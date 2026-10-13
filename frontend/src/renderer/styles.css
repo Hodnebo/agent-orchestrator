@@ -789,13 +789,6 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	border-top: 1px solid var(--color-border);
 }
 
-/* Helper copy belongs to the preceding settings row, not a separate divided row. */
-[data-section="updates"] .nightly-warning {
-	border-top: 0 !important;
-	border-block-start: 0 !important;
-	padding-inline: var(--space-3);
-}
-
 /* Tailwind preflight clears button backgrounds; keep settings rows filled. */
 button.settings-row-bar {
 	background-color: var(--color-bg-settings-row);
@@ -816,11 +809,6 @@ button.settings-row-bar {
 @utility settings-content-row {
 	padding-inline: var(--space-3);
 	padding-block: var(--space-3);
-}
-
-/* The update summary is a content row, not a compact control row. */
-.settings-grouped-rows .update-status-row {
-	padding-block: var(--space-4);
 }
 
 @utility settings-menu-item {
