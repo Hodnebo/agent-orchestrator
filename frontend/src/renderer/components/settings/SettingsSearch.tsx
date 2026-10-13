@@ -3,10 +3,10 @@ import type { ReactNode } from "react";
 import { Input } from "../ui/input";
 
 /**
- * The one settings search bar: full column width, sticky under the transparent
- * top strip while the page scrolls. Pass it as a SettingsSection's `toolbar`
- * so it sits under the heading and above the card. `trailing` holds a ghost
- * action beside the field ("Clear all") or a view switch.
+ * The one settings search bar: full column width, scrolling with the page.
+ * Pass it as a SettingsSection's `toolbar` so it sits under the heading and
+ * above the card. `trailing` holds a ghost action beside the field
+ * ("Clear all") or a view switch.
  */
 export function SettingsSearch({
 	value,
@@ -22,7 +22,7 @@ export function SettingsSearch({
 	trailing?: ReactNode;
 }) {
 	return (
-		<div className="sticky top-toolbar z-10 flex items-center gap-2 bg-(--color-bg-primary) pb-3">
+		<div className="flex items-center gap-2 pb-3">
 			<div className="relative min-w-0 flex-1">
 				<Search
 					aria-hidden="true"
