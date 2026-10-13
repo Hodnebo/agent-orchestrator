@@ -1,54 +1,110 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { PairingQr } from "./PairingQr";
+import { act, fireEvent, render } from "@testing-library/react";
+import { useEffect } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PairingQr, QR_FADE_MS, QR_SETTLE_FALLBACK_MS } from "./PairingQr";
 
-const CAPTION = "Preparing remote access — usually 30-60 seconds";
+// jsdom cannot draw qr-code-styling's SVG, so stand in a code that reports
+// itself drawn as soon as it mounts — the moment the real one resolves its
+// drawing promise.
+vi.mock("./StyledQRCode", () => ({
+	StyledQRCode: ({ value, onReady, ...rest }: { value: string; onReady?: () => void; "data-qr-value"?: string }) => {
+		useEffect(() => {
+			onReady?.();
+		}, [value]);
+		return <div data-code={value} data-qr-value={rest["data-qr-value"]} />;
+	},
+}));
+
+const A = "aomobile://pair#a";
+const B = "aomobile://pair#b";
+
+function layerFor(container: HTMLElement, code: string) {
+	return container.querySelector(`[data-code="${code}"]`)?.parentElement ?? null;
+}
+
+async function flushFrames() {
+	await act(async () => {
+		vi.advanceTimersByTime(40);
+	});
+}
+
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
+});
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 describe("PairingQr", () => {
-	it("says what it is doing while the code is being prepared", () => {
-		render(<PairingQr value={null} size={204} caption={CAPTION} />);
-		expect(screen.getByRole("status")).toHaveTextContent(CAPTION);
-	});
-
 	// A code withheld because the connector is not advertisable must not be
 	// scannable: one scanned early carries no tunnel endpoint and would pair
 	// here then fail from every other network.
 	it("exposes no scannable code before one exists", () => {
-		const { container } = render(<PairingQr value={null} size={204} caption={CAPTION} />);
+		const { container } = render(<PairingQr value={null} size={192} />);
 		expect(container.querySelector("[data-qr-value]")).toBeNull();
 	});
 
-	it("renders the real code once it arrives", () => {
-		const { container } = render(<PairingQr value="aomobile://pair#real" size={204} caption={CAPTION} />);
-		expect(container.querySelector("[data-qr-value]")).toHaveAttribute(
-			"data-qr-value",
-			"aomobile://pair#real",
-		);
+	it("renders the real code once it arrives", async () => {
+		const { container } = render(<PairingQr value={A} size={192} />);
+		await flushFrames();
+		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", A);
+		expect(layerFor(container, A)).toHaveClass("opacity-100");
 	});
 
-	// The caption belongs to the wait. Leaving it under a finished code would
-	// claim the app is still working when it is done.
-	it("drops the caption once the code is shown", () => {
-		render(<PairingQr value="aomobile://pair#real" size={204} caption={CAPTION} />);
-		expect(screen.queryByRole("status")).toBeNull();
+	// The glitch this replaces: the old code was unmounted the moment the value
+	// changed, leaving a blank card until the new one drew. Now the old code
+	// stays fully visible underneath until the new one has faded in over it.
+	it("keeps the previous code on screen until the next one has faded in", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		await flushFrames();
+
+		rerender(<PairingQr value={B} size={192} />);
+		// Both mounted; only the new one is the scannable value.
+		expect(layerFor(container, A)).toHaveClass("opacity-100");
+		expect(layerFor(container, B)).toHaveClass("opacity-0");
+		expect(container.querySelectorAll("[data-qr-value]")).toHaveLength(1);
+		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", B);
+
+		await flushFrames();
+		expect(layerFor(container, B)).toHaveClass("opacity-100");
+		expect(layerFor(container, A)).toHaveClass("opacity-100");
+
+		// Not on a timer racing the fade: the old code goes only once the new
+		// one has finished fading in.
+		await act(async () => {
+			vi.advanceTimersByTime(QR_FADE_MS);
+		});
+		expect(layerFor(container, A)).not.toBeNull();
+
+		fireEvent.transitionEnd(layerFor(container, B)!);
+		expect(layerFor(container, A)).toBeNull();
+		expect(layerFor(container, B)).toHaveClass("opacity-100");
 	});
 
-	// The decoys stay mounted briefly so the two overlap and one dissolves into
-	// the other, rather than the placeholder vanishing before the code appears.
-	// Only on the transition: mounting with a code already in hand has nothing
-	// to resolve from and should not fade anything in.
-	it("keeps the placeholder on screen through the resolve", () => {
-		const { container, rerender } = render(<PairingQr value={null} size={204} caption={CAPTION} />);
-		expect(container.querySelectorAll(".ao-qr-decoy").length).toBeGreaterThan(0);
+	// Reduced motion and hidden tabs fire no transitionend.
+	it("still drops the covered code when no transition runs", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		await flushFrames();
+		rerender(<PairingQr value={B} size={192} />);
+		await flushFrames();
 
-		rerender(<PairingQr value="aomobile://pair#real" size={204} caption={CAPTION} />);
-
-		expect(container.querySelector("[data-qr-value]")).not.toBeNull();
-		expect(container.querySelector(".ao-qr-decoy--settling")).not.toBeNull();
+		await act(async () => {
+			vi.advanceTimersByTime(QR_SETTLE_FALLBACK_MS);
+		});
+		expect(layerFor(container, A)).toBeNull();
+		expect(layerFor(container, B)).toHaveClass("opacity-100");
 	});
 
-	it("shows no placeholder when a code is available from the start", () => {
-		const { container } = render(<PairingQr value="aomobile://pair#real" size={204} caption={CAPTION} />);
-		expect(container.querySelectorAll(".ao-qr-decoy")).toHaveLength(0);
+	it("fades the code out when it is withdrawn, then drops it", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		await flushFrames();
+
+		rerender(<PairingQr value={null} size={192} />);
+		expect(container.querySelector("[data-qr-value]")).toBeNull();
+		expect(layerFor(container, A)).toHaveClass("opacity-0");
+
+		fireEvent.transitionEnd(layerFor(container, A)!);
+		expect(layerFor(container, A)).toBeNull();
 	});
 });

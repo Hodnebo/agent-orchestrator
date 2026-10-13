@@ -49,19 +49,27 @@ export const StyledQRCode = memo(function StyledQRCode({
 	size,
 	showLogo = true,
 	className,
+	onReady,
 	"data-qr-value": dataQrValue,
 }: {
 	value: string;
 	size: number;
 	showLogo?: boolean;
 	className?: string;
+	/** Called once the code is fully drawn. qr-code-styling draws the dots
+	 *  only after the logo has loaded, so the SVG it appends is empty for a
+	 *  frame or more; a caller fading a code in waits for this, not for mount. */
+	onReady?: () => void;
 	"data-qr-value"?: string;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
+	// Read through a ref so a new callback identity does not redraw the code.
+	const onReadyRef = useRef(onReady);
+	onReadyRef.current = onReady;
 
 	useEffect(() => {
 		const el = ref.current;
-		if (!el) return;
+		if (!el) return undefined;
 		try {
 			const qr = new QRCodeStyling({
 				width: size,
@@ -88,9 +96,21 @@ export const StyledQRCode = memo(function StyledQRCode({
 			if (modules > 0) qr.update({ margin: quietZonePx(size, modules) });
 			el.replaceChildren();
 			qr.append(el);
+			let cancelled = false;
+			// A failed logo load still leaves a scannable code, so reveal it
+			// either way rather than leave the caller waiting on it.
+			void Promise.resolve(qr._svgDrawingPromise)
+				.catch(() => undefined)
+				.then(() => {
+					if (!cancelled) onReadyRef.current?.();
+				});
+			return () => {
+				cancelled = true;
+			};
 		} catch {
 			// jsdom / non-browser environments can't render the SVG; the QR is
 			// purely visual, so fail silent rather than crash the settings page.
+			return undefined;
 		}
 	}, [value, size, showLogo]);
 

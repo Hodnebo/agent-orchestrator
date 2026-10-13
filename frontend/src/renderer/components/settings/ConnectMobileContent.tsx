@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Fragment, useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
@@ -15,12 +15,10 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { cn } from "../../lib/utils";
 
-// Match the panel's full width so the generated code uses the same visual
-// footprint as the preview. The containing panel still scales it down on
-// narrower layouts.
-const QR_CODE_SIZE = 320;
+// The pairing panel is a fixed 192px square (size-48) so the card stays short
+// and a code change can never move the layout. Codes are drawn at that size.
+const QR_CODE_SIZE = 192;
 const STORE_QR_SIZE = 140;
 
 const STORE_LINKS = [
@@ -179,10 +177,14 @@ function AndroidIcon({ className }: { className?: string }) {
 	);
 }
 
-/** Trailing store link at the end of a walkthrough step. Border-bottom instead
- *  of text-decoration so the underline runs under the arrow too. */
-const STEP_LINK_CLASS =
-	"inline-flex items-center gap-0.5 border-b border-[color-mix(in_oklch,var(--color-settings-label)_45%,transparent)] align-baseline text-settings-label transition-colors hover:border-current hover:text-settings-title";
+/** Quiet store link: platform icon, name and an outbound arrow, muted until
+ *  hovered. The icons carry the "this is a link" cue, not an underline. */
+const STORE_LINK_CLASS =
+	"inline-flex items-center gap-1 rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label focus-visible:text-settings-label focus-visible:outline-none";
+
+/** Icon actions beside the password. */
+const ICON_ACTION_CLASS =
+	"inline-flex size-6 items-center justify-center rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label disabled:opacity-50";
 
 interface MobileStatus {
 	enabled: boolean;
@@ -246,7 +248,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const [copied, setCopied] = useState(false);
 	const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const lastQrValueRef = useRef<string | null>(null);
 	// Pinned to "lan" while the connection picker below is commented out.
 	// setMode is still called by the close-reset effect.
 	const [mode, setMode] = useState<SetupMode>("lan");
@@ -478,10 +479,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
 		null;
 
+	const turnOff = () => {
+		clearActionErrors();
+		setOptimisticEnabled(false);
+		disable.mutate();
+	};
+
 	// Each return is one or more direct children of the settings card: the
 	// pairing is a content row, keep-awake a SettingsRow, divided by the card.
+	// Loading keeps the pairing layout, so the card does not jump from one
+	// short row to the full block when the status lands.
 	if (query.isLoading) {
-		return <p className="settings-row-bar text-sm text-settings-muted">{t("mobile.checkingStatus")}</p>;
+		return (
+			<PairingLayout panel={<QrPlaceholder />}>
+				<ScanIntro />
+				<p className="sr-only" role="status">
+					{t("mobile.checkingStatus")}
+				</p>
+			</PairingLayout>
+		);
 	}
 	if (query.isError) {
 		return (
@@ -505,244 +521,161 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				password: status?.password ?? "",
 				endpoints: status?.endpoints ?? [],
 			})
-		: undefined;
-	if (qrValue) lastQrValueRef.current = qrValue;
-	// Keep the preview in place while enable/remote access is still preparing.
-	// Only reveal the generated panel once there is a real, scannable payload.
-	const generatedQrVisible = Boolean(showRealQR && qrValue);
-	const generatedQrValue = generatedQrVisible ? (qrValue ?? null) : lastQrValueRef.current;
-	const shouldRenderGeneratedQr = generatedQrVisible || Boolean(lastQrValueRef.current);
+		: null;
 	const secureReasonText = reasonMessage(status.securePairing?.reason ?? "", t);
+	const unreachable = enabled && !qrValue && noEndpointAvailable;
+
+	// One object throughout: the blurred placeholder sits at the back, the real
+	// code crossfades in over it (and over the previous code on a change), and
+	// the overlay says what is happening while there is no code.
+	const panel = (
+		<QrPlaceholder>
+			<PairingQr value={qrValue} size={QR_CODE_SIZE} />
+			{!enabled ? (
+				<div className="absolute inset-0 flex items-center justify-center">
+					<Button
+						type="button"
+						variant="footer-primary"
+						className="rounded-md shadow-lg"
+						onClick={startBridge}
+						disabled={busy || enabled}
+					>
+						{t("mobile.generate")}
+					</Button>
+				</div>
+			) : !qrValue && !unreachable ? (
+				<div
+					className="absolute inset-0 flex items-center justify-center"
+					data-testid="mobile-pairing-preparing"
+					role="status"
+					aria-label={t("mobile.checkingStatus")}
+				>
+					<span className="flex h-(--size-settings-action-height) items-center rounded-(--radius-settings-action) bg-(--color-bg-secondary) px-3 text-settings-muted shadow-lg">
+						<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+					</span>
+				</div>
+			) : null}
+		</QrPlaceholder>
+	);
 
 	return (
 		<>
-		<div className="settings-content-row flex flex-col gap-4">
-			<p className="text-xs leading-4 text-settings-muted">{t("mobile.description")}</p>
+			<PairingLayout panel={panel}>
+				{/* No connection picker (see modeOptions above): one v2 code carries
+				    every advertised endpoint — LAN, Tailscale and tunnel — and the
+				    phone races them, so the mode never changed what a scan produces.
+				    TLS keys off the tailnet address, not this control. */}
+				<ScanIntro />
 
-			<div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-				{/* Left: the walkthrough. */}
-				<div className="flex min-w-0 flex-1 flex-col">
-					{/* Connection picker commented out: one v2 code carries every
-					    advertised endpoint — LAN, Tailscale and tunnel — and the phone
-					    races them, so the mode never changed what a scan produces. TLS
-					    is enabled off the tailnet address rather than this control (see
-					    the effect above), so hiding it does not disable secure pairing.
-					    What it does take off-screen is Tailscale's setup step and the
-					    address/password rows for the tailnet host. */}
-					{/*
-					<div className="flex flex-nowrap items-center gap-2">
-						<SettingsOptionMenu
-							aria-label={t("mobile.connectionMethod")}
-							value={mode}
-							options={modeOptions}
-							onChange={setMode}
-							triggerClassName="w-44 justify-between"
-							menuClassName="!w-44 !min-w-0"
-							menuAlign="start"
-						/>
-					</div>
-					*/}
-
-					{/* One walkthrough per connection method. Steps are plain text with
-					    trailing store links; address/password join the list once the QR
-					    is generated. */}
-					<ol className="settings-mobile-steps mt-4 !text-[13px] !leading-6 !text-[color-mix(in_oklch,var(--color-settings-label)_75%,var(--color-text-settings-muted))]">
-						{/* Both stores are a public one-tap listing now, so the step names
-						    both rather than making people pick a platform first — the
-						    choice only ever selected which of these two links to show. */}
-						<li>
-							{t("mobile.getApp.step1")}{" "}
-							{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }, index) => (
-								<Fragment key={key}>
-									{index > 0 ? <span className="mx-1 text-settings-muted">{t("mobile.getApp.or")}</span> : null}
-									<Tooltip>
-										<TooltipTrigger asChild>
+				{qrValue && (
+					<dl className="mt-5 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-6 gap-y-1 text-control leading-6">
+						<dt className="text-settings-muted">{t("mobile.address")}</dt>
+						<dd className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-address">
+							{`${activeHost}:${activePort}`}
+						</dd>
+						<dt className="text-settings-muted">{t("mobile.password")}</dt>
+						<dd className="flex min-w-0 items-center">
+							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
+							<span className="ml-2 flex shrink-0 items-center">
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+											className={ICON_ACTION_CLASS}
+											onClick={() => void copyPassword()}
+										>
+											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+										</button>
+									</TooltipTrigger>
+									<TooltipContent side="bottom">
+										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+									</TooltipContent>
+								</Tooltip>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										{/* Span so the tooltip still opens while the button is disabled. */}
+										<span className="inline-flex">
 											<button
 												type="button"
-												className={STEP_LINK_CLASS}
-												aria-label={t(ariaKey)}
-												onClick={() => void aoBridge.app.openExternal(url)}
+												aria-label={t("mobile.regenerate")}
+												className={ICON_ACTION_CLASS}
+												disabled={busy}
+												onClick={() => {
+													clearActionErrors();
+													regenerate.mutate();
+												}}
 											>
-												<Icon className="size-3.5 shrink-0" />
-												{t(labelKey)}
-												<ArrowUpRight className="size-3.5" aria-hidden="true" />
+												{regenerate.isPending ? (
+													<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+												) : (
+													<RotateCcw className="size-3.5" aria-hidden="true" />
+												)}
 											</button>
-										</TooltipTrigger>
-										<TooltipContent side="bottom" className="p-2" data-testid={testId}>
-											<div className="rounded-md bg-(--color-bg-settings-input) p-2">
-												<StyledQRCode value={url} size={STORE_QR_SIZE} showLogo={false} className="block" />
-											</div>
-										</TooltipContent>
-									</Tooltip>
-								</Fragment>
-							))}
-						</li>
-						{mode === "tailscale" ? <li>{t("mobile.tailscale.step1")}</li> : null}
-						<li>{t("mobile.pairStep")}</li>
-						{showRealQR && (
-							<>
-								<li data-testid="mobile-pairing-address">
-									{t("mobile.address")}:{" "}
-									<span className="tracking-settings-mono text-settings-label">{`${activeHost}:${activePort}`}</span>
-								</li>
-								<li>
-									{t("mobile.password")}:{" "}
-									<span className="tracking-settings-mono text-settings-label">{status.password}</span>
-									<button
-										type="button"
-										aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-										className="ml-1.5 inline-flex size-5 items-center justify-center align-middle text-settings-muted transition-colors hover:text-settings-label"
-										onClick={() => void copyPassword()}
-									>
-										{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-									</button>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<span className="ml-0.5 inline-flex align-middle">
-												<button
-													type="button"
-													aria-label={t("mobile.regenerate")}
-													className="inline-flex size-5 items-center justify-center text-settings-muted transition-colors hover:text-settings-label disabled:opacity-50"
-													disabled={busy}
-													onClick={() => {
-														clearActionErrors();
-														regenerate.mutate();
-													}}
-												>
-													{regenerate.isPending ? (
-														<Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-													) : (
-														<RotateCcw className="size-3.5" aria-hidden="true" />
-													)}
-												</button>
-											</span>
-										</TooltipTrigger>
-										<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
-									</Tooltip>
-								</li>
-							</>
-						)}
-					</ol>
+										</span>
+									</TooltipTrigger>
+									<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
+								</Tooltip>
+							</span>
+						</dd>
+					</dl>
+				)}
 
-					{/* Tailscale extras: secure pairing (required on iPhone) + status. */}
-					{status.tailscaleHost && secureReasonText && (
-						<p
-							data-testid="secure-pairing-reason"
-							className="mt-4 text-caption leading-(--leading-settings-mobile-hint) text-warning"
-						>
-							{secureReasonText}
+				{unreachable && (
+					<p className="mt-5 flex items-start gap-1.5 text-control leading-5 text-warning">
+						<TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+						{mode === "tailscale" ? t("mobile.noTailscaleHost") : t("mobile.noPairingHost")}
+					</p>
+				)}
+
+				{/* TLS on the tailnet: shown only when it failed. */}
+				{status.tailscaleHost && secureReasonText && (
+					<p data-testid="secure-pairing-reason" className="mt-4 text-control leading-5 text-warning">
+						{secureReasonText}
+					</p>
+				)}
+
+				{remoteAccessUnavailable && (
+					// Stated rather than hidden: pairing still works on this network,
+					// so this is a limitation of what the code can reach, not an
+					// error. Without it the QR looks entirely normal and the user
+					// discovers the gap only by being away from home.
+					<div className="mt-4">
+						<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
+							{t(
+								"mobile.remoteAccessUnavailable",
+								"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
+							)}
 						</p>
-					)}
-
-					{remoteAccessUnavailable && (
-						// Stated rather than hidden: pairing still works on this network,
-						// so this is a limitation of what the code can reach, not an
-						// error. Without it the QR looks entirely normal and the user
-						// discovers the gap only by being away from home.
-						<div className="mt-3">
-							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
-								{t(
-									"mobile.remoteAccessUnavailable",
-									"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
-								)}
-							</p>
-							{/* Deliberately not enable(): that mints a fresh password, so
-							    installing remote access would invalidate the phone the user
-							    had already paired. This re-checks for the binary and starts
-							    the connector, leaving the credential alone. */}
-							<InstallCloudflared onInstalled={() => void startRemoteAccess.mutate()} />
-						</div>
-					)}
-					{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
-				</div>
-
-				{/* Right: dedicated pairing-QR panel — square, clipping, flush with
-				    the content's right edge so bottom/right spacing match. */}
-				<div className="flex w-full shrink-0 flex-col gap-3 self-start sm:w-80">
-					<div className="relative">
-						<div
-							className={cn(
-								"transition-opacity duration-200",
-								generatedQrVisible ? "relative opacity-100" : "pointer-events-none absolute inset-0 opacity-0",
-							)}
-						>
-							{shouldRenderGeneratedQr && (
-								<PairingQr
-									value={generatedQrValue}
-									size={QR_CODE_SIZE}
-									caption={t("mobile.tunnelStarting")}
-								/>
-							)}
-						</div>
-						<div
-							className={cn(
-								"transition-opacity duration-200",
-								generatedQrVisible
-									? "pointer-events-none absolute inset-0 opacity-0"
-									: "relative pb-6 opacity-100",
-							)}
-						>
-							<div className="relative aspect-square w-full overflow-hidden rounded-md">
-								{enabled && noEndpointAvailable ? (
-									<div className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4">
-										<p className="text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted">
-											{mode === "tailscale" ? t("mobile.noTailscaleHost") : t("mobile.noPairingHost")}
-										</p>
-									</div>
-								) : enabled ? (
-									<div
-										className="flex size-full items-center justify-center bg-(--color-bg-settings-input) p-4 text-settings-muted"
-										data-testid="mobile-pairing-preparing"
-										role="status"
-										aria-label={t("mobile.checkingStatus")}
-									>
-										<Loader2 className="size-6 animate-spin" aria-hidden="true" />
-									</div>
-								) : (
-									<>
-										{/* The QR stays dark on white so Android can scan it. */}
-										<div className="size-full bg-white opacity-60 blur-[6px]" aria-hidden="true">
-											<StyledQRCode
-												value={PLACEHOLDER_QR_VALUE}
-												size={QR_CODE_SIZE}
-												className="ao-qr-visual block size-full [&_svg]:size-full"
-											/>
-										</div>
-										<div className="absolute inset-0 flex items-center justify-center">
-											<Button
-												type="button"
-												variant="footer-primary"
-												className="rounded-md shadow-lg"
-												onClick={startBridge}
-												disabled={busy || enabled}
-											>
-												{t("mobile.generate")}
-											</Button>
-										</div>
-									</>
-								)}
-							</div>
-						</div>
+						{/* Deliberately not enable(): that mints a fresh password, so
+						    installing remote access would invalidate the phone the user
+						    had already paired. This re-checks for the binary and starts
+						    the connector, leaving the credential alone. */}
+						<InstallCloudflared onInstalled={() => void startRemoteAccess.mutate()} />
 					</div>
-					{enabled && (
+				)}
+				{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
+
+				{/* Bottom of the details column, level with the code's bottom edge:
+				    the off switch belongs to the connection the details describe,
+				    not to the code, and here it costs no extra row. Pulled left by its
+				    padding plus its 1px transparent border so the label starts on the
+				    column's text edge. */}
+				{enabled && (
+					<div className="mt-auto pt-4">
 						<Button
 							type="button"
 							variant="ghost"
 							size="sm"
-							className="w-full text-settings-muted hover:text-settings-label"
+							className="-ml-[calc(--spacing(2.5)+1px)] text-settings-muted hover:text-settings-label"
 							disabled={busy}
-							onClick={() => {
-								clearActionErrors();
-								setOptimisticEnabled(false);
-								disable.mutate();
-							}}
+							onClick={turnOff}
 						>
 							{t("mobile.disable", "Turn off mobile connection")}
 						</Button>
-					)}
 					</div>
-			</div>
-		</div>
+				)}
+			</PairingLayout>
 
 			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
 			    whether or not the bridge is on: the choice is remembered and takes
@@ -756,9 +689,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<>
 							{t("mobile.keepAwake.help")}
 							{status.keepAwake.hasBattery && (!status.keepAwake.lidClosed || !status.keepAwake.lidSupported || !status.keepAwake.enabled) && (
-								<span className="mt-1 block" data-testid="mobile-keep-awake-laptop">
-									{t("mobile.keepAwake.laptopNote")}
-								</span>
+								<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
 							)}
 						</>
 					}
@@ -811,5 +742,80 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 			)}
 		</>
+	);
+}
+
+/**
+ * The pairing content row: details on the left, the code on the right.
+ *
+ * The code's offset from the card's top edge equals its offset from the right
+ * edge (the row inset, 16px). The card already pads its block edges by
+ * --space-1, so the row's own top padding is the inset minus that. Bottom
+ * mirrors it: 16px to the divider above Keep awake, or to the card edge when
+ * this row is the card's last child.
+ */
+function PairingLayout({ panel, children }: { panel: ReactNode; children: ReactNode }) {
+	return (
+		<div
+			className="settings-content-row flex flex-col gap-6 pt-[calc(var(--settings-row-inset)-var(--space-1))] not-last:pb-(--settings-row-inset) last:pb-[calc(var(--settings-row-inset)-var(--space-1))] sm:flex-row"
+			data-testid="mobile-pairing"
+		>
+			<div className="flex min-w-0 flex-1 flex-col">{children}</div>
+			{panel}
+		</div>
+	);
+}
+
+/** One instruction and where to get the app. Nothing here changes once paired. */
+function ScanIntro() {
+	const { t } = useTranslation();
+	return (
+		<>
+			<p className="text-sm leading-5 text-settings-label">{t("mobile.scanHint")}</p>
+			<p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-control leading-5 text-settings-muted">
+				<span>{t("mobile.getApp")}</span>
+				{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
+					<Tooltip key={key}>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								className={STORE_LINK_CLASS}
+								aria-label={t(ariaKey)}
+								onClick={() => void aoBridge.app.openExternal(url)}
+							>
+								<Icon className="size-3.5 shrink-0" />
+								{t(labelKey)}
+								<ArrowUpRight className="size-3" aria-hidden="true" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" className="p-2" data-testid={testId}>
+							<div className="rounded-md bg-(--color-bg-settings-input) p-2">
+								<StyledQRCode value={url} size={STORE_QR_SIZE} showLogo={false} className="block" />
+							</div>
+						</TooltipContent>
+					</Tooltip>
+				))}
+			</p>
+		</>
+	);
+}
+
+/**
+ * The fixed 192px square every pairing state shares: a blurred decoy code
+ * (dark on white, so Android can scan the real one that replaces it) with the
+ * state's content layered over it.
+ */
+function QrPlaceholder({ children }: { children?: ReactNode }) {
+	return (
+		<div className="relative size-48 shrink-0 self-start overflow-hidden rounded-md bg-white">
+			<div className="absolute inset-0 opacity-60 blur-[6px]" aria-hidden="true">
+				<StyledQRCode
+					value={PLACEHOLDER_QR_VALUE}
+					size={QR_CODE_SIZE}
+					className="block size-full [&_svg]:size-full"
+				/>
+			</div>
+			{children}
+		</div>
 	);
 }

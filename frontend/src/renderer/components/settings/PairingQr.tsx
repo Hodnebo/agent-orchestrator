@@ -1,128 +1,128 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
 import { StyledQRCode } from "./StyledQRCode";
-import { scramblePairingCodes } from "./qrScramble";
 
-/** Decoy layers cycled while waiting.
- *
- * Four, phase-offset by a quarter cycle each, so exactly two are on screen at
- * any moment — one rising, one falling. That overlap is what makes the field
- * appear to move: with layers fading fully out before the next arrived, it
- * read as a slideshow of separate codes rather than as one code churning. */
-const SCRAMBLE_LAYERS = 4;
+/** Crossfade between codes: long enough to read as one code becoming the
+ *  next, short enough that a fresh code is scannable at once. Matches the
+ *  `duration-200` on each layer below. */
+export const QR_FADE_MS = 200;
 
-/** Keep the finished code ready to scan quickly; it only dissolves in. */
-export const QR_RESOLVE_MS = 260;
+/** A finished fade is detected by its transitionend. This is only the backstop
+ *  for when none fires (reduced motion, a hidden tab), so it sits well past
+ *  the fade: dropping the old code early would show the placeholder through
+ *  the new one while it is still fading in. */
+export const QR_SETTLE_FALLBACK_MS = QR_FADE_MS * 5;
 
-/** One pass through the decoy stack. Unhurried on purpose: a fast shuffle
- *  reads as a glitch, a slow one as something being worked out.
- *
- *  MUST match the ao-qr-decoy animation duration in styles.css — the per-layer
- *  delays below are phase offsets within this cycle, and they only produce the
- *  intended overlap if both agree. */
-export const QR_SCRAMBLE_CYCLE_MS = 4800;
+function prefersReducedMotion(): boolean {
+	return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+interface Layer {
+	value: string;
+	key: number;
+	shown: boolean;
+}
 
 /**
- * The pairing code, and the wait that precedes it, as one continuous object.
+ * The pairing code, crossfaded whenever it changes.
  *
- * Bringing the tunnel up takes ~30s. Rather than show a message and then
- * replace it with a QR, this renders decoy codes of the same shape — same QR
- * version, same module size, same corner markers, same logo — shuffling
- * underneath, and dissolves them into the real code when it arrives. Only the
- * data changes; the object on screen never does.
+ * Each code is its own opaque layer. A new code mounts hidden on top of the
+ * current one and is revealed only once qr-code-styling has finished drawing
+ * it, so the old code stays on screen underneath until the new one fully
+ * covers it: no blank card between the two, and no half-drawn frame. Layers
+ * beneath the newest shown one are dropped once its fade has finished
+ * (transitionend), never on a timer racing the fade.
  *
- * The logo sits still throughout, so there is a fixed point to look at while
- * the field around it churns.
+ * `value` null fades every code out, revealing whatever the caller has placed
+ * behind this component (the blurred placeholder). Reduced motion turns the
+ * fades into instant swaps; the ordering is unchanged.
  *
- * Owns its own square box and puts the caption beneath it. The caption cannot
- * live inside the clipping aspect-square the panel used to impose — that is
- * what cut it in half and pushed it under the button below.
+ * Fills its parent, which owns the fixed square size, so a code change can
+ * never shift the layout.
  */
 export const PairingQr = memo(function PairingQr({
 	value,
 	size,
-	caption,
 	className,
 }: {
-	/** The real pairing code, or null while it is still being prepared. */
+	/** The real pairing code, or null when there is none to show. */
 	value: string | null;
 	size: number;
-	caption: string;
 	className?: string;
 }) {
-	const decoys = useMemo(() => scramblePairingCodes(SCRAMBLE_LAYERS), []);
-	// Kept mounted through the crossfade so the two codes overlap rather than
-	// one being swapped for the other.
-	const [scrambling, setScrambling] = useState(!value);
+	const [layers, setLayers] = useState<Layer[]>([]);
+	const nextKey = useRef(0);
 
 	useEffect(() => {
-		if (!value) {
-			setScrambling(true);
-			return;
-		}
-		const timer = setTimeout(() => setScrambling(false), QR_RESOLVE_MS);
-		return () => clearTimeout(timer);
+		setLayers((prev) => {
+			if (!value) return prev.some((l) => l.shown) ? prev.map((l) => ({ ...l, shown: false })) : prev;
+			const top = prev[prev.length - 1];
+			if (top?.value === value) return top.shown ? prev : prev.map((l) => (l === top ? { ...l, shown: true } : l));
+			nextKey.current += 1;
+			return [...prev, { value, key: nextKey.current, shown: false }];
+		});
 	}, [value]);
 
-	const resolved = Boolean(value);
+	// Two frames, so the hidden state is painted before the transition starts;
+	// flipping it in the frame the layer mounted in would skip the fade.
+	const reveal = useCallback((key: number) => {
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() =>
+				setLayers((prev) => prev.map((l) => (l.key === key ? { ...l, shown: true } : l))),
+			),
+		);
+	}, []);
+
+	// A shown layer has finished fading in: everything beneath it is covered.
+	// A hidden one has finished fading out: it can go.
+	const settle = useCallback((key: number) => {
+		setLayers((prev) => {
+			const index = prev.findIndex((l) => l.key === key);
+			if (index < 0) return prev;
+			if (prev[index].shown) return index > 0 ? prev.slice(index) : prev;
+			return prev.filter((l) => l.key !== key || l.value === value);
+		});
+	}, [value]);
+
+	useEffect(() => {
+		let lastShown = -1;
+		layers.forEach((l, i) => {
+			if (l.shown) lastShown = i;
+		});
+		const pending = lastShown > 0 || (!value && layers.length > 0 && lastShown < 0);
+		if (!pending) return undefined;
+		const timer = setTimeout(
+			() => (lastShown >= 0 ? settle(layers[lastShown].key) : setLayers((prev) => prev.filter((l) => l.shown))),
+			prefersReducedMotion() ? 0 : QR_SETTLE_FALLBACK_MS,
+		);
+		return () => clearTimeout(timer);
+	}, [layers, value, settle]);
 
 	return (
-		<div className={cn("flex w-full flex-col", className)}>
-			{/* Light card. The code is drawn dark-on-light because Android's
-			    scanner will not decode an inverted one.
-
-			    The code fills the card: StyledQRCode draws its own quiet zone, so
-			    insetting it here only stacked a second margin on top of that one
-			    and shrank the modules for nothing. */}
-			<div className="relative aspect-square w-full overflow-hidden rounded-md bg-white">
-				{/* Drifts only while waiting: a code being scanned must hold still. */}
-				<div className={cn("absolute inset-0", !resolved && "ao-qr-drift")}>
-					{scrambling &&
-						decoys.map((code, i) => (
-							<div
-								key={code}
-								className={cn("ao-qr-decoy absolute inset-0", resolved && "ao-qr-decoy--settling")}
-								style={
-									resolved
-										? undefined
-										: { animationDelay: `${i * (QR_SCRAMBLE_CYCLE_MS / SCRAMBLE_LAYERS)}ms` }
-								}
-								aria-hidden="true"
-							>
-								<StyledQRCode value={code} size={size} className="ao-qr-visual block size-full [&_svg]:size-full" />
-							</div>
-						))}
-					{value && (
-						<div
-							key={value}
-							className="ao-qr-resolved absolute inset-0"
-							style={{ animationDuration: `${QR_RESOLVE_MS}ms` }}
-						>
-							<StyledQRCode
-								value={value}
-								data-qr-value={value}
-								size={size}
-											className="ao-qr-visual block size-full [&_svg]:size-full"
-							/>
-						</div>
+		<div className={cn("absolute inset-0", className)}>
+			{layers.map((layer) => (
+				<div
+					key={layer.key}
+					aria-hidden={layer.value !== value}
+					onTransitionEnd={(event) => {
+						if (event.target === event.currentTarget) settle(layer.key);
+					}}
+					className={cn(
+						// Opaque, so a layer that has finished fading in hides the one
+						// beneath it completely.
+						"absolute inset-0 bg-white transition-[opacity,filter] duration-200 motion-reduce:transition-none",
+						layer.shown ? "opacity-100 blur-[0px] ease-out" : "opacity-0 blur-[4px] ease-in",
 					)}
+				>
+					<StyledQRCode
+						value={layer.value}
+						data-qr-value={layer.value === value ? layer.value : undefined}
+						size={size}
+						onReady={() => reveal(layer.key)}
+						className="block size-full [&_svg]:size-full"
+					/>
 				</div>
-			</div>
-			{/* Fixed height, not min-height: the button below must not move when
-			    the caption appears or goes. Clamped rather than grown, so a long
-			    translation wrapping to a second line still cannot shift it. */}
-			<div className="flex h-6 items-center justify-center px-2">
-				{!resolved && (
-					<p
-						className="flex items-center justify-center gap-2 text-center text-caption leading-(--leading-settings-mobile-hint) text-settings-muted"
-						role="status"
-					>
-						<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
-						<span className="line-clamp-2">{caption}</span>
-					</p>
-				)}
-			</div>
+			))}
 		</div>
 	);
 });

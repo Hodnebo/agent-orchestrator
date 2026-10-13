@@ -198,11 +198,16 @@ test("withholds the QR when tunnel startup fails without advertising an endpoint
 test("vertically aligns the regenerate control with the password row", async () => {
 	renderMobileSettings();
 
+	// The password value and its icon actions share one centred flex row.
 	const regenerate = await screen.findByRole("button", { name: "Regenerate password" });
-	expect(regenerate.parentElement).toHaveClass("align-middle");
+	const row = regenerate.closest("dd");
+	expect(row).toHaveClass("flex", "items-center");
+	expect(row).toHaveTextContent("fake-password-for-testing");
 });
 
-test("shows a quiet preparing state instead of a blurred QR while startup is incomplete", async () => {
+// The blurred placeholder stays behind the spinner, so the code that arrives
+// resolves in place; what matters is that nothing scannable shows yet.
+test("shows a quiet preparing state while startup is incomplete", async () => {
 	mobileStatus.endpoints = [];
 	mobileStatus.tunnel = {
 		supported: true,
@@ -218,6 +223,7 @@ test("shows a quiet preparing state instead of a blurred QR while startup is inc
 	expect(await screen.findByTestId("mobile-pairing-preparing")).toBeInTheDocument();
 	expect(screen.queryByText(/Preparing remote access/i)).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument();
+	expect(qrPayload()).toBeNull();
 });
 
 test("can turn off the generated mobile connection", async () => {
@@ -293,7 +299,7 @@ test("does not tell LAN users to join the same Wi-Fi", async () => {
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
 	expect(screen.queryByText(/same Wi-Fi/i)).not.toBeInTheDocument();
-	expect(screen.getByText("Generate and scan the QR from the AO app")).toBeInTheDocument();
+	expect(screen.getByText("Scan with the AO mobile app")).toBeInTheDocument();
 });
 
 // Both stores are listed in step one now. The platform dropdown that used to
