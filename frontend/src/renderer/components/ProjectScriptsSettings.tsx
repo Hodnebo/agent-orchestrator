@@ -15,6 +15,7 @@ import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { ProjectSettingsSection } from "@aoagents/product-ui";
 
 type Project = components["schemas"]["Project"];
 type ScriptKind = "setup" | "cleanup";
@@ -31,8 +32,8 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 			return data.project as Project;
 		},
 	});
-	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
-	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
+	if (query.isLoading) return <p className="px-3 text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+	if (query.isError || !query.data) return <p role="alert" className="px-3 text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project = query.data;
 	const scratch = project.kind === "scratch";
 	const save = async (scripts: ScriptCommands) => {
@@ -76,8 +77,8 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 		queryFn: ({ signal }) => client.getProject(cloudOrgId, projectId, { signal }).then((response) => response.project),
 	});
 	if (!ready) return <p role="alert" className="text-sm text-error">{t("settings.cloudProject.signIn")}</p>;
-	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
-	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
+	if (query.isLoading) return <p className="px-3 text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+	if (query.isError || !query.data) return <p role="alert" className="px-3 text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project: CloudCpProject = query.data;
 	const commandsOf = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
 	const save = async (scripts: ScriptCommands) => {
@@ -171,8 +172,9 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>
 				<TabsTrigger value="cleanup">{t("settings.project.scriptCleanup")}</TabsTrigger>
 			</TabsList>
-			{(["setup", "cleanup"] as const).map((kind) => <TabsContent className="space-y-4" key={kind} value={kind}>
-				{kind === "cleanup" && scratch ? <p className="text-sm text-settings-muted">{t("settings.project.cleanupScratchUnavailable")}</p> : <>
+			{(["setup", "cleanup"] as const).map((kind) => <TabsContent key={kind} value={kind}>
+				{kind === "cleanup" && scratch ? <p className="px-3 text-sm text-settings-muted">{t("settings.project.cleanupScratchUnavailable")}</p> : <ProjectSettingsSection title={t(kind === "setup" ? "settings.project.scriptSetup" : "settings.project.scriptCleanup")} titleHidden grouped>
+					<div className="settings-content-row flex flex-col gap-4">
 					{cloud ? <div className="space-y-1 text-pretty text-xs leading-4 text-settings-muted">
 						{cloud.readOnly && <p role="note" className="text-settings-label">{t("settings.project.cloudScriptsAdminOnly")}</p>}
 						<p>{t(kind === "setup" ? "settings.project.cloudSetupHint" : "settings.project.cloudCleanupHint")}</p>
@@ -183,7 +185,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 						<p>{t(`settings.project.${kind}ShellHint`)}</p>
 						<p>{t("settings.project.setupPlatformHint")}</p>
 					</div>}
-					{!scratch && <details className="rounded-md border border-border p-3 text-xs text-settings-muted">
+					{!scratch && <details className="text-xs text-settings-muted">
 						<summary className="cursor-pointer font-medium text-settings-label">{t(cloud ? "settings.project.cloudVariables" : `settings.project.${kind}Paths`)}</summary>
 						{cloud ? <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
 							{cloudScriptVariables.map(([name, key]) => <Fragment key={name}><dt><code>{"$" + name}</code></dt><dd>{t(key)}</dd></Fragment>)}
@@ -200,21 +202,22 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 							</div>
 							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={locked} id={`${kind}-step-${index}`} spellCheck={false} value={step} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? event.target.value : item))} />
 						</div>)}
-						<Button className="gap-1.5" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
+						<Button className="gap-1.5 self-start text-settings-muted hover:text-settings-label" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="ghost"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 					</div>
-					{kind === "cleanup" && !cloud && <div className="space-y-2 border-t border-border pt-4">
+					</div>
+					{kind === "cleanup" && !cloud && <div className="settings-content-row space-y-2">
 						<p className="text-xs text-settings-muted">{t("settings.project.cleanupRetryHint")}</p>
-						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="outline">{t("settings.project.retryCleanup")}</Button>
+						<Button disabled={dirty || mutation.isPending || retry.isPending} onClick={() => retry.mutate()} type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label">{t("settings.project.retryCleanup")}</Button>
 						{retry.isError && <p role="alert" className="text-sm text-error">{retry.error instanceof Error ? retry.error.message : t("settings.project.cleanupRetryFailed")}</p>}
 						{retry.data && <div role="status" className="space-y-1 text-sm text-settings-muted">
 							<p>{t("settings.project.cleanupRetryResult", { cleaned: retry.data.cleaned.length, skipped: retry.data.skipped.length })}</p>
 							{retry.data.skipped.map((item) => <p key={item.sessionId}>{item.sessionId}: {item.reason}</p>)}
 						</div>}
 					</div>}
-				</>}
+				</ProjectSettingsSection>}
 			</TabsContent>)}
 		</Tabs>
-		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
+		{mutation.isError && <p role="alert" className="px-3 text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 		<div className="flex items-center justify-end gap-3 border-t border-border pt-4">
 			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{savedAt && !dirty ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || locked} type="submit">{t("settings.project.saveChanges")}</Button>
