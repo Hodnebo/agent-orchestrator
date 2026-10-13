@@ -188,9 +188,12 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 				<MachineBar appBytes={app.rssBytes} system={system} />
 			) : (
 				// Never an empty card: until the first sample lands, one row holds its place.
-				<div aria-busy="true" className="settings-row-bar text-xs text-settings-muted" data-testid="session-memory-loading">
-					<Loader2 aria-hidden="true" className="size-3 animate-spin" />
-				</div>
+				<p aria-busy="true" className="settings-row-bar text-sm text-settings-muted" data-testid="session-memory-loading">
+					<span className="inline-flex items-center gap-2">
+						<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
+						{t("common.loading")}
+					</span>
+				</p>
 			)}
 		</SettingsSection>
 	);
@@ -202,12 +205,12 @@ export function MachineSection({ action }: { action?: ReactNode }) {
  */
 const columnWidth = { type: "w-24", pid: "w-28", memory: "w-28", cpu: "w-16" } as const;
 const cell = {
-	name: "pl-4 pr-3 text-left",
+	name: "px-3 text-left",
 	process: "pl-11 pr-3 text-left",
 	type: "px-3 text-left",
 	pid: "px-3 text-right",
 	memory: "px-3 text-right",
-	cpu: "pl-3 pr-4 text-right",
+	cpu: "px-3 text-right",
 } as const;
 
 /** Every full-width row (group label, spacer, step heading) spans all five. */
@@ -252,7 +255,7 @@ function SortHeader({ active, ascending, className, label, onSort }: { active: b
 }
 
 /** Every live session and AO's own processes, largest first. */
-export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow[]) => void; projectId?: string }) {
+export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; projectId?: string; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
@@ -307,9 +310,17 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			return next;
 		});
 	if (live.length === 0 && reviewers.length === 0 && !app?.own) {
-		return <p className="px-3 text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>;
+		return (
+			<SettingsSection title={t("shell.memoryGroupSessions")} grouped>
+				<p className="settings-row-bar text-sm text-settings-muted">{t("shell.memoryEmpty")}</p>
+			</SettingsSection>
+		);
 	}
 	return (
+		<SettingsSection title={t("shell.memoryGroupSessions")}>
+		{/* overflow-clip, not the card's overflow-hidden: hidden makes the card a
+		    scroll container, which would stop the header sticking to the page. */}
+		<div className="settings-grouped-rows overflow-clip!">
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
 			<colgroup>
 				<col />
@@ -319,7 +330,9 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 				<col className={columnWidth.cpu} />
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
-			<thead className="sticky top-8 z-10 bg-popover">
+			{/* Below the pinned summary (h-8) and, on the settings page, the window's
+			    transparent toolbar strip. */}
+			<thead className={cn("sticky z-10 bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
 					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
@@ -372,6 +385,8 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 				) : null}
 			</tbody>
 		</table>
+		</div>
+		</SettingsSection>
 	);
 }
 
@@ -393,7 +408,7 @@ export function CpuSection() {
  * list. The numbers stay reachable through the summary line, which only
  * appears once the graphs have scrolled away.
  */
-export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; scroller?: RefObject<HTMLElement | null> }) {
+export function DiagnosticsBody({ projectId, scroller, underToolbar }: { projectId?: string; scroller?: RefObject<HTMLElement | null>; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
@@ -417,13 +432,17 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 				/>
 				<CpuSection />
 			</div>
+			{/* One block with the sessions, so the zero-height bar adds no section gap. */}
+			<div className="flex w-full flex-col">
 			{/* Zero height, so nothing shifts when the bar appears: the bar itself
-			    floats over the rows it is pinned above. */}
-			<div className="sticky top-0 z-20 h-0 overflow-visible">
+			    floats over the rows it is pinned above. On the settings page it pins
+			    below the window's transparent toolbar strip. */}
+			<div className={cn("sticky z-20 h-0 overflow-visible", underToolbar ? "top-toolbar" : "top-0")}>
 				<div
 					aria-hidden={!scrolledPast}
 					className={cn(
-						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) bg-popover font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-3 font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						underToolbar ? "bg-(--color-bg-primary)" : "bg-popover",
 						scrolledPast ? "opacity-100" : "pointer-events-none opacity-0",
 					)}
 					data-testid="session-memory-pinned"
@@ -441,7 +460,8 @@ export function DiagnosticsBody({ projectId, scroller }: { projectId?: string; s
 					) : null}
 				</div>
 			</div>
-			<SessionsTable onRows={setRows} projectId={projectId} />
+			<SessionsTable onRows={setRows} projectId={projectId} underToolbar={underToolbar} />
+			</div>
 		</>
 	);
 }
@@ -470,7 +490,7 @@ export function MemoryDiagnostics() {
 	useFastMemorySampling();
 	return (
 		<div className="settings-dialog-body flex w-full flex-col gap-(--size-settings-section-gap,1.5rem)" data-testid="memory-diagnostics">
-			<DiagnosticsBody />
+			<DiagnosticsBody underToolbar />
 		</div>
 	);
 }

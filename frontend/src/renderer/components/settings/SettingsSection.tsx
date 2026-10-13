@@ -68,7 +68,9 @@ export function SettingsSection({
 			data-section={sectionId}
 		>
 			{action ? (
-				<div className="flex min-h-5 items-center justify-between gap-3 px-3">
+				// h-5, the heading's own line: a taller action (a ghost button)
+				// centres on it and overhangs, so heading→card stays 12px.
+				<div className="flex h-5 items-center justify-between gap-3 px-3">
 					{showTitle ? <h2 className="min-w-0 text-sm font-medium leading-5 text-foreground">{title}</h2> : <span />}
 					<div className="flex shrink-0 items-center">{action}</div>
 				</div>

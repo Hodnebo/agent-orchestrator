@@ -349,7 +349,7 @@ export function KeyboardShortcutsContent({
 							description={shortcutCategoryLabel(shortcut.category, t)}
 						>
 							{shortcut.customizable === false ? (
-								<span className="ml-auto text-caption text-settings-muted">{t("shortcut.fixedIndexed")}</span>
+								<span className="ml-auto text-xs text-settings-muted">{t("shortcut.fixedIndexed")}</span>
 							) : isRecording ? (
 								<div className="ml-auto flex min-w-52 items-center gap-2 rounded-md border border-(--color-settings-accent) px-3 py-2 text-caption text-settings-label">
 									<Keyboard className="size-icon-base animate-pulse" aria-hidden="true" />
@@ -358,7 +358,7 @@ export function KeyboardShortcutsContent({
 							) : (
 								<div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
 									{bindings.length === 0 ? (
-										<span className="text-caption text-settings-muted">{t("shortcut.unassigned")}</span>
+										<span className="text-xs text-settings-muted">{t("shortcut.unassigned")}</span>
 									) : (
 										bindings.map((candidate, index) => (
 											<span

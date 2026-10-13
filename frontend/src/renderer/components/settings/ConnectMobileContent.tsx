@@ -481,7 +481,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// Each return is one or more direct children of the settings card: the
 	// pairing is a content row, keep-awake a SettingsRow, divided by the card.
 	if (query.isLoading) {
-		return <p className="settings-content-row text-xs text-settings-muted">{t("mobile.checkingStatus")}</p>;
+		return <p className="settings-row-bar text-sm text-settings-muted">{t("mobile.checkingStatus")}</p>;
 	}
 	if (query.isError) {
 		return (

@@ -141,7 +141,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 				<input
 					ref={titleRef}
 					id={titleId}
-					className="settings-field-control h-(--size-settings-action-height) rounded-md!"
+					className="settings-field-control h-control-form rounded-md!"
 					value={summary}
 					onChange={(event) => {
 						setSummary(event.target.value);

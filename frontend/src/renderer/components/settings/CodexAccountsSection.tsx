@@ -60,7 +60,7 @@ export function CodexAccountsSection({ titleHidden }: { titleHidden?: boolean })
 	const switchSourceAvailable = Boolean(activeAccount);
 	const switchTargets = data?.accounts.filter((account) => account.id !== data.activeAccountId) ?? [];
 	const switchUnsupported = data?.capabilities.globalSwitch.state !== "supported";
-	const providerHasContent = Boolean(activeLogin || data?.accounts.length || actions.error || switchOutcome || accountsQuery.isLoading || accountsError);
+	const providerHasContent = Boolean(activeLogin || data?.accounts.length || actions.error || switchOutcome);
 
 	useEffect(() => {
 		if (!activeLogin) return;
@@ -205,10 +205,11 @@ export function CodexAccountsSection({ titleHidden }: { titleHidden?: boolean })
 			{actions.error ? <p role="alert" className="settings-content-row text-xs text-error">{actions.error}</p> : null}
 			{switchOutcome ? <p key={switchOutcome.switchId} className={`settings-content-row text-xs ${switchOutcome.result === "failed" || switchOutcome.result === "unchanged" ? "text-error" : "text-settings-muted"}`} role="status" aria-live="polite">{t(`settings.codexAccounts.switch.${switchOutcome.result}`, { label: switchOutcome.label })}</p> : null}
 			{activeLogin && !activeLogin.accountId ? <div className="settings-content-row" data-testid="codex-account-pending-row"><CodexAccountLoginTerminalPanel activeLogin={activeLogin} pending={actions.loginOperationPending} onCheckAgain={() => void verifyLogin(activeLogin)} onClose={() => void actions.closeLogin(activeLogin)} onRetry={() => void actions.retryLogin(activeLogin)} /></div> : null}
-			{accountsQuery.isLoading ? <p className="settings-row-bar text-xs text-settings-muted">{t("settings.codexAccounts.loading")}</p> : null}{accountsError ? <p className="settings-content-row text-xs text-error" role="alert">{accountsError}</p> : null}
 			{data?.accounts.map((account) => <CodexAccountRow key={account.id} account={account} expanded={expandedAccount === account.id} resetCreditSupported={data.capabilities.resetCreditConsume.state === "supported"} mutationDisabled={mutationDisabled} deviceMutationDisabled={mutationDisabled || switchUnsupported} canUse={!activeAccount && !deviceRefreshing && !switchUnsupported && codexAccountCanSwitch(account)} resetBusy={pendingAction?.kind === "reset" && pendingAction.account.id === account.id && pendingAction.submitting} authenticationRetryBusy={actions.authenticationRetryAccountId === account.id} logoutBusy={pendingAction?.kind === "logout" && pendingAction.account.id === account.id && pendingAction.submitting} deleteBusy={pendingAction?.kind === "delete" && pendingAction.account.id === account.id && pendingAction.submitting} activeLogin={activeLogin?.accountId === account.id ? activeLogin : null} loginPending={actions.loginOperationPending} onToggle={() => toggleAccount(account)} onUseAccount={() => openPending("switch", account)} onUseReset={() => openPending("reset", account)} onRetryAuthentication={() => void actions.retryAuthentication(account.id).catch(() => undefined)} onSignIn={() => void beginLogin(account.id)} onLogout={() => openPending("logout", account)} onDelete={() => openPending("delete", account)} onCheckLogin={() => activeLogin && void verifyLogin(activeLogin)} onCloseLogin={() => activeLogin && void actions.closeLogin(activeLogin)} onRetryLogin={() => activeLogin && void actions.retryLogin(activeLogin)} />)}
 		</AgentProviderGroup>
 		{announcement ? <p className="sr-only" role="status" aria-live="polite">{announcement}</p> : null}
+		{/* Loading and the accounts error show once, as the provider row's summary; the error is still announced. */}
+		{accountsError ? <p className="sr-only" role="alert">{accountsError}</p> : null}
 		{dialog && pendingAction ? <ConfirmDialog open title={dialog.title} description={dialog.description} confirmLabel={dialog.confirmLabel} destructive={dialog.destructive} busy={pendingAction.submitting} error={actions.error} onConfirm={() => void submitPending()} onOpenChange={(open) => { if (!open && !pendingAction.submitting) setPendingAction(null); }} /> : null}
 	</SettingsSection>;
 }
