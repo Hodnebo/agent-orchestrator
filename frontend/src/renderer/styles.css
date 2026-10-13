@@ -783,15 +783,17 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	--settings-row-inset: var(--space-4);
 }
 
-/* One card per settings section: hairline edge, the raised card surface one
- * step off the page. The outline is the section's only border; rows inside
- * are separated by space, never by divider lines. */
+/* One card per settings section: no outline, the raised card surface one
+ * step off the page groups it. Hairline dividers separate the items. */
 .settings-grouped-rows {
 	overflow: hidden;
-	border: 1px solid var(--color-border);
 	border-radius: var(--radius-md);
 	background-color: var(--color-bg-secondary);
 	padding-block: var(--space-1);
+}
+
+.settings-grouped-rows > * + * {
+	border-top: 1px solid var(--color-border);
 }
 
 /* Tailwind preflight clears button backgrounds; keep settings rows filled. */
