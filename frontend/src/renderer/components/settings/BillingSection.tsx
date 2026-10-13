@@ -67,8 +67,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	if (!offering.isError && (!offering.loaded || billing.isPending)) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<p className="flex items-center gap-2 px-3 text-xs text-muted-foreground">
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+				<p className="settings-row-bar justify-start gap-2 text-sm text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 					{t("settings.billing.loading")}
 				</p>
@@ -77,10 +77,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	if (billing.isError || !billing.data) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				<div className="flex items-center gap-2 px-3 text-xs text-destructive">
-					{t("settings.billing.loadFailed")}
-					<Button variant="ghost" size="sm" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+				<div className="settings-row-bar">
+					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
+					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
 				</div>
 			</SettingsSection>
 		);
@@ -130,106 +130,106 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	return (
 		<>
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-				{summary.exempt ? <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.exempt")}</p> : null}
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+				{summary.exempt ? <p className="settings-row-bar text-sm text-settings-muted">{t("settings.billing.exempt")}</p> : null}
 				{endsAt ? (
-					<p className="flex items-center justify-between gap-3 px-1 text-xs text-settings-muted">
-						{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
+					<div className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-xs text-settings-muted">
+							{t("settings.billing.cancelNotice", { plan: planName(currentPlan), date: endsAt })}
+						</p>
 						{manage ? (
-							<Button size="sm" variant="secondary" disabled={pending !== null} onClick={() => void openPortal()}>
+							<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 								{t("settings.billing.keepPlan", { plan: planName(currentPlan) })}
 							</Button>
 						) : null}
-					</p>
+					</div>
 				) : null}
 				{lapsed && manage ? (
-					<p role="alert" className="flex items-center justify-between gap-3 px-1 text-xs text-destructive">
-						{t("settings.billing.paymentFailed")}
+					<div role="alert" className="settings-row-bar">
+						<p className="min-w-0 text-pretty text-xs text-error">{t("settings.billing.paymentFailed")}</p>
 						<Button size="sm" disabled={pending !== null} onClick={() => void openPortal()}>
 							{pending === "portal" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
 							{t("settings.billing.updatePayment")}
 						</Button>
-					</p>
+					</div>
 				) : null}
-				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-					<PlanCard
-						name={t("settings.billing.planFree")}
-						price={t("settings.billing.freePrice")}
-						features={[
-							t("settings.billing.freeLocal"),
-							t("settings.billing.freeAgents"),
-							t("settings.billing.freeOrchestrator"),
-							t("settings.billing.freeNoCloud"),
-						]}
-						current={currentPlan === "free"}
-						action={endsAt ? (
-							<Button size="sm" variant="secondary" className="w-full" disabled>
-								{t("settings.billing.freeStarts", { date: endsAt })}
-							</Button>
-						) : subscribed && manage ? (
-							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openCancel()}>
-								{pending === "portal:cancel" ? spinner : null}
-								{t("settings.billing.downgrade")}
-							</Button>
-						) : null}
-						t={t}
-					/>
-					{offers.map((offer) => {
-						const isCurrent = currentPlan === offer.name;
-						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
-						let label = t("settings.billing.upgrade");
-						let onClick = () => void openCheckout(offer.name);
-						if (isCurrent) {
-							label = t("settings.billing.manage");
-							onClick = () => void openPortal();
-						} else if (subscribed) {
-							label = t("settings.billing.switchPlan");
-							onClick = () => void openPortal();
-						}
-						return (
-							<PlanCard
-								key={offer.name}
-								name={planName(offer.name)}
-								price={offerPrice(offer, t)}
-								features={offer.limits ? planFeatures(offer.name, offer.limits, t) : []}
-								current={isCurrent}
-								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
-								highlighted={subscribed ? isCurrent : offer.name === RECOMMENDED_PLAN}
-								action={manage ? (
-									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
-										className="w-full" disabled={pending !== null} onClick={onClick}>
-										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
-										{label}
-									</Button>
-								) : null}
-								t={t}
-							/>
-						);
-					})}
-					<PlanCard
-						name={t("settings.billing.planEnterprise")}
-						price={t("settings.billing.enterprisePrice")}
-						features={[
-							t("settings.billing.enterpriseSessions"),
-							t("settings.billing.enterpriseOrchestrators"),
-							t("settings.billing.enterpriseHours"),
-							t("settings.billing.enterpriseCoder"),
-							t("settings.billing.enterpriseSso"),
-							t("settings.billing.enterpriseSupport"),
-						]}
-						current={false}
-						action={(
-							<Button size="sm" variant="secondary" className="w-full" onClick={() => void aoBridge.app.openExternal(ENTERPRISE_BOOKING_URL)}>
-								<ExternalLink className="size-icon-sm" aria-hidden="true" />
-								{t("settings.billing.talkToFounder")}
-							</Button>
-						)}
-						t={t}
-					/>
-				</div>
-				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
-				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
+				<PlanRow
+					name={t("settings.billing.planFree")}
+					price={t("settings.billing.freePrice")}
+					features={[
+						t("settings.billing.freeLocal"),
+						t("settings.billing.freeAgents"),
+						t("settings.billing.freeOrchestrator"),
+						t("settings.billing.freeNoCloud"),
+					]}
+					current={currentPlan === "free"}
+					action={endsAt ? (
+						<span className="text-xs text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
+					) : subscribed && manage ? (
+						<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openCancel()}>
+							{pending === "portal:cancel" ? spinner : null}
+							{t("settings.billing.downgrade")}
+						</Button>
+					) : null}
+					t={t}
+				/>
+				{offers.map((offer) => {
+					const isCurrent = currentPlan === offer.name;
+					const recommended = !subscribed && offer.name === RECOMMENDED_PLAN;
+					const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
+					let label = t("settings.billing.upgrade");
+					let onClick = () => void openCheckout(offer.name);
+					if (isCurrent) {
+						label = t("settings.billing.manage");
+						onClick = () => void openPortal();
+					} else if (subscribed) {
+						label = t("settings.billing.switchPlan");
+						onClick = () => void openPortal();
+					}
+					return (
+						<PlanRow
+							key={offer.name}
+							name={planName(offer.name)}
+							price={offerPrice(offer, t)}
+							features={offer.limits ? planFeatures(offer.name, offer.limits, t) : []}
+							current={isCurrent}
+							recommended={recommended}
+							action={manage ? (
+								// The recommended upgrade is the page's one primary action;
+								// every other plan action is a quiet row action.
+								<Button size="sm" variant={recommended ? "primary" : "ghost"}
+									className={recommended ? undefined : ghostAction} disabled={pending !== null} onClick={onClick}>
+									{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
+									{label}
+								</Button>
+							) : null}
+							t={t}
+						/>
+					);
+				})}
+				<PlanRow
+					name={t("settings.billing.planEnterprise")}
+					price={t("settings.billing.enterprisePrice")}
+					features={[
+						t("settings.billing.enterpriseSessions"),
+						t("settings.billing.enterpriseOrchestrators"),
+						t("settings.billing.enterpriseHours"),
+						t("settings.billing.enterpriseCoder"),
+						t("settings.billing.enterpriseSso"),
+						t("settings.billing.enterpriseSupport"),
+					]}
+					current={false}
+					action={(
+						<Button size="sm" variant="ghost" className={ghostAction} onClick={() => void aoBridge.app.openExternal(ENTERPRISE_BOOKING_URL)}>
+							<ExternalLink className="size-icon-sm" aria-hidden="true" />
+							{t("settings.billing.talkToFounder")}
+						</Button>
+					)}
+					t={t}
+				/>
+				{manage ? null : <p className="settings-row-bar text-xs text-settings-muted">{t("settings.billing.adminOnly")}</p>}
+				{actionError ? <p role="alert" className="settings-row-bar text-xs text-error">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
 				<>
@@ -264,12 +264,12 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
 							: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
 					>
-						<Button size="sm" variant="secondary" disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
+						<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
 							{t("settings.billing.resetNow")}
 						</Button>
 					</SettingsRow> : null}
+					<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("settings.billing.usageNote")}</p>
 				</SettingsSection>
-				<p className="-mt-2 px-1 text-xs text-settings-muted">{t("settings.billing.usageNote")}</p>
 				</>
 			) : null}
 			<Dialog open={confirmReset} onOpenChange={(open) => { if (pending !== "reset") setConfirmReset(open); }}>
@@ -294,19 +294,26 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boolean; text: string }) {
 	return (
-		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
-			<p className="px-3 text-xs leading-relaxed text-muted-foreground">{text}</p>
+		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+			<p className="settings-row-bar text-sm text-settings-muted">{text}</p>
 		</SettingsSection>
 	);
 }
 
-function PlanCard({ name, price, features, current, recommended, highlighted, action, t }: {
+/** Muted ghost row action, the settings default for every non-primary action. */
+const ghostAction = "text-settings-muted hover:text-settings-label";
+
+/**
+ * One plan as a row of the Plans card: name, price and status on the first
+ * line, its limits under it, the plan action at the trailing edge. The current
+ * plan is the selected row (raised surface + accent "Current").
+ */
+function PlanRow({ name, price, features, current, recommended, action, t }: {
 	name: string;
 	price: string;
 	features: string[];
 	current: boolean;
 	recommended?: boolean;
-	highlighted?: boolean;
 	action: React.ReactNode;
 	t: TFunction;
 }) {
@@ -314,34 +321,33 @@ function PlanCard({ name, price, features, current, recommended, highlighted, ac
 		<div
 			data-testid="plan-card"
 			data-plan={name.toLowerCase()}
+			aria-current={current ? "true" : undefined}
 			className={cn(
-				"relative flex flex-col gap-2 rounded-lg border bg-[var(--color-bg-settings-row)] p-3",
-				highlighted ? "border-[var(--color-status-working)]" : "border-[var(--color-border)]",
+				"settings-content-row flex items-center gap-3",
+				current && "bg-(--color-bg-settings-row-hover)",
 			)}
 		>
-			{current ? (
-				<span className="absolute right-2 top-2 rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
-					{t("settings.billing.current")}
-				</span>
-			) : null}
-			<div className="flex flex-col gap-1">
-				{recommended ? (
-					<span className="w-fit rounded-full bg-[var(--color-status-working)] px-1.5 py-px text-[length:var(--font-size-xs)] font-medium leading-4 text-white">
-						{t("settings.billing.recommended")}
-					</span>
-				) : null}
-				<span className="text-sm font-semibold text-settings-label">{name}</span>
-				<span className="text-xs tabular-nums text-settings-muted">{price}</span>
+			<div className="flex min-w-0 flex-1 flex-col gap-1">
+				<div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+					<span className="text-sm font-medium text-settings-label">{name}</span>
+					<span className="text-xs tabular-nums text-settings-muted">{price}</span>
+					{current ? (
+						<span className="text-xs font-medium text-accent">{t("settings.billing.current")}</span>
+					) : null}
+					{recommended ? (
+						<span className="text-xs font-medium text-accent">{t("settings.billing.recommended")}</span>
+					) : null}
+				</div>
+				<ul className="flex flex-wrap gap-x-3 gap-y-1">
+					{features.map((feature) => (
+						<li key={feature} className="flex items-start gap-1 text-xs leading-4 text-settings-muted">
+							<Check className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
+							{feature}
+						</li>
+					))}
+				</ul>
 			</div>
-			<ul className="flex flex-1 flex-col gap-1">
-				{features.map((feature) => (
-					<li key={feature} className="flex items-start gap-1.5 text-xs leading-4 text-settings-muted">
-						<Check className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
-						{feature}
-					</li>
-				))}
-			</ul>
-			{action}
+			{action ? <div className="flex shrink-0 items-center">{action}</div> : null}
 		</div>
 	);
 }
