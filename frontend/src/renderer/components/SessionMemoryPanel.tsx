@@ -205,12 +205,12 @@ export function MachineSection({ action }: { action?: ReactNode }) {
  */
 const columnWidth = { type: "w-24", pid: "w-28", memory: "w-28", cpu: "w-16" } as const;
 const cell = {
-	name: "px-3 text-left",
-	process: "pl-11 pr-3 text-left",
+	name: "pl-(--settings-row-inset) pr-3 text-left",
+	process: "pl-12 pr-3 text-left",
 	type: "px-3 text-left",
 	pid: "px-3 text-right",
 	memory: "px-3 text-right",
-	cpu: "px-3 text-right",
+	cpu: "pl-3 pr-(--settings-row-inset) text-right",
 } as const;
 
 /** Every full-width row (group label, spacer, step heading) spans all five. */
@@ -441,7 +441,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 				<div
 					aria-hidden={!scrolledPast}
 					className={cn(
-						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-3 font-mono text-xs tabular-nums text-settings-muted transition-opacity",
+						"absolute inset-x-0 top-0 flex h-8 items-center gap-4 border-b border-(--color-border-settings-dialog-header) px-(--settings-row-inset) font-mono text-xs tabular-nums text-settings-muted transition-opacity",
 						underToolbar ? "bg-(--color-bg-primary)" : "bg-popover",
 						scrolledPast ? "opacity-100" : "pointer-events-none opacity-0",
 					)}
@@ -789,7 +789,7 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	return (
 		<>
 			<tr>
-				<td className="pb-1 pl-11 pt-2 text-xs font-medium text-settings-muted" colSpan={columnCount}>{t("shell.memoryRecent")}</td>
+				<td className="pb-1 pl-12 pt-2 text-xs font-medium text-settings-muted" colSpan={columnCount}>{t("shell.memoryRecent")}</td>
 			</tr>
 			{steps.map((step) => {
 				const started = new Date(step.startedAt);

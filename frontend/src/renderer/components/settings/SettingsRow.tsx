@@ -44,10 +44,10 @@ function SettingsRowLabel({
  * The text column is the flexible part: a label alone truncates, a
  * description wraps. The control slot does not shrink, so a control that
  * needs width (an Input) sets one, e.g. `w-80 max-w-full`.
- * Inside a `grouped` SettingsSection it is a 48px-minimum card row.
+ * Inside a `grouped` SettingsSection it is a 56px-minimum card row.
  *
  * `description` adds a sub-label under the row label for controls whose effect
- * is not obvious from the name alone — "Automatic Updates" was read as "install
+ * is not obvious from the name alone — "Automatic updates" was read as "install
  * automatically" when it only governs downloading. It takes a node, so a live
  * status line can carry its own `role="status"` or an error tone
  * (`<span className="text-error">`).

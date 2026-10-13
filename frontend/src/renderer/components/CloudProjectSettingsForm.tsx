@@ -44,8 +44,8 @@ export function CloudProjectSettingsAdapter({ projectId, cloudOrgId, section = "
 	useEffect(() => {
 		if (loadError) onSaveState?.({ phase: "failed", error: loadError, retry: ready ? () => { void query.refetch({ cancelRefetch: false }); } : undefined });
 	}, [loadError, onSaveState, ready, query.refetch]);
-	if (loadError) return <p className="px-3 text-sm text-error" role="alert">{loadError}</p>;
-	if (!query.data) return <p className="px-3 text-sm text-settings-muted">{t("settings.project.loading")}</p>;
+	if (loadError) return <p className="px-(--settings-row-inset) text-sm text-error" role="alert">{loadError}</p>;
+	if (!query.data) return <p className="px-(--settings-row-inset) text-sm text-settings-muted">{t("settings.project.loading")}</p>;
 	return <CloudSettingsAdapter key={`${cloudOrgId}/${projectId}`} project={query.data} section={section} onSaveState={onSaveState} />;
 }
 

@@ -336,7 +336,7 @@ function ProjectCuesSettings({ projectId, onBusyChange, createOnly = false, onCr
 	const empty = !formOpen && !cuesQuery.isError && (!cuesQuery.isFetchedAfterMount || (cuesQuery.data ?? []).length === 0);
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
-			<p className="px-3 text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
+			<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("cues.settingsDescription")}</p>
 			<fieldset className="min-w-0" disabled={busy}>{formOpen ? createOnly ? renderForm() : <div className="settings-grouped-rows flex w-full flex-col"><div className="settings-content-row">{renderForm()}</div></div> : renderList()}</fieldset>
 			{empty ? null : (
 			<div className="flex items-center justify-end gap-2">

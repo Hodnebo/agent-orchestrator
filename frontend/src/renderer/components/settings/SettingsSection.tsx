@@ -19,8 +19,8 @@ function repeatsPageTitle(title: string, pageTitle: string | null) {
  * `sectionId` (optional) marks the section for the renderer smoke suite as
  * [data-testid="settings-section"][data-section=<id>].
  * `grouped` puts the children in one card (.settings-grouped-rows): direct
- * children are SettingsRow or `.settings-content-row` blocks, divided by the
- * card's own hairline.
+ * children are SettingsRow or `.settings-content-row` blocks, separated by space;
+ * the card outline is the only border.
  * `toolbar` sits under the heading and above the card — a SettingsSearch, for
  * instance. Its sticky wrapper's bottom padding is the gap to the card.
  * `action` sits at the right end of the heading line, vertically centred: a
@@ -70,12 +70,12 @@ export function SettingsSection({
 			{action ? (
 				// h-5, the heading's own line: a taller action (a ghost button)
 				// centres on it and overhangs, so heading→card stays 12px.
-				<div className="flex h-5 items-center justify-between gap-3 px-3">
+				<div className="flex h-5 items-center justify-between gap-3 px-(--settings-row-inset)">
 					{showTitle ? <h2 className="min-w-0 text-sm font-medium leading-5 text-foreground">{title}</h2> : <span />}
 					<div className="flex shrink-0 items-center">{action}</div>
 				</div>
 			) : showTitle ? (
-				<h2 className="px-3 text-sm font-medium leading-5 text-foreground">{title}</h2>
+				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">{title}</h2>
 			) : null}
 			{toolbar ? (
 				<div className="flex w-full flex-col">

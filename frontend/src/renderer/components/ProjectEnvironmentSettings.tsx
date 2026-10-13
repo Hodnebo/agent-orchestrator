@@ -55,7 +55,7 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 		},
 	});
 	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
-	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-3"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
+	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
 	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -174,7 +174,7 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		return () => window.clearTimeout(timer);
 	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<p className="px-3 text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
+		<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{t("settings.project.environmentDescription")}</p>
 		{showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
 			<div className="settings-row-bar">
 				<span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span>
@@ -203,8 +203,8 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 				<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
 			</div>
 		</div></ProjectSettingsSection>}
-		{importedCount !== null && <p role="status" className="px-3 text-xs text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
-		{error && <p role="alert" className="px-3 text-xs text-error">{error}</p>}
-		{mutation.isError && <p role="alert" className="px-3 text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
+		{importedCount !== null && <p role="status" className="px-(--settings-row-inset) text-xs text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
+		{error && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{error}</p>}
+		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 	</form>;
 }
