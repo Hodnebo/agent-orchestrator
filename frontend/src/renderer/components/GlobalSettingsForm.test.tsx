@@ -228,7 +228,8 @@ describe("GlobalSettingsForm", () => {
 		renderForm("harness", "cursor");
 
 		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
+		// Headings that repeat the page title are now hidden by SettingsSection, not this flag.
+		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: false });
 	});
 
 	it("keeps Browser in its dedicated settings page", async () => {

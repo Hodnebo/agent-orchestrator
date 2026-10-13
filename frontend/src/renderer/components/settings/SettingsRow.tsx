@@ -25,7 +25,7 @@ function SettingsRowLabel({
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
 			<span className="min-w-0">
 				<span className="block text-sm leading-5 text-settings-label">{label}</span>
-				<span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span>
+				<span className="mt-0.5 block text-pretty text-control leading-4 text-settings-muted">{description}</span>
 			</span>
 		</div>
 	);
@@ -55,7 +55,7 @@ export function SettingsRow({
 		<div
 			className={cn(
 				"settings-row-bar",
-				description !== undefined && "h-auto min-h-(--size-settings-row) items-start py-3",
+				description !== undefined && "h-auto min-h-(--size-settings-row)",
 				className,
 			)}
 		>

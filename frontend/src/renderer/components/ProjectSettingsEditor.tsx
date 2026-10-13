@@ -164,8 +164,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	}, [didSave]);
 	const patch = (values: Partial<ProjectSettingsDraft>) => setDraft((current) => ({ ...current, ...values }));
 	const warning = reviewerWarning?.(draft.reviewerHarness);
-	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form gap-5${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
-		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-5">
+	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
+		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
 					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
