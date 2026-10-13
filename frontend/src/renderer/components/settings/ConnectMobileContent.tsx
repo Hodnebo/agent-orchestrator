@@ -519,8 +519,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		<div className="settings-content-row flex flex-col gap-4">
 			<p className="text-xs leading-4 text-settings-muted">{t("mobile.description")}</p>
 
-			<div className="flex flex-col gap-6">
-				{/* The walkthrough, then the pairing QR under it. */}
+			<div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+				{/* Left: the walkthrough. */}
 				<div className="flex min-w-0 flex-1 flex-col">
 					{/* Connection picker commented out: one v2 code carries every
 					    advertised endpoint — LAN, Tailscale and tunnel — and the phone
@@ -656,9 +656,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
 				</div>
 
-				{/* Dedicated pairing-QR panel — square and clipping, stacked under
-				    the walkthrough in the settings column. */}
-				<div className="flex w-80 max-w-full shrink-0 flex-col gap-3 self-start">
+				{/* Right: dedicated pairing-QR panel — square, clipping, flush with
+				    the content's right edge so bottom/right spacing match. */}
+				<div className="flex w-full shrink-0 flex-col gap-3 self-start sm:w-80">
 					<div className="relative">
 						<div
 							className={cn(
@@ -729,7 +729,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 							type="button"
 							variant="ghost"
 							size="sm"
-							className="self-start text-settings-muted hover:text-settings-label"
+							className="w-full text-settings-muted hover:text-settings-label"
 							disabled={busy}
 							onClick={() => {
 								clearActionErrors();
