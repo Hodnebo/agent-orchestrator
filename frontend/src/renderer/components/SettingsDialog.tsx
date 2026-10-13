@@ -393,9 +393,13 @@ export function SettingsPane() {
 			<div aria-hidden="true" className="h-toolbar shrink-0" style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
+				// `relative` makes the scroller the containing block for absolutely
+				// positioned content (sr-only labels, menu triggers). Without it they
+				// escape to the shell's overflow-x-hidden wrapper, which then scrolls
+				// the whole center panel away.
 				<div
 					aria-busy={!entry.isBodyReady}
-					className={cn("settings-thin-scrollbar min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
+					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pb-12 pt-4">
