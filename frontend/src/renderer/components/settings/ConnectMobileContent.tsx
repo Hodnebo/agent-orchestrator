@@ -478,11 +478,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		null;
 
 	if (query.isLoading) {
-		return <p className="py-4 text-center text-xs text-settings-muted">{t("mobile.checkingStatus")}</p>;
+		return <p className="text-xs text-settings-muted">{t("mobile.checkingStatus")}</p>;
 	}
 	if (query.isError) {
 		return (
-			<p className="py-4 text-center text-xs text-error">
+			<p className="text-xs text-error">
 				{query.error instanceof Error ? query.error.message : t("mobile.loadFailed")}
 			</p>
 		);
@@ -515,8 +515,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		<div className="flex flex-col gap-4">
 			<p className="text-xs leading-4 text-settings-muted">{t("mobile.description")}</p>
 
-			<div className="flex flex-col gap-6 sm:flex-row sm:items-start">
-				{/* Left: the walkthrough. */}
+			<div className="flex flex-col gap-6">
+				{/* The walkthrough, then the pairing QR under it. */}
 				<div className="flex min-w-0 flex-1 flex-col">
 					{/* Connection picker commented out: one v2 code carries every
 					    advertised endpoint — LAN, Tailscale and tunnel — and the phone
@@ -652,9 +652,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
 				</div>
 
-				{/* Right: dedicated pairing-QR panel — square, clipping, flush with
-				    the content's right edge so bottom/right spacing match. */}
-				<div className="flex w-full shrink-0 flex-col gap-3 self-start sm:w-80">
+				{/* Dedicated pairing-QR panel — square and clipping, stacked under
+				    the walkthrough in the settings column. */}
+				<div className="flex w-80 max-w-full shrink-0 flex-col gap-3 self-start">
 					<div className="relative">
 						<div
 							className={cn(
@@ -723,8 +723,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					{enabled && (
 						<Button
 							type="button"
-							variant="footer"
-							className="w-full"
+							variant="ghost"
+							size="sm"
+							className="self-start text-settings-muted hover:text-settings-label"
 							disabled={busy}
 							onClick={() => {
 								clearActionErrors();

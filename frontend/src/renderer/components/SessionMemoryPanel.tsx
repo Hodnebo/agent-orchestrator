@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
 import {
 	chipTone,
 	largestSession,
@@ -183,12 +183,20 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 	const system = appMemory?.system;
 	return (
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-			<div className="flex items-center justify-between gap-3">
-				<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.memorySectionMachine")}</h2>
+			{/* SettingsSection's heading, plus a trailing action it has no slot for. */}
+			<div className="flex items-center justify-between gap-3 px-3">
+				<h2 className="text-sm font-medium leading-5 text-foreground">{t("shell.memorySectionMachine")}</h2>
 				{action}
 			</div>
 			<div className="settings-grouped-rows flex w-full flex-col">
-				{system && app ? <MachineBar appBytes={app.rssBytes} system={system} /> : null}
+				{system && app ? (
+					<MachineBar appBytes={app.rssBytes} system={system} />
+				) : (
+					// Never an empty card: until the first sample lands, one row holds its place.
+					<div aria-busy="true" className="settings-row-bar text-xs text-settings-muted" data-testid="session-memory-loading">
+						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+					</div>
+				)}
 			</div>
 		</section>
 	);
@@ -305,7 +313,7 @@ export function SessionsTable({ onRows, projectId }: { onRows?: (rows: ReportRow
 			return next;
 		});
 	if (live.length === 0 && reviewers.length === 0 && !app?.own) {
-		return <p className="py-6 text-center text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>;
+		return <p className="px-3 text-xs text-settings-muted">{t("shell.memoryEmpty")}</p>;
 	}
 	return (
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
@@ -1037,8 +1045,8 @@ function CpuGraph({ current, history, system }: { current: CPUSample; history: C
 	const now = current;
 	return (
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)" data-testid="session-cpu-graph">
-			<div className="flex items-center justify-between">
-				<h2 className="text-xs font-medium leading-4 text-settings-muted">{t("shell.cpuBarTitle", { cores: system.cpuCount })}</h2>
+			<div className="flex items-center justify-between px-3">
+				<h2 className="text-sm font-medium leading-5 text-foreground">{t("shell.cpuBarTitle", { cores: system.cpuCount })}</h2>
 				{/* A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number. */}
 				{system.load1 >= 0 ? (
 					<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>

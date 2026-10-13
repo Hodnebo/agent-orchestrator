@@ -127,11 +127,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "shortcuts",
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
-		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.keyboardShortcuts")} grouped>
-				<KeyboardShortcutsContent active />
-			</SettingsSection>
-		),
+		render: (_t, titleHidden) => <KeyboardShortcutsContent active titleHidden={titleHidden} />,
 	},
 	{
 		id: "diagnostics",
