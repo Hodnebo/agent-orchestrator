@@ -56,10 +56,6 @@ export type SettingsCatalogItem = {
 	render: (t: TFunction, titleHidden: boolean, context: CatalogContext) => ReactNode;
 };
 
-function SettingsContentPanel({ children }: { children: ReactNode }) {
-	return <div className="rounded-md bg-[var(--color-bg-settings-row)]">{children}</div>;
-}
-
 const globalSettingsCatalog: SettingsCatalogItem[] = [
 	{
 		id: "general",
@@ -116,12 +112,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Smartphone,
 		label: (t) => t("settings.mobile"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")}>
-				<div className="rounded-md bg-[var(--color-bg-settings-row)] pb-4 pt-0">
-					<ConnectMobileContent active />
-					<MobileDevicesSection />
-				</div>
-			</SettingsSection>
+			<>
+				<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")} grouped>
+					<div className="settings-content-row">
+						<ConnectMobileContent active />
+					</div>
+				</SettingsSection>
+				{/* Its own section (and card) when devices are paired; renders nothing otherwise. */}
+				<MobileDevicesSection />
+			</>
 		),
 	},
 	{
@@ -129,8 +128,8 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.keyboardShortcuts")}>
-				<SettingsContentPanel><KeyboardShortcutsContent active /></SettingsContentPanel>
+			<SettingsSection titleHidden={titleHidden} title={t("settings.keyboardShortcuts")} grouped>
+				<KeyboardShortcutsContent active />
 			</SettingsSection>
 		),
 	},
@@ -157,8 +156,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CircleHelp,
 		label: (t) => t("settings.help"),
 		render: (t, titleHidden) => (
-			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")}>
-				<SettingsContentPanel><ReportProblemContent active /></SettingsContentPanel>
+			<SettingsSection titleHidden={titleHidden} title={t("settings.reportProblem")} grouped>
+				<div className="settings-content-row">
+					<ReportProblemContent active />
+				</div>
 			</SettingsSection>
 		),
 	},

@@ -1,20 +1,26 @@
 import { Pencil, type LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
 function SettingsRowLabel({
 	icon: Icon,
+	leading,
 	label,
 	description,
 }: {
 	icon?: LucideIcon;
-	label: string;
-	description?: string;
+	leading?: ReactNode;
+	label: ReactNode;
+	description?: ReactNode;
 }) {
+	const lead = leading ? (
+		<div className="flex shrink-0 items-center self-center">{leading}</div>
+	) : null;
 	if (description === undefined) {
 		return (
 			<div className="flex shrink-0 items-center gap-(--size-settings-row-icon-gap)">
+				{lead}
 				{Icon ? <Icon className="size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
 				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{label}</span>
 			</div>
@@ -22,44 +28,57 @@ function SettingsRowLabel({
 	}
 	return (
 		<div className="flex min-w-0 shrink items-start gap-(--size-settings-row-icon-gap)">
+			{lead}
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
-			<span className="min-w-0">
-				<span className="block text-sm leading-5 text-settings-label">{label}</span>
-				<span className="mt-0.5 block text-pretty text-control leading-4 text-settings-muted">{description}</span>
-			</span>
+			<div className="min-w-0">
+				<div className="text-sm leading-5 text-settings-label">{label}</div>
+				<div className="mt-0.5 text-pretty text-control leading-4 text-settings-muted">{description}</div>
+			</div>
 		</div>
 	);
 }
 
 /**
- * Settings row bar: tokenized height, radius, padding, and icon gap.
+ * The one settings row: label (14px) with an optional 13px muted description
+ * directly under it, the control vertically centered at the trailing edge.
+ * Inside a `grouped` SettingsSection it is a 48px-minimum card row.
  *
  * `description` adds a sub-label under the row label for controls whose effect
  * is not obvious from the name alone — "Automatic Updates" was read as "install
- * automatically" when it only governs downloading.
+ * automatically" when it only governs downloading. It takes a node, so a live
+ * status line can carry its own `role="status"` or an error tone
+ * (`<span className="text-error">`).
+ *
+ * `icon` is a muted Lucide glyph; `leading` is any other leading visual, such
+ * as an AgentAvatar (`size-7`). Other div attributes (id, data-*, tabIndex,
+ * aria-labelledby) pass through to the row.
  */
 export function SettingsRow({
 	icon,
+	leading,
 	label,
 	description,
 	children,
 	className,
-}: {
+	...rowProps
+}: Omit<ComponentPropsWithoutRef<"div">, "children"> & {
 	icon?: LucideIcon;
-	label: string;
-	description?: string;
-	children: ReactNode;
+	leading?: ReactNode;
+	label: ReactNode;
+	description?: ReactNode;
+	children?: ReactNode;
 	className?: string;
 }) {
 	return (
 		<div
+			{...rowProps}
 			className={cn(
 				"settings-row-bar",
 				description !== undefined && "h-auto min-h-(--size-settings-row)",
 				className,
 			)}
 		>
-			<SettingsRowLabel icon={icon} label={label} description={description} />
+			<SettingsRowLabel icon={icon} leading={leading} label={label} description={description} />
 			<div
 				className={cn(
 					"flex min-w-0 flex-1 items-center justify-end",

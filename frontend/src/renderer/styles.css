@@ -790,7 +790,6 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 }
 
 /* Helper copy belongs to the preceding settings row, not a separate divided row. */
-.settings-grouped-rows > .settings-row-helper,
 [data-section="updates"] .nightly-warning {
 	border-top: 0 !important;
 	border-block-start: 0 !important;
@@ -809,6 +808,14 @@ button.settings-row-bar {
 	padding-block: var(--space-1_5);
 	padding-inline: var(--space-3);
 	border-radius: 0;
+}
+
+/* Non-row content in a settings card (forms, release notes, terminals, QR,
+ * charts): a direct card child inset to the rows' text edge. Block by default;
+ * add flex/gap utilities for its own layout. */
+@utility settings-content-row {
+	padding-inline: var(--space-3);
+	padding-block: var(--space-3);
 }
 
 /* The update summary is a content row, not a compact control row. */
