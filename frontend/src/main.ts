@@ -1079,6 +1079,10 @@ async function createWindowInternal(): Promise<void> {
 				console.error("AO: window teardown failed:", error);
 			});
 		mainWindow = null;
+		// Vibrancy belongs to the destroyed window. Forget it so the replacement
+		// window's renderer re-applies it instead of hitting the unchanged-state
+		// early return in theme:set-window-translucent.
+		windowTranslucent = false;
 		// Drop any pending dock bounce with the window it was attached to: its
 		// focus listener died with the window, so leaving the id set would make
 		// the next bounce skip attaching one to the replacement window.
