@@ -776,17 +776,22 @@ html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, 
 	padding-block: var(--size-settings-row-padding);
 }
 
+/* Horizontal inset of settings row text inside a card. Page titles, section
+ * headings and helper text outside the card use it too so every text edge on
+ * a settings page lines up. */
+:root {
+	--settings-row-inset: var(--space-4);
+}
+
 /* One card per settings section: hairline edge, the raised card surface one
- * step off the page, rows divided by the same hairline. */
+ * step off the page. The outline is the section's only border; rows inside
+ * are separated by space, never by divider lines. */
 .settings-grouped-rows {
 	overflow: hidden;
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-md);
 	background-color: var(--color-bg-secondary);
-}
-
-.settings-grouped-rows > * + * {
-	border-top: 1px solid var(--color-border);
+	padding-block: var(--space-1);
 }
 
 /* Tailwind preflight clears button backgrounds; keep settings rows filled. */
@@ -794,12 +799,12 @@ button.settings-row-bar {
 	background-color: var(--color-bg-settings-row);
 }
 
-/* Grouped rows: 48px minimum, the control vertically centered. */
+/* Grouped rows: 56px minimum, the control vertically centered. */
 .settings-grouped-rows .settings-row-bar {
 	height: auto;
-	min-height: calc(var(--spacing) * 12);
-	padding-block: var(--space-1_5);
-	padding-inline: var(--space-3);
+	min-height: calc(var(--spacing) * 14);
+	padding-block: var(--space-2_5);
+	padding-inline: var(--settings-row-inset);
 	border-radius: 0;
 }
 
@@ -807,7 +812,7 @@ button.settings-row-bar {
  * charts): a direct card child inset to the rows' text edge. Block by default;
  * add flex/gap utilities for its own layout. */
 @utility settings-content-row {
-	padding-inline: var(--space-3);
+	padding-inline: var(--settings-row-inset);
 	padding-block: var(--space-3);
 }
 

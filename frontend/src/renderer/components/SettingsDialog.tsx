@@ -405,7 +405,7 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
-						<h1 className="mb-8 px-3 text-heading font-medium leading-7 text-foreground">
+						<h1 className="mb-8 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
 						</h1>
