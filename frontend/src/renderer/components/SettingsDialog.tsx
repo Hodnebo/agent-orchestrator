@@ -387,10 +387,12 @@ export function SettingsPane() {
 	if (!page) return null;
 	const layer = page.active;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			{/* Empty strip, toolbar height: keeps the macOS window-drag region and clears
-			  * the fixed titlebar controls that sit over the panel when the sidebar is closed. */}
-			<div aria-hidden="true" className="h-toolbar shrink-0" style={topbarDragStyle} />
+		<div className="relative flex min-h-0 flex-1 flex-col" data-testid="settings-page">
+			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
+			  * window-drag region while content scrolls up under it to the panel edge.
+			  * The body's top padding clears it (and the fixed titlebar controls that
+			  * sit over the panel when the sidebar is closed) at rest. */}
+			<div aria-hidden="true" className={cn("absolute inset-x-0 top-0 z-10 h-toolbar", !topbarDragStyle && "pointer-events-none")} style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
 				// `relative` makes the scroller the containing block for absolutely
@@ -402,7 +404,7 @@ export function SettingsPane() {
 					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pb-12 pt-4">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
 						<h1 className="mb-8 px-3 text-heading font-medium leading-7 text-foreground">
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
