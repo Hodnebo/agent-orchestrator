@@ -44,7 +44,8 @@ it("does not expose saved hosts or pairing controls before account sign-in", () 
 	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
 	renderSettings();
 	// The row names the requirement; the action is a short ghost "Sign in".
-	expect(screen.getByText("Sign in to AO Cloud")).toBeVisible();
+	expect(screen.getByText("AO Cloud")).toBeVisible();
+	expect(screen.getByText("Sign in to connect remote hosts.")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
 	expect(screen.queryByRole("button", { name: "Edit Box A" })).toBeNull();
 	expect(remotes.list).not.toHaveBeenCalled();

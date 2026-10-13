@@ -50,6 +50,7 @@ import {
 	settingsDialogContentClass,
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
+import { SettingsSection } from "./settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 // Stable identity for the loading state: `data ?? []` would hand useMemo a
@@ -182,23 +183,16 @@ export function MachineSection({ action }: { action?: ReactNode }) {
 	const app = appMemory?.app;
 	const system = appMemory?.system;
 	return (
-		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-			{/* SettingsSection's heading, plus a trailing action it has no slot for. */}
-			<div className="flex items-center justify-between gap-3 px-3">
-				<h2 className="text-sm font-medium leading-5 text-foreground">{t("shell.memorySectionMachine")}</h2>
-				{action}
-			</div>
-			<div className="settings-grouped-rows flex w-full flex-col">
-				{system && app ? (
-					<MachineBar appBytes={app.rssBytes} system={system} />
-				) : (
-					// Never an empty card: until the first sample lands, one row holds its place.
-					<div aria-busy="true" className="settings-row-bar text-xs text-settings-muted" data-testid="session-memory-loading">
-						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
-					</div>
-				)}
-			</div>
-		</section>
+		<SettingsSection title={t("shell.memorySectionMachine")} action={action} grouped>
+			{system && app ? (
+				<MachineBar appBytes={app.rssBytes} system={system} />
+			) : (
+				// Never an empty card: until the first sample lands, one row holds its place.
+				<div aria-busy="true" className="settings-row-bar text-xs text-settings-muted" data-testid="session-memory-loading">
+					<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+				</div>
+			)}
+		</SettingsSection>
 	);
 }
 
@@ -1044,46 +1038,45 @@ function CpuGraph({ current, history, system }: { current: CPUSample; history: C
 	const { t } = useTranslation();
 	const now = current;
 	return (
-		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)" data-testid="session-cpu-graph">
-			<div className="flex items-center justify-between px-3">
-				<h2 className="text-sm font-medium leading-5 text-foreground">{t("shell.cpuBarTitle", { cores: system.cpuCount })}</h2>
-				{/* A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number. */}
-				{system.load1 >= 0 ? (
-					<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
-				) : null}
-			</div>
-			<div className="settings-grouped-rows flex w-full flex-col">
-				<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">
-					<svg aria-hidden="true" className="h-14 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
-						{[25, 50, 75].map((line) => (
-							<line
-								className="stroke-foreground/[0.06]"
-								key={line}
-								strokeWidth={1}
-								x1={0}
-								x2={graphWidth}
-								y1={graphHeight - (line / 100) * graphHeight}
-								y2={graphHeight - (line / 100) * graphHeight}
-							/>
-						))}
-						<path className="fill-none stroke-warning/80" d={linePath(history.map((s) => s.host))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-						<path className="fill-none stroke-accent-strong" d={linePath(history.map((s) => s.ao))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-					</svg>
-					{/* A line's colour means nothing without a key: name each one,
-					    the same way the memory bar names its parts. */}
-					<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
-						{[
-							{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: now.host },
-							{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: now.ao },
-						].map((part) => (
-							<span className="inline-flex items-center gap-1.5" key={part.key}>
-								<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
-								{part.label} <span className="text-settings-label">{formatCPU(part.value)}</span>
-							</span>
-						))}
-					</div>
+		<SettingsSection
+			title={t("shell.cpuBarTitle", { cores: system.cpuCount })}
+			testId="session-cpu-graph"
+			grouped
+			// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
+			action={system.load1 >= 0 ? (
+				<span className="font-mono text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
+			) : undefined}
+		>
+			<div className="settings-row-bar h-auto flex-col items-stretch gap-2 py-3">
+				<svg aria-hidden="true" className="h-14 w-full" preserveAspectRatio="none" viewBox={`0 0 ${graphWidth} ${graphHeight}`}>
+					{[25, 50, 75].map((line) => (
+						<line
+							className="stroke-foreground/[0.06]"
+							key={line}
+							strokeWidth={1}
+							x1={0}
+							x2={graphWidth}
+							y1={graphHeight - (line / 100) * graphHeight}
+							y2={graphHeight - (line / 100) * graphHeight}
+						/>
+					))}
+					<path className="fill-none stroke-warning/80" d={linePath(history.map((s) => s.host))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+					<path className="fill-none stroke-accent-strong" d={linePath(history.map((s) => s.ao))} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+				</svg>
+				{/* A line's colour means nothing without a key: name each one,
+				    the same way the memory bar names its parts. */}
+				<div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-settings-muted">
+					{[
+						{ key: "machine", className: "bg-warning/80", label: t("shell.cpuLegendMachine"), value: now.host },
+						{ key: "ao", className: "bg-accent-strong", label: t("shell.memoryLegendAO"), value: now.ao },
+					].map((part) => (
+						<span className="inline-flex items-center gap-1.5" key={part.key}>
+							<span aria-hidden="true" className={cn("size-1.5 rounded-full", part.className)} />
+							{part.label} <span className="text-settings-label">{formatCPU(part.value)}</span>
+						</span>
+					))}
 				</div>
 			</div>
-		</section>
+		</SettingsSection>
 	);
 }

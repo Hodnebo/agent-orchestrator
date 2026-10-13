@@ -256,7 +256,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 	return (
 		<>
-			<SettingsSection title={t("settings.updates.installedVersion")} sectionId="updates" titleHidden={titleHidden} grouped>
+			<SettingsSection title={t("settings.updates.versionSection")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
 					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure } : status}
 					manualCheckRequestId={manualCheckRequestId}
@@ -279,7 +279,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 				)}
 			</SettingsSection>
 
-			<SettingsSection title={t("settings.general")} grouped>
+			<SettingsSection title={t("settings.updates.preferencesSection")} grouped>
 				<SettingsRow
 					label={t("settings.updates.automatic")}
 					description={t("settings.updates.automaticHelp")}

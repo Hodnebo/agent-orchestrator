@@ -252,8 +252,9 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
 		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
-		// Its first heading is "Installed version" ("Updates" is the page title).
-		expect(await screen.findByText("Installed version", {}, { timeout: 5_000 })).toBeInTheDocument();
+		// Its sections are "Version" and "Preferences" ("Updates" is the page title).
+		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -530,7 +531,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("hides the nightly warning on the stable channel", async () => {
 		renderForm();
-		await screen.findByText("Installed version");
+		await screen.findByRole("heading", { name: "Version" });
 		expect(screen.queryByText(/Nightly updates daily and may be unstable or cause data loss/i)).not.toBeInTheDocument();
 	});
 

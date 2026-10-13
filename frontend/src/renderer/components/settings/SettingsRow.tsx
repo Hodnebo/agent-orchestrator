@@ -19,15 +19,15 @@ function SettingsRowLabel({
 	) : null;
 	if (description === undefined) {
 		return (
-			<div className="flex shrink-0 items-center gap-(--size-settings-row-icon-gap)">
+			<div className="flex min-w-0 flex-1 items-center gap-(--size-settings-row-icon-gap)">
 				{lead}
 				{Icon ? <Icon className="size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
-				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{label}</span>
+				<span className="min-w-0 truncate text-sm leading-5 text-settings-label">{label}</span>
 			</div>
 		);
 	}
 	return (
-		<div className="flex min-w-0 shrink items-start gap-(--size-settings-row-icon-gap)">
+		<div className="flex min-w-0 flex-1 items-start gap-(--size-settings-row-icon-gap)">
 			{lead}
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
 			<div className="min-w-0">
@@ -41,6 +41,9 @@ function SettingsRowLabel({
 /**
  * The one settings row: label (14px) with an optional 13px muted description
  * directly under it, the control vertically centered at the trailing edge.
+ * The text column is the flexible part: a label alone truncates, a
+ * description wraps. The control slot does not shrink, so a control that
+ * needs width (an Input) sets one, e.g. `w-80 max-w-full`.
  * Inside a `grouped` SettingsSection it is a 48px-minimum card row.
  *
  * `description` adds a sub-label under the row label for controls whose effect
@@ -79,9 +82,12 @@ export function SettingsRow({
 			)}
 		>
 			<SettingsRowLabel icon={icon} leading={leading} label={label} description={description} />
+			{/* The text column takes the free space; the control keeps its own
+			    width (capped at 60% of the row) so it never spills over the text.
+			    Value/input caps resolve against the slot, so they are 100% here. */}
 			<div
 				className={cn(
-					"flex min-w-0 flex-1 items-center justify-end",
+					"flex max-w-[60%] shrink-0 items-center justify-end [--size-settings-inline-input-max-percent:100%] [--size-settings-row-value-max-percent:100%]",
 					description !== undefined && "self-center",
 				)}
 			>

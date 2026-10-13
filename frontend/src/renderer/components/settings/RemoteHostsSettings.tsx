@@ -130,7 +130,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 
 	if (status !== "authenticated") return (
 		<SettingsSection title={t("settings.remoteHosts")} sectionId="remoteHosts" titleHidden={titleHidden} grouped>
-			<SettingsRow label={t("shell.signInToAOCloud")} description={t("remote.connectionDescription")}>{status === "unauthenticated" ? (
+			<SettingsRow label={t("remote.aoCloud")} description={t("remote.signInDescription")}>{status === "unauthenticated" ? (
 				<Button className={GHOST_ACTION} onClick={() => localAuthAvailable ? openLocalSignIn() : signIn()} size="sm" type="button" variant="ghost">
 					{t("shell.signIn")}
 				</Button>
@@ -196,9 +196,9 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		<form className="flex w-full flex-col" onSubmit={(event) => void save(event)} ref={formRef}>
 			<SettingsSection title={editing ? t("remote.editHost", { label: editing.label }) : t("remote.addHost")} grouped>
 				<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("remote.setupHint")}</p>
-				<SettingsRow label={t("remote.name")}><Input aria-label={t("remote.name")} className="max-w-sm" disabled={busy} maxLength={64} onChange={(event) => setLabel(event.target.value)} required value={label} /></SettingsRow>
-				<SettingsRow label={t("mobile.address")}><Input aria-label={t("mobile.address")} className="max-w-sm" disabled={busy} inputMode="url" onChange={(event) => setUrl(event.target.value)} placeholder={t("remote.addressPlaceholder")} required value={url} /></SettingsRow>
-				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="max-w-sm" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
+				<SettingsRow label={t("remote.name")}><Input aria-label={t("remote.name")} className="w-80 max-w-full" disabled={busy} maxLength={64} onChange={(event) => setLabel(event.target.value)} required value={label} /></SettingsRow>
+				<SettingsRow label={t("mobile.address")}><Input aria-label={t("mobile.address")} className="w-80 max-w-full" disabled={busy} inputMode="url" onChange={(event) => setUrl(event.target.value)} placeholder={t("remote.addressPlaceholder")} required value={url} /></SettingsRow>
+				<SettingsRow label={t("remote.connectionPassword")}><Input aria-label={t("remote.connectionPassword")} autoComplete="off" className="w-80 max-w-full" disabled={busy} onChange={(event) => setPassword(event.target.value)} placeholder={editing?.hostId ? t("remote.keepPassword") : undefined} required={!editing?.hostId} type="password" value={password} /></SettingsRow>
 				<div className="settings-content-row flex items-center justify-end gap-2">
 					{formError ? <p className="mr-auto min-w-0 text-xs text-error" role="alert">{formError}</p> : null}
 					{editing ? <Button className={GHOST_ACTION} disabled={busy} onClick={resetForm} size="sm" type="button" variant="ghost">{t("confirm.cancel")}</Button> : null}
