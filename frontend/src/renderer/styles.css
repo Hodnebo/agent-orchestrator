@@ -801,10 +801,11 @@ button.settings-row-bar {
 	background-color: var(--color-bg-settings-row);
 }
 
-/* Grouped rows: 56px minimum, the control vertically centered. */
+/* Grouped rows fit their content (10px vertical padding), the control
+ * vertically centered. */
 .settings-grouped-rows .settings-row-bar {
 	height: auto;
-	min-height: calc(var(--spacing) * 14);
+	min-height: 0;
 	padding-block: var(--space-2_5);
 	padding-inline: var(--settings-row-inset);
 	border-radius: 0;

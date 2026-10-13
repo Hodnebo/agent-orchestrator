@@ -44,7 +44,7 @@ function SettingsRowLabel({
  * The text column is the flexible part: a label alone truncates, a
  * description wraps. The control slot does not shrink, so a control that
  * needs width (an Input) sets one, e.g. `w-80 max-w-full`.
- * Inside a `grouped` SettingsSection it is a 56px-minimum card row.
+ * Inside a `grouped` SettingsSection it is a card row that fits its content (10px vertical padding).
  *
  * `description` adds a sub-label under the row label for controls whose effect
  * is not obvious from the name alone — "Automatic updates" was read as "install
@@ -77,7 +77,6 @@ export function SettingsRow({
 			{...rowProps}
 			className={cn(
 				"settings-row-bar",
-				description !== undefined && "h-auto min-h-(--size-settings-row)",
 				className,
 			)}
 		>
