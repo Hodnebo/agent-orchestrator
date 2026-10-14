@@ -7,7 +7,7 @@ import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
 import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
-import { StyledQRCode } from "./StyledQRCode";
+import { PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
 import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
@@ -157,8 +157,9 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
  * required. Universal links can be added later without changing the payload. */
 const PAIRING_LINK_BASE = "aomobile://pair";
 
-/** A decoy with the same payload shape as a real pairing offer. Keeping the
- * same QR version makes the blurred preview look like the code it becomes. */
+/** A decoy with the same payload shape as a real pairing offer, drawn at the
+ * same pinned QR version, so the blurred preview looks like the code it
+ * becomes. */
 function placeholderQrValue(status?: { hostId?: string; host?: string; password?: string }): string {
 	return scramblePairingCodes(1, {
 		...(status?.hostId ? { hostIdLength: status.hostId.length } : {}),
@@ -248,11 +249,49 @@ export async function fetchMobileStatus(): Promise<MobileStatus> {
 	return data;
 }
 
+type KeepAwakeStatus = NonNullable<MobileStatus["keepAwake"]>;
+
+/**
+ * Keep awake as last seen, for the one moment nothing better is known: a cold
+ * open of this page before the status has loaded (Settings prefetches it, so
+ * this is rare). The row is drawn disabled in this state rather than popping
+ * in, or flipping, when the status lands.
+ */
+const KEEP_AWAKE_STORAGE_KEY = "ao.mobile.keepAwake";
+
+function readLastKeepAwake(): KeepAwakeStatus | null {
+	try {
+		const raw = window.localStorage?.getItem(KEEP_AWAKE_STORAGE_KEY);
+		if (!raw) return null;
+		const saved = JSON.parse(raw) as Partial<KeepAwakeStatus> | null;
+		if (typeof saved?.supported !== "boolean" || typeof saved.enabled !== "boolean") return null;
+		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true };
+	} catch {
+		return null;
+	}
+}
+
+function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
+	try {
+		if (!keepAwake) window.localStorage?.removeItem(KEEP_AWAKE_STORAGE_KEY);
+		else
+			window.localStorage?.setItem(
+				KEEP_AWAKE_STORAGE_KEY,
+				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery }),
+			);
+	} catch {
+		// Storage can be unavailable; the row then waits for the status.
+	}
+}
+
 export function ConnectMobileContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [copied, setCopied] = useState(false);
 	const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
+	// The code crossfades only after the user has generated or regenerated one
+	// on this visit; opening the page shows whatever exists without a transition.
+	const [animateQr, setAnimateQr] = useState(false);
 	const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// Pinned to "lan" while the connection picker below is commented out.
 	// setMode is still called by the close-reset effect.
@@ -292,6 +331,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		reportedOpen.current = true;
 		void captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: initialEnabled });
 	}, [active, initialEnabled]);
+
+	const keepAwakeStatus = query.data?.keepAwake;
+	const hasStatus = query.data !== undefined;
+	useEffect(() => {
+		if (hasStatus) rememberKeepAwake(keepAwakeStatus);
+	}, [hasStatus, keepAwakeStatus]);
 
 	const invalidate = () => {
 		void queryClient.invalidateQueries({ queryKey: mobileStatusQueryKey });
@@ -468,6 +513,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const startBridge = () => {
 		if (busy || enabled) return;
 		clearActionErrors();
+		setAnimateQr(true);
 		setOptimisticEnabled(true);
 		enable.mutate(undefined, {
 			onSuccess: () => reportToggle(true, "succeeded"),
@@ -493,16 +539,21 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	// Each return is one or more direct children of the settings card: the
 	// pairing is a content row, keep-awake a SettingsRow, divided by the card.
-	// Loading keeps the pairing layout, so the card does not jump from one
-	// short row to the full block when the status lands.
+	// Loading keeps the pairing layout, and Keep awake in its last-known state,
+	// so the card does not jump from one short row to the full block when the
+	// status lands. Settings prefetches the status, so this is a cold start only.
 	if (query.isLoading) {
+		const lastKeepAwake = readLastKeepAwake();
 		return (
-			<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
-				<ScanIntro />
-				<p className="sr-only" role="status">
-					{t("mobile.checkingStatus")}
-				</p>
-			</PairingLayout>
+			<>
+				<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
+					<ScanIntro />
+					<p className="sr-only" role="status">
+						{t("mobile.checkingStatus")}
+					</p>
+				</PairingLayout>
+				{lastKeepAwake?.supported && <KeepAwakeRow keepAwake={lastKeepAwake} disabled />}
+			</>
 		);
 	}
 	if (query.isError) {
@@ -536,7 +587,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// the overlay says what is happening while there is no code.
 	const panel = (
 		<QrPlaceholder value={placeholderQrValue({ ...status, host: activeHost || status.host })}>
-			<PairingQr value={qrValue} size={QR_CODE_SIZE} />
+			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
 			{!enabled ? (
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Button
@@ -609,6 +660,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 												disabled={busy}
 												onClick={() => {
 													clearActionErrors();
+													setAnimateQr(true);
 													regenerate.mutate();
 												}}
 											>
@@ -687,65 +739,98 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    whether or not the bridge is on: the choice is remembered and takes
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
+				<KeepAwakeRow
+					keepAwake={status.keepAwake}
+					disabled={busy}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setKeepAwake.mutate(next);
+					}}
+					onLidChange={(next) => {
+						clearActionErrors();
+						setLidAwake.mutate(next);
+					}}
+				/>
+			)}
+		</>
+	);
+}
+
+/** Keep this Mac awake, and (when the daemon reports it) keep it awake with the
+ *  lid closed. Disabled while it shows a remembered state rather than the
+ *  daemon's, so it cannot be toggled on a guess; the lid row appears only for a
+ *  live status, since the remembered one does not carry the lid fields. */
+function KeepAwakeRow({
+	keepAwake,
+	disabled = false,
+	onCheckedChange,
+	onLidChange,
+}: {
+	keepAwake: KeepAwakeStatus;
+	disabled?: boolean;
+	onCheckedChange?: (next: boolean) => void;
+	onLidChange?: (next: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const lidNeedsAttention =
+		(keepAwake.enabled && keepAwake.lidClosed) ||
+		keepAwake.lidReason === "recovery_failed" ||
+		keepAwake.lidReason === "lease_failed" ||
+		keepAwake.lidReason === "helper_upgrade_required";
+	return (
+		<>
+			<SettingsRow
+				data-testid="mobile-keep-awake"
+				icon={Coffee}
+				label={t("mobile.keepAwake.label")}
+				description={
+					<>
+						{t("mobile.keepAwake.help")}
+						{keepAwake.hasBattery && (!keepAwake.lidClosed || !keepAwake.lidSupported || !keepAwake.enabled) && (
+							<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
+						)}
+					</>
+				}
+			>
+				<Switch
+					aria-label={t("mobile.keepAwake.label")}
+					checked={keepAwake.enabled}
+					disabled={disabled}
+					onCheckedChange={onCheckedChange}
+				/>
+			</SettingsRow>
+			{onLidChange && (keepAwake.lidSupported || keepAwake.lidClosed) && (
 				<SettingsRow
-					data-testid="mobile-keep-awake"
-					icon={Coffee}
-					label={t("mobile.keepAwake.label")}
+					data-testid="mobile-lid-awake"
+					label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
 					description={
 						<>
-							{t("mobile.keepAwake.help")}
-							{status.keepAwake.hasBattery && (!status.keepAwake.lidClosed || !status.keepAwake.lidSupported || !status.keepAwake.enabled) && (
-								<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
+							{t(
+								"mobile.keepAwake.lidHelp",
+								"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+							)}
+							{lidNeedsAttention && (
+								<span className="mt-1 block" role="status">
+									{keepAwake.lidActive && keepAwake.enabled
+										? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+										: keepAwake.lidReason
+											? t(
+													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
+													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
+												)
+											: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
+								</span>
 							)}
 						</>
 					}
 				>
 					<Switch
-						aria-label={t("mobile.keepAwake.label")}
-						disabled={busy}
-						checked={status.keepAwake.enabled}
-						onCheckedChange={(next) => {
-							clearActionErrors();
-							setKeepAwake.mutate(next);
-						}}
+						aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
+						checked={keepAwake.enabled && (keepAwake.lidClosed ?? false)}
+						disabled={disabled}
+						onCheckedChange={onLidChange}
 					/>
 				</SettingsRow>
-				{(status.keepAwake.lidSupported || status.keepAwake.lidClosed) && (
-					<SettingsRow
-						data-testid="mobile-lid-awake"
-						label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-						description={
-							<>
-								{t(
-									"mobile.keepAwake.lidHelp",
-									"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
-								)}
-								{((status.keepAwake.enabled && status.keepAwake.lidClosed) || status.keepAwake.lidReason === "recovery_failed" || status.keepAwake.lidReason === "lease_failed" || status.keepAwake.lidReason === "helper_upgrade_required") && (
-									<span className="mt-1 block" role="status">
-										{status.keepAwake.lidActive && status.keepAwake.enabled
-											? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-											: status.keepAwake.lidReason
-												? t(
-														`mobile.keepAwake.lidReason.${status.keepAwake.lidReason}`,
-														"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
-													)
-												: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
-									</span>
-								)}
-							</>
-						}
-					>
-						<Switch
-							aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-							disabled={busy}
-							checked={status.keepAwake.enabled && (status.keepAwake.lidClosed ?? false)}
-							onCheckedChange={(next) => {
-								clearActionErrors();
-								setLidAwake.mutate(next);
-							}}
-						/>
-					</SettingsRow>
-				)}
 			)}
 		</>
 	);
@@ -818,6 +903,7 @@ function QrPlaceholder({ value, children }: { value: string; children?: ReactNod
 				<StyledQRCode
 					value={value}
 					size={QR_CODE_SIZE}
+					version={PAIRING_QR_VERSION}
 					className="block size-full [&_svg]:size-full"
 				/>
 			</div>

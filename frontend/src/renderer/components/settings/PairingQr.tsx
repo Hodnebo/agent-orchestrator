@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
-import { StyledQRCode } from "./StyledQRCode";
+import { PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
 
 /** Crossfade between codes: long enough to read as one code becoming the
  *  next, short enough that a fresh code is scannable at once. Matches the
@@ -21,6 +21,9 @@ interface Layer {
 	value: string;
 	key: number;
 	shown: boolean;
+	/** Swapped in without a fade: it is revealed the moment it is drawn and
+	 *  everything beneath it is dropped at once. */
+	instant: boolean;
 }
 
 /**
@@ -34,8 +37,13 @@ interface Layer {
  * (transitionend), never on a timer racing the fade.
  *
  * `value` null fades every code out, revealing whatever the caller has placed
- * behind this component (the blurred placeholder). Reduced motion turns the
- * fades into instant swaps; the ordering is unchanged.
+ * behind this component (the blurred placeholder).
+ *
+ * Fading is opt-in through `animate`, which the caller sets only once the user
+ * has generated or regenerated a code. A code that already exists when the page
+ * opens is on screen in the first frame, with no blur, fade or placeholder, and
+ * a change nobody asked for swaps without a fade once the new code is drawn.
+ * Reduced motion makes every change such a swap.
  *
  * Fills its parent, which owns the fixed square size, so a code change can
  * never shift the layout.
@@ -43,29 +51,51 @@ interface Layer {
 export const PairingQr = memo(function PairingQr({
 	value,
 	size,
+	animate = false,
 	className,
 }: {
 	/** The real pairing code, or null when there is none to show. */
 	value: string | null;
 	size: number;
+	/** Crossfade code changes from now on. Off at mount, so opening the page
+	 *  never plays a transition. */
+	animate?: boolean;
 	className?: string;
 }) {
-	const [layers, setLayers] = useState<Layer[]>([]);
+	// A code present at mount is shown at once: it is not a change.
+	const [layers, setLayers] = useState<Layer[]>(() =>
+		value ? [{ value, key: 0, shown: true, instant: true }] : [],
+	);
 	const nextKey = useRef(0);
+	const animateRef = useRef(animate);
+	animateRef.current = animate;
 
 	useEffect(() => {
+		const instant = !animateRef.current || prefersReducedMotion();
 		setLayers((prev) => {
-			if (!value) return prev.some((l) => l.shown) ? prev.map((l) => ({ ...l, shown: false })) : prev;
+			if (!value) {
+				if (instant) return prev.length > 0 ? [] : prev;
+				return prev.some((l) => l.shown) ? prev.map((l) => ({ ...l, shown: false })) : prev;
+			}
 			const top = prev[prev.length - 1];
 			if (top?.value === value) return top.shown ? prev : prev.map((l) => (l === top ? { ...l, shown: true } : l));
 			nextKey.current += 1;
-			return [...prev, { value, key: nextKey.current, shown: false }];
+			return [...prev, { value, key: nextKey.current, shown: false, instant }];
 		});
 	}, [value]);
 
 	// Two frames, so the hidden state is painted before the transition starts;
-	// flipping it in the frame the layer mounted in would skip the fade.
-	const reveal = useCallback((key: number) => {
+	// flipping it in the frame the layer mounted in would skip the fade. An
+	// instant layer replaces everything beneath it as soon as it is drawn.
+	const reveal = useCallback((key: number, instant: boolean) => {
+		if (instant) {
+			setLayers((prev) => {
+				const index = prev.findIndex((l) => l.key === key);
+				if (index < 0 || (index === 0 && prev[0].shown)) return prev;
+				return [{ ...prev[index], shown: true }, ...prev.slice(index + 1)];
+			});
+			return;
+		}
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() =>
 				setLayers((prev) => prev.map((l) => (l.key === key ? { ...l, shown: true } : l))),
@@ -110,15 +140,19 @@ export const PairingQr = memo(function PairingQr({
 					className={cn(
 						// Opaque, so a layer that has finished fading in hides the one
 						// beneath it completely.
-						"absolute inset-0 bg-white transition-[opacity,filter] duration-200 motion-reduce:transition-none",
-						layer.shown ? "opacity-100 blur-[0px] ease-out" : "opacity-0 blur-[4px] ease-in",
+						"absolute inset-0 bg-white",
+						layer.instant
+							? "transition-none"
+							: "transition-[opacity,filter] duration-200 motion-reduce:transition-none",
+						layer.shown ? "opacity-100 blur-[0px] ease-out" : layer.instant ? "opacity-0" : "opacity-0 blur-[4px] ease-in",
 					)}
 				>
 					<StyledQRCode
 						value={layer.value}
 						data-qr-value={layer.value === value ? layer.value : undefined}
 						size={size}
-						onReady={() => reveal(layer.key)}
+						version={PAIRING_QR_VERSION}
+						onReady={() => reveal(layer.key, layer.instant)}
 						className="block size-full [&_svg]:size-full"
 					/>
 				</div>

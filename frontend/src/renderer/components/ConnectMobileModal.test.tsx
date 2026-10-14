@@ -59,14 +59,16 @@ vi.mock("../lib/api-client", () => ({
 
 import {
 	ConnectMobileContent,
+	mobileStatusQueryKey,
 	mobileStatusRefetchInterval,
 	pairingPayload,
 	qrIsReady,
 	qrValueFor,
 } from "./settings/ConnectMobileContent";
 
-function renderMobileSettings() {
-	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderMobileSettings(
+	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+) {
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -95,7 +97,10 @@ async function selectConnectionMethod(mode: "LAN" | "Tailscale") {
 }
 
 beforeEach(() => {
+	// Keep awake's last-known state is remembered across mounts; start clean.
+	window.localStorage.clear();
 	mobileStatus.enabled = true;
+	mobileStatus.password = "fake-password-for-testing";
 	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
@@ -903,4 +908,47 @@ test("enabling idle wake never restores an unchecked legacy lid choice", async (
 	expect(mainToggle).toBeChecked();
 	expect(lidToggle).not.toBeChecked();
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
+});
+
+// Settings prefetches the status, so opening the page reads it from the cache:
+// Keep awake and the code are in their final state in the very first render.
+test("renders cached state on first paint, with no transition on the code", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(mobileStatusQueryKey, structuredClone(mobileStatus));
+	renderMobileSettings(client);
+
+	const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+	expect(toggle).toBeChecked();
+	expect(toggle).toBeEnabled();
+	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
+	expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100", "transition-none");
+
+	// Regenerating is the user's doing, so that change does blur in.
+	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
+		mobileStatus.password = "regenerated-password";
+		return { data: {}, error: undefined } as never;
+	});
+	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
+	await waitFor(() =>
+		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass(
+			"opacity-0",
+			"blur-[4px]",
+			"transition-[opacity,filter]",
+		),
+	);
+});
+
+// A cold open (nothing cached yet) keeps the row in its last-known state,
+// disabled until the daemon answers, instead of popping it in afterwards.
+test("holds Keep awake at its last-known state while the status loads", async () => {
+	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
+	window.localStorage.setItem("ao.mobile.keepAwake", JSON.stringify({ supported: true, enabled: true, hasBattery: false }));
+	renderMobileSettings();
+
+	const pending = screen.getByRole("switch", { name: "Keep this Mac awake" });
+	expect(pending).toBeChecked();
+	expect(pending).toBeDisabled();
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
+	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
 });
