@@ -41,12 +41,12 @@ describe("PairingQr", () => {
 	// scannable: one scanned early carries no tunnel endpoint and would pair
 	// here then fail from every other network.
 	it("exposes no scannable code before one exists", () => {
-		const { container } = render(<PairingQr value={null} size={192} />);
+		const { container } = render(<PairingQr value={null} size={240} />);
 		expect(container.querySelector("[data-qr-value]")).toBeNull();
 	});
 
 	it("renders the real code once it arrives", async () => {
-		const { container } = render(<PairingQr value={A} size={192} />);
+		const { container } = render(<PairingQr value={A} size={240} />);
 		await flushFrames();
 		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", A);
 		expect(layerFor(container, A)).toHaveClass("opacity-100");
@@ -56,10 +56,10 @@ describe("PairingQr", () => {
 	// changed, leaving a blank card until the new one drew. Now the old code
 	// stays fully visible underneath until the new one has faded in over it.
 	it("keeps the previous code on screen until the next one has faded in", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
 		await flushFrames();
 
-		rerender(<PairingQr value={B} size={192} />);
+		rerender(<PairingQr value={B} size={240} />);
 		// Both mounted; only the new one is the scannable value.
 		expect(layerFor(container, A)).toHaveClass("opacity-100");
 		expect(layerFor(container, B)).toHaveClass("opacity-0");
@@ -84,9 +84,9 @@ describe("PairingQr", () => {
 
 	// Reduced motion and hidden tabs fire no transitionend.
 	it("still drops the covered code when no transition runs", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
 		await flushFrames();
-		rerender(<PairingQr value={B} size={192} />);
+		rerender(<PairingQr value={B} size={240} />);
 		await flushFrames();
 
 		await act(async () => {
@@ -97,10 +97,10 @@ describe("PairingQr", () => {
 	});
 
 	it("fades the code out when it is withdrawn, then drops it", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={192} />);
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
 		await flushFrames();
 
-		rerender(<PairingQr value={null} size={192} />);
+		rerender(<PairingQr value={null} size={240} />);
 		expect(container.querySelector("[data-qr-value]")).toBeNull();
 		expect(layerFor(container, A)).toHaveClass("opacity-0");
 

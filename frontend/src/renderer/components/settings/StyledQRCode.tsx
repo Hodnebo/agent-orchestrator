@@ -35,7 +35,7 @@ const PAPER = "#ffffff";
  * pairing code silently leaves the small store codes under a third of the
  * clearance they need.
  */
-const QUIET_ZONE_MODULES = 4;
+const QUIET_ZONE_MODULES = 3;
 
 /** Margin in px that yields QUIET_ZONE_MODULES around a code of `modules`
  *  modules drawn at `size` px, given the margin eats into that same size:

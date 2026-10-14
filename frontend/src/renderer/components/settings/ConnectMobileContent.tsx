@@ -16,9 +16,9 @@ import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-// The pairing panel is a fixed 192px square (size-48) so the card stays short
+// The pairing panel is a fixed 240px square (size-60) so the card stays short
 // and a code change can never move the layout. Codes are drawn at that size.
-const QR_CODE_SIZE = 192;
+const QR_CODE_SIZE = 240;
 const STORE_QR_SIZE = 140;
 
 const STORE_LINKS = [
@@ -801,13 +801,13 @@ function ScanIntro() {
 }
 
 /**
- * The fixed 192px square every pairing state shares: a blurred decoy code
+ * The fixed 240px square every pairing state shares: a blurred decoy code
  * (dark on white, so Android can scan the real one that replaces it) with the
  * state's content layered over it.
  */
 function QrPlaceholder({ children }: { children?: ReactNode }) {
 	return (
-		<div className="relative size-48 shrink-0 self-start overflow-hidden rounded-md bg-white">
+		<div className="relative size-60 shrink-0 self-start overflow-hidden rounded-md bg-white">
 			<div className="absolute inset-0 opacity-60 blur-[6px]" aria-hidden="true">
 				<StyledQRCode
 					value={PLACEHOLDER_QR_VALUE}
