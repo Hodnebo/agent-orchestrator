@@ -159,7 +159,13 @@ const PAIRING_LINK_BASE = "aomobile://pair";
 
 /** A decoy with the same payload shape as a real pairing offer. Keeping the
  * same QR version makes the blurred preview look like the code it becomes. */
-const PLACEHOLDER_QR_VALUE = scramblePairingCodes(1)[0];
+function placeholderQrValue(status?: { hostId?: string; host?: string; password?: string }): string {
+	return scramblePairingCodes(1, {
+		...(status?.hostId ? { hostIdLength: status.hostId.length } : {}),
+		...(status?.host ? { nameLength: status.host.length } : {}),
+		...(status?.password ? { tokenLength: status.password.length } : {}),
+	})[0];
+}
 
 function AppleIcon({ className }: { className?: string }) {
 	return (
@@ -491,7 +497,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// short row to the full block when the status lands.
 	if (query.isLoading) {
 		return (
-			<PairingLayout panel={<QrPlaceholder />}>
+			<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
 				<ScanIntro />
 				<p className="sr-only" role="status">
 					{t("mobile.checkingStatus")}
@@ -529,7 +535,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// code crossfades in over it (and over the previous code on a change), and
 	// the overlay says what is happening while there is no code.
 	const panel = (
-		<QrPlaceholder>
+		<QrPlaceholder value={placeholderQrValue({ ...status, host: activeHost || status.host })}>
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} />
 			{!enabled ? (
 				<div className="absolute inset-0 flex items-center justify-center">
@@ -805,12 +811,12 @@ function ScanIntro() {
  * (dark on white, so Android can scan the real one that replaces it) with the
  * state's content layered over it.
  */
-function QrPlaceholder({ children }: { children?: ReactNode }) {
+function QrPlaceholder({ value, children }: { value: string; children?: ReactNode }) {
 	return (
 		<div className="relative size-60 shrink-0 self-start overflow-hidden rounded-md bg-white">
 			<div className="absolute inset-0 opacity-60 blur-[6px]" aria-hidden="true">
 				<StyledQRCode
-					value={PLACEHOLDER_QR_VALUE}
+					value={value}
 					size={QR_CODE_SIZE}
 					className="block size-full [&_svg]:size-full"
 				/>
