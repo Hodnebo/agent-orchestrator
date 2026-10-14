@@ -22,7 +22,9 @@ import {
 } from "../../hooks/useAgentSwitches";
 import { useObservedAgentSwitchLifecycle } from "../../hooks/useObservedAgentSwitchLifecycle";
 import { useAgentSwitchPresentationVisibility, useAgentSwitchRouteVisibility } from "../../hooks/useAgentSwitchVisibility";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { forgetLaunchSettings, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
+import { rememberChatSettingsTemplate } from "../../lib/chat-settings-template";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { useSwitchAgentState } from "../../hooks/useSwitchAgent";
@@ -214,6 +216,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
+	// Set only when this task was started from the new chat page.
+	const queryClient = useQueryClient();
+	const launchSettings = launchSettingsFor(queryClient, session.id, hostId);
+	const openingStartedAt = openingStartFor(queryClient, session.id, hostId);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
@@ -247,7 +253,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
 		for (const echo of localEchos) {
-			if (
+			if (echo.opening && durableHumanTurnIds.size > 0) acknowledgeLocalEcho?.(undefined, echo.clientMessageId);
+			else if (
 				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
 				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
 			) acknowledgeLocalEcho?.(echo.turnId);
@@ -361,6 +368,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Suppress native controls only for dimensions the provider catalog replaces;
 	// a model-only catalog must not hide the Approvals control.
 	const providerOptions = configOptions.options ?? [];
+	// Keep this agent's settings so the new chat page can draw the very bar a
+	// session of it will show, before that session exists.
+	useEffect(() => {
+		if (session.kind !== "worker" || !configOptions.loaded || providerOptions.length === 0) return;
+		rememberChatSettingsTemplate(session.provider, hostId, { options: providerOptions });
+	}, [configOptions.loaded, hostId, providerOptions, session.kind, session.provider]);
 	const hasProviderMode = hasProviderPermissionMode(providerOptions);
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
@@ -550,7 +563,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// arrival, even over a cached transcript, so history appears once and fades
 	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
-	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	// A task started from the new chat page already shows its brief, so its first
+	// read keeps that frame instead of flashing a loading state.
+	const openingSend = localEchos.some((echo) => echo.opening);
+	const optimisticChat = ((session.kind === "orchestrator" || openingSend) && isLoading && !renderShellFallback) || optimisticArrival;
 	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
 		(optimisticArrival
@@ -591,6 +607,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				!workspaceFileActive,
 		),
 	});
+
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming) &&
+		(!renderSnapshot || !can(renderSnapshot, "config_options") || configOptions.loaded);
+	// The session's own settings have taken over; a later restart must not bring the launch chips back.
+	useEffect(() => {
+		if (settingsReady && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
+	}, [hostId, launchSettings, queryClient, session.id, settingsReady]);
 
 	if (isLoading && !renderShellFallback && !optimisticChat) {
 		return (
@@ -732,7 +755,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming) && (!can(renderSnapshot, "config_options") || configOptions.loaded)}
+				settingsReady={settingsReady}
+				openingStartedAt={openingStartedAt}
+				// A task started from the new chat page keeps its chips until these are ready.
+				draftSettings={!settingsReady && launchSettings ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
