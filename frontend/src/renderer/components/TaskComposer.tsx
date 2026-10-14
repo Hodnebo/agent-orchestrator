@@ -599,10 +599,11 @@ export function TaskComposer({
 	// the cloud connection: once that is connected, this computer's login state is
 	// irrelevant to the task and the notice only confuses.
 	const cloudHarnessReady = isCloudProject && isCloudHarnessConnected(cloudConnectionsQuery.data, selectedAgent);
-	const modelWarning = modelAuthIssue && cloudHarnessReady ? undefined : modelAuthIssue ? (
+	// An expired login whose refresh token is still in date needs nothing from
+	// the user: the task starts and the agent renews the token as it launches.
+	const modelWarning = modelAuthIssue === "expired" || (modelAuthIssue && cloudHarnessReady) ? undefined : modelAuthIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelAuthIssue}
 			detail={modelWarningText}
 			cloud={isCloudProject}
 			onLogin={startAgentLogin}
