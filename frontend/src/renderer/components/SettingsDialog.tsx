@@ -397,8 +397,12 @@ export function SettingsPane() {
 			{/* Transparent toolbar-height strip laid over the scroller: keeps the macOS
 			  * window-drag region while content scrolls up under it to the panel edge.
 			  * The body's top padding clears it (and the fixed titlebar controls that
-			  * sit over the panel when the sidebar is closed) at rest. */}
-			<div aria-hidden="true" className={cn("absolute inset-x-0 top-0 z-10 h-toolbar", !topbarDragStyle && "pointer-events-none")} style={topbarDragStyle} />
+			  * sit over the panel when the sidebar is closed) at rest. Controls that
+			  * scroll beneath it are no-drag (styles.css). The strip itself never takes
+			  * pointer events (the native drag region does not need them), so a click
+			  * there reaches the control under it, and it stops short of the scrollbar
+			  * so the top of the track can still be grabbed. */}
+			<div aria-hidden="true" className="pointer-events-none absolute left-0 right-2 top-0 z-10 h-toolbar" style={topbarDragStyle} />
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
 				// `relative` makes the scroller the containing block for absolutely

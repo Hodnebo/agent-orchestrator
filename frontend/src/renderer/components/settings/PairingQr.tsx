@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
-import { PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
+import { forgetSecretCodes, PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
 
 /** Crossfade between codes: long enough to read as one code becoming the
  *  next, short enough that a fresh code is scannable at once. Matches the
@@ -69,13 +69,21 @@ export const PairingQr = memo(function PairingQr({
 	const nextKey = useRef(0);
 	const animateRef = useRef(animate);
 	animateRef.current = animate;
+	const valueRef = useRef(value);
+	const hadValue = useRef(value !== null);
 
 	useEffect(() => {
+		valueRef.current = value;
+		// The code was revoked (turned off, or dropped by the status poll): it
+		// must not be repainted from the redraw cache later.
+		if (!value && hadValue.current) forgetSecretCodes();
+		hadValue.current = value !== null;
 		const instant = !animateRef.current || prefersReducedMotion();
 		setLayers((prev) => {
 			if (!value) {
 				if (instant) return prev.length > 0 ? [] : prev;
-				return prev.some((l) => l.shown) ? prev.map((l) => ({ ...l, shown: false })) : prev;
+				// Fade out what is on screen; a code still drawing never shows.
+				return prev.length > 0 ? prev.filter((l) => l.shown).map((l) => ({ ...l, shown: false })) : prev;
 			}
 			const top = prev[prev.length - 1];
 			if (top?.value === value) return top.shown ? prev : prev.map((l) => (l === top ? { ...l, shown: true } : l));
@@ -86,19 +94,22 @@ export const PairingQr = memo(function PairingQr({
 
 	// Two frames, so the hidden state is painted before the transition starts;
 	// flipping it in the frame the layer mounted in would skip the fade. An
-	// instant layer replaces everything beneath it as soon as it is drawn.
+	// instant layer replaces everything beneath it as soon as it is drawn. A
+	// layer whose code stopped being current while it drew is never revealed.
 	const reveal = useCallback((key: number, instant: boolean) => {
 		if (instant) {
 			setLayers((prev) => {
 				const index = prev.findIndex((l) => l.key === key);
-				if (index < 0 || (index === 0 && prev[0].shown)) return prev;
+				if (index < 0 || prev[index].value !== valueRef.current || (index === 0 && prev[0].shown)) return prev;
 				return [{ ...prev[index], shown: true }, ...prev.slice(index + 1)];
 			});
 			return;
 		}
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() =>
-				setLayers((prev) => prev.map((l) => (l.key === key ? { ...l, shown: true } : l))),
+				setLayers((prev) =>
+					prev.map((l) => (l.key === key && l.value === valueRef.current ? { ...l, shown: true } : l)),
+				),
 			),
 		);
 	}, []);
@@ -152,6 +163,7 @@ export const PairingQr = memo(function PairingQr({
 						data-qr-value={layer.value === value ? layer.value : undefined}
 						size={size}
 						version={PAIRING_QR_VERSION}
+						secret
 						onReady={() => reveal(layer.key, layer.instant)}
 						className="block size-full [&_svg]:size-full"
 					/>

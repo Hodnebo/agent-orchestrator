@@ -6,15 +6,32 @@ import { PairingQr, QR_FADE_MS, QR_SETTLE_FALLBACK_MS } from "./PairingQr";
 // jsdom cannot draw qr-code-styling's SVG, so stand in a code that reports
 // itself drawn as soon as it mounts — the moment the real one resolves its
 // drawing promise.
+// A code listed in `slowCodes` reports itself drawn only when the test calls
+// `finishDrawing`, standing in for a logo that is still loading.
+const qr = vi.hoisted(() => ({
+	slowCodes: new Set<string>(),
+	pending: new Map<string, () => void>(),
+	forgetSecretCodes: vi.fn(),
+}));
+
 vi.mock("./StyledQRCode", () => ({
 	PAIRING_QR_VERSION: 17,
+	forgetSecretCodes: qr.forgetSecretCodes,
 	StyledQRCode: ({ value, onReady, ...rest }: { value: string; onReady?: () => void; "data-qr-value"?: string }) => {
 		useEffect(() => {
-			onReady?.();
+			if (qr.slowCodes.has(value)) qr.pending.set(value, () => onReady?.());
+			else onReady?.();
 		}, [value]);
 		return <div data-code={value} data-qr-value={rest["data-qr-value"]} />;
 	},
 }));
+
+async function finishDrawing(code: string) {
+	await act(async () => {
+		qr.pending.get(code)?.();
+		vi.advanceTimersByTime(40);
+	});
+}
 
 const A = "aomobile://pair#a";
 const B = "aomobile://pair#b";
@@ -35,6 +52,9 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	qr.slowCodes.clear();
+	qr.pending.clear();
+	qr.forgetSecretCodes.mockClear();
 });
 
 describe("PairingQr", () => {
@@ -107,6 +127,29 @@ describe("PairingQr", () => {
 
 		fireEvent.transitionEnd(layerFor(container, A)!);
 		expect(layerFor(container, A)).toBeNull();
+	});
+
+	// Turning pairing off while a fresh code is still drawing must not leave
+	// that code scannable once it finishes.
+	it("never shows a code withdrawn while it was still drawing", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		await flushFrames();
+		qr.slowCodes.add(B);
+		rerender(<PairingQr value={B} size={240} animate />);
+		rerender(<PairingQr value={null} size={240} animate />);
+
+		await finishDrawing(B);
+		expect(container.querySelector("[data-qr-value]")).toBeNull();
+		expect(container.querySelector(".opacity-100")).toBeNull();
+	});
+
+	it("drops the cached pairing code once it is withdrawn", async () => {
+		const { rerender } = render(<PairingQr value={null} size={240} />);
+		expect(qr.forgetSecretCodes).not.toHaveBeenCalled();
+		rerender(<PairingQr value={A} size={240} />);
+		await flushFrames();
+		rerender(<PairingQr value={null} size={240} />);
+		expect(qr.forgetSecretCodes).toHaveBeenCalledTimes(1);
 	});
 
 	// Opening the page (or coming back to it) is not a change: a code that

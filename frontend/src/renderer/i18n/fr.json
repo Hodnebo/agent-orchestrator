@@ -1818,6 +1818,7 @@
 	"shortcut.reset": "Réinitialiser",
 	"shortcut.resetAll": "Tout réinitialiser",
 	"shortcut.resetAllConfirm": "Restaurer l’affectation initiale de chaque raccourci ?",
+	"shortcut.resetAllFailed": "Impossible de réinitialiser les raccourcis. Réessayez.",
 	"shortcut.resetAria": "Réinitialiser {{name}}",
 	"shortcut.restored": "Raccourci restauré",
 	"shortcut.restoredDefaults": "Raccourcis clavier restaurés à leurs affectations initiales",

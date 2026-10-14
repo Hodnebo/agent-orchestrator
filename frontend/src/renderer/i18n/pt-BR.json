@@ -1818,6 +1818,7 @@
 	"shortcut.reset": "Redefinir",
 	"shortcut.resetAll": "Redefinir todos",
 	"shortcut.resetAllConfirm": "Restaurar todos os atalhos às atribuições originais?",
+	"shortcut.resetAllFailed": "Não foi possível redefinir os atalhos. Tente novamente.",
 	"shortcut.resetAria": "Redefinir {{name}}",
 	"shortcut.restored": "Atalho restaurado",
 	"shortcut.restoredDefaults": "Atalhos de teclado restaurados às atribuições originais",

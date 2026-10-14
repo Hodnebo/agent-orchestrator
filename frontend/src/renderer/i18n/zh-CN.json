@@ -1843,6 +1843,7 @@
 	"shortcut.reset": "重置",
 	"shortcut.resetAll": "全部重置",
 	"shortcut.resetAllConfirm": "将所有快捷键恢复为原始分配？",
+	"shortcut.resetAllFailed": "无法重置快捷键。请重试。",
 	"shortcut.resetAria": "重置 {{name}}",
 	"shortcut.restored": "快捷键已恢复",
 	"shortcut.restoredDefaults": "键盘快捷键已恢复原始分配",

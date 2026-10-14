@@ -100,6 +100,8 @@ export function KeyboardShortcutsContent({
 	const [recording, setRecordingState] = useState<RecordingState | null>(null);
 	const [conflict, setConflict] = useState<ConflictState | null>(null);
 	const [confirmResetAll, setConfirmResetAll] = useState(false);
+	const [resettingAll, setResettingAll] = useState(false);
+	const [resetAllError, setResetAllError] = useState<string | null>(null);
 	const [toast, setToast] = useState<ToastState | null>(null);
 	const toastTimerRef = useRef<number | undefined>(undefined);
 	const activeRef = useRef(active);
@@ -474,12 +476,24 @@ export function KeyboardShortcutsContent({
 				title={t("shortcut.resetAll")}
 				description={t("shortcut.resetAllConfirm")}
 				confirmLabel={t("shortcut.resetAll")}
-				onOpenChange={setConfirmResetAll}
+				destructive
+				busy={resettingAll}
+				error={resetAllError}
+				onOpenChange={(next) => {
+					setConfirmResetAll(next);
+					if (!next) setResetAllError(null);
+				}}
 				onConfirm={() => {
-					void resetAll().then(() => {
-						setConfirmResetAll(false);
-						showToast({ title: t("shortcut.restoredDefaults") });
-					});
+					if (resettingAll) return;
+					setResettingAll(true);
+					setResetAllError(null);
+					resetAll()
+						.then(() => {
+							setConfirmResetAll(false);
+							showToast({ title: t("shortcut.restoredDefaults") });
+						})
+						.catch(() => setResetAllError(t("shortcut.resetAllFailed")))
+						.finally(() => setResettingAll(false));
 				}}
 			/>
 

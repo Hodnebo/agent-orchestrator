@@ -1788,6 +1788,7 @@
 	"shortcut.reset": "リセット",
 	"shortcut.resetAll": "すべてリセット",
 	"shortcut.resetAllConfirm": "すべてのショートカットを元の割り当てに戻しますか？",
+	"shortcut.resetAllFailed": "ショートカットをリセットできませんでした。もう一度お試しください。",
 	"shortcut.resetAria": "{{name}} をリセット",
 	"shortcut.restored": "ショートカットを復元しました",
 	"shortcut.restoredDefaults": "キーボードショートカットを元の割り当てに戻しました",

@@ -35,7 +35,7 @@ const PAPER = "#ffffff";
  * pairing code silently leaves the small store codes under a third of the
  * clearance they need.
  */
-const QUIET_ZONE_MODULES = 3;
+const QUIET_ZONE_MODULES = 4;
 
 /** Margin in px that yields QUIET_ZONE_MODULES around a code of `modules`
  *  modules drawn at `size` px, given the margin eats into that same size:
@@ -68,11 +68,28 @@ function modulesFor(version: number): number {
  *  logo reloads. Small: the pairing code, its decoy and the two store codes. */
 const drawnCodes = new Map<string, string>();
 const DRAWN_CODES_MAX = 8;
+/** Keys of secret codes (the real pairing code carries the connection
+ *  password). At most one is kept: remembering a new one drops the rest. */
+const secretKeys = new Set<string>();
 
-function rememberDrawn(key: string, markup: string) {
+function rememberDrawn(key: string, markup: string, secret: boolean) {
+	if (secret) {
+		forgetSecretCodes();
+		secretKeys.add(key);
+	}
 	drawnCodes.delete(key);
 	drawnCodes.set(key, markup);
-	if (drawnCodes.size > DRAWN_CODES_MAX) drawnCodes.delete(drawnCodes.keys().next().value as string);
+	if (drawnCodes.size > DRAWN_CODES_MAX) {
+		const oldest = drawnCodes.keys().next().value as string;
+		drawnCodes.delete(oldest);
+		secretKeys.delete(oldest);
+	}
+}
+
+/** Drop every cached secret code, e.g. once the pairing code is revoked. */
+export function forgetSecretCodes() {
+	for (const key of secretKeys) drawnCodes.delete(key);
+	secretKeys.clear();
 }
 
 export const StyledQRCode = memo(function StyledQRCode({
@@ -80,6 +97,7 @@ export const StyledQRCode = memo(function StyledQRCode({
 	size,
 	showLogo = true,
 	version,
+	secret = false,
 	className,
 	onReady,
 	"data-qr-value": dataQrValue,
@@ -91,6 +109,8 @@ export const StyledQRCode = memo(function StyledQRCode({
 	 *  payload lengths draw at the same density and outer size. Omitted, the
 	 *  encoder picks the smallest version and the quiet zone follows it. */
 	version?: number;
+	/** The code is a credential: keep only the latest one in the redraw cache. */
+	secret?: boolean;
 	className?: string;
 	/** Called once the code is fully drawn. qr-code-styling draws the dots
 	 *  only after the logo has loaded, so the SVG it appends is empty for a
@@ -158,8 +178,12 @@ export const StyledQRCode = memo(function StyledQRCode({
 			let cancelled = false;
 			// A failed logo load still leaves a scannable code, so reveal it
 			// either way rather than leave the caller waiting on it.
+			// A cancelled draw is stale: a newer one may already own `el`, so its
+			// markup is not this code's.
 			void Promise.resolve(qr._svgDrawingPromise)
-				.then(() => rememberDrawn(cacheKey, el.innerHTML))
+				.then(() => {
+					if (!cancelled) rememberDrawn(cacheKey, el.innerHTML, secret);
+				})
 				.catch(() => undefined)
 				.then(() => {
 					if (!cancelled) onReadyRef.current?.();
@@ -172,7 +196,7 @@ export const StyledQRCode = memo(function StyledQRCode({
 			// purely visual, so fail silent rather than crash the settings page.
 			return undefined;
 		}
-	}, [value, size, showLogo, version]);
+	}, [value, size, showLogo, version, secret]);
 
 	return <div ref={ref} className={className} data-qr-value={dataQrValue} />;
 });

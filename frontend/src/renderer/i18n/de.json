@@ -1788,6 +1788,7 @@
 	"shortcut.reset": "Zurücksetzen",
 	"shortcut.resetAll": "Alle zurücksetzen",
 	"shortcut.resetAllConfirm": "Alle Tastenkürzel auf ihre ursprüngliche Belegung zurücksetzen?",
+	"shortcut.resetAllFailed": "Tastenkürzel konnten nicht zurückgesetzt werden. Versuche es erneut.",
 	"shortcut.resetAria": "{{name}} zurücksetzen",
 	"shortcut.restored": "Tastenkürzel wiederhergestellt",
 	"shortcut.restoredDefaults": "Tastenkürzel auf ihre ursprüngliche Belegung zurückgesetzt",

@@ -2078,6 +2078,7 @@
 	"shortcut.reset": "Reset",
 	"shortcut.resetAll": "Reset all",
 	"shortcut.resetAllConfirm": "Restore every shortcut to its original assignment?",
+	"shortcut.resetAllFailed": "Could not reset shortcuts. Try again.",
 	"shortcut.resetAria": "Reset {{name}}",
 	"shortcut.restored": "Shortcut restored",
 	"shortcut.restoredDefaults": "Keyboard shortcuts restored to original assignments",

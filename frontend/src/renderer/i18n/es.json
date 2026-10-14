@@ -1818,6 +1818,7 @@
 	"shortcut.reset": "Restablecer",
 	"shortcut.resetAll": "Restablecer todo",
 	"shortcut.resetAllConfirm": "¿Restaurar la asignación original de todos los atajos?",
+	"shortcut.resetAllFailed": "No se pudieron restablecer los atajos. Inténtalo de nuevo.",
 	"shortcut.resetAria": "Restablecer {{name}}",
 	"shortcut.restored": "Atajo restaurado",
 	"shortcut.restoredDefaults": "Atajos de teclado restaurados a sus asignaciones originales",
