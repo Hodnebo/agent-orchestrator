@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
@@ -48,13 +48,17 @@ describe("CliLinkSettings", () => {
 		expect(inspect).not.toHaveBeenCalled();
 	});
 
-	it("shows the current and proposed targets and confirms before relinking", async () => {
+	it("explains a stale link and shows its targets before confirming a relink", async () => {
 		const user = userEvent.setup();
 		render(<CliLinkSettings enabled={true} />);
-		expect(await screen.findByText(/Current target: \/Apps\/Old.app/)).toBeInTheDocument();
-		expect(screen.getByText(/Proposed target: \/Apps\/Agent Orchestrator.app/)).toBeInTheDocument();
-		expect(screen.getByText(/9.1.0/)).toBeInTheDocument();
+		expect(await screen.findByText(/Your ao command points to an old app location/)).toBeInTheDocument();
+		expect(screen.queryByText(/Current target:/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Proposed target:/)).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Relink" }));
+		const dialog = within(screen.getByRole("dialog"));
+		expect(dialog.getByText(/Current target: \/Apps\/Old.app/)).toBeInTheDocument();
+		expect(dialog.getByText(/Proposed target: \/Apps\/Agent Orchestrator.app/)).toBeInTheDocument();
+		expect(dialog.getByText(/9.1.0/)).toBeInTheDocument();
 		expect(link).not.toHaveBeenCalled();
 		await user.click(screen.getByRole("button", { name: "Confirm" }));
 		expect(link).toHaveBeenCalledWith(true, "/Apps/Old.app/Contents/Resources/daemon/ao");

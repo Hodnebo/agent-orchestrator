@@ -97,7 +97,7 @@ function CliLinkSettingsRow() {
 			<ConfirmDialog
 				open={confirm !== null}
 				title={t(confirm?.action === "unlink" ? "settings.cliLink.confirmUnlinkTitle" : "settings.cliLink.confirmLinkTitle")}
-				description={describeStatus((key, options) => String(t(key as never, options as never)), view, null)}
+				description={describeStatus((key, options) => String(t(key as never, options as never)), view, null, true)}
 				confirmLabel={t("confirm.confirm")}
 				busy={busy}
 				error={error}
@@ -116,6 +116,7 @@ function describeStatus(
 	t: (key: string, options?: Record<string, string>) => string,
 	view: CliLinkView | null,
 	error: string | null,
+	showTargets = false,
 ): string {
 	if (!view) return error || String(t("settings.cliLink.loading"));
 	if (!view.ok) return error || view.message;
@@ -127,7 +128,9 @@ function describeStatus(
 		: status.proposedVersion
 			? String(t("settings.cliLink.proposed", { target: status.proposedTarget, version: status.proposedVersion }))
 			: String(t("settings.cliLink.proposedUnknown", { target: status.proposedTarget }));
-	const linked = status.current.kind === "linked" ? String(t("settings.cliLink.linked", { version: status.current.version })) : "";
+	const summary = status.message || status.pathIssue ? "" : status.current.kind === "linked" ? t("settings.cliLink.linked")
+		: status.current.kind === "missing" ? t("settings.cliLink.missing")
+			: status.current.kind === "stale" ? t("settings.cliLink.stale") : "";
 	const foreign = status.current.kind === "foreign" && !status.message ? String(t("settings.cliLink.foreign")) : "";
-	return [current, proposed, linked, foreign, status.message, error].filter(Boolean).join(" ");
+	return [...(showTargets ? [current, proposed] : [summary]), foreign, status.message || status.pathIssue, error].filter(Boolean).join(" ");
 }
