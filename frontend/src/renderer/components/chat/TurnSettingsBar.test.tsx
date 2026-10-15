@@ -1410,3 +1410,26 @@ describe("OpenCode-style execution modes", () => {
 		expect(onChange).toHaveBeenCalledWith({ approvalMode: "default" });
 	});
 });
+
+
+describe("fixed provider agents", () => {
+	it.each(["kilocode", "kiro"])("keeps AO approvals available for %s", async (harness) => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		const onChangeConfigOption = vi.fn();
+		const agent: ChatConfigOption = {
+			id: "mode", name: "Agent", category: "agent", type: "select", currentValue: "ao",
+			choices: [{ value: "ao", name: "AO" }, { value: "code", name: "Code" }],
+		};
+		expect(hasProviderPermissionMode([agent])).toBe(false);
+		render(
+			<TurnSettingsBar harness={harness} models={[]} settings={{ approvalMode: "default" }}
+				configOptions={[agent]} onChange={onChange} onChangeConfigOption={onChangeConfigOption} />,
+		);
+		expect(screen.queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
+		expect(onChange).toHaveBeenCalledWith({ approvalMode: "auto" });
+		expect(onChangeConfigOption).not.toHaveBeenCalled();
+	});
+});

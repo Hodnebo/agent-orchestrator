@@ -21,13 +21,15 @@ import (
 )
 
 // New launches `kilocode acp` from the exact binary resolved by the existing
-// Kilo Code agent plugin. Models and modes come from the live ACP session
-// advertisements; Kilo Code owns tools, providers, and auth.
+// Kilo Code agent plugin. Models and effort come from the live ACP session
+// advertisements; the launch-selected agent keeps AO's standing instructions.
+// Kilo Code owns tools, providers, and auth.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessKilocode,
 		Configure:            configure,
 		SessionOptions:       sessionOptions,
+		FixedAgentMode:       true,
 		ValidateTurnSettings: acpdriver.ApprovalFixedAtLaunch("Kilo Code ACP permission mode", nil),
 	}, log)
 }

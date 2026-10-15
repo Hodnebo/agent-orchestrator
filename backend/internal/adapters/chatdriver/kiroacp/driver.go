@@ -24,9 +24,10 @@ import (
 // advertises session/set_model and session/load, so models and native history
 // are available to Chat.
 //
-// Kiro's mode is not fixed at launch: configure passes no trust flag and the
-// permission policy runs per request against the conversation's current mode,
-// so a mid-session approval change takes effect on the next tool call.
+// Kiro's approval policy is not fixed at launch: configure passes no trust flag
+// and the permission policy runs per request against the current approval mode,
+// so a mid-session approval change takes effect on the next tool call. The
+// provider agent stays selected to preserve AO's standing instructions.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:   domain.HarnessKiro,
@@ -34,6 +35,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		PermissionPolicy: acpdriver.StandardPermissionPolicy(
 			ports.PermissionModeAuto, ports.PermissionModeBypassPermissions),
 		SessionOptions: acpdriver.ModelOption,
+		FixedAgentMode: true,
 	}, log)
 }
 

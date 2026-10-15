@@ -120,6 +120,7 @@ type conversation struct {
 	extensionMethods   map[string]string
 	legacyModel        bool
 	legacyMode         bool
+	fixedAgentMode     bool
 	liveState          *persistenthost.ACPState
 	detaching          bool
 	terminalEventID    string

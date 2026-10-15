@@ -38,6 +38,12 @@ Goose ACP explicitly sets `GOOSE_MODE=approve` in Default mode, overriding an
 inherited `GOOSE_MODE=auto`. Accept edits uses `smart_approve`; Auto and Bypass
 use `auto`. Changes between different Goose modes require a Chat restart.
 
+Kilo and Kiro keep the provider agent selected at launch. Their native mode
+menus select different agents, which would drop AO's standing instructions;
+AO classifies those catalogs as agent controls, hides them in the composer,
+and rejects API attempts to switch agents. Model, effort, and AO approval
+controls remain available. Kilo approval changes still require a Chat restart.
+
 ### Deliberate limitations
 
 - **Vibe** sends no tool kind on a permission request, so AO cannot tell an
