@@ -12,7 +12,7 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Switch: host("Switch"), Text: host("Text"), View: host("View"),
+		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 	};
 });
@@ -65,7 +65,7 @@ function updateHeader() {
 
 function toggle() {
 	updateHeader();
-	return header.root.find((node) => (node.type as unknown) === "Switch");
+	return header.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityRole === "switch");
 }
 
 async function openPreview() {
@@ -73,8 +73,8 @@ async function openPreview() {
 }
 
 async function setMobile(enabled: boolean) {
-	const onValueChange = toggle().props.onValueChange;
-	await act(async () => onValueChange(enabled));
+	const control = toggle();
+	if (control.props.accessibilityState.checked !== enabled) await act(async () => control.props.onPress());
 }
 
 beforeEach(() => {
@@ -93,14 +93,16 @@ afterEach(() => {
 });
 
 describe("session preview mode", () => {
-	it("defaults to the live browser even after an app preview loads, with the switch only in the header", async () => {
+	it("defaults to the live browser with a labelled toggle only in the header", async () => {
 		await openPreview();
 		expect(fixtures.getPreview).toHaveBeenCalledWith(fixtures.config, "session-1");
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
 		expect(nodes("WebView")).toHaveLength(0);
-		expect(nodes("Switch")).toHaveLength(0);
+		expect(screen.root.findAll((node) => node.props.accessibilityRole === "switch")).toHaveLength(0);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "tablist")).toHaveLength(0);
-		expect(toggle().props).toMatchObject({ accessibilityLabel: "Mobile responsive view", value: false, disabled: false });
+		expect(toggle().props).toMatchObject({ accessibilityLabel: "Mobile view", accessibilityState: { checked: false, disabled: false }, disabled: false });
+		expect(toggle().find((node) => (node.type as unknown) === "Text").props.children).toBe("Mobile view");
+		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
 	});
 
 	it("switches to the authenticated responsive preview and back to streaming", async () => {
@@ -108,11 +110,12 @@ describe("session preview mode", () => {
 		await setMobile(true);
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
-		expect(toggle().props.value).toBe(true);
+		expect(toggle().props.accessibilityState.checked).toBe(true);
+		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("check");
 		await setMobile(false);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.value).toBe(false);
+		expect(toggle().props.accessibilityState.checked).toBe(false);
 	});
 
 	it("keeps the chosen mode during preview polls while updating the app URL", async () => {
@@ -121,22 +124,22 @@ describe("session preview mode", () => {
 		fixtures.getPreview.mockResolvedValue({ ...appPreview, url: "http://desktop.local:4317/updated" });
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("WebView")[0].props.source.uri).toBe("http://desktop.local:4317/updated");
-		expect(toggle().props.value).toBe(true);
+		expect(toggle().props.accessibilityState.checked).toBe(true);
 		await setMobile(false);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.value).toBe(false);
+		expect(toggle().props.accessibilityState.checked).toBe(false);
 	});
 
 	it("disables responsive mode without an app preview and stays live when one becomes available", async () => {
 		fixtures.getPreview.mockResolvedValue(null);
 		await openPreview();
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ value: false, disabled: true });
+		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: true }, disabled: true });
 		fixtures.getPreview.mockResolvedValue(appPreview);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ value: false, disabled: false });
+		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: false }, disabled: false });
 	});
 
 	it("returns to the live browser if the selected app preview is cleared", async () => {
@@ -145,7 +148,7 @@ describe("session preview mode", () => {
 		fixtures.getPreview.mockResolvedValue(null);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ value: false, disabled: true });
+		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: true }, disabled: true });
 	});
 
 	it("starts another session in streaming mode after using its predecessor's responsive preview", async () => {
@@ -154,6 +157,6 @@ describe("session preview mode", () => {
 		fixtures.params.id = "session-2";
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
-		expect(toggle().props.value).toBe(false);
+		expect(toggle().props.accessibilityState.checked).toBe(false);
 	});
 });

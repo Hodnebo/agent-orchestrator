@@ -1,7 +1,7 @@
 import { Feather } from "../../lib/icons";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
@@ -45,19 +45,20 @@ function SessionPreviewContent() {
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: title || "Preview",
-			headerRight: hostMatches && config ? () => <View style={styles.modeToggle}>
-				<Text style={styles.modeLabel}>Mobile</Text>
-				<Switch
-					accessibilityLabel="Mobile responsive view"
-					accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
-					disabled={!canShowResponsive}
-					value={responsive}
-					onValueChange={(enabled) => { haptics.tap(); setActive(enabled ? "app" : "browser"); }}
-					trackColor={{ false: t.borderStrong, true: t.green }}
-				/>
-			</View> : undefined,
+			headerRight: hostMatches && config ? () => <Pressable
+				accessibilityRole="switch"
+				accessibilityLabel="Mobile view"
+				accessibilityState={{ checked: responsive, disabled: !canShowResponsive }}
+				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
+				disabled={!canShowResponsive}
+				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
+				style={({ pressed }) => [styles.modeToggle, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
+			>
+				<Feather name={responsive ? "check" : "smartphone"} size={iconSize.sm} color={responsive ? t.textPrimary : t.textSecondary} />
+				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
+			</Pressable> : undefined,
 		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeToggle, t.borderStrong, t.green, title]);
+	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleDimmed, t.textPrimary, t.textSecondary, title]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -122,8 +123,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	modeToggle: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.xs },
-	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize },
+	modeToggle: { height: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.sm },
+	modeToggleDimmed: { opacity: 0.5 },
+	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
+	modeLabelActive: { color: t.textPrimary },
 	appPane: { flex: 1, backgroundColor: t.bgBase },
 	appBar: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
 	appPath: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
