@@ -468,7 +468,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
-	const setFilesSource = useUiStore((state) => state.setFilesSource);
+	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
 	const clearWorkspaceFileOpenRequest = useUiStore((state) => state.clearWorkspaceFileOpenRequest);
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
@@ -1571,10 +1571,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
-		setFilesSource(uiSessionId, { kind: "workspace" });
+		// Opens on the checked-out branch's default review: its uncommitted
+		// changes, or its commits when the worktree is clean.
+		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, setFilesSource, uiSessionId]);
+	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -2075,7 +2077,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
 							path={fileTabs.activePath}
-							scope={activeCenterFileRequest?.scope}
+							// Uncommitted is local-only; a cloud review's nearest scope is combined.
+							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
 							session={session}
 							split={filesSplit}
 						/>

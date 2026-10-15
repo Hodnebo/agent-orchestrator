@@ -152,7 +152,7 @@ export function FileContentPane({
 		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
-	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
 	const liveText = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
