@@ -1,5 +1,7 @@
 # Contributing
 
+Regular contributions can lead to a conversation about joining the team.
+
 New contributors should start with bug fixes. Pick an available issue labelled
 `bug`, comment to claim it, and open a PR linked to that issue.
 Feature work needs core-team approval before you start.
@@ -74,8 +76,6 @@ Also follow **PR hygiene** in [AGENTS.md](AGENTS.md): branch from `main`, one is
 
 The weekly contributor call is open to everyone. Share your work, discuss PRs,
 and suggest features. The time and link are shared on Discord.
-
-Regular contributions can lead to a conversation about joining the team.
 
 ## Code of Conduct
 
