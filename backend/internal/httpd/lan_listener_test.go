@@ -216,11 +216,13 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/internal/agent-switch-observability/prepare-disable",
 		"/internal/agent-switch-observability/apply-policy",
 		"/api/v1/mobile/status",
+		"/api/v1/mobile/keep-awake",
 		"/api/v1/mobile/devices",
 		"/api/v1/mobile/devices/i1",
 		"/api/v1/dev/import-projects",
 		"/api/v1/browser/status",
 		"/api/v1/desktop/sessions/ao-1/workspace",
+		"/api/v1/desktop/sessions/ao-1/artifacts",
 		"/api/v1/system/install/tmux",
 		"/api/v1/sessions/ao-1/preview/server",
 		"/api/v1/agents/codex/accounts",
@@ -452,6 +454,10 @@ func (c *lanFakeAgentCatalog) Probe(context.Context, string) (agentsvc.ProbeResu
 func (c *lanFakeAgentCatalog) Models(_ context.Context, agentID, _ string, _ bool) (ports.AgentModelCatalog, error) {
 	c.calls++
 	return ports.AgentModelCatalog{AgentID: agentID}, nil
+}
+
+func (c *lanFakeAgentCatalog) ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	return c.Models(ctx, agentID, projectID, refresh)
 }
 
 func (c *lanFakeAgentCatalog) RevalidateModels(_ context.Context, agentID, _ string) (ports.AgentModelCatalog, error) {

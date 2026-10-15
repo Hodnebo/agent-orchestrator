@@ -48,7 +48,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Play, Plus, Square, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
@@ -60,6 +60,7 @@ import {
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
+	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
@@ -194,6 +195,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	onContinue,
 	canSteer,
 	sendPending,
 	steerPending,
@@ -224,6 +226,7 @@ export const ChatComposer = memo(function ChatComposer({
 	assetSessionId,
 	acceptedClientMessageIds,
 	emptyPlaceholder,
+	promptSuggestion,
 	onSelectAnnotation,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
@@ -252,6 +255,8 @@ export const ChatComposer = memo(function ChatComposer({
 	starting?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
+	/** A proposed next message, kept out of the draft until accepted with Tab. */
+	promptSuggestion?: ComposerPromptSuggestion;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
@@ -275,6 +280,12 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/**
+	 * Pick a stopped turn back up when there is no draft to send: the same button
+	 * that stopped it continues it, like play after pause. Present only while the
+	 * latest turn is one the user stopped.
+	 */
+	onContinue?: () => Promise<unknown> | void;
 	/** A turn is actually running, so there is something to steer into. */
 	canSteer?: boolean;
 	/** A send mutation is in flight for this session. */
@@ -642,6 +653,20 @@ export const ChatComposer = memo(function ChatComposer({
 	const canStopTurn = Boolean(
 		willQueue && onInterrupt && !controlsDisabled && !hasDraft && !savingQueuedEdit,
 	);
+	// Typing a draft turns the button back into Send, so after a stop the user can
+	// still ask something else instead.
+	const canContinueTurn = Boolean(
+		onContinue && !canStopTurn && !controlsDisabled && !hasDraft && !savingQueuedEdit && !durableDelivery,
+	);
+	const [continuing, setContinuing] = useState(false);
+	const continueTurn = () => {
+		if (!onContinue || continuing) return;
+		setSendError(null);
+		setContinuing(true);
+		void Promise.resolve().then(onContinue)
+			.catch((error: unknown) => setSendError(apiErrorMessage(error, "Couldn't continue the turn. Try again.")))
+			.finally(() => setContinuing(false));
+	};
 	const canSteerNext =
 		Boolean(canSteer && onSteer) &&
 		!controlsDisabled &&
@@ -1706,69 +1731,80 @@ export const ChatComposer = memo(function ChatComposer({
 						</button>
 					</div>
 				) : null}
-				{staged ? (
-					<ul className="flex flex-wrap gap-1.5" aria-label="Attached files">
-						{stripAttachments.map(({ file, path, preview }) => {
-							return (
-							<li
-								key={file.id}
-								className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
-							>
-								{preview ? (
-									<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
-								) : (
-									<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-										<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-									</div>
-								)}
-								<span
-									className="max-w-[120px] truncate text-xs text-muted-foreground"
-									title={file.name}
-								>
-									{file.name}
-								</span>
-								<button
-									type="button"
-									onClick={() => {
-									if (submitInFlight.current) return;
-									if (path) editor.current?.removeImage(path);
-									if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
-										const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
-										setRetainedAttachments(next);
-										onQueuedRetainedAttachmentsChange?.(next);
-									} else fileAttachments.remove(file.id);
-									}}
-									disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-									aria-label={`Remove ${file.name}`}
-									className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									<X aria-hidden="true" className="size-3" />
-								</button>
-							</li>
-							);
-						})}
-					</ul>
-				) : null}
-				{contextReferences.length > 0 ? (
-					<ChatAnnotationSummary
-						annotations={contextReferences}
-						onSelect={onSelectAnnotation}
-						disabled={controlsDisabled || draftMutationPending}
-						onRemove={(excerpt) => {
-							if (!draftScope || submitInFlight.current || !excerpt.id) return;
-							const result = writeChatExcerptReferences(
-								draftScope,
-								contextReferences.filter((item) => item.id !== excerpt.id),
-							);
-							composerRevision.current = result.draft.composer.revision;
-							setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
-						}}
-					/>
+				{staged || contextReferences.length > 0 ? (
+					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+						{staged ? (
+							<ul className="contents" aria-label="Attached files">
+								{stripAttachments.map(({ file, path, preview }) => {
+									return (
+									<li
+										key={file.id}
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+									>
+										{preview ? (
+											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
+										) : (
+											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
+												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
+											</div>
+										)}
+										<span
+											className="max-w-[120px] truncate text-xs text-muted-foreground"
+											title={file.name}
+										>
+											{file.name}
+										</span>
+										<button
+											type="button"
+											onClick={() => {
+											if (submitInFlight.current) return;
+											if (path) editor.current?.removeImage(path);
+											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
+												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
+												setRetainedAttachments(next);
+												onQueuedRetainedAttachmentsChange?.(next);
+											} else fileAttachments.remove(file.id);
+											}}
+											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+											aria-label={`Remove ${file.name}`}
+											className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											<X aria-hidden="true" className="size-3" />
+										</button>
+									</li>
+									);
+								})}
+							</ul>
+						) : null}
+						{contextReferences.length > 0 ? (
+							<ChatAnnotationSummary
+								annotations={contextReferences}
+								onSelect={onSelectAnnotation}
+								disabled={controlsDisabled || draftMutationPending}
+								onRemoveAll={() => {
+									if (!draftScope || submitInFlight.current) return;
+									const result = writeChatExcerptReferences(draftScope, []);
+									composerRevision.current = result.draft.composer.revision;
+									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+								}}
+								onRemove={(excerpt) => {
+									if (!draftScope || submitInFlight.current || !excerpt.id) return;
+									const result = writeChatExcerptReferences(
+										draftScope,
+										contextReferences.filter((item) => item.id !== excerpt.id),
+									);
+									composerRevision.current = result.draft.composer.revision;
+									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+								}}
+							/>
+						) : null}
+					</div>
 				) : null}
 
 				<ComposerEditor
 					ref={editor}
 					images={composerImages}
+					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
@@ -1873,22 +1909,24 @@ export const ChatComposer = memo(function ChatComposer({
 							<TooltipTrigger asChild>
 								<span className="inline-flex">
 									<Button
-										type={canStopTurn ? "button" : "submit"}
+										type={canStopTurn || canContinueTurn ? "button" : "submit"}
 										variant="ghost"
 										size="icon-sm"
-										disabled={canStopTurn ? false : !sendActionEnabled}
-										onClick={canStopTurn ? onInterrupt : undefined}
-										aria-label={canStopTurn ? "Stop turn" : sendActionLabel}
+										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
+										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
 										className={cn(
 											"size-7 rounded-full border-transparent focus-visible:ring-ring/40",
-											canStopTurn || sendActionEnabled
+											canStopTurn || canContinueTurn || sendActionEnabled
 												? "bg-foreground text-background hover:bg-foreground/90 hover:text-background dark:hover:bg-foreground/90 dark:hover:text-background"
 												: "bg-primary text-primary-foreground",
 										)}
 									>
 										{canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
-										) : submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : canContinueTurn && !continuing ? (
+											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
+										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />
@@ -1898,7 +1936,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : durableDelivery ? sendActionLabel : sendHint}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : durableDelivery ? sendActionLabel : sendHint}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

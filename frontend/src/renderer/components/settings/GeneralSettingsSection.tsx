@@ -8,7 +8,9 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
+import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -245,6 +247,8 @@ export function GeneralSettingsSection({
 				) : null}
 			</SettingsSection>
 
+			<DefaultCloudSandboxSection />
+
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 			</SettingsSection>
@@ -260,6 +264,7 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
 				{developerMode && isMacPlatform() && <WindowTranslucencyRow />}
 			</SettingsSection>

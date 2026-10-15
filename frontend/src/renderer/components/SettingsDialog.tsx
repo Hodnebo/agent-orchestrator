@@ -12,11 +12,10 @@ import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
-import { ProjectScriptsSettings } from "./ProjectScriptsSettings";
+import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { motion } from "motion/react";
 import { topbarHeaderClass } from "./TopbarButton";
 import { topbarDragStyle, useTopbarPaddingLeft } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
@@ -43,7 +42,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const { cloudEnabled } = useCloudGate();
 	// The org's offering decides the cloud pages: the bring-your-own-Coder page
 	// only when it includes coder, Upgrade only for self-serve billing.
-	const { hasCoder, selfServeBilling } = useCloudOffering();
+	const { customCoder, selfServeBilling } = useCloudOffering();
 
 	const displaySettings = settingsModal;
 	// The selected page includes several store/query subscribers. Mount it one
@@ -67,7 +66,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}, [deferSettingsBody, settingsModal]);
 	const isBodyReady = bodySettings === displaySettings;
 
-	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling });
+	const globalSections = visibleGlobalSettings({ cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling });
 	const remoteHostId = displaySettings?.scope === "project" ? displaySettings.hostId : undefined;
 	// A cloud project lives only in the control plane; the local daemon has no
 	// record of it. Resolve it here so its settings load from the control plane.
@@ -99,9 +98,11 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
 	];
-	// Scripts, environment, and cues are local-daemon features; remote hosts and Cloud projects do not expose them.
+	// Scripts are project settings on local and Cloud projects alike (a Cloud
+	// session's worker runs them). Environment and cues are local-daemon
+	// features; remote hosts expose none of these.
+	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 	if (!remoteHostId && !isCloudProjectSettings) {
-		projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
@@ -126,7 +127,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const activeLabel = !settingsModal ? "" : isProjectSettings
 		? (projectSections.find((s) => s.id === activeProjectSection)?.label ?? t("settings.project.general"))
-		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).label(t);
+		: globalSettingsItem(activeSection, { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).label(t);
 
 	const closeSettingsDialog = () => {
 		if (!settingsModal) return;
@@ -175,9 +176,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling }).id);
+			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id);
 		}
-	}, [cloudEnabled, developerMode, diagnostics, hasCoder, selfServeBilling, settingsModal]);
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
@@ -262,8 +263,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "cues") {
 				return <CuesSettings projectId={displaySettings.projectId} onBusyChange={setCueBusy} />;
 			}
-			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "scripts") {
-				return <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			if (displaySettings?.scope === "project" && !remoteHostId && activeProjectSection === "scripts") {
+				return isCloudProjectSettings && cloudOrgId !== undefined
+					? <CloudProjectScriptsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />
+					: <ProjectScriptsSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
@@ -271,7 +274,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;
 			}
-			return <GlobalSettingsForm cloudEnabled={cloudEnabled} hasCoder={hasCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
+			return <GlobalSettingsForm cloudEnabled={cloudEnabled} customCoder={customCoder} selfServeBilling={selfServeBilling} focusAgentId={focusAgentId} hostId={displaySettings?.scope === "global" ? displaySettings.hostId : undefined} harnessView={harnessView} startLogin={startLogin} section={activeSection} />;
 		},
 	};
 }
@@ -386,7 +389,7 @@ export function SettingsPane() {
 	const layer = page.active;
 	return (
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
-			<motion.header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
+			<header className={cn(topbarHeaderClass, "workspace-topbar-container")} style={{ ...topbarDragStyle, paddingLeft }}>
 				<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
 					<span className="text-muted-foreground">{layer.rootLabel}</span>
 					<span aria-hidden="true" className="text-muted-foreground/50">/</span>
@@ -396,7 +399,7 @@ export function SettingsPane() {
 				<button aria-label={t("settings.close")} className="settings-close-button ml-auto shrink-0" disabled={layer.cueBusy} onClick={layer.close} style={{ WebkitAppRegion: "no-drag" } as CSSProperties} type="button">
 					<X aria-hidden="true" className="size-4" />
 				</button>
-			</motion.header>
+			</header>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
 			{page.layers.map((entry) => (
 				<div
