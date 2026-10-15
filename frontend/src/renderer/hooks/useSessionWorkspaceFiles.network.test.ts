@@ -8,7 +8,10 @@ import { sessionArtifactFileQueryOptions } from "./useSessionWorkspaceFiles";
 
 vi.mock("../lib/bridge", () => ({ aoBridge: {} }));
 
-it.for([false, true])("reads artifacts from IPv4 AO while another app owns the same port on IPv6 (IPv4 collision: %s)", async (simulateCollision, context) => {
+it.for([
+	{ simulateCollision: false, artifactPath: "sub/report (1).md", escapedPath: "sub/report%20(1).md" },
+	{ simulateCollision: true, artifactPath: "sub/a+b.md", escapedPath: "sub/a%2Bb.md" },
+])("reads $artifactPath from IPv4 AO while another app owns the same port on IPv6 (IPv4 collision: $simulateCollision)", async ({ simulateCollision, artifactPath, escapedPath }, context) => {
 	const requests: string[] = [];
 	const daemon = createServer((request, response) => {
 		requests.push(request.url ?? "");
@@ -69,7 +72,7 @@ it.for([false, true])("reads artifacts from IPv4 AO while another app owns the s
 		}
 		expect(daemonListen.mock.calls.length).toBeGreaterThanOrEqual(simulateCollision ? 2 : 1);
 		const hostname = "ao-preview-artifact.session.localhost";
-		const rawUrl = `http://${hostname}:${port}/sub/report.md?raw=true`;
+		const rawUrl = `http://${hostname}:${port}/${artifactPath}?raw=true`;
 		// Reproduce Chromium choosing ::1 deterministically, without relying on
 		// the test host's DNS support or address ordering for *.localhost.
 		const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) =>
@@ -80,12 +83,12 @@ it.for([false, true])("reads artifacts from IPv4 AO while another app owns the s
 		fetch.mockClear();
 		setApiBaseUrl(`http://127.0.0.1:${port}`);
 
-		const detail = await client.fetchQuery(sessionArtifactFileQueryOptions("session-1", "sub/report.md", rawUrl));
+		const detail = await client.fetchQuery(sessionArtifactFileQueryOptions("session-1", artifactPath, rawUrl));
 
 		expect(detail.content).toBe("# The AO artifact");
 		expect(detail.editable).toBe(true);
 		expect(detail.fileFingerprint).toMatch(/^[a-f0-9]{64}$/);
-		expect(requests).toEqual(["/api/v1/sessions/session-1/preview/files/sub/report.md?source=artifact&raw=true"]);
+		expect(requests).toEqual([`/api/v1/sessions/session-1/preview/files/${escapedPath}?source=artifact&raw=true`]);
 		expect(competingRequests).toBe(1);
 		expect(fetch).toHaveBeenCalledExactlyOnceWith(`http://127.0.0.1:${port}${requests[0]}`);
 
@@ -93,7 +96,7 @@ it.for([false, true])("reads artifacts from IPv4 AO while another app owns the s
 		client.clear();
 		fetch.mockClear();
 		setApiBaseUrl(null);
-		await expect(client.fetchQuery(sessionArtifactFileQueryOptions("session-1", "sub/report.md", rawUrl))).rejects.toThrow("Unable to load artifact");
+		await expect(client.fetchQuery(sessionArtifactFileQueryOptions("session-1", artifactPath, rawUrl))).rejects.toThrow("Unable to load artifact");
 		expect(fetch).not.toHaveBeenCalled();
 	} finally {
 		daemonListen.mockRestore();
