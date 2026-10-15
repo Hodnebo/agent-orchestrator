@@ -67,6 +67,20 @@ func EnsureClaudeCode(ctx context.Context) string {
 	return defaultClaudeCode.ensure(ctx)
 }
 
+// AwaitClaudeCodeUpgrade waits, at most as long as a Chat turn does, for an
+// upgrade in progress, so a terminal launch runs the upgraded Claude Code
+// rather than an older install that current models refuse. It returns at once
+// when nothing is pending or an earlier upgrade failed.
+func AwaitClaudeCodeUpgrade(ctx context.Context) {
+	defaultClaudeCode.await(ctx, claudeCodeTurnWait)
+}
+
+func (c *claudeCode) await(ctx context.Context, wait time.Duration) {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	_ = c.ensure(waitCtx)
+}
+
 // WarmClaudeCode starts any needed upgrade in the background so a Chat turn
 // does not wait for npm.
 func WarmClaudeCode() {

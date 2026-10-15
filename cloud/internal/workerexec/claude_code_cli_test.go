@@ -162,6 +162,46 @@ func TestClaudeCodeRetriesAFailedUpgradeInTheBackgroundWithBackoff(t *testing.T)
 	}
 }
 
+// A terminal launch on a fresh workspace must run the upgraded Claude Code:
+// the older install the image ships refuses current models ("version 2.1.280
+// or newer is required"). It waits for the upgrade in progress, but no longer
+// than its bound, and not at all once an upgrade has failed.
+func TestClaudeCodeAwaitRunsTheTerminalOnTheUpgrade(t *testing.T) {
+	home := t.TempDir()
+	local := filepath.Join(home, ".ao", "tools", "bin", "claude")
+	versions := map[string]string{"/usr/bin/claude": "2.1.228"}
+	release := make(chan struct{})
+	code := testClaudeCode(home,
+		map[string]string{"claude": "/usr/bin/claude", "npm": "/usr/bin/npm"},
+		versions,
+		func(context.Context, string, string) error {
+			<-release
+			writeExecutable(t, local)
+			versions[local] = ClaudeCodeVersion
+			return nil
+		})
+	go func() { _ = code.ensure(context.Background()) }() // WarmClaudeCode at worker boot
+	time.AfterFunc(50*time.Millisecond, func() { close(release) })
+	code.await(context.Background(), 5*time.Second)
+	if got := code.current(); got != local {
+		t.Fatalf("terminal launch would run %q, want the upgraded %q", got, local)
+	}
+
+	stuck := testClaudeCode(t.TempDir(),
+		map[string]string{"claude": "/usr/bin/claude", "npm": "/usr/bin/npm"},
+		map[string]string{"/usr/bin/claude": "2.1.228"},
+		func(ctx context.Context, _, _ string) error { <-ctx.Done(); return ctx.Err() })
+	go func() { _ = stuck.ensure(context.Background()) }()
+	started := time.Now()
+	stuck.await(context.Background(), 30*time.Millisecond)
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatalf("await waited %s past its bound", waited)
+	}
+	if got := stuck.current(); got != "claude" {
+		t.Fatalf("current after a timed-out wait = %q, want the existing install", got)
+	}
+}
+
 func TestClaudeCodeEnsureDoesNotOutwaitItsCaller(t *testing.T) {
 	release := make(chan struct{})
 	code := testClaudeCode(t.TempDir(),
