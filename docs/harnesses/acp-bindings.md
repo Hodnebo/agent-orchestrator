@@ -30,6 +30,10 @@ changing to a stricter approval mode takes effect on subsequent requests. If a
 provider offers only `allow_always`, AO asks the user instead of automatically caching a grant it
 cannot revoke. Grants explicitly remembered by the user remain provider-owned.
 
+Kilo ACP explicitly asks before edits and shell commands in Default mode.
+Accept edits allows file changes but still asks before shell commands. AO layers
+these settings over inherited permission config, preserving unrelated tool rules.
+
 ### Deliberate limitations
 
 - **Vibe** sends no tool kind on a permission request, so AO cannot tell an

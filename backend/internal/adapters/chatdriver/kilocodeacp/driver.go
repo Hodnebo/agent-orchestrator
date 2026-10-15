@@ -32,17 +32,13 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-// configure builds the `kilocode acp` argv. When AO carries standing
-// instructions or a non-default permission mode, they ride on
+// configure builds the `kilocode acp` argv. AO's standing instructions and
+// permission rules (including explicit Default prompts) ride on
 // KILO_CONFIG_CONTENT, the same highest-precedence inline config the TUI path
 // uses. Kilo's `acp` subcommand accepts no model flag, so the model is applied
 // through session/set_model instead.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" &&
-		ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeDefault {
-		return args, nil, nil
-	}
 	content, err := kilocode.PrepareACPConfigContent(
 		cfg.Env["KILO_CONFIG_CONTENT"], cfg.SystemPrompt, string(cfg.SessionID), cfg.Permissions)
 	if err != nil {

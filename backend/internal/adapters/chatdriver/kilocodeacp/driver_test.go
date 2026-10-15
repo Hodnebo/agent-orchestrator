@@ -18,8 +18,14 @@ func TestConfigureStartsACPSubcommand(t *testing.T) {
 	if want := []string{"acp"}; !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
-	if env != nil {
-		t.Fatalf("env = %#v, want nil", env)
+	var config struct {
+		Permission map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(env["KILO_CONFIG_CONTENT"]), &config); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"edit": "ask", "bash": "ask"}; !reflect.DeepEqual(config.Permission, want) {
+		t.Fatalf("default permissions = %#v, want %#v", config.Permission, want)
 	}
 }
 
@@ -52,7 +58,9 @@ func TestConfigureCarriesStandingInstructionsOnConfigContent(t *testing.T) {
 
 func TestConfigureMapsPermissionModesOnConfigContent(t *testing.T) {
 	tests := map[ports.PermissionMode]map[string]string{
-		ports.PermissionModeAcceptEdits:       {"edit": "allow"},
+		"":                                    {"edit": "ask", "bash": "ask"},
+		ports.PermissionModeDefault:           {"edit": "ask", "bash": "ask"},
+		ports.PermissionModeAcceptEdits:       {"edit": "allow", "bash": "ask"},
 		ports.PermissionModeAuto:              {"edit": "allow", "bash": "allow"},
 		ports.PermissionModeBypassPermissions: {"*": "allow"},
 	}
