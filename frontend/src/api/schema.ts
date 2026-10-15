@@ -3984,9 +3984,13 @@ export interface components {
             projectId: string;
             prompt: string;
             rrule: string;
+            /** @enum {string} */
+            templateId: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
             timezone: string;
             /** Format: date-time */
             updatedAt: string;
+            /** @enum {string} */
+            useCase: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
         AutomationRunResponse: {
             /** Format: int64 */
@@ -4722,7 +4726,11 @@ export interface components {
             projectId: string;
             prompt: string;
             rrule?: string;
+            /** @enum {string} */
+            templateId?: "custom" | "daily_pr_review_v1" | "daily_issue_triage_v1" | "weekly_release_notes_v1";
             timezone: string;
+            /** @enum {string} */
+            useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown";
         };
         CreateConversationSideChatRequest: {
             forceNew?: boolean;
@@ -6504,6 +6512,8 @@ export interface components {
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
+            /** @enum {null|string} */
+            useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
