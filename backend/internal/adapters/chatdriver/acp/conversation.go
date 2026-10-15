@@ -24,6 +24,9 @@ import (
 const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
+	// sessionCloseWait bounds the courtesy session/close sent before a
+	// provider is terminated.
+	sessionCloseWait = 500 * time.Millisecond
 )
 
 var (
@@ -1115,7 +1118,10 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
+			// The provider is terminated right after, gracefully first, so a slow
+			// session/close answer (Grok takes seconds) must not hold up the stop:
+			// an agent switch waits on it.
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), sessionCloseWait)
 			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
 			cancelClose()
 		}

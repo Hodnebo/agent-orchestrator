@@ -56,6 +56,9 @@ type Config struct {
 	// ValidateInitialize optionally admits only the ACP agent and version the
 	// handshake identifies. See acpdriver.Config.ValidateInitialize.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// SessionMeta carries provider-defined _meta on session/new, session/load,
+	// and session/resume. See acpdriver.Config.SessionMeta.
+	SessionMeta func(acpdriver.LaunchConfig) map[string]any
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
@@ -155,6 +158,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		RequireAdvertisedOptions:     cfg.RequireAdvertisedOptions,
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
+		SessionMeta:                  cfg.SessionMeta,
 		SessionPreamble:              cfg.SessionPreamble,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,

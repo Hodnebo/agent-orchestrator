@@ -34,6 +34,10 @@ const (
 	startupTimeout   = 10 * time.Second
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
+	// A stopped provider gets providerStdinGrace to exit on stdin closing, then
+	// a terminate signal, and is killed at providerStopDeadline.
+	providerStdinGrace   = 300 * time.Millisecond
+	providerStopDeadline = 3 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -646,15 +650,38 @@ func Run(ctx context.Context, cfg Config) error {
 
 	stopProvider := func() {
 		_ = stdin.Close()
+		deadline := time.After(providerStopDeadline)
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
 			// process tree is the ownership boundary, so explicit shutdown reaps
 			// any descendant that did not follow stdin closure.
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
-		case <-time.After(3 * time.Second):
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			return
+		case <-time.After(providerStdinGrace):
 		}
+		// Some agents (Cursor, Grok) ignore stdin closing and only exit on a
+		// signal; asking them to terminate saves most of the deadline below,
+		// which an agent switch otherwise waits out in full.
+		_ = terminateProviderProcess(child)
+		// The provider's output can stay open after it exits when a helper it
+		// started inherited the pipe, so its own exit also ends the wait.
+		exited := time.NewTicker(20 * time.Millisecond)
+		defer exited.Stop()
+	wait:
+		for {
+			select {
+			case <-providerDone:
+				break wait
+			case <-deadline:
+				break wait
+			case <-exited.C:
+				if child.Process != nil && !processalive.Alive(child.Process.Pid) {
+					break wait
+				}
+			}
+		}
+		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
 	select {

@@ -36,7 +36,27 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		},
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
+		SessionPreamble:      continuationPreamble,
 	}, log)
+}
+
+const (
+	continuationOpenTag  = "<ao-continuation"
+	continuationCloseTag = "</ao-continuation>"
+)
+
+// continuationPreamble hands an agent switch's continuation to Cursor with the
+// first prompt. Cursor does not act on it from the standing rule (a switch to
+// Cursor recalled none of the handed-over context), and it advertises no
+// embedded-resource prompts, so the block travels as plain text ahead of the
+// user's message. A session started without a switch has no block.
+func continuationPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
+	start := strings.Index(cfg.SystemPrompt, continuationOpenTag)
+	end := strings.LastIndex(cfg.SystemPrompt, continuationCloseTag)
+	if start < 0 || end < start {
+		return nil
+	}
+	return []acpsdk.ContentBlock{acpsdk.TextBlock(cfg.SystemPrompt[start : end+len(continuationCloseTag)])}
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {

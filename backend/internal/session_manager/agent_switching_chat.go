@@ -173,18 +173,17 @@ func (m *Manager) executeChatAgentSwitch(
 	if m.chat == nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ports.ErrChatUnsupported)
 	}
-	if err := m.chat.PreflightChat(
-		ctx,
-		cfg.TargetHarness,
-		effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config).Permissions,
-	); err != nil {
+	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
+	// The target keeps the chat's approval mode, not the project default: a chat
+	// someone set to bypass stays in bypass across a switch.
+	baseAgentConfig.Permissions = m.chatSwitchPermissions(ctx, rec, baseAgentConfig.Permissions)
+	if err := m.chat.PreflightChat(ctx, cfg.TargetHarness, baseAgentConfig.Permissions); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target preflight: %w", id, err)
 	}
 	handoff, ok := m.chat.(chatHandoffLauncher)
 	if !ok {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ErrInterfaceHandoffUnsupported)
 	}
-	baseAgentConfig := effectiveAgentConfig(cfg.TargetHarness, rec.Kind, project.Config)
 	agentConfig, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{
 		ProjectID: rec.ProjectID,
 		Kind:      rec.Kind,
@@ -598,6 +597,21 @@ func committedChatSwitchConversation(
 	conversation.Settings.ReasoningEffort = ""
 	conversation.UpdatedAt = activatedAt
 	return conversation
+}
+
+// chatSwitchPermissions is the approval mode a switch target starts with: the
+// chat's current one when the conversation records it (someone may have changed
+// it mid-chat), else the mode the session was launched with, else fallback.
+func (m *Manager) chatSwitchPermissions(ctx context.Context, rec domain.SessionRecord, fallback ports.PermissionMode) ports.PermissionMode {
+	if history, ok := m.store.(chatHandoffHistoryStore); ok {
+		if conversation, err := history.ConversationForSession(ctx, rec.ID); err == nil && conversation.Settings.ApprovalMode != "" {
+			return conversation.Settings.ApprovalMode
+		}
+	}
+	if rec.Metadata.Permissions != "" {
+		return rec.Metadata.Permissions
+	}
+	return fallback
 }
 
 // chatMessageSender delivers a human message through the ordinary Chat send
