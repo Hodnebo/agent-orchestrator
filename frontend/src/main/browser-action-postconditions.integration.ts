@@ -280,7 +280,6 @@ async function run(): Promise<void> {
 
 		// Exercise the production host with real Chromium window handles. Unit
 		// fakes cannot prove that the child retains its native opener linkage.
-		process.stdout.write("starting native popup integration\n");
 		const opener = activeWebContents();
 		await opener.executeJavaScript("guardEnabled = false");
 		await opener.loadURL(`http://127.0.0.1:${address.port}/destination`);
@@ -288,13 +287,17 @@ async function run(): Promise<void> {
 		async function deadline<T>(pending: Promise<T>): Promise<T> {
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
-				return await Promise.race([pending, new Promise<never>((_resolve, reject) => {
-					timer = setTimeout(() => reject(new Error("popup integration timed out")), 10_000);
-				})]);
-			} finally { if (timer) clearTimeout(timer); }
+				return await Promise.race([
+					pending,
+					new Promise<never>((_resolve, reject) => {
+						timer = setTimeout(() => reject(new Error("popup integration timed out")), 10_000);
+					}),
+				]);
+			} finally {
+				if (timer) clearTimeout(timer);
+			}
 		}
 		for (const bootstrapBlank of [false, true]) {
-			process.stdout.write(`opening ${bootstrapBlank ? "blank bootstrap" : "direct"} popup\n`);
 			const hasHandle = await opener.executeJavaScript(`
 				window.popupReady = new Promise(resolve => addEventListener('message', event => {
 					if (event.data?.kind === 'popup-ready') resolve(event.data);
@@ -303,10 +306,11 @@ async function run(): Promise<void> {
 				${bootstrapBlank ? `window.authPopup.location = ${JSON.stringify(popupURL)};` : ""}
 				!!window.authPopup;
 			`, true);
-			process.stdout.write("popup window.open returned\n");
 			assert.equal(hasHandle, true, "window.open must return a real WindowProxy");
-			assert.deepEqual(await deadline(opener.executeJavaScript("window.popupReady")), {kind: "popup-ready", hasOpener: true});
-			process.stdout.write("popup cross-origin ready message received\n");
+			assert.deepEqual(await deadline(opener.executeJavaScript("window.popupReady")), {
+				kind: "popup-ready",
+				hasOpener: true,
+			});
 			const popup = activeWebContents();
 			assert.notEqual(popup, opener);
 			assert.equal(popup.session, opener.session, "popup must share its opener's browser profile");
@@ -315,7 +319,6 @@ async function run(): Promise<void> {
 			const tabs = await host.execute("integration-session", "tabs") as BrowserTabsState;
 			assert.equal(tabs.tabs.length, 2);
 			const closed = new Promise<void>(resolve => popup.once("destroyed", () => resolve()));
-			process.stdout.write("requesting popup self-close\n");
 			await opener.executeJavaScript(`
 				window.authComplete = new Promise(resolve => addEventListener('message', event => {
 					if (event.data?.kind === 'auth-complete') resolve(true);
@@ -325,7 +328,6 @@ async function run(): Promise<void> {
 			`);
 			assert.equal(await deadline(opener.executeJavaScript("window.authComplete")), true);
 			await deadline(closed);
-			process.stdout.write("popup self-close finished\n");
 			assert.equal(await opener.executeJavaScript("window.authPopup.closed"), true);
 			const remaining = await host.execute("integration-session", "tabs") as BrowserTabsState;
 			assert.equal(remaining.tabs.length, 1, "self-closed guest must leave AO's tab registry");
@@ -333,7 +335,7 @@ async function run(): Promise<void> {
 		}
 		assert.equal(await opener.executeJavaScript("window.open('file:///etc/passwd') === null", true), true);
 		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
-		process.stdout.write("browser popup handle, cross-origin messaging, profile isolation and self-close integration passed\n");
+		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {

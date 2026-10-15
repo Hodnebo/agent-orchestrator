@@ -940,7 +940,10 @@ function setupTabHost(
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
 ) {
-const constructorOptions: Array<{ webPreferences: Electron.WebPreferences; webContents?: Electron.WebContents }> = [];
+	const constructorOptions: Array<{
+		webPreferences: Electron.WebPreferences;
+		webContents?: Electron.WebContents;
+	}> = [];
 	const handlers = new Map<string, InvokeHandler>();
 	const eventHandlers = new Map<string, EventHandler>();
 	const sent: Array<{ channel: string; payload: unknown }> = [];
@@ -1030,7 +1033,10 @@ const constructorOptions: Array<{ webPreferences: Electron.WebPreferences; webCo
 			}),
 			on: (event: string, listener: (...args: never[]) => void) => {
 				const previous = listeners.get(event);
-				listeners.set(event, (...args) => { previous?.(...args); listener(...args); });
+				listeners.set(event, (...args) => {
+					previous?.(...args);
+					listener(...args);
+				});
 			},
 			reload: () => undefined,
 			send: vi.fn(),
@@ -1046,13 +1052,20 @@ const constructorOptions: Array<{ webPreferences: Electron.WebPreferences; webCo
 			closeDevTools: vi.fn(),
 			session: electronSession,
 			openWindow: (url: string, nativeGuest = true) => {
-				const result = windowOpenHandler?.({ url, frameName: "", features: "",
-					disposition: "new-window", referrer: {url: currentURL, policy: "default"} });
+				const result = windowOpenHandler?.({
+					url,
+					frameName: "",
+					features: "",
+					disposition: "new-window",
+					referrer: { url: currentURL, policy: "default" },
+				});
 				if (result?.action !== "allow") return null;
 				const guest = nativeGuest ? makeView(partition) : undefined;
 				if (guest) views.pop(); // Electron created contents, not an AO tab yet.
-				const windowOptions = { ...result.overrideBrowserWindowOptions,
-					webContents: guest?.webContents as unknown as Electron.WebContents | undefined };
+				const windowOptions = {
+					...result.overrideBrowserWindowOptions,
+					webContents: guest?.webContents as unknown as Electron.WebContents | undefined,
+				};
 				const contents = result.createWindow!(windowOptions);
 				// Match Electron 33's identity check; the old fake accepted unrelated contents.
 				if (guest && contents !== guest.webContents as unknown as Electron.WebContents)
@@ -3632,7 +3645,10 @@ describe("agent browser runtime", () => {
 		expect(constructorOptions[1].webContents).toBe(handle);
 		expect(constructorOptions[1].webPreferences).toMatchObject({
 			partition: constructorOptions[0].webPreferences.partition,
-			contextIsolation: true, nodeIntegration: false, sandbox: true, preload: "/preload.js",
+			contextIsolation: true,
+			nodeIntegration: false,
+			sandbox: true,
+			preload: "/preload.js",
 		});
 		await vi.waitFor(() => expect(views[1].webContents.loadURL).toHaveBeenCalledExactlyOnceWith(popupURL));
 		expect(views[1].webContents.loadURL).not.toHaveBeenCalledWith("about:blank");
@@ -3641,8 +3657,9 @@ describe("agent browser runtime", () => {
 	it("allows blank popup bootstrap but blocks unsafe popup destinations", async () => {
 		const { host, views } = setupTabHost();
 		await host.execute("sess-1", "tabs");
-		for (const url of ["file:///etc/passwd", "javascript:alert(1)", "custom://secret", "http://localhost:5173/"])
+		for (const url of ["file:///etc/passwd", "javascript:alert(1)", "custom://secret", "http://localhost:5173/"]) {
 			expect(views[0].webContents.openWindow(url)).toBeNull();
+		}
 		expect(views).toHaveLength(1);
 		expect(views[0].webContents.openWindow("about:blank")).toBe(views[1].webContents);
 		await vi.waitFor(() => expect(views[1].webContents.loadURL).toHaveBeenCalledOnce());
