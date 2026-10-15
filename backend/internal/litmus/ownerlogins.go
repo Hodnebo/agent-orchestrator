@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const ownerLoginsFile = "owner-logins.json"
@@ -34,7 +35,7 @@ func readOwnerLogins(ctx context.Context) ownerLogins {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// Run discards stdout and stderr. Only the Keychain item's presence is kept.
-	login.Claude = exec.CommandContext(ctx, "security", "find-generic-password", "-s", "Claude Code-credentials").Run() == nil
+	login.Claude = process.CommandContext(ctx, "security", "find-generic-password", "-s", "Claude Code-credentials").Run() == nil
 	return login
 }
 

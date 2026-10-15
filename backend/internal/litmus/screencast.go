@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -167,7 +168,11 @@ func (r *screencast) capture(index *os.File) error {
 	url, err := r.resolve(ctx)
 	var conn *websocket.Conn
 	if err == nil {
-		conn, _, err = websocket.Dial(ctx, url, nil)
+		var resp *http.Response
+		conn, resp, err = websocket.Dial(ctx, url, nil)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 	}
 	cancel()
 	if err != nil {

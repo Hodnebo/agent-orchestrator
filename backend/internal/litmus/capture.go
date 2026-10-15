@@ -79,7 +79,7 @@ func (e *Engine) flatten(ctx context.Context, path string) error {
 			return nil, err
 		}
 		if p.conn != nil {
-			defer p.conn.CloseNow()
+			defer func() { _ = p.conn.CloseNow() }()
 		}
 		var values []uint8
 		if err := p.evaluate(ctx, windowBackgroundJS, &values); err != nil {
@@ -121,7 +121,7 @@ func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []
 		return nil, "theme pair not taken: " + err.Error()
 	}
 	if p.conn != nil {
-		defer p.conn.CloseNow()
+		defer func() { _ = p.conn.CloseNow() }()
 	}
 	previous := e.theme
 	set := func(ctx context.Context, value string) error {
@@ -206,7 +206,7 @@ func samePixels(a, b string) bool {
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		img, _ := png.Decode(f)
 		return img
 	}

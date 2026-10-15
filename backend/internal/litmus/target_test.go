@@ -17,8 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"gopkg.in/yaml.v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // fakeSys records every process action in order; started maps live pids to start times.

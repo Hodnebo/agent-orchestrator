@@ -305,7 +305,7 @@ func TestEmbeddedTestingGuidanceRequiresApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"ao testing show <runId>", "ao testing post <runId>", "ao testing discard <runId>", "Never post without the user's yes."} {
+	for _, required := range []string{"ao testing show <runId>", "ao testing post <runId>", "ao testing discard <runId>", "ask the user whether to post them", "Never post without the user's yes."} {
 		if !strings.Contains(string(body), required) {
 			t.Errorf("testing guidance missing %q", required)
 		}

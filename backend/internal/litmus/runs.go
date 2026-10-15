@@ -405,17 +405,6 @@ func (s *Service) awaiting(id string) (Run, func(), error) {
 	return run, done, err
 }
 
-// existingVideos is what the video step left in the run dir, as closeRun saw it.
-func existingVideos(runDir string) (out []legVideo) {
-	for _, leg := range []string{"head", "base"} {
-		v := legVideo{leg: leg, raw: fileExists(recordingPath(runDir, leg)), cut: fileExists(cutPath(runDir, leg))}
-		if v.raw || v.cut {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 // Post publishes the evidence and posts the comment of a run awaiting approval: the second half of what submit does for
 // a project that does not ask. When the post fails the run stays awaiting approval, with the reason in its comment
 // state, so it can be tried again.
@@ -439,7 +428,7 @@ func (s *Service) Post(ctx context.Context, id string) (Run, error) {
 	}
 	// The publish runs on its own context: a client that hangs up between the evidence push and the comment would leave
 	// the post half done. Every step has its own timeout, as in submit.
-	url, state, ev := s.publishComment(context.WithoutCancel(ctx), run, v, existingVideos(runDir), string(body))
+	url, state, ev := s.publishComment(context.WithoutCancel(ctx), run, v, string(body))
 	return s.update(run.ID, func(cur *Run) {
 		cur.CommentURL, cur.CommentState, cur.EvidenceState, cur.EvidenceCommit = url, state, ev.state, ev.commit
 		cur.VideoState, cur.VideoURLs = ev.videoState, ev.videoURLs()

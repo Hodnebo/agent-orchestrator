@@ -82,7 +82,7 @@ func TestSavedReceiptFlattensTransparentBodyOntoWindowBackground(t *testing.T) {
 			t.Fatalf("background %d,%d,%d", r, g, b)
 		}
 	}
-	res, err = svc.Drive(ctx, "s1", "screenshot", []string{"transparent.png"})
+	_, err = svc.Drive(ctx, "s1", "screenshot", []string{"transparent.png"})
 	is(t, "")(nil, err)
 	requireOpaque(t, filepath.Join(runDir, "transparent.png"))
 }
@@ -111,7 +111,8 @@ func fakeThemePageWithPreference(t *testing.T, pinned bool, initialPreference st
 		case "Runtime.evaluate":
 			expression := params.(map[string]any)["expression"].(string)
 			var value any = !pinned
-			if expression == themeStateJS {
+			switch expression {
+			case themeStateJS:
 				theme := "dark"
 				if preference == "light" && !pinned {
 					theme = "light"
@@ -121,7 +122,7 @@ func fakeThemePageWithPreference(t *testing.T, pinned bool, initialPreference st
 					media = "dark"
 				}
 				value = map[string]string{"theme": theme, "background": theme, "preference": media}
-			} else if expression == windowBackgroundJS {
+			case windowBackgroundJS:
 				value = []uint8{12, 12, 14, 255}
 				if preference == "light" && !pinned {
 					value = []uint8{251, 251, 251, 255}

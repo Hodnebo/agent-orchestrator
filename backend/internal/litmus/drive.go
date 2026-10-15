@@ -288,7 +288,7 @@ func compactSnapshot(snapshot string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(snapshot, "\n") {
 		m := snapRef.FindStringSubmatch(line)
-		if m == nil || !interactiveSnapshotRoles[strings.ToLower(m[1])] {
+		if len(m) < 2 || !interactiveSnapshotRoles[strings.ToLower(m[1])] {
 			continue
 		}
 		line = strings.TrimRight(line, " \t\r")
@@ -418,7 +418,7 @@ func (e *Engine) clickTarget(ctx context.Context, ref string) (*clickAt, *Elemen
 		return nil, element, err
 	}
 	if p.conn != nil {
-		defer p.conn.CloseNow()
+		defer func() { _ = p.conn.CloseNow() }()
 	}
 	var size []float64
 	if err := p.evaluate(ctx, "[innerWidth, innerHeight]", &size); err != nil {

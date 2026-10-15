@@ -141,7 +141,7 @@ func (s *Service) previousComments(run Run) []PostedComment {
 	return current
 }
 
-func (s *Service) numberBugComments(run Run, bugs []bugComment) []PostedComment {
+func (s *Service) numberBugComments(run Run, bugs []bugComment) {
 	previous := s.previousComments(run)
 	used := map[int]bool{}
 	next := 1
@@ -170,7 +170,6 @@ func (s *Service) numberBugComments(run Run, bugs []bugComment) []PostedComment 
 	for i := range bugs {
 		bugs[i].Total = total
 	}
-	return previous
 }
 
 // baseTwinCheck is the check-name form of baseTwin. It returns nil when main
@@ -362,7 +361,7 @@ func summaryCommentBody(run Run, v Verdict, now time.Time, marker bool) string {
 
 // fixedCommentBody keeps the marker on the first comment so a later rerun can
 // still find the run, while the visible text is exactly the requested result.
-func fixedCommentBody(run Run, sha string, marker bool) string {
+func fixedCommentBody(sha string, marker bool) string {
 	body := "Fixed at " + clip(strings.TrimSpace(sha), 80)
 	if marker {
 		body += "\n\n" + litmusCommentMarker()
@@ -1068,7 +1067,7 @@ func plainCell(note string, n int) string {
 // evidence images and posts it. It never fails the submit: the outcome is the comment's URL and a state (posted,
 // updated, off or failed:<reason>), plus what became of the evidence. A run that asks before posting stops after the
 // first step (see closeRun) and takes the second (publishComment) when its post is approved.
-func (s *Service) postComment(ctx context.Context, run Run, v Verdict, videos []legVideo) (url, state string, ev evidence) {
+func (s *Service) postComment(ctx context.Context, run Run, v Verdict) (url, state string, ev evidence) {
 	body, ev, err := s.composeComment(run, v)
 	if err != nil {
 		return "", s.commentFailed(run, err), ev
@@ -1076,7 +1075,7 @@ func (s *Service) postComment(ctx context.Context, run Run, v Verdict, videos []
 	if run.Comment != CommentPost || v.Overall == CheckBlocked {
 		return "", CommentOff, ev
 	}
-	return s.publishComment(ctx, run, v, videos, body)
+	return s.publishComment(ctx, run, v, body)
 }
 
 // writeComment renders the comment for ev and writes it to comment.md.
@@ -1160,7 +1159,7 @@ func (s *Service) draftComments(run Run, v Verdict) ([]commentDoc, error) {
 			continue
 		}
 		marker := isMarker(name, len(docs))
-		docs = append(docs, commentDoc{Name: name, Number: old.Number, Fixed: true, CommentID: old.ID, Marker: marker, Body: fixedCommentBody(run, run.HeadSHA, marker)})
+		docs = append(docs, commentDoc{Name: name, Number: old.Number, Fixed: true, CommentID: old.ID, Marker: marker, Body: fixedCommentBody(run.HeadSHA, marker)})
 	}
 	for i := range docs {
 		if docs[i].Number == 0 {
@@ -1356,11 +1355,9 @@ func (s *Service) commentDrafts(run Run, v Verdict, ev evidence, fallback string
 		if docs[i].ImageFile != "" {
 			if url := ev.bugImages[docs[i].Name]; url != "" {
 				docs[i].Body = strings.ReplaceAll(docs[i].Body, "("+docs[i].ImageFile+")", "("+url+")")
-			} else {
-				if strings.Contains(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")") {
-					docs[i].Body = strings.ReplaceAll(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")\n\n", "")
-					docs[i].Body = strings.TrimSpace(docs[i].Body) + "\n\nThe comparison image was not available in the published evidence."
-				}
+			} else if strings.Contains(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")") {
+				docs[i].Body = strings.ReplaceAll(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")\n\n", "")
+				docs[i].Body = strings.TrimSpace(docs[i].Body) + "\n\nThe comparison image was not available in the published evidence."
 			}
 		}
 		if docs[i].ClipFile != "" {
@@ -1560,7 +1557,7 @@ func (s *Service) composeComment(run Run, v Verdict) (string, evidence, error) {
 
 // publishComment is the second step: it publishes the evidence images and videos and posts or updates the comment.
 // Evidence is published only once the token's login is known, so a gh that cannot post does not push files either.
-func (s *Service) publishComment(ctx context.Context, run Run, v Verdict, videos []legVideo, body string) (url, state string, ev evidence) {
+func (s *Service) publishComment(ctx context.Context, run Run, v Verdict, body string) (url, state string, ev evidence) {
 	ev = evidence{state: EvidenceOff, videoState: "off"}
 	lctx, cancel := context.WithTimeout(ctx, commentTimeout)
 	_, err := s.ghLogin(lctx)

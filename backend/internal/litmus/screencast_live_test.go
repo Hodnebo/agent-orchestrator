@@ -228,7 +228,7 @@ stopped:
 	run, err = svc.store.Get("run_live")
 	is(t, "")(nil, err)
 	started := run.Legs[0].RecordStartedAt
-	run = svc.stopRecording(proofCtx, run)
+	svc.stopRecording(proofCtx, run)
 	run, err = svc.store.Get("run_live")
 	is(t, "")(nil, err)
 	stoppedAt := run.Legs[0].RecordStoppedAt

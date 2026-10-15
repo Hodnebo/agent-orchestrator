@@ -205,10 +205,10 @@ func (s *Store) waitForSpawned(ctx context.Context, sessionID string, maxWait ti
 			return spawned{}, false, fmt.Errorf("read spawned marker for session %s: %w", sessionID, err)
 		}
 		var sp spawned
-		if err := json.Unmarshal(data, &sp); err != nil || sp.At.IsZero() || strings.TrimSpace(sp.Repo) == "" || sp.PR < 1 {
-			return spawned{}, false, nil
+		if json.Unmarshal(data, &sp) == nil && !sp.At.IsZero() && strings.TrimSpace(sp.Repo) != "" && sp.PR > 0 {
+			return sp, true, nil
 		}
-		return sp, true, nil
+		return spawned{}, false, nil
 	}
 
 	timer := time.NewTimer(maxWait)

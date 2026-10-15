@@ -10,7 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/jpeg"
+	_ "image/jpeg" // Register JPEG decoding for evidence images.
 	"image/png"
 	"log/slog"
 	"os"
@@ -126,8 +126,8 @@ func bugImageShot(c Check, leg string) (r Receipt, theme, ok bool) {
 	return r, false, ok
 }
 
-func openEvidenceImage(path string) (image.Image, error) {
-	f, err := os.Open(path)
+func openEvidenceImage(file string) (image.Image, error) {
+	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
 	}
@@ -680,7 +680,7 @@ func (s *Service) publishCheckClips(ctx context.Context, run Run, v Verdict) (ma
 		id, err := s.repoID(ctx, run)
 		var url string
 		if err == nil {
-			url, err = s.uploadVideoFile(ctx, run, file, "check-"+bug.Check.ID, id)
+			url, err = s.uploadVideoFile(ctx, file, "check-"+bug.Check.ID, id)
 		}
 		if err != nil {
 			first = cmp.Or(first, err)
@@ -702,7 +702,7 @@ func (s *Service) publishCheckClips(ctx context.Context, run Run, v Verdict) (ma
 	return clips, "failed:" + clip(strings.TrimSpace(reason), 120)
 }
 
-func (s *Service) uploadVideoFile(ctx context.Context, run Run, file, name string, repoID int64) (string, error) {
+func (s *Service) uploadVideoFile(ctx context.Context, file, name string, repoID int64) (string, error) {
 	uctx, cancel := context.WithTimeout(ctx, uploadTimeout)
 	out, err := s.gh.Run(uctx, "api", "--method", "POST", "-H", "Content-Type: video/mp4",
 		fmt.Sprintf("%s?name=%s.mp4&content_type=video%%2Fmp4&repository_id=%d", assetsURL, name, repoID), "--input", file)

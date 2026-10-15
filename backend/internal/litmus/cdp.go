@@ -17,7 +17,10 @@ func (e *Engine) pageCDP(ctx context.Context) (*pageCDP, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	conn, resp, err := websocket.Dial(ctx, url, nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ type pageCDP struct {
 	request func(context.Context, string, any, any) error // tests answer page protocol requests without a socket
 }
 
-func (p *pageCDP) call(ctx context.Context, method string, params any, result any) error {
+func (p *pageCDP) call(ctx context.Context, method string, params, result any) error {
 	if p.request != nil {
 		return p.request(ctx, method, params, result)
 	}

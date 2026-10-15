@@ -370,7 +370,7 @@ func (s *Service) closeRun(ctx context.Context, run Run, checks []Check, summary
 			return v, err
 		}
 		var ev evidence
-		v.CommentURL, v.CommentState, ev = s.postComment(ctx, run, v, videos) // never fails the submit
+		v.CommentURL, v.CommentState, ev = s.postComment(ctx, run, v) // never fails the submit
 		v.EvidenceState, v.EvidenceCommit = ev.state, ev.commit
 		if _, err := s.update(run.ID, func(cur *Run) {
 			cur.CommentURL, cur.CommentState, cur.EvidenceState, cur.EvidenceCommit = v.CommentURL, v.CommentState, v.EvidenceState, v.EvidenceCommit

@@ -44,7 +44,7 @@ func (g *roundCommentGH) Run(_ context.Context, args ...string) ([]byte, error) 
 	if err := json.Unmarshal(data, &body); err != nil {
 		return nil, err
 	}
-	id := int64(0)
+	var id int64
 	if args[2] == "PATCH" {
 		id, err = strconv.ParseInt(args[3][strings.LastIndex(args[3], "/")+1:], 10, 64)
 		if err != nil {
