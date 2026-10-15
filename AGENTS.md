@@ -2,7 +2,7 @@
 
 Operational guidance for coding agents working in this repository. Keep changes small, match the current rewrite architecture, and prefer the documented daemon/API boundaries over behavior from the old TypeScript implementation.
 
-Before choosing an issue or writing code, read [CONTRIBUTING.md](CONTRIBUTING.md) and follow its contributor process.
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting work.
 
 ## Repo layout
 

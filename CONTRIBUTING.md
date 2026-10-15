@@ -1,15 +1,14 @@
 # Contributing
 
 New contributors should start with bug fixes. Pick an available issue labelled
-`bug`, comment to claim it, and open a focused PR linked to that issue.
-Feature requests need core-team approval before implementation starts.
+`bug`, comment to claim it, and open a PR linked to that issue.
+Feature work needs core-team approval before you start.
 
 Bug reports, docs, tests, and help investigating issues are welcome too.
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white&logoSize=auto)](https://discord.com/invite/UZv7JjxbwG)
 
-Use GitHub for reports, proposals, and review. Use Discord for questions,
-help, and the weekly public contributor call.
+Use Discord for questions and the weekly contributor call.
 
 ## Ways to contribute
 
@@ -23,13 +22,12 @@ help, and the weekly public contributor call.
 ## Quick start
 
 1. Read [AGENTS.md](AGENTS.md) for setup, commands, and PR requirements.
-2. Pick an [open bug](https://github.com/OrchestratorInc/agent-orchestrator/issues?q=is%3Aissue%20is%3Aopen%20label%3Abug). Check its assignee, comments, and linked PRs to see whether someone has already claimed it. Issues marked `blocked` or `needs-discussion` need a maintainer's decision first.
-3. Comment `I'd like to work on this` before starting. Follow any scope or coordination notes already on the issue.
-4. Open one focused PR with `Fixes #123` in its description, using the issue it actually fixes. Describe the change and how you checked it.
-5. Address review feedback and get the required checks passing. Maintainers review and merge bug fixes through the normal PR process.
+2. Pick an unclaimed `bug` from [open issues](https://github.com/OrchestratorInc/agent-orchestrator/issues). Check assignees, comments, and linked PRs first.
+3. Comment `I'd like to work on this` before starting.
+4. Open a PR with `Fixes #123` and describe how you checked the change.
+5. Address review feedback. Maintainers review and merge when the required checks pass.
 
-The `good first issue` and `help wanted` labels can help you find a starting
-point. Check that the issue is a bug and is still available before claiming it.
+Wait for a maintainer on issues marked `blocked`, `needs-discussion`, or `needs-triage`.
 
 Need the product/run overview first? Start with [README.md](README.md),
 [docs/architecture.md](docs/architecture.md), and
@@ -42,18 +40,14 @@ Two onboarding notes matter on current `main`:
 
 ### Bugs and features
 
-Use the [GitHub issue forms](https://github.com/OrchestratorInc/agent-orchestrator/issues/new/choose) for bugs and feature requests. A bug describes existing behavior that is broken. A feature request proposes a new capability or a change to how the product works; its label is `enhancement`.
+Use the [GitHub issue forms](https://github.com/OrchestratorInc/agent-orchestrator/issues/new/choose) for bugs and feature requests.
 
-For a feature request, wait for discussion on a contributor call and an
-explicit core-team decision on the issue before starting implementation. The team decides
-whether to build it, its scope, priority, and who should work on it. A
-`needs-discussion` label means that decision is pending. Classification alone
-does not approve feature work, and feature PRs opened before approval wait for
-that decision before review. Larger changes may also need a design document.
+Before working on a feature, comment `Can I work on this?` on its issue and
+wait for core-team approval there. Feature PRs wait for approval before review.
+A maintainer removes `needs-discussion` after approving the feature.
 
-If an issue seems misclassified, explain why in the
-[bug-triaging channel on Discord](https://discord.com/channels/1476302178913357958/1491735678156013588)
-and link the issue.
+If an issue is misclassified, share its link on
+[Discord](https://discord.com/invite/UZv7JjxbwG).
 
 For bugs, only a description is required. Write a short, concrete report in your own words: what you did and what went wrong. When available, add what you expected, steps to reproduce, how often it happens, AO version and OS, or screenshots/a recording. You can report an intermittent bug even if you cannot reproduce it reliably.
 
@@ -76,19 +70,12 @@ Review the draft and attachments before submitting. A clear observation is usefu
 New PRs are prefilled from [`.github/pull_request_template.md`](.github/pull_request_template.md).
 Also follow **PR hygiene** in [AGENTS.md](AGENTS.md): branch from `main`, one issue per PR, conventional commits, explain intentional omissions, and keep CI green for the area you touched.
 
-Coding agents should follow this same process. Have your agent read this guide
-and AGENTS.md before choosing an issue or writing code. Review its changes and
-PR description before submitting.
-
 ### Weekly contributor call
 
-The weekly public call is open to everyone. Join to show bug fixes, discuss
-PRs waiting for review, bring feedback, or talk through feature requests with
-the core team. Rishet shares the time and public call link on Discord.
+The weekly contributor call is open to everyone. Share your work, discuss PRs,
+and suggest features. The time and link are shared on Discord.
 
-We cover the past week's issues, feature requests, and PRs, including work that
-has merged. Two or three merged bug fixes can lead to a separate conversation
-with Prateek about joining the team.
+Regular contributions can lead to a conversation about joining the team.
 
 ## Code of Conduct
 
