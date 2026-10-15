@@ -1,7 +1,7 @@
 import { Feather } from "../../lib/icons";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter, type NativeStackHeaderItemButton } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
@@ -43,22 +43,39 @@ function SessionPreviewContent() {
 	const responsive = active === "app" && canShowResponsive;
 
 	useLayoutEffect(() => {
+		const toggle = () => { haptics.tap(); setActive(responsive ? "browser" : "app"); };
+		const hint = canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet.";
+		const nativeToggle: NativeStackHeaderItemButton = {
+			type: "button",
+			label: "Mobile view",
+			selected: responsive,
+			disabled: !canShowResponsive,
+			onPress: toggle,
+			// Let UIKit draw the whole capsule in both states. Painting inside a
+			// custom bar view clips its filled corners against the native glass.
+			variant: responsive ? "prominent" : "plain",
+			tintColor: responsive ? t.blue : t.textSecondary,
+			labelStyle: { fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
+			accessibilityLabel: `Mobile view, ${responsive ? "on" : "off"}`,
+			accessibilityHint: hint,
+		};
 		navigation.setOptions({
 			title: title || "Preview",
-			headerRight: hostMatches && config ? () => <Pressable
+			unstable_headerRightItems: Platform.OS === "ios" && hostMatches && config ? () => [nativeToggle] : undefined,
+			headerRight: Platform.OS !== "ios" && hostMatches && config ? () => <Pressable
 				accessibilityRole="switch"
 				accessibilityLabel="Mobile view"
 				accessibilityState={{ checked: responsive, disabled: !canShowResponsive }}
-				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
+				accessibilityHint={hint}
 				disabled={!canShowResponsive}
-				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
+				onPress={toggle}
 				style={({ pressed }) => [styles.modeToggle, responsive && styles.modeToggleActive, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
 			>
 				<Feather name={responsive ? "check" : "smartphone"} size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
 				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
 			</Pressable> : undefined,
 		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.onAccent, t.textSecondary, title]);
+	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.blue, t.onAccent, t.textSecondary, title]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
