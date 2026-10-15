@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,6 +194,11 @@ func hostProcessPossiblyAlive(ctx context.Context, pid int, startID string, reco
 	}
 	if startID != "" {
 		return identity.StartID == startID
+	}
+	// Linux ps start dates move with the wall clock; a live legacy PID without
+	// a saved boot/start-tick identity cannot be conclusively replaced.
+	if runtime.GOOS == "linux" {
+		return true
 	}
 	// Legacy records have only a publication timestamp. Allow two seconds for
 	// coarse filesystem timestamps before declaring a different owner.

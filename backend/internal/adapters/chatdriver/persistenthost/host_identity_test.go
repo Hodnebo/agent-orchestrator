@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -99,12 +100,16 @@ func TestAcquireHostLockChecksProcessStartIdentity(t *testing.T) {
 
 func TestReconnectOnlyChecksLegacyProcessStart(t *testing.T) {
 	identity := processalive.Identify(context.Background(), os.Getpid())
+	wantOldRecord := ErrNotRunning
+	if runtime.GOOS == "linux" {
+		wantOldRecord = ErrOwnershipInconclusive
+	}
 	for _, tc := range []struct {
 		name      string
 		startedAt time.Time
 		want      error
 	}{
-		{"reused pid", time.Unix(0, 0).UTC(), ErrNotRunning},
+		{"old publication timestamp", time.Unix(0, 0).UTC(), wantOldRecord},
 		{"unknown start time", time.Time{}, ErrOwnershipInconclusive},
 		{"possible current owner", time.Now().UTC(), ErrOwnershipInconclusive},
 		{"same second as process start", identity.StartedAt.Truncate(time.Second), ErrOwnershipInconclusive},
@@ -129,12 +134,16 @@ func TestReconnectOnlyChecksLegacyProcessStart(t *testing.T) {
 }
 
 func TestAcquireHostLockChecksLegacyProcessStart(t *testing.T) {
+	var wantOldRecord error
+	if runtime.GOOS == "linux" {
+		wantOldRecord = ErrHostExists
+	}
 	for _, tc := range []struct {
 		name     string
 		modified time.Time
 		want     error
 	}{
-		{"reused pid", time.Unix(0, 0).UTC(), nil},
+		{"old publication timestamp", time.Unix(0, 0).UTC(), wantOldRecord},
 		{"newer lock with older descriptor", time.Now().UTC(), ErrHostExists},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,7 +176,7 @@ func TestAcquireHostLockChecksLegacyProcessStart(t *testing.T) {
 	}
 }
 
-func TestConnectOrStartRecoversLegacyReusedPIDWithoutDisturbingOtherSession(t *testing.T) {
+func TestConnectOrStartRecoversReusedPIDWithoutDisturbingOtherSession(t *testing.T) {
 	dataDir := t.TempDir()
 	liveCfg := Config{
 		SessionID: "other-live-session", DataDir: dataDir, Workdir: t.TempDir(),
@@ -187,17 +196,29 @@ func TestConnectOrStartRecoversLegacyReusedPIDWithoutDisturbingOtherSession(t *t
 
 	staleCfg := liveCfg
 	staleCfg.SessionID = "rebooted-session"
-	if err := writeDescriptor(dataDir, Descriptor{
+	staleDescriptor := Descriptor{
 		Version: ProtocolVersion, SessionID: staleCfg.SessionID, Address: closedHostAddress(t),
 		Token: "stale", PID: os.Getpid(), StartedAt: time.Unix(0, 0).UTC(),
-	}); err != nil {
+	}
+	lockOwner := []byte(fmt.Sprintf("%d\n", os.Getpid()))
+	if runtime.GOOS == "linux" {
+		// Linux wall-clock start times cannot prove that a live legacy PID was reused.
+		staleDescriptor.ProcessStartID = "previous-process-incarnation"
+		lockOwner, err = json.Marshal(hostLockOwner{
+			PID: os.Getpid(), ProcessStartID: staleDescriptor.ProcessStartID, StartedAt: staleDescriptor.StartedAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeDescriptor(dataDir, staleDescriptor); err != nil {
 		t.Fatal(err)
 	}
 	path, err := lockPath(dataDir, staleCfg.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+	if err := os.WriteFile(path, lockOwner, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(path, time.Unix(0, 0), time.Unix(0, 0)); err != nil {
