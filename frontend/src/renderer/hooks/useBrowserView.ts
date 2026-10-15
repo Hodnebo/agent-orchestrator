@@ -1042,8 +1042,8 @@ export function useBrowserView({
 	// main shows it as one tab per agent page. It is derived from the host
 	// whenever the view is built or the host reconnects, not remembered: a
 	// reopened window brings it back. A host with no agent browser to show yet
-	// (starting, redeploying, or not set up) is asked again, backing off,
-	// while the view stays.
+	// (starting, asleep, redeploying, not set up, or an agent that has not
+	// used it) is asked again, backing off, for as long as the view stays.
 	useEffect(() => {
 		const agentBrowserUrl = origin
 			? () => aoBridge.remotes.agentBrowserUrl(origin.hostId, origin.sessionId)
@@ -1053,19 +1053,21 @@ export function useBrowserView({
 		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
 		let cancelled = false;
 		let retry = 0;
+		// ponytail: polls every 15 s at most while nothing shows; main could
+		// instead say when the agent browser comes up.
+		const again = (attempt: number) => {
+			if (!cancelled) retry = window.setTimeout(() => ask(attempt + 1), Math.min(2_000 * 2 ** attempt, 15_000));
+		};
 		const ask = (attempt: number) => {
 			void agentBrowserUrl().then(async (url) => {
 				if (cancelled || viewIdRef.current !== viewId) return;
-				// ponytail: six more tries over about two minutes, then the next
-				// session switch or reconnect asks afresh; main could instead say
-				// when the agent browser comes up.
-				if (!url) {
-					if (attempt < 6) retry = window.setTimeout(() => ask(attempt + 1), 2_000 * 2 ** attempt);
-					return;
-				}
+				if (!url) return again(attempt);
 				const state = await window.ao!.browser.openTab({ viewId, url });
 				if (viewIdRef.current === viewId) setTabsState(state);
-			}).catch((error) => console.warn("Unable to open the agent browser", error));
+			}).catch((error) => {
+				if (attempt === 0) console.warn("Unable to open the agent browser", error);
+				again(attempt);
+			});
 		};
 		ask(0);
 		return () => {

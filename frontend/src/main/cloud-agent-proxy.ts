@@ -3,11 +3,12 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { request as httpRequest, type ClientRequest, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { createSecureServer } from "node:http2";
 import { request as httpsRequest } from "node:https";
-import type { AddressInfo, Socket } from "node:net";
+import type { Socket } from "node:net";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { WebSocket, WebSocketServer } from "ws";
+import { agentBrowserRunning, agentViewerUrl, HOP_BY_HOP_HEADERS, listenOnStablePort } from "./agent-viewer";
 import { getCloudAccessToken } from "./cloud-auth";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 import { previewCertificate } from "./preview-certificate";
@@ -43,13 +44,9 @@ const SECRET_FILE = "cloud-agent-browser.key";
 const ID = /^[\w-]{1,128}$/;
 // The viewer's own routes, by method; its socket is ws/cdp.
 const GET_TAILS = /^(?:v\/cdp|stats|download\/[\w-]+)$/;
-const STRIP_REQUEST_HEADERS = new Set([
-	"host", "origin", "cookie", "authorization", "proxy-authorization",
-	"connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "http2-settings",
-]);
-// Hop-by-hop headers an HTTP/2 response refuses, and the CP's cookies, which
-// are not the viewer's.
-const STRIP_RESPONSE_HEADERS = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "http2-settings", "set-cookie"]);
+const STRIP_REQUEST_HEADERS = new Set(["host", "origin", "cookie", "authorization", "proxy-authorization", ...HOP_BY_HOP_HEADERS]);
+// The CP's cookies are not the viewer's.
+const STRIP_RESPONSE_HEADERS = new Set([...HOP_BY_HOP_HEADERS, "set-cookie"]);
 
 // Never the URL: the viewer puts its token in the query.
 function warn(message: string): void {
@@ -200,17 +197,7 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 		// under the request: that must not reach the main process as a rejection.
 		server.on("request", (req, res) => void handleRequest(req, res).catch(() => res.destroy()));
 		server.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => void handleUpgrade(req, socket, head).catch(() => socket.destroy()));
-		// The port is part of the origin too: reuse the same one while it is free.
-		const listened = (at: number) => new Promise<boolean>((resolve) => {
-			const busy = () => resolve(false);
-			server.once("error", busy);
-			server.listen(at, "127.0.0.1", () => {
-				server.off("error", busy);
-				resolve(true);
-			});
-		});
-		if (!(await listened(41000 + (createHmac("sha256", key).update("port").digest().readUInt16BE(0) % 8000)))) await listened(0);
-		port = (server.address() as AddressInfo).port;
+		port = await listenOnStablePort(server, createHmac("sha256", key).update("port").digest());
 		return {
 			port,
 			hosts,
@@ -235,6 +222,10 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 				return started;
 			});
 			current = opening;
+			// A start that failed is not kept: the next session tries again.
+			opening.catch(() => {
+				if (current === opening) current = undefined;
+			});
 		}
 		return current;
 	};
@@ -246,21 +237,20 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 				throw new Error("invalid cloud agent browser session");
 			}
 			const target: Target = { base, orgId, sessionId };
-			// Only a sandbox whose agent browser answers has one; the CP answers 502
-			// for one without, and a CP this cannot reach gets no agent tab either.
+			// Only a sandbox whose agent browser runs has an agent tab: the CP answers
+			// 502 for one without, or asleep; one the agent has not used yet answers
+			// that it is not running. A CP this cannot reach gets none either.
 			const token = await bearer();
 			if (!token) return "";
 			const probe = await fetch(cpUrl(target, "stats"), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) })
 				.catch(() => null);
-			await probe?.body?.cancel().catch(() => undefined);
-			if (!probe?.ok) return "";
+			if (!(await agentBrowserRunning(probe))) return "";
 			const key = await loadKey();
 			const { port, hosts } = await running(key);
 			// Its own origin per session, unguessable without the secret.
 			const host = `ao-preview-${createHmac("sha256", key).update(`agent\n${orgId}\n${sessionId}`).digest("hex").slice(0, 32)}.localhost`;
 			hosts.set(host, target);
-			// embed: the Browser panel's own toolbar drives it (remote-tab.ts).
-			return `https://${host}:${port}/v/cdp?embed=1&sq=70&ss=1`;
+			return agentViewerUrl(host, port);
 		},
 		isAgentBrowserUrl: (url) => {
 			try {

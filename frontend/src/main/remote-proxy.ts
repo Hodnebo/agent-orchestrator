@@ -21,6 +21,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, createWebSocketStream } from "ws";
+import { agentBrowserRunning, agentViewerUrl, HOP_BY_HOP_HEADERS, listenOnStablePort } from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
 import { IncompatibleRemoteVersionError, readRemoteIdentity } from "./remote-request";
 import type { RemoteEntry } from "./remotes-store";
@@ -111,21 +112,12 @@ const RENDERER_ORIGIN = "app://renderer";
 const STRIP_REQUEST_HEADERS = [
 	"host",
 	"origin",
-	"connection",
-	"keep-alive",
-	"transfer-encoding",
-	"upgrade",
 	"proxy-authorization",
 	"x-ao-preview-app-authorization",
 	"x-ao-preview-app-origin",
 	"x-ao-expected-host-id",
-	"te",
-	"proxy-connection",
-	"http2-settings",
+	...HOP_BY_HOP_HEADERS,
 ];
-// Connection-specific headers: meaningless past one hop, and an HTTP/2
-// response refuses them outright.
-const HOP_BY_HOP_RESPONSE_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "http2-settings"];
 
 // Nothing in this file may log a secret. Not the connection password, not the
 // proxy token, and not `req.url` (its first segment IS the token) — only the
@@ -516,7 +508,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		body.on("error", closeDroppedStream);
 		const headers: OutgoingHttpHeaders = {};
 		for (const [name, value] of Object.entries(upstreamHeaders)) {
-			if (!name.startsWith(":") && !HOP_BY_HOP_RESPONSE_HEADERS.includes(name)) headers[name] = value;
+			if (!name.startsWith(":") && !HOP_BY_HOP_HEADERS.includes(name)) headers[name] = value;
 		}
 		Object.assign(headers, corsHeaders);
 		if (kind !== undefined && kind !== "app") delete headers["set-cookie"];
@@ -754,14 +746,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	});
 	secureServer.on("request", (req, res) => void handleRequest(req, res, "https"));
 	secureServer.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => handleUpgrade(req, socket, head, "https"));
-	// The port is part of the origin too: reuse this host's port while it is free.
-	const listened = (port: number) => new Promise<boolean>((resolve) => {
-		const busy = () => resolve(false);
-		secureServer.once("error", busy);
-		secureServer.listen(port, "127.0.0.1", () => { secureServer.off("error", busy); resolve(true); });
-	});
-	if (!(await listened(41000 + (originMac("port").readUInt16BE(0) % 8000)))) await listened(0);
-	const securePort = (secureServer.address() as AddressInfo).port;
+	const securePort = await listenOnStablePort(secureServer, originMac("port"));
 
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const { address: listeningAddress, port } = server.address() as AddressInfo;
@@ -841,13 +826,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			// reach gets the proxy's own 502: neither may show an agent tab.
 			const probe = await fetch(`http://127.0.0.1:${port}/${token}/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-browser/stats`, { signal: AbortSignal.timeout(8_000) })
 				.catch(() => null);
-			await probe?.body?.cancel().catch(() => undefined);
-			if (!probe?.ok) return "";
+			if (!(await agentBrowserRunning(probe))) return "";
 			// Its own origin per session: never the app's, so the two keep apart.
 			const host = `ao-preview-${originMac(`agent\n${sessionId}`).toString("hex", 0, 16)}.localhost`;
 			previewHosts.set(host, { sessionId, kind: "agent", entry: "" });
-			// embed: the Browser panel's own toolbar drives it (remote-tab.ts).
-			return `https://${host}:${securePort}/v/cdp?embed=1&sq=70&ss=1`;
+			return agentViewerUrl(host, securePort);
 		},
 		isAgentBrowserUrl: (url) => {
 			try {

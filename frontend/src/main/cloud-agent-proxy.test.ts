@@ -10,8 +10,20 @@ import { WebSocket, WebSocketServer } from "ws";
 import { previewCertificate } from "./preview-certificate";
 
 const token = vi.hoisted(() => ({ value: "cloud-token" as string | null }));
+// Listens to fail before the real one runs.
+const listenFailures = vi.hoisted(() => ({ left: 0 }));
 vi.mock("electron", () => ({ ipcMain: {} }));
 vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => token.value) }));
+vi.mock("./agent-viewer", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./agent-viewer")>();
+	return {
+		...actual,
+		listenOnStablePort: vi.fn(async (...args: Parameters<typeof actual.listenOnStablePort>) => {
+			if (listenFailures.left-- > 0) throw new Error("could not listen on loopback");
+			return actual.listenOnStablePort(...args);
+		}),
+	};
+});
 
 import { createCloudAgentProxy, type CloudAgentProxy } from "./cloud-agent-proxy";
 
@@ -23,6 +35,7 @@ let dataDir = "";
 
 beforeEach(async () => {
 	token.value = "cloud-token";
+	listenFailures.left = 0;
 	dataDir = await mkdtemp(path.join(os.tmpdir(), "cloud-agent-proxy-"));
 	vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
@@ -39,7 +52,7 @@ afterEach(async () => {
 
 // A fake control plane on loopback: answers every request with the handler's
 // status and records what reached it.
-async function startCp(status: (req: IncomingMessage) => number = () => 200): Promise<{ baseUrl: string; seen: Seen[] }> {
+async function startCp(status: (req: IncomingMessage) => number = () => 200, answer = "ok"): Promise<{ baseUrl: string; seen: Seen[] }> {
 	const seen: Seen[] = [];
 	cp = createServer((req, res) => {
 		let body = "";
@@ -47,7 +60,7 @@ async function startCp(status: (req: IncomingMessage) => number = () => 200): Pr
 		req.on("end", () => {
 			seen.push({ method: req.method ?? "", url: req.url ?? "", auth: req.headers.authorization, cookie: req.headers.cookie, origin: req.headers.origin, body });
 			res.writeHead(status(req), { "content-type": "text/plain", "set-cookie": "cp=1" });
-			res.end("ok");
+			res.end(answer);
 		});
 	});
 	await new Promise<void>((resolve) => cp?.listen(0, "127.0.0.1", resolve));
@@ -107,6 +120,21 @@ describe("cloud agent proxy", () => {
 		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
 		await expect(proxy.agentBrowserUrl("http://cp.example", "org-1", "ses-1")).rejects.toThrow(/https/);
 		await expect(proxy.agentBrowserUrl(baseUrl, "../x", "ses-1")).rejects.toThrow(/invalid/);
+	});
+
+	it("gives no agent browser while the sandbox's has not started: showing it would start it", async () => {
+		const { baseUrl, seen } = await startCp(() => 200, `{"running":false}`);
+		proxy = createCloudAgentProxy(() => dataDir);
+		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
+		expect(seen.map((request) => request.url)).toEqual([route("stats")]);
+	});
+
+	it("tries again after its server failed to start", async () => {
+		const { baseUrl } = await startCp();
+		proxy = createCloudAgentProxy(() => dataDir);
+		listenFailures.left = 1;
+		await expect(proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).rejects.toThrow(/listen/);
+		expect(new URL(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).pathname).toBe("/v/cdp");
 	});
 
 	it("keeps a session's origin across restarts, and only with the same secret", async () => {

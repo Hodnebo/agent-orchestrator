@@ -1650,24 +1650,38 @@ describe("useBrowserView", () => {
 			}
 		});
 
-		it("stops asking for the agent browser after a while, and as soon as the view goes", async () => {
+		it("keeps asking for the agent browser while the view stays, every 15 s at most, and stops as soon as it goes", async () => {
 			vi.useFakeTimers();
 			try {
 				setupBridge();
 				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
 				const view = renderHook(() => useBrowserView(remote));
 				await act(() => vi.advanceTimersByTimeAsync(0));
-				await act(() => vi.advanceTimersByTimeAsync(60 * 60_000));
-				// Six more tries, 2 s to 64 s apart: about two minutes.
-				expect(lookup).toHaveBeenCalledTimes(7);
+				await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
+				// At 0, 2, 6 and 14 s, then every 15 s: an agent may first use its
+				// browser long after the view opened.
+				expect(lookup).toHaveBeenCalledTimes(43);
 				view.unmount();
 				lookup.mockClear();
-				const next = renderHook(() => useBrowserView(remote));
+				await act(() => vi.advanceTimersByTimeAsync(60 * 60_000));
+				expect(lookup).not.toHaveBeenCalled();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("asks again after a failed lookup", async () => {
+			vi.useFakeTimers();
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			try {
+				const browser = setupBridge();
+				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockRejectedValueOnce(new Error("proxy failed")).mockResolvedValue(agentUrl);
+				renderHook(() => useBrowserView(remote));
 				await act(() => vi.advanceTimersByTimeAsync(0));
 				expect(lookup).toHaveBeenCalledTimes(1);
-				next.unmount();
-				await act(() => vi.advanceTimersByTimeAsync(60 * 60_000));
-				expect(lookup).toHaveBeenCalledTimes(1);
+				await act(() => vi.advanceTimersByTimeAsync(2_000));
+				expect(lookup).toHaveBeenCalledTimes(2);
+				expect(browser.openTab).toHaveBeenCalledWith(expect.objectContaining({ url: agentUrl }));
 			} finally {
 				vi.useRealTimers();
 			}
