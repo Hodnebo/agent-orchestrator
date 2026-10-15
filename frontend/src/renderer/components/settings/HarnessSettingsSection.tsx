@@ -1,12 +1,12 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
+import { RadioGroup } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useConnectedHosts } from "../../hooks/useHostConnection";
 import { labelForHost } from "../../lib/host-clients";
 import { LOCAL_HOST } from "../../lib/hosts";
 import type { HarnessDiagnosticsRequest } from "../../stores/ui-store";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { CloudHarnessContent } from "./harness/CloudHarnessContent";
 import { LocalHarnessContent } from "./harness/LocalHarnessContent";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -51,7 +51,10 @@ export function HarnessSettingsSection({
 				<span className="sr-only">{t("settings.harness.search")}</span>
 				<input aria-label={t("settings.harness.search")} className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted" placeholder={t("settings.harness.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
 			</label>
-			{cloudEnabled ? <Tabs value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)}><TabsList aria-label={t("settings.harness.viewLabel")}><TabsTrigger value="local">{t("settings.harness.viewLocal")}</TabsTrigger><TabsTrigger value="cloud">{t("settings.harness.viewCloud")}</TabsTrigger></TabsList></Tabs> : null}
+			{cloudEnabled ? <RadioGroup.Root value={cloudView ? "cloud" : "local"} onValueChange={(value) => setView(value as HarnessView)} aria-label={t("settings.harness.viewLabel")} className="settings-segment rounded-md">
+				<RadioGroup.Item value="local" className="settings-segment-item rounded-md">{t("settings.harness.viewLocal")}</RadioGroup.Item>
+				<RadioGroup.Item value="cloud" className="settings-segment-item rounded-md">{t("settings.harness.viewCloud")}</RadioGroup.Item>
+			</RadioGroup.Root> : null}
 		</div> : null}
 		{showToolbar && !cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}

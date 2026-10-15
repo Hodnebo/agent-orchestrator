@@ -414,7 +414,7 @@ export function SettingsPane() {
 					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
 						<h1 className="mb-8 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
 							{entry.title}
 							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}

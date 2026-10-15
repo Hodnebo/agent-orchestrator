@@ -1623,9 +1623,16 @@ textarea,
 [data-section="harness"]:has([data-harness-detail]),
 [data-section="harness"]:has([data-harness-detail]) > div {
 	min-width: 0;
-	max-width: 100%;
 	min-height: 0;
 	flex: 1;
+}
+
+/* The page body keeps its column cap (max-w on .settings-dialog-body); only
+   the inner wrappers are held to their parent. */
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]) > div {
+	max-width: 100%;
 }
 
 .settings-dialog-body:has([data-harness-detail]) {
@@ -1656,6 +1663,31 @@ textarea,
 
 .settings-thin-scrollbar:hover::-webkit-scrollbar-thumb {
 	background-color: color-mix(in srgb, var(--color-scrollbar) 28%, transparent);
+}
+
+/* The harness list scrolls on its own edge: no track, just a thin thumb
+   over the rows. scrollbar-width must stay auto, or the webkit rules below
+   are ignored and the native bar reserves a gutter. */
+.harness-list-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar {
+	width: 6px;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background-color: color-mix(in srgb, var(--color-scrollbar) 24%, transparent);
+}
+
+.harness-list-scrollbar:hover::-webkit-scrollbar-thumb {
+	background-color: color-mix(in srgb, var(--color-scrollbar) 40%, transparent);
 }
 
 /* Repository pickers keep a visible scroll track so a long grant list is
