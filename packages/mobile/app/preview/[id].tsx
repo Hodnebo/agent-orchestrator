@@ -11,7 +11,7 @@ import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { iconSize, space, type } from "../../lib/tokens";
+import { iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { userFacingError } from "../../lib/connectionError";
 
@@ -52,13 +52,13 @@ function SessionPreviewContent() {
 				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
 				disabled={!canShowResponsive}
 				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
-				style={({ pressed }) => [styles.modeToggle, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
+				style={({ pressed }) => [styles.modeToggle, responsive && styles.modeToggleActive, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
 			>
-				<Feather name={responsive ? "check" : "smartphone"} size={iconSize.sm} color={responsive ? t.textPrimary : t.textSecondary} />
+				<Feather name={responsive ? "check" : "smartphone"} size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
 				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
 			</Pressable> : undefined,
 		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleDimmed, t.textPrimary, t.textSecondary, title]);
+	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.onAccent, t.textSecondary, title]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -123,10 +123,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	modeToggle: { height: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.sm },
+	modeToggle: { height: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: radius.pill },
+	modeToggleActive: { backgroundColor: t.blue },
 	modeToggleDimmed: { opacity: 0.5 },
 	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
-	modeLabelActive: { color: t.textPrimary },
+	modeLabelActive: { color: t.onAccent },
 	appPane: { flex: 1, backgroundColor: t.bgBase },
 	appBar: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
 	appPath: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
