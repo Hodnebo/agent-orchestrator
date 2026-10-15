@@ -47,6 +47,7 @@ type Config struct {
 	SessionMode            func(ports.PermissionMode) string
 	SessionOptions         func(ports.ChatTurnSettings) []acpdriver.SessionOption
 	FixedAgentMode         bool
+	EmptyTurnNotice        string
 	PermissionPolicy       acpdriver.PermissionPolicy
 	ClientExtension        acpdriver.ClientExtensionHandler
 	ClientExtensionAliases map[string]string
@@ -138,6 +139,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		SessionMode:            cfg.SessionMode,
 		SessionOptions:         cfg.SessionOptions,
 		FixedAgentMode:         cfg.FixedAgentMode,
+		EmptyTurnNotice:        cfg.EmptyTurnNotice,
 		PermissionPolicy:       cfg.PermissionPolicy,
 		ClientExtension:        cfg.ClientExtension,
 		ClientExtensionAliases: cfg.ClientExtensionAliases,

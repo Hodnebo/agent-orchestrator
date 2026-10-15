@@ -29,6 +29,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		Configure:            configure,
 		PermissionPolicy:     acpdriver.StandardPermissionPolicy(),
 		SessionOptions:       acpdriver.ModelOption,
+		EmptyTurnNotice:      "Cline returned no response. Check the selected provider's credits and sign-in, then retry.",
 		ValidateTurnSettings: acpdriver.ApprovalFixedAtLaunch("Cline ACP auto-approval", nil),
 	}, log)
 }

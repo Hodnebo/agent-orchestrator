@@ -73,6 +73,10 @@ type Config struct {
 	// Keep the launch-selected agent: switching away discards AO's standing
 	// instructions. Models, effort, and AO's permission policy remain separate.
 	FixedAgentMode bool
+	// EmptyTurnNotice is an optional provider-specific explanation for a normal
+	// turn that completes without visible output. It does not infer a failure or
+	// demand reauthentication from an ambiguous empty response.
+	EmptyTurnNotice string
 	// PermissionPolicy lets a provider binding resolve permission requests that
 	// have an exact AO policy mapping before the generic client parks them for a
 	// human. Returning handled=false preserves the ordinary approval flow.
@@ -468,6 +472,7 @@ func (d *Driver) initialize(
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.fixedAgentMode = d.cfg.FixedAgentMode
+	conv.emptyTurnNotice = d.cfg.EmptyTurnNotice
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
