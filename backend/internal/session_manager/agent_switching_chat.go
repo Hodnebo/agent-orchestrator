@@ -326,12 +326,6 @@ func (m *Manager) executeChatAgentSwitch(
 	// provider transcript, when there is one, stays as a pointer for detail.
 	observedTranscript, sourceTranscriptStatus := m.captureSourceTranscriptFact(
 		ctx, admitted.sourceAgent, admitted.sourceNative, false)
-	if conversation := m.chatTranscriptFact(ctx, id); conversation != nil {
-		if observedTranscript != nil {
-			conversation.Path = observedTranscript.Path
-		}
-		observedTranscript = conversation
-	}
 	finalContext := deterministicSwitchContext{
 		OriginalTask:          stoppedSession.Metadata.Prompt,
 		LatestUserPrompt:      stoppedSession.Metadata.LatestUserPrompt,
@@ -345,8 +339,7 @@ func (m *Manager) executeChatAgentSwitch(
 		finalContext.SourceTranscriptPath = observedTranscript.Path
 	}
 	stage(domain.AgentSwitchFailureContinuationBuild)
-	continuation := buildTargetContinuationMessageWithLimit(
-		result, finalContext, observedTranscript, handoffContinuationMaxBytes)
+	continuation := m.buildChatSwitchContinuation(ctx, id, result, finalContext, observedTranscript)
 	stage(domain.AgentSwitchFailureFinalArtifactPublish)
 	writtenFinal, err := m.writeFinalizedHandoffFile(ctx, result, continuation)
 	if err != nil {
@@ -641,14 +634,49 @@ func (m *Manager) deliverChatSwitchOpening(
 	return err
 }
 
-// chatTranscriptFact is the bounded tail of AO's record of this conversation,
-// or nil when there is none to read.
-func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID) *switchTranscriptFact {
+// buildChatSwitchContinuation fills the handoff with as much of the
+// conversation as fits under the handoff cap. The excerpt comes from AO's own
+// record, every agent's turns and actions in order; a provider's transcript
+// holds only its own, so after a few switches it would leave out what the
+// others said. The provider transcript, when there is one, stays as a pointer.
+//
+// Over the cap, the generic builder falls back to a few KiB of history, so the
+// excerpt is first sized to the whole cap, then shrunk by each overflow.
+func (m *Manager) buildChatSwitchContinuation(
+	ctx context.Context,
+	id domain.SessionID,
+	sw domain.AgentSwitch,
+	facts deterministicSwitchContext,
+	native *switchTranscriptFact,
+) string {
+	transcript := native
+	budget := handoffContinuationMaxBytes
+	for attempt := 0; attempt < 4 && budget > 0; attempt++ {
+		conversation := m.chatTranscriptFact(ctx, id, budget)
+		if conversation == nil {
+			break
+		}
+		if native != nil {
+			conversation.Path = native.Path
+		}
+		transcript = conversation
+		over := len(buildTargetContinuationMessageBody(sw, facts, transcript)) - handoffContinuationMaxBytes
+		if over <= 0 {
+			break
+		}
+		budget -= over + 4<<10
+	}
+	return buildTargetContinuationMessageWithLimit(sw, facts, transcript, handoffContinuationMaxBytes)
+}
+
+// chatTranscriptFact is the newest maxBytes of AO's record of this
+// conversation, or nil when there is none to read.
+func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID, maxBytes int) *switchTranscriptFact {
 	excerpter, ok := m.chat.(chatTranscriptExcerpter)
 	if !ok {
 		return nil
 	}
-	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, handoffTranscriptMaxBytes)
+	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, maxBytes)
 	if err != nil {
 		m.logger.Warn("Chat agent switch: AO transcript excerpt unavailable", "sessionID", id, "error", err)
 		return nil
