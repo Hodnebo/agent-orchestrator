@@ -18,8 +18,8 @@ import (
 
 // gooseModeEnvVar is the only permission-control surface Goose honors: the
 // approval mode is read from this process env var, not from any CLI flag. The
-// name and value vocabulary mirror the existing Goose agent plugin so Chat and
-// TUI sessions do not acquire different answers for the same AO mode.
+// Default is explicitly approve so an unset value cannot inherit Goose's
+// autonomous default or an ambient GOOSE_MODE=auto.
 const gooseModeEnvVar = "GOOSE_MODE"
 
 // New launches `goose acp` from the exact binary resolved by the existing Goose
@@ -40,16 +40,12 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 // over this surface. This is documented in docs/harnesses/acp-bindings.md.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
-	if mode := gooseMode(cfg.Permissions); mode != "" {
-		return args, map[string]string{gooseModeEnvVar: mode}, nil
-	}
-	return args, nil, nil
+	return args, map[string]string{gooseModeEnvVar: gooseMode(cfg.Permissions)}, nil
 }
 
-// gooseMode maps an AO permission mode onto Goose's GOOSE_MODE value, matching
-// the TUI adapter: default leaves Goose's own config in charge, accept-edits
-// auto-approves safe edits, and auto/bypass select Goose's fully-autonomous
-// mode.
+// gooseMode maps an AO permission mode onto Goose's GOOSE_MODE value: default
+// asks for approval, accept-edits uses smart approval, and auto/bypass select
+// Goose's fully-autonomous mode.
 func gooseMode(mode ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeAcceptEdits:
@@ -57,6 +53,6 @@ func gooseMode(mode ports.PermissionMode) string {
 	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
 		return "auto"
 	default:
-		return ""
+		return "approve"
 	}
 }

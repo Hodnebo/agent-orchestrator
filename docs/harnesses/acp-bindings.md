@@ -17,7 +17,7 @@ agent plugin. AO never downloads, packages, or substitutes the provider CLI.
 | Auggie | `auggie --acp` | `--model` at launch and `session/set_model` | ACP requests; `accept-edits`/`bypass` auto-resolve | session-private `--rules` file |
 | Autohand | `autohand-acp` | session-advertised model options | `AUTOHAND_PERMISSION_MODE=external`; `accept-edits`/`auto`/`bypass` auto-resolve | not injectable |
 | Cline | `cline --acp` | `CLINE_MODEL` env and `session/set_config_option` | `--auto-approve true` for `auto`/`bypass`; `accept-edits` auto-resolves edit tools | not injectable (ACP ignores `--system`) |
-| Goose | `goose acp` | session-advertised model options | `GOOSE_MODE` env (`smart_approve`/`auto`) | not injectable |
+| Goose | `goose acp` | session-advertised model options | `GOOSE_MODE` env (`approve`/`smart_approve`/`auto`) | not injectable |
 | Kilo Code | `kilocode acp` | `session/set_config_option` (`model`, `effort`) | `KILO_CONFIG_CONTENT` permission map | `KILO_CONFIG_CONTENT` generated primary agent |
 | Kiro | `kiro-cli acp --agent ao` | `session/set_model` | ACP requests; `accept-edits`/`auto`/`bypass` auto-resolve | workspace-local `ao` custom agent |
 | Vibe | `vibe-acp` | `session/set_config_option` (`model`) | ACP requests; `auto`/`bypass` use per-call approval, `accept-edits` prompts | not injectable |
@@ -33,6 +33,10 @@ cannot revoke. Grants explicitly remembered by the user remain provider-owned.
 Kilo ACP explicitly asks before edits and shell commands in Default mode.
 Accept edits allows file changes but still asks before shell commands. AO layers
 these settings over inherited permission config, preserving unrelated tool rules.
+
+Goose ACP explicitly sets `GOOSE_MODE=approve` in Default mode, overriding an
+inherited `GOOSE_MODE=auto`. Accept edits uses `smart_approve`; Auto and Bypass
+use `auto`. Changes between different Goose modes require a Chat restart.
 
 ### Deliberate limitations
 
