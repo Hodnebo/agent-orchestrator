@@ -3557,6 +3557,9 @@ describe("agent browser runtime", () => {
 		const popup = views[1] as unknown as { webContents?: unknown; listeners: Map<string, () => void> };
 		const destroyed = popup.listeners.get("destroyed")!;
 		popup.webContents = undefined;
+		views[1].setBounds.mockImplementation(() => {
+			throw new Error("destroyed native views must not be laid out");
+		});
 		destroyed();
 
 		const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
@@ -3578,19 +3581,22 @@ describe("agent browser runtime", () => {
 		).not.toThrow();
 	});
 
-	it("replaces the only tab with a blank tab when its page closes itself", async () => {
+	it("leaves an empty browser when its only page closes itself", async () => {
 		const { emit, host, invoke, views } = setupTabHost();
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		await host.execute("sess-1", "open", { url: "http://localhost:3000" });
 
+		const electronSession = views[0].webContents.session;
 		const only = views[0] as unknown as { webContents?: unknown; listeners: Map<string, () => void> };
 		const destroyed = only.listeners.get("destroyed")!;
 		only.webContents = undefined;
 		destroyed();
 
 		const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
-		expect(tabs.tabs.map((tab) => tab.id)).toEqual(["t2"]);
-		expect(tabs.activeTabId).toBe("t2");
+		expect(tabs.tabs).toEqual([]);
+		expect(tabs.activeTabId).toBe("");
+		expect(electronSession.webRequest.onCompleted).toHaveBeenLastCalledWith(null);
+		expect(electronSession.webRequest.onErrorOccurred).toHaveBeenLastCalledWith(null);
 		expect(() =>
 			emit("browser:setBounds", {
 				viewId,
@@ -3599,6 +3605,7 @@ describe("agent browser runtime", () => {
 				visible: true,
 			}),
 		).not.toThrow();
+		await expect(host.execute("sess-1", "tab-new")).resolves.toMatchObject({ id: "t2" });
 	});
 
 	it("captures allowed popups as new tabs and protects the final tab", async () => {

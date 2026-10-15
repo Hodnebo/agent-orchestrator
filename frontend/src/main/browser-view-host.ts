@@ -1034,10 +1034,19 @@ export function createBrowserViewHost(
     // after sign-in. Electron then destroys the WebContents and the view's
     // `webContents` becomes undefined, so the tab must leave the session before
     // the next layout or IPC call dereferences it.
-    const webContentsId = view.webContents.id;
+    const closedContents = {
+      id: view.webContents.id,
+      session: view.webContents.session,
+      contents: view.webContents,
+    };
     view.webContents.on("destroyed", () => {
       if (!isCurrentEntry()) return;
-      forgetSelfClosedTab(session, entry, webContentsId);
+      if (session.profileReplacing) {
+        session.tabs.delete(tabId);
+        tabsByWebContentsId.delete(closedContents.id);
+        return;
+      }
+      closeTab(session, tabId, closedContents);
     });
     view.webContents.on("found-in-page", (_event, result) => {
       if (
@@ -1367,9 +1376,10 @@ export function createBrowserViewHost(
 
   const unregisterBrowserSignalWatcher = (
     session: BrowserSessionEntry,
+    closedSession?: BrowserElectronSession,
   ): void => {
     const firstTab = session.tabs.values().next().value;
-    const electronSession = firstTab?.view.webContents.session;
+    const electronSession = closedSession ?? firstTab?.view.webContents.session;
     if (!electronSession) return;
     const watcher = signalWatchers.get(electronSession);
     if (!watcher) return;
@@ -1569,6 +1579,11 @@ export function createBrowserViewHost(
   function closeTab(
     session: BrowserSessionEntry,
     tabId = session.activeTabId,
+    closedContents?: {
+      id: number;
+      session?: BrowserElectronSession;
+      contents: BrowserWebContents;
+    },
   ): BrowserTabsState {
     assertTabsNotReplacing(session);
     const tab = session.tabs.get(tabId);
@@ -1577,8 +1592,19 @@ export function createBrowserViewHost(
         "TAB_NOT_FOUND",
         `Browser tab ${tabId} does not exist`,
       );
-    const closedTab = tabResult(tab, false);
+    const closedTab = closedContents
+      ? {
+          id: tabId,
+          url: tab.state.url,
+          title: tab.state.title,
+          active: false,
+          ...(tab.favicon ? { favicon: tab.favicon } : {}),
+          untrustedExternalContent: true as const,
+        }
+      : tabResult(tab, false);
     const wasActive = tabId === session.activeTabId;
+    if (closedContents && session.devtools?.contents === closedContents.contents)
+      destroyDevTools(session);
     // Activate the replacement BEFORE destroying the closed view. Destroying
     // the focused view first leaves OS focus in limbo until the async close
     // resolves — a second ⌘W in that window bypasses every before-input-event
@@ -1586,13 +1612,25 @@ export function createBrowserViewHost(
     const nextTabId = wasActive
       ? [...session.tabs.keys()].filter((id) => id !== tabId).at(-1)
       : undefined;
+    const wasLastTab = session.tabs.size === 1;
+    // A destroyed guest's native view must not be laid out as the previous
+    // active tab. Remove it before activating the surviving opener.
+    if (closedContents) session.tabs.delete(tabId);
     if (nextTabId) activateTab(session, nextTabId, false);
     disposeNetworkCapture(tab, "tab-closed");
     if (session.networkTabId === tabId) session.networkTabId = undefined;
-    if (session.tabs.size === 1) unregisterBrowserSignalWatcher(session);
+    if (wasLastTab)
+      unregisterBrowserSignalWatcher(session, closedContents?.session);
     session.tabs.delete(tabId);
-    tabsByWebContentsId.delete(tab.view.webContents.id);
-    destroyTabView(tab);
+    tabsByWebContentsId.delete(closedContents?.id ?? tab.view.webContents.id);
+    if (closedContents) {
+      options.mainWindow.contentView.removeChildView?.(tab.view);
+      if (session.nativeActiveTabId === tabId)
+        session.nativeActiveTabId = undefined;
+      session.snapshotDeltaBaseline = undefined;
+    } else {
+      destroyTabView(tab);
+    }
     if (session.tabs.size === 0) {
       session.activeTabId = "";
       session.nativeActiveTabId = undefined;
@@ -1621,42 +1659,6 @@ export function createBrowserViewHost(
     const state = listTabs(session, { kind: "closed", tabId, tab: closedTab });
     shellContents(options).send("browser:tabsState", state);
     return state;
-  }
-
-  // The page already destroyed its WebContents, so this mirrors closeTab
-  // without touching the dead contents. Closing the last tab leaves a fresh
-  // blank tab, matching the panel's "always one tab" invariant.
-  function forgetSelfClosedTab(
-    session: BrowserSessionEntry,
-    entry: BrowserEntry,
-    webContentsId: number,
-  ): void {
-    const { tabId } = entry;
-    const wasActive = tabId === session.activeTabId;
-    const closedTab = {
-      id: tabId,
-      url: entry.state.url,
-      title: entry.state.title,
-      active: false,
-      ...(entry.favicon ? { favicon: entry.favicon } : {}),
-      untrustedExternalContent: true as const,
-    };
-    disposeNetworkCapture(entry, "tab-closed");
-    if (session.networkTabId === tabId) session.networkTabId = undefined;
-    if (session.nativeActiveTabId === tabId)
-      session.nativeActiveTabId = undefined;
-    session.tabs.delete(tabId);
-    tabsByWebContentsId.delete(webContentsId);
-    if (!options.mainWindow.isDestroyed?.())
-      options.mainWindow.contentView.removeChildView?.(entry.view);
-    // A profile switch rebuilds every tab itself; just drop the dead one.
-    if (session.profileReplacing) return;
-    if (session.tabs.size === 0) {
-      createTab(session, true);
-    } else if (wasActive) {
-      activateTab(session, [...session.tabs.keys()].at(-1)!, false);
-    }
-    pushTabsState(options, session, { kind: "closed", tabId, tab: closedTab });
   }
 
   const openUserTab = async (
