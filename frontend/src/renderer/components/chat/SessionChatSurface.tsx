@@ -607,10 +607,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const composerSwitchInProgress = composerSwitch && (switchMutation.isPending || switchPresentation?.outcome === "in_progress");
 	const switchEcho = localEchos.find((echo) => echo.switching);
 	// Chat shows a switch in the transcript ("Switched from X to Y") and the
-	// working message, never as a card. Only a failure, which carries the reason
-	// and a recovery path, still gets one.
+	// working message, never as a card. Only a failure or a switch awaiting
+	// recovery, which carry the reason and what to do next, still get one.
 	const shownSwitchPresentation =
-		switchPresentation?.outcome === "failure" && dismissedFailureSwitchId !== agentSwitch?.id
+		(switchPresentation?.outcome === "failure" && dismissedFailureSwitchId !== agentSwitch?.id) ||
+		switchPresentation?.outcome === "recovery"
 			? switchPresentation
 			: undefined;
 	// The switch a composer send is making right now, before or after the daemon accepts it.
