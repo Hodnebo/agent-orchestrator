@@ -1,0 +1,159 @@
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const fixtures = vi.hoisted(() => ({
+	params: { id: "session-1", hostId: "host-1" },
+	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" },
+	navigation: { setOptions: vi.fn() },
+	getPreview: vi.fn(),
+}));
+
+vi.mock("react-native", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Switch: host("Switch"), Text: host("Text"), View: host("View"),
+		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
+	};
+});
+vi.mock("expo-router", () => ({
+	useLocalSearchParams: () => fixtures.params,
+	useNavigation: () => fixtures.navigation,
+	useRouter: () => ({ navigate: vi.fn() }),
+}));
+vi.mock("react-native-webview", async () => {
+	const React = await import("react");
+	return { WebView: (props: object) => React.createElement("WebView", props) };
+});
+vi.mock("./api", () => ({ getPreview: fixtures.getPreview }));
+vi.mock("./config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }) }));
+vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
+vi.mock("./connectionError", () => ({ userFacingError: String }));
+vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
+vi.mock("./store", () => ({
+	HostScope: ({ children }: { children: React.ReactNode }) => children,
+	useApp: () => ({ config: fixtures.config, currentHostId: "host-1", connection: "open" }),
+}));
+vi.mock("./ThemeProvider", () => {
+	const theme = new Proxy({}, { get: () => "#888" });
+	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
+});
+vi.mock("./icons", async () => {
+	const React = await import("react");
+	return { Feather: (props: object) => React.createElement("Feather", props) };
+});
+vi.mock("./ui", async () => {
+	const React = await import("react");
+	return { Button: (props: object) => React.createElement("Button", props), EmptyState: (props: object) => React.createElement("EmptyState", props) };
+});
+vi.mock("./preview/BrowserLivePane", async () => {
+	const React = await import("react");
+	return { BrowserLivePane: (props: object) => React.createElement("BrowserLivePane", props) };
+});
+
+import SessionPreviewScreen from "../app/preview/[id]";
+
+const appPreview = { entry: "index.html", url: "http://desktop.local:3011/preview/artifacts/index.html", authenticated: true };
+let screen: ReactTestRenderer;
+let header: ReactTestRenderer;
+const nodes = (name: string) => screen.root.findAll((node) => (node.type as unknown) === name);
+
+function updateHeader() {
+	const options = fixtures.navigation.setOptions.mock.lastCall?.[0];
+	act(() => header.update(options.headerRight?.() ?? <></>));
+}
+
+function toggle() {
+	updateHeader();
+	return header.root.find((node) => (node.type as unknown) === "Switch");
+}
+
+async function openPreview() {
+	await act(async () => { screen = create(<SessionPreviewScreen />); header = create(<></>); });
+}
+
+async function setMobile(enabled: boolean) {
+	const onValueChange = toggle().props.onValueChange;
+	await act(async () => onValueChange(enabled));
+}
+
+beforeEach(() => {
+	vi.useFakeTimers();
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	vi.stubGlobal("IS_REACT_NATIVE_TEST_ENVIRONMENT", true);
+	fixtures.params.id = "session-1";
+	fixtures.navigation.setOptions.mockClear();
+	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
+});
+
+afterEach(() => {
+	act(() => { screen?.unmount(); header?.unmount(); });
+	vi.useRealTimers();
+	vi.unstubAllGlobals();
+});
+
+describe("session preview mode", () => {
+	it("defaults to the live browser even after an app preview loads, with the switch only in the header", async () => {
+		await openPreview();
+		expect(fixtures.getPreview).toHaveBeenCalledWith(fixtures.config, "session-1");
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(nodes("WebView")).toHaveLength(0);
+		expect(nodes("Switch")).toHaveLength(0);
+		expect(screen.root.findAll((node) => node.props.accessibilityRole === "tablist")).toHaveLength(0);
+		expect(toggle().props).toMatchObject({ accessibilityLabel: "Mobile responsive view", value: false, disabled: false });
+	});
+
+	it("switches to the authenticated responsive preview and back to streaming", async () => {
+		await openPreview();
+		await setMobile(true);
+		expect(nodes("BrowserLivePane")).toHaveLength(0);
+		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
+		expect(toggle().props.value).toBe(true);
+		await setMobile(false);
+		expect(nodes("WebView")).toHaveLength(0);
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props.value).toBe(false);
+	});
+
+	it("keeps the chosen mode during preview polls while updating the app URL", async () => {
+		await openPreview();
+		await setMobile(true);
+		fixtures.getPreview.mockResolvedValue({ ...appPreview, url: "http://desktop.local:4317/updated" });
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(nodes("WebView")[0].props.source.uri).toBe("http://desktop.local:4317/updated");
+		expect(toggle().props.value).toBe(true);
+		await setMobile(false);
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props.value).toBe(false);
+	});
+
+	it("disables responsive mode without an app preview and stays live when one becomes available", async () => {
+		fixtures.getPreview.mockResolvedValue(null);
+		await openPreview();
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props).toMatchObject({ value: false, disabled: true });
+		fixtures.getPreview.mockResolvedValue(appPreview);
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props).toMatchObject({ value: false, disabled: false });
+	});
+
+	it("returns to the live browser if the selected app preview is cleared", async () => {
+		await openPreview();
+		await setMobile(true);
+		fixtures.getPreview.mockResolvedValue(null);
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props).toMatchObject({ value: false, disabled: true });
+	});
+
+	it("starts another session in streaming mode after using its predecessor's responsive preview", async () => {
+		await openPreview();
+		await setMobile(true);
+		fixtures.params.id = "session-2";
+		await act(async () => { screen.update(<SessionPreviewScreen />); });
+		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
+		expect(toggle().props.value).toBe(false);
+	});
+});

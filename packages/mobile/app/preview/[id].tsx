@@ -1,7 +1,7 @@
 import { Feather } from "../../lib/icons";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
@@ -31,8 +31,6 @@ function SessionPreviewContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
-	const userPickedTab = useRef(false);
-	const defaultDecided = useRef(false);
 	const [active, setActive] = useState<"browser" | "app">("browser");
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
@@ -41,10 +39,25 @@ function SessionPreviewContent() {
 	const currentRoute = useRef(`${routeHostId ?? ""}|${sessionID}`);
 	currentRoute.current = `${routeHostId ?? ""}|${sessionID}`;
 	const [previewError, setPreviewError] = useState<string>();
+	const canShowResponsive = Boolean(preview);
+	const responsive = active === "app" && canShowResponsive;
 
 	useLayoutEffect(() => {
-		navigation.setOptions({ title: title || "Preview" });
-	}, [navigation, title]);
+		navigation.setOptions({
+			title: title || "Preview",
+			headerRight: hostMatches && config ? () => <View style={styles.modeToggle}>
+				<Text style={styles.modeLabel}>Mobile</Text>
+				<Switch
+					accessibilityLabel="Mobile responsive view"
+					accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
+					disabled={!canShowResponsive}
+					value={responsive}
+					onValueChange={(enabled) => { haptics.tap(); setActive(enabled ? "app" : "browser"); }}
+					trackColor={{ false: t.borderStrong, true: t.green }}
+				/>
+			</View> : undefined,
+		});
+	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeToggle, t.borderStrong, t.green, title]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -53,10 +66,6 @@ function SessionPreviewContent() {
 			const value = await getPreview(config, sessionID);
 			if (currentConfig.current === config && currentRoute.current === route) {
 				setLoaded({ config, id: sessionID, value });
-				if (!defaultDecided.current) {
-					defaultDecided.current = true;
-					if (value && !userPickedTab.current) setActive("app");
-				}
 				setPreviewError(undefined);
 			}
 		} catch (cause) {
@@ -65,8 +74,6 @@ function SessionPreviewContent() {
 	}, [config, hostMatches, routeHostId, sessionID]);
 
 	useEffect(() => {
-		userPickedTab.current = false;
-		defaultDecided.current = false;
 		setActive("browser");
 	}, [sessionID]);
 
@@ -84,11 +91,7 @@ function SessionPreviewContent() {
 	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Connecting to this machine…</Text></View>;
 
 	return <View style={styles.screen}>
-		{preview ? <View accessibilityRole="tablist" style={styles.switcher}>
-			<PreviewTab label="Browser" icon="monitor" selected={active === "browser"} onPress={() => { userPickedTab.current = true; setActive("browser"); }} />
-			<PreviewTab label="App preview" icon="globe" selected={active === "app"} onPress={() => { userPickedTab.current = true; setActive("app"); }} />
-		</View> : null}
-		{active === "browser" || !preview ? <BrowserLivePane sessionID={sessionID} /> : <View style={styles.appPane}>
+		{!responsive || !preview ? <BrowserLivePane sessionID={sessionID} /> : <View style={styles.appPane}>
 			<View style={styles.appBar}>
 				<Feather name="globe" size={iconSize.sm} color={t.textTertiary} />
 				<Text numberOfLines={1} style={styles.appPath}>{preview.entry}</Text>
@@ -115,24 +118,12 @@ function SessionPreviewContent() {
 	</View>;
 }
 
-function PreviewTab({ label, icon, selected, onPress }: { label: string; icon: "monitor" | "globe"; selected: boolean; onPress(): void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return <Pressable accessibilityRole="tab" accessibilityState={{ selected }} onPress={() => { haptics.tap(); onPress(); }} style={[styles.switcherTab, selected && styles.switcherTabActive]}>
-		<Feather name={icon} size={iconSize.sm} color={selected ? t.textPrimary : t.textTertiary} />
-		<Text style={[styles.switcherLabel, selected && styles.switcherLabelActive]}>{label}</Text>
-	</Pressable>;
-}
-
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	switcher: { flexDirection: "row", gap: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
-	switcherTab: { flex: 1, minHeight: 40, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderRadius: 11 },
-	switcherTabActive: { backgroundColor: t.bgElevated },
-	switcherLabel: { color: t.textTertiary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
-	switcherLabelActive: { color: t.textPrimary },
+	modeToggle: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.xs },
+	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize },
 	appPane: { flex: 1, backgroundColor: t.bgBase },
 	appBar: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
 	appPath: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
