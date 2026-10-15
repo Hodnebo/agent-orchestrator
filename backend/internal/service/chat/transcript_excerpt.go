@@ -52,7 +52,7 @@ func (s *Service) TranscriptExcerpt(ctx context.Context, id domain.SessionID, ma
 	var activities []domain.ConversationActivity
 	before := int64(0)
 	rows := 0
-	more := false
+	var more bool
 	for {
 		snapshot, err := s.SnapshotPage(ctx, id, before, transcriptExcerptPageRows)
 		if err != nil {

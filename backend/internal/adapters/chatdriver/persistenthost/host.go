@@ -592,13 +592,13 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	}
 }
 
+func isStandbyKey(key string) bool { return strings.Contains(key, ".standby-") }
+
 // StandbyKey returns a fresh host key for a provider started ahead of a launch
 // for sessionID. Each standby gets its own key and directory: an adopted host
 // keeps its prompt journal in its launch directory, so a later standby for the
 // same session must never reuse it. No durable session keeps these keys, so
 // Reconcile reaps any left by a crash on daemon start.
-func isStandbyKey(key string) bool { return strings.Contains(key, ".standby-") }
-
 func StandbyKey(sessionID string) string {
 	var b [6]byte
 	_, _ = rand.Read(b[:])

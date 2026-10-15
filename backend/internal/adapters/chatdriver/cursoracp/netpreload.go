@@ -1,6 +1,7 @@
 package cursoracp
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"fmt"
@@ -24,7 +25,7 @@ var netPreload []byte
 func writeNetPreload(dataDir string) (string, error) {
 	sum := sha256.Sum256(netPreload)
 	path := filepath.Join(dataDir, "cursor", fmt.Sprintf("ao-net-%x.cjs", sum[:6]))
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(netPreload) {
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, netPreload) {
 		return path, nil
 	}
 	// Node reads a preload only at process start, so files an older AO wrote
@@ -37,7 +38,7 @@ func writeNetPreload(dataDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create Cursor preload: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(netPreload); err != nil {
 		_ = tmp.Close()
 		return "", fmt.Errorf("write Cursor preload: %w", err)
