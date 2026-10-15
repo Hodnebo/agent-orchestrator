@@ -1044,7 +1044,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex) {
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
@@ -1547,6 +1547,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		resolved.Effort = requested.Effort
 	}
 	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
+		// Only a flagged explicit override (the spawn API and delegation mark
+		// request-carried effort) fails loudly: the caller asked for something
+		// the harness cannot honor. Unflagged or inherited effort still clears
+		// silently so role/project defaults keep working for every harness.
+		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
+		}
 		resolved.Effort = ""
 		return resolved, nil
 	}
@@ -3342,6 +3349,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	// must win over the project default for every harness on a TUI rebuild.
 	if model := strings.TrimSpace(rec.Metadata.Model); model != "" {
 		agentConfig.Model = model
+	}
+	// A per-spawn or ChatUI-selected reasoning effort is the same kind of
+	// durable session-level choice: it must survive the rebuild for every
+	// effort-capable harness, not only Claude Code.
+	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
+		agentConfig.Effort = effort
 	}
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
