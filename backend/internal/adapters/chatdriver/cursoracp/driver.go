@@ -37,13 +37,21 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
 		SessionPreamble:      continuationPreamble,
+		Standby:              &acpdriver.StandbyConfig{Warm: warmSharedServices},
 	}, log)
 }
 
-const (
-	continuationOpenTag  = "<ao-continuation"
-	continuationCloseTag = "</ao-continuation>"
-)
+// listModelsMethod is Cursor's own model catalog request. Cursor answers it
+// only without ACP's extension underscore.
+const listModelsMethod = "cursor/list_available_models"
+
+// warmSharedServices makes Cursor load its account, settings, and model
+// services, which a fresh process otherwise loads inside the first
+// session/new (3 to 4s of API calls). Listing models loads them without
+// creating a session, so the session an agent switch opens later takes ~1.5s.
+func warmSharedServices(ctx context.Context, request acpdriver.RawRequest) error {
+	return request(ctx, listModelsMethod, map[string]any{})
+}
 
 // continuationPreamble hands an agent switch's continuation to Cursor with the
 // first prompt. Cursor does not act on it from the standing rule (a switch to
@@ -51,12 +59,7 @@ const (
 // embedded-resource prompts, so the block travels as plain text ahead of the
 // user's message. A session started without a switch has no block.
 func continuationPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
-	start := strings.Index(cfg.SystemPrompt, continuationOpenTag)
-	end := strings.LastIndex(cfg.SystemPrompt, continuationCloseTag)
-	if start < 0 || end < start {
-		return nil
-	}
-	return []acpsdk.ContentBlock{acpsdk.TextBlock(cfg.SystemPrompt[start : end+len(continuationCloseTag)])}
+	return acpdriver.ContinuationPreamble(cfg.SystemPrompt)
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {

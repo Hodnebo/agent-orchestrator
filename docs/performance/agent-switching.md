@@ -6,9 +6,11 @@ The model's own time to first token comes after that and is not counted.
 
 ## How a switch runs
 
-1. Picking an agent in the model menu records the choice in the renderer and
+1. Picking an agent in the model menu records the choice in the renderer,
    prewarms the target's readiness check (`POST
-   /agents/{agent}/chat/prewarm`). No session is created.
+   /agents/{agent}/chat/prewarm`), and, for Cursor and Droid, starts the
+   target's process (`POST /sessions/{id}/switch-agent/prewarm`). No provider
+   session is created. See "Starting the target on pick" below.
 2. The next send carries the switch: `POST /sessions/{id}/switch-agent` with the
    message, model, and reasoning effort. The message shows at once and reads as
    Working from the send. Messages sent in the meantime wait in the queue dock.
@@ -67,12 +69,16 @@ and for Claude Code 8.03s against 8.85s.
 | omp | refused | 8.39s | 1.09s | 7.7× | 5/5 |
 | fx | refused | 5.97s | 1.61s | 3.7× | 5/5 |
 | opencode | refused | 11.34s | 1.72s | 6.6× | 5/5 |
-| Droid | refused | 7.53s (4 runs) | 2.63s (5 runs) | 2.9× | 5/5 |
-| Cursor | refused | 14.15s (4 runs) | 4.94s (8 runs, 4.3 to 7.0s) | 2.9× | 5/5 |
+| Droid, picked 1s or more before send | refused | 7.33 to 7.82s (4 runs) | 1.32 to 1.68s (8 runs) | 4.4× or more | 5/5 |
+| Droid, cold | refused | 7.53s (median) | 2.63s (median of 5) | 2.9× | 5/5 |
+| Cursor, picked 6s before send | refused | 13.27 to 21.27s (4 runs) | 1.04 to 1.90s (4 runs) | 7× or more | 5/5 |
+| Cursor, picked 3s before send | refused | 13.27 to 21.27s | 2.34 to 3.51s (3 runs) | 3.8× or more | 5/5 |
+| Cursor, picked 1s before send, or cold | refused | 14.15s (median) | 4.94s (median of 8, 4.3 to 7.0s) | 2.9× | 5/5 |
 
 Codex to Claude Code: main 8.85s, main's protocol 8.03s, this branch 2.03s
-(4.4× vs main), 5/5. Multi-run numbers are medians. pi's first ever start on a
-machine took 4.8s.
+(4.4× vs main), 5/5. "or more" compares the slowest run on this branch with the
+fastest baseline run; other multi-run numbers are medians. pi's first ever
+start on a machine took 4.8s.
 
 A chain through every agent, Claude Code to Codex, opencode, Droid, Grok, fx,
 omp, pi, Cursor, and back to Claude Code, telling each one a new fact, recalled
@@ -107,6 +113,37 @@ in about 1.1s. Claude Code, Codex, and opencode stop in under 0.2s.
 | Claude Code | ~1.8s |
 | Droid | 2 to 3s |
 | Cursor | 4 to 6.5s |
+
+## Starting the target on pick
+
+Cursor and Droid spend most of a switch in their own startup: Cursor about 4s
+loading account, settings, and model services before its first session, Droid
+2 to 3s in `initialize` and its first `session/new`. Picking one of them in the
+model menu now starts it while the user finishes typing:
+
+- The daemon prepares the target's workspace files, builds its standing
+  instructions and environment as the switch would, and starts the provider in
+  a persistent host under a separate key (`<session>.standby`), because the
+  current agent still owns the session's host. It runs `initialize`, and for
+  Cursor `cursor/list_available_models`, which loads those services without
+  creating a session.
+- No provider session exists until the send. The process holds a browser
+  bearer whose verifier is stored only when the switch adopts it, after the
+  source agent stops, the same point where a cold switch rotates it.
+- The switch adopts the standby when the target, model, effort, approval mode,
+  environment, and standing instructions match. It asks the host to rekey onto
+  the session (`persistenthost.Rekey`), sets the provider scope, and opens the
+  session. Droid takes the standing instructions at launch, so the handoff
+  goes ahead of its first message, as it already does for Cursor.
+- Anything else drops the standby: a different pick, picking the current agent
+  again, other settings at send, or two minutes unused. A send that arrives
+  while the standby is still starting waits up to 10s for it, then starts the
+  agent itself.
+
+The gain depends on how long before the send the user picks. Cursor's standby
+takes about 4s to be ready (plus a one-time readiness check of about 1.7s per
+daemon), so a pick 1s before sending saves almost nothing, 3s saves about half,
+and 6s brings Cursor to 1 to 2s. Droid's standby is ready in about 1.1s.
 
 ## opencode: the per-worktree install (fixed)
 
@@ -172,10 +209,10 @@ Droid is similar: its `initialize` takes 0.7 to 1s and its first `session/new`
 handshake answers in 12ms). It is a compiled binary, so there is no preload
 equivalent.
 
-The only way to get Cursor well under 4s is to create its session before the
-send: a standby session opened on pick or menu open, handed to the chat when
-the switch commits. That is not built. It costs a Cursor session for every
-pick that is not followed by a send.
+Without a pick ahead of the send, the cold path above is the floor. Creating
+the Cursor session itself ahead of the send would cut it further but costs a
+Cursor session for every pick that is not sent, so the standby stops at a
+started, warmed process.
 
 ## Reproducing
 

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
@@ -49,7 +49,7 @@ export function useSessionAgentSwitch({
 	// A chat can only continue with an agent that runs as a chat.
 	const agents = useMemo(() => {
 		const chatHarnesses = settings?.chatHarnesses;
-		return agentsQuery.data?.agents.filter((agent) => !chatHarnesses || chatHarnesses.includes(agent.id));
+		return agentsQuery.data?.agents?.filter((agent) => !chatHarnesses || chatHarnesses.includes(agent.id));
 	}, [agentsQuery.data?.agents, settings?.chatHarnesses]);
 	// Kept after the switch lands, until the surface hands the bar to the new
 	// agent's own settings (it then calls clear), so the bar never blanks.
@@ -68,6 +68,36 @@ export function useSessionAgentSwitch({
 			defaultEffort: item.defaultEffort,
 		}));
 	}, [catalog, t]);
+
+	// One model always shows, and it is the one the switch starts with: the
+	// agent's default when it marks one, otherwise the first listed.
+	const model = pendingDraft
+		? models.find((item) => item.id === pendingDraft.model) ?? models.find((item) => item.default) ?? models[0]
+		: undefined;
+	const effort = pendingDraft?.effort && model?.efforts?.includes(pendingDraft.effort)
+		? pendingDraft.effort
+		: model?.defaultEffort;
+	const catalogLoaded = catalog !== undefined;
+	const pendingHarness = pendingDraft?.harness;
+	const modelId = model?.id ?? "";
+	const effortId = effort ?? "";
+
+	// Start the picked agent's process now, with the model and effort the send
+	// will carry, so the switch adopts it instead of starting one. Picking the
+	// chat's own agent again drops it. The daemon replaces an earlier standby.
+	const prewarmed = useRef(false);
+	useEffect(() => {
+		if (!enabled) return;
+		if (pendingHarness && !catalogLoaded) return;
+		if (!pendingHarness && !prewarmed.current) return;
+		prewarmed.current = Boolean(pendingHarness);
+		void clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/switch-agent/prewarm", {
+			params: { path: { sessionId: session.id } },
+			body: pendingHarness
+				? { targetHarness: pendingHarness, model: modelId || undefined, reasoningEffort: effortId || undefined }
+				: { targetHarness: session.provider },
+		}).catch(() => undefined);
+	}, [enabled, hostId, session.id, session.provider, pendingHarness, catalogLoaded, modelId, effortId]);
 
 	const clear = () => setDraft(key, undefined);
 	const choose = (harness: string) => {
@@ -93,12 +123,6 @@ export function useSessionAgentSwitch({
 	) : undefined;
 
 	if (!pendingDraft) return { agentMenu, clear };
-	// One model always shows, and it is the one the switch starts with: the
-	// agent's default when it marks one, otherwise the first listed.
-	const model = models.find((item) => item.id === pendingDraft.model) ?? models.find((item) => item.default) ?? models[0];
-	const effort = pendingDraft.effort && model?.efforts?.includes(pendingDraft.effort)
-		? pendingDraft.effort
-		: model?.defaultEffort;
 	return {
 		agentMenu,
 		clear,

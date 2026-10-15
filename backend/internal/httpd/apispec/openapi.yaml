@@ -9654,6 +9654,46 @@ paths:
       summary: Switch a logical AO session to another agent harness
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/switch-agent/prewarm:
+    post:
+      operationId: prewarmSessionAgentSwitch
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrewarmAgentSwitchRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmAgentSwitchResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent picked for a chat's next switch so the send that carries
+        the switch adopts it
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/diffs:
     post:
       operationId: getSessionWorkspaceDiffs
@@ -15686,6 +15726,31 @@ components:
       - sessionId
       - state
       - logs
+      type: object
+    PrewarmAgentSwitchRequest:
+      properties:
+        model:
+          description: Model the switch will request, if any.
+          maxLength: 256
+          type: string
+        reasoningEffort:
+          description: Reasoning effort the switch will request, if any.
+          maxLength: 64
+          type: string
+        targetHarness:
+          description: Agent picked for the chat's next switch. Picking the chat's
+            current agent drops any earlier standby.
+          type: string
+      required:
+      - targetHarness
+      type: object
+    PrewarmAgentSwitchResponse:
+      properties:
+        targetHarness:
+          description: Agent whose process is being started.
+          type: string
+      required:
+      - targetHarness
       type: object
     PrewarmChatAgentResponse:
       properties:

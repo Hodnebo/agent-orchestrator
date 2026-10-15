@@ -70,6 +70,9 @@ type Config struct {
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// Standby opts the binding into starting its provider ahead of an agent
+	// switch. See acpdriver.StandbyConfig.
+	Standby *acpdriver.StandbyConfig
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -166,5 +169,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
+		Standby:                      cfg.Standby,
 	}
 }

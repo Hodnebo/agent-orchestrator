@@ -197,6 +197,13 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
+	// A target the user picked before sending may already be running. Its hook
+	// and trust files are in the workspace, so failure cleanup covers them.
+	standby := m.takeChatStandby(id, cfg.TargetHarness, agentConfig)
+	if standby != nil {
+		defer standby.handle.Discard()
+		targetWorkspacePrepared = true
+	}
 
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
@@ -401,7 +408,13 @@ func (m *Manager) executeChatAgentSwitch(
 	if resumable {
 		historyMode = ports.ChatHistoryDeferred
 	}
+	var standbyHandle ports.ChatStandby
+	var standbyEnv func() (map[string]string, error)
+	if standby != nil {
+		standbyHandle = standby.handle
+	}
 	_, err = m.chat.StartChat(ctx, ChatStart{
+		Standby:                 standbyHandle,
 		SessionID:               id,
 		ProjectID:               rec.ProjectID,
 		Kind:                    rec.Kind,
@@ -417,6 +430,14 @@ func (m *Manager) executeChatAgentSwitch(
 		MCPServers:              m.aoMCPServers(cfg.TargetHarness, targetLaunchEnv),
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+			if standby != nil {
+				// The standby already holds a bearer; persisting its verifier now,
+				// after the source stopped, is the rotation a cold start does here.
+				if standbyEnv == nil {
+					standbyEnv = standby.controllerEnv(launchCtx, m, &credentialRecord, expected)
+				}
+				return standbyEnv()
+			}
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
 				launchCtx, credentialRecord, project.Config.Env, expected,
 			)

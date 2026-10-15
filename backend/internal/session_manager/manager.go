@@ -486,8 +486,13 @@ type Manager struct {
 	statusVerificationLimit     time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
-	interfaceRecoveryMu         sync.Mutex
-	deferredInterfaceRecovery   map[domain.SessionID]string
+	// chatStandbys holds the target agent of a picked, unsent Chat switch per
+	// session; chatStandbyLocks serializes its prewarm and takeover.
+	chatStandbyMu             sync.Mutex
+	chatStandbys              map[domain.SessionID]*chatSwitchStandby
+	chatStandbyLocks          map[domain.SessionID]chan struct{}
+	interfaceRecoveryMu       sync.Mutex
+	deferredInterfaceRecovery map[domain.SessionID]string
 	// switchDecisionInput opens a narrow human-only terminal lane while the
 	// source is blocked on permission during a mandatory switch.
 	switchDecisionInput map[domain.SessionID]domain.AgentSwitchID

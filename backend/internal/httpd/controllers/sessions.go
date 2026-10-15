@@ -260,6 +260,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/exit-agent", c.exitAgent)
 	r.Post("/sessions/{sessionId}/resume-agent", c.resumeAgent)
 	r.Post("/sessions/{sessionId}/switch-agent", c.switchAgent)
+	r.Post("/sessions/{sessionId}/switch-agent/prewarm", c.prewarmAgentSwitch)
 	r.Get("/sessions/{sessionId}/agent-switches", c.listAgentSwitches)
 	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/recover", c.recoverAgentSwitch)
 	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/handoff", c.submitAgentHandoff)
@@ -1956,6 +1957,46 @@ func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, AgentSwitchResponse{Switch: agentSwitchView(switchRecord)})
+}
+
+// agentSwitchPrewarmer starts a chat's picked switch target ahead of the send.
+type agentSwitchPrewarmer interface {
+	PrewarmAgentSwitch(id domain.SessionID, in sessionsvc.SwitchAgentInput)
+}
+
+// prewarmAgentSwitch starts the agent someone picked in a chat's model menu,
+// without a provider session, so the send that carries the switch adopts a
+// running process. It returns before the process is ready.
+func (c *SessionsController) prewarmAgentSwitch(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(agentSwitchPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/switch-agent/prewarm")
+		return
+	}
+	var in PrewarmAgentSwitchRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	targetHarness := domain.AgentHarness(strings.TrimSpace(string(in.TargetHarness)))
+	if targetHarness == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TARGET_HARNESS_REQUIRED", "targetHarness is required", nil)
+		return
+	}
+	model := strings.TrimSpace(domain.SanitizeControlChars(in.Model))
+	if utf8.RuneCountInString(model) > maxModelLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
+		return
+	}
+	effort := strings.TrimSpace(domain.SanitizeControlChars(in.ReasoningEffort))
+	if len(effort) > 64 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "REASONING_EFFORT_TOO_LONG", "reasoningEffort must be 64 characters or fewer", nil)
+		return
+	}
+	prewarmer.PrewarmAgentSwitch(sessionID(r), sessionsvc.SwitchAgentInput{
+		TargetHarness: targetHarness, Model: model, Effort: effort,
+	})
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmAgentSwitchResponse{TargetHarness: targetHarness})
 }
 
 func (c *SessionsController) listAgentSwitches(w http.ResponseWriter, r *http.Request) {

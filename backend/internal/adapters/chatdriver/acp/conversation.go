@@ -192,6 +192,14 @@ var _ acpsdk.Client = (*conversation)(nil)
 var _ acpsdk.ClientExperimental = (*conversation)(nil)
 var _ acpsdk.ExtensionMethodHandler = (*conversation)(nil)
 
+// setProviderScope gives an adopted standby the scope of the session it now
+// serves. It runs before session/new, so no provider id has been scoped yet.
+func (c *conversation) setProviderScope(id string) {
+	c.mu.Lock()
+	c.providerScopeID = id
+	c.mu.Unlock()
+}
+
 func newConversation(
 	proc *process,
 	log *slog.Logger,

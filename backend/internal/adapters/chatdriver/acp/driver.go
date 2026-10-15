@@ -126,6 +126,9 @@ type Config struct {
 	// raw value on the ACP wire.
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
+	// Standby opts the binding into starting its provider ahead of an agent
+	// switch (ports.ChatStandbyDriver). Nil leaves Prewarm unsupported.
+	Standby *StandbyConfig
 	// OnAuthRejected is called when the provider rejects the credential during
 	// a live turn. It is how a cached "this credential works" verdict is
 	// corrected the moment the provider says otherwise, and it is the only
@@ -250,11 +253,30 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
-	connectStarted := time.Now()
-	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
-	d.logStartStage(cfg.SessionID, "connect", connectStarted, err)
-	if err != nil {
-		return nil, err
+	var (
+		conv    *conversation
+		init    acpsdk.InitializeResponse
+		live    *persistenthost.ACPState
+		err     error
+		adopted bool
+	)
+	if cfg.Standby != nil {
+		adoptStarted := time.Now()
+		conv, init, err = d.adoptStandby(ctx, cfg.Standby, cfg, launchCfg)
+		d.logStartStage(cfg.SessionID, "standby_adopt", adoptStarted, err)
+		adopted = err == nil
+		if err != nil {
+			d.log.Info("chat: ACP standby not adopted; starting a new provider",
+				"sessionID", cfg.SessionID, "harness", d.cfg.Harness, "reason", err)
+		}
+	}
+	if !adopted {
+		connectStarted := time.Now()
+		conv, init, live, err = d.connect(ctx, launchCfg, cfg.PrepareEnv)
+		d.logStartStage(cfg.SessionID, "connect", connectStarted, err)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if live != nil {
 		// A fresh-start request colliding with a surviving host is a durable-state
@@ -280,8 +302,19 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 
 	settings := ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}
 	if err := d.openNewSession(ctx, conv, init, launchCfg, settings, additional, mcpServers); err != nil {
-		conv.discard()
+		if adopted {
+			// The adopted host already answers to the session key; discarding
+			// would only detach and leave it running.
+			_ = conv.Terminate()
+		} else {
+			conv.discard()
+		}
 		return nil, err
+	}
+	if adopted && d.cfg.Standby != nil && d.cfg.Standby.PromptAtLaunch && d.cfg.SessionPreamble == nil {
+		// The standby was launched with the standing instructions only; the
+		// switch's handoff did not exist yet.
+		conv.setSessionPreamble(ContinuationPreamble(launchCfg.SystemPrompt))
 	}
 	d.logStartStage(cfg.SessionID, "total", totalStarted, nil)
 	return conv, nil
@@ -708,13 +741,29 @@ func (d *Driver) connectProcess(
 	cfg LaunchConfig,
 	prepareEnv func(context.Context) (map[string]string, error),
 ) (*process, error) {
-	// Ownership is stable across app upgrades and mutable model/approval choices.
-	// An adopted provider keeps its original launch environment and instructions;
-	// changes to those take effect only when the provider is explicitly replaced.
+	return d.connectProcessAt(ctx, cfg, prepareEnv, newHostKey(string(cfg.SessionID)))
+}
+
+// ownershipFingerprint is stable across app upgrades and mutable model/approval
+// choices. An adopted provider keeps its original launch environment and
+// instructions; changes to those take effect only when the provider is
+// explicitly replaced.
+func (d *Driver) ownershipFingerprint(cfg LaunchConfig) string {
 	owner, _ := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(d.cfg.Harness), cfg.ProviderScopeID})
-	identity := fmt.Sprintf("%x", sha256.Sum256(owner))
+	return fmt.Sprintf("%x", sha256.Sum256(owner))
+}
+
+// connectProcessAt attaches to or starts the host under key. A standby host is
+// rekeyed onto its session after start, so shutdown reads the key it has then.
+func (d *Driver) connectProcessAt(
+	ctx context.Context,
+	cfg LaunchConfig,
+	prepareEnv func(context.Context) (map[string]string, error),
+	key *hostKey,
+) (*process, error) {
+	identity := d.ownershipFingerprint(cfg)
 	hostConfig := persistenthost.Config{
-		SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
+		SessionID: key.get(), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
 		Protocol: persistenthost.ProtocolACP, OwnershipFingerprint: identity,
 		ReconnectOnly: cfg.ReconnectOnly,
 		Prepare: func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
@@ -760,7 +809,7 @@ func (d *Driver) connectProcess(
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
 	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
-		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
+		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, key.get())
 	})
 	return proc, nil
 }

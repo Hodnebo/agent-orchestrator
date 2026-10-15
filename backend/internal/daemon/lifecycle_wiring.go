@@ -673,6 +673,17 @@ func (c chatLauncher) StartChat(ctx context.Context, cfg sessionmanager.ChatStar
 	return c.svc.StartChat(ctx, cfg)
 }
 
+func (c chatLauncher) SupportsChatStandby(harness domain.AgentHarness) bool {
+	return c.svc.SupportsChatStandby(harness)
+}
+
+func (c chatLauncher) PrewarmChatStandby(ctx context.Context, cfg sessionmanager.ChatStart) (ports.ChatStandby, error) {
+	if err := c.waitForPersistentHostReconcile(ctx); err != nil {
+		return nil, err
+	}
+	return c.svc.PrewarmChatStandby(ctx, cfg)
+}
+
 func (c chatLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
 	return c.svc.RunBackgroundTask(ctx, harness, cfg, prompt)
 }

@@ -515,6 +515,18 @@ type SwitchAgentRequest struct {
 	Message *SendConversationMessageRequest `json:"message,omitempty" description:"Chat only. The human message the target agent answers first, in place of AO's activation prompt."`
 }
 
+// PrewarmAgentSwitchRequest names the agent picked for a chat's next switch.
+type PrewarmAgentSwitchRequest struct {
+	TargetHarness   domain.AgentHarness `json:"targetHarness" description:"Agent picked for the chat's next switch. Picking the chat's current agent drops any earlier standby."`
+	Model           string              `json:"model,omitempty" maxLength:"256" description:"Model the switch will request, if any."`
+	ReasoningEffort string              `json:"reasoningEffort,omitempty" maxLength:"64" description:"Reasoning effort the switch will request, if any."`
+}
+
+// PrewarmAgentSwitchResponse acknowledges a background prewarm.
+type PrewarmAgentSwitchResponse struct {
+	TargetHarness domain.AgentHarness `json:"targetHarness" description:"Agent whose process is being started."`
+}
+
 // AgentSwitchView is the deliberately small public projection of a durable
 // switch saga. Provider context, local artifact paths, retry keys, generation
 // fences, and raw failure details remain daemon-private.

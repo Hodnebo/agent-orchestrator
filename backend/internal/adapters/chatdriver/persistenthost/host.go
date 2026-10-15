@@ -143,6 +143,9 @@ type hello struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
 	Action  string `json:"action"`
+	// To and Fingerprint carry a rekey's new session key and launch identity.
+	To          string `json:"to,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type helloResponse struct {
@@ -571,6 +574,119 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 }
 
+// StandbyKey is the host key of a provider started ahead of an agent switch.
+// It never collides with a session id, and Reconcile reaps it on daemon start
+// because no durable session keeps it.
+func StandbyKey(sessionID string) string { return sessionID + ".standby" }
+
+// Rekey moves a running host from one session key to another. An agent switch
+// uses it to adopt a provider that was started under StandbyKey while the
+// previous agent still owned the session's key. The target key must be free:
+// the previous host has to be shut down first.
+func Rekey(ctx context.Context, dataDir, from, to, fingerprint string) error {
+	if _, err := hostDir(dataDir, to); err != nil {
+		return err
+	}
+	d, err := readDescriptor(dataDir, from)
+	if err != nil {
+		return err
+	}
+	if d.Version != ProtocolVersion {
+		return ErrIncompatible
+	}
+	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(handshakeCtx, "tcp", d.Address)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	finishHandshake := bindConnToContext(handshakeCtx, conn)
+	request := hello{Version: ProtocolVersion, Token: d.Token, Action: "rekey", To: to, Fingerprint: fingerprint}
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return finishHandshake(err)
+	}
+	var response helloResponse
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		return finishHandshake(err)
+	}
+	if err := finishHandshake(nil); err != nil {
+		return err
+	}
+	if !response.OK {
+		if response.Error == ErrHostExists.Error() {
+			return ErrHostExists
+		}
+		return fmt.Errorf("rekey chat host: %s", response.Error)
+	}
+	moved, err := readDescriptor(dataDir, to)
+	if err != nil {
+		return fmt.Errorf("rekey chat host: %w", err)
+	}
+	if moved.Token != d.Token {
+		return fmt.Errorf("%w: rekeyed descriptor belongs to another host", ErrOwnershipInconclusive)
+	}
+	return nil
+}
+
+// ownership is the session key a host currently answers to: its launch lock
+// and published descriptor. The ACP prompt journal stays in the launch key's
+// directory for the host's lifetime.
+type ownership struct {
+	mu         sync.Mutex
+	dataDir    string
+	key        string
+	descriptor Descriptor
+	release    func()
+	startDir   string
+}
+
+func (o *ownership) rekey(to, fingerprint string) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if to == o.key {
+		return nil
+	}
+	release, err := acquireHostLock(o.dataDir, to)
+	if err != nil {
+		return err
+	}
+	next := o.descriptor
+	next.SessionID = to
+	if fingerprint != "" {
+		next.OwnershipFingerprint = fingerprint
+	}
+	if err := writeDescriptor(o.dataDir, next); err != nil {
+		release()
+		return err
+	}
+	if path, err := descriptorPath(o.dataDir, o.key); err == nil {
+		_ = os.Remove(path)
+	}
+	o.release()
+	o.key, o.descriptor, o.release = to, next, release
+	return nil
+}
+
+func (o *ownership) removeDescriptor() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if path, err := descriptorPath(o.dataDir, o.key); err == nil {
+		_ = os.Remove(path)
+	}
+}
+
+// releaseLock gives up the current key last, after the provider tree is gone,
+// and removes the launch directory if the host was rekeyed away from it.
+func (o *ownership) releaseLock() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.release()
+	if dir, err := hostDir(o.dataDir, o.key); err == nil && dir != o.startDir && o.startDir != "" {
+		_ = os.RemoveAll(o.startDir)
+	}
+}
+
 // Run owns the provider until it exits or an authenticated shutdown arrives.
 func Run(ctx context.Context, cfg Config) error {
 	if len(cfg.Argv) == 0 || !filepath.IsAbs(cfg.Workdir) {
@@ -580,7 +696,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	defer releaseLock()
+	startDir, _ := hostDir(cfg.DataDir, cfg.SessionID)
+	own := &ownership{dataDir: cfg.DataDir, key: cfg.SessionID, release: releaseLock, startDir: startDir}
+	defer own.releaseLock()
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -621,11 +739,12 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 		return err
 	}
+	own.descriptor = d
+	defer own.removeDescriptor()
 	path, _ := descriptorPath(cfg.DataDir, cfg.SessionID)
-	defer func() { _ = os.Remove(path) }()
 
 	h := &host{
-		ctx: ctx, listener: listener, child: child, stdin: stdin, token: token,
+		ctx: ctx, listener: listener, child: child, stdin: stdin, token: token, own: own,
 		detached: make([][]byte, 0, 64), pendingRequests: make(map[string]*pendingRequest),
 		shutdown: make(chan struct{}),
 	}
@@ -710,6 +829,7 @@ type host struct {
 	stdin    io.WriteCloser
 	token    string
 	acp      *acpRelay
+	own      *ownership
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -760,6 +880,15 @@ func (h *host) handle(conn net.Conn) {
 		_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
 		_ = conn.Close()
 		h.shutdownOnce.Do(func() { close(h.shutdown) })
+		return
+	}
+	if request.Action == "rekey" {
+		response := helloResponse{OK: true}
+		if err := h.own.rekey(request.To, request.Fingerprint); err != nil {
+			response = helloResponse{Error: err.Error()}
+		}
+		_ = json.NewEncoder(conn).Encode(response)
+		_ = conn.Close()
 		return
 	}
 	if request.Action != "attach" {
