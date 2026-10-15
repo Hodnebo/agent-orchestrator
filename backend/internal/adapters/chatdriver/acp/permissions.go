@@ -27,9 +27,10 @@ func PermissionOption(
 
 // StandardPermissionPolicy builds the policy shared by every binding whose
 // provider offers ACP's ordinary allow-once/allow-always choices: accept-edits
-// allows a file-changing tool once, each mode in blanketAllow allows any tool
-// (persistently where the provider offers it), and anything else keeps the
-// ordinary approval flow by parking the request for a human.
+// allows a file-changing tool once, and each mode in blanketAllow allows any
+// tool once. Never automatically persist a provider grant: AO cannot revoke it
+// when the user later selects a stricter permission mode. If no allow-once
+// choice is offered, keep the ordinary approval flow by parking for a human.
 //
 // Bindings differ only in which modes they can blanket-allow over ACP: a
 // provider with a launch-time auto-approve flag passes fewer, because that flag
@@ -50,9 +51,6 @@ func StandardPermissionPolicy(blanketAllow ...ports.PermissionMode) PermissionPo
 			}
 			return PermissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce)
 		case allowAny[mode]:
-			if id, ok := PermissionOption(params.Options, acpsdk.PermissionOptionKindAllowAlways); ok {
-				return id, true
-			}
 			return PermissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce)
 		default:
 			return "", false

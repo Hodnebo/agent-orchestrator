@@ -56,14 +56,14 @@ func TestStandardPermissionPolicyResolvesPerBindingModes(t *testing.T) {
 		{name: "bypass-only binding parks auto",
 			blanketAllow: []ports.PermissionMode{ports.PermissionModeBypassPermissions},
 			mode:         ports.PermissionModeAuto, kind: &execute},
-		{name: "bypass-only binding allows bypass persistently",
+		{name: "bypass-only binding allows bypass once",
 			blanketAllow: []ports.PermissionMode{ports.PermissionModeBypassPermissions},
 			mode:         ports.PermissionModeBypassPermissions, kind: &execute,
-			wantID: "allow_always", wantHandled: true},
-		{name: "full binding allows auto persistently",
+			wantID: "allow_once", wantHandled: true},
+		{name: "full binding allows auto once",
 			blanketAllow: []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions},
 			mode:         ports.PermissionModeAuto, kind: &execute,
-			wantID: "allow_always", wantHandled: true},
+			wantID: "allow_once", wantHandled: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,9 +75,8 @@ func TestStandardPermissionPolicyResolvesPerBindingModes(t *testing.T) {
 	}
 }
 
-// A provider that offers no persistent choice must still be auto-answered,
-// otherwise a bypass session parks on every tool call.
-func TestStandardPermissionPolicyFallsBackToAllowOnce(t *testing.T) {
+// A provider offering only allow-once still supports automatic approval.
+func TestStandardPermissionPolicyAllowsOnceWithoutPersistentChoice(t *testing.T) {
 	execute := acpsdk.ToolKindExecute
 	policy := StandardPermissionPolicy(ports.PermissionModeBypassPermissions)
 	id, handled := policy(ports.PermissionModeBypassPermissions,
@@ -148,5 +147,20 @@ func TestModelOptionSelectsAdvertisedModel(t *testing.T) {
 	want := []SessionOption{{ID: "model", Value: "anthropic/claude-sonnet-4"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+// Persistent-only grants must stay a human decision, even in auto or bypass:
+// choosing one automatically would outlive a later permission downgrade.
+func TestStandardPermissionPolicyParksPersistentOnlyChoices(t *testing.T) {
+	policy := StandardPermissionPolicy(ports.PermissionModeAuto, ports.PermissionModeBypassPermissions)
+	edit := acpsdk.ToolKindEdit
+	for _, mode := range []ports.PermissionMode{ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
+		t.Run(string(mode), func(t *testing.T) {
+			id, handled := policy(mode, request(&edit, offered(acpsdk.PermissionOptionKindAllowAlways, acpsdk.PermissionOptionKindRejectOnce)))
+			if handled || id != "" {
+				t.Fatalf("persistent-only selection = (%q, %v), want parked request", id, handled)
+			}
+		})
 	}
 }

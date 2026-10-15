@@ -2003,6 +2003,94 @@ func TestACPDriverUsesProviderPermissionPolicyBeforeParking(t *testing.T) {
 	}
 }
 
+// Model a provider that stops requesting approval after allow_always. A local
+// mode change cannot undo that cache, so automatic grants must remain per-call.
+func TestACPDriverPermissionDowngradePromptsAfterAutomaticGrant(t *testing.T) {
+	for _, binding := range []struct {
+		name  string
+		modes []ports.PermissionMode
+	}{
+		{"auggie", []ports.PermissionMode{ports.PermissionModeBypassPermissions}},
+		{"autohand", []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions}},
+		{"kiro", []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions}},
+	} {
+		for _, initial := range binding.modes {
+			for _, stricter := range []ports.PermissionMode{ports.PermissionModeDefault, ports.PermissionModeAcceptEdits} {
+				t.Run(binding.name+"/"+string(initial)+"/"+string(stricter), func(t *testing.T) {
+					driver := New(Config{
+						Harness:          domain.HarnessKiro,
+						Capabilities:     ports.ChatCapabilities{ports.ChatCapabilityApprovals: true},
+						Probe:            func(context.Context) error { return nil },
+						Launch:           func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+						PermissionPolicy: StandardPermissionPolicy(binding.modes...),
+					}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+					driver.useTestProcess(fakeSpawn(&fakeAgent{promptNoPermission: true}))
+					opened, err := driver.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), Permissions: initial})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer opened.Close()
+					_ = nextEvent(t, opened.Events())
+					conv := opened.(*conversation)
+					params := acpsdk.RequestPermissionRequest{
+						ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "command", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute)},
+						Options: []acpsdk.PermissionOption{
+							{OptionId: "remember-command", Kind: acpsdk.PermissionOptionKindAllowAlways},
+							{OptionId: "run-command", Kind: acpsdk.PermissionOptionKindAllowOnce},
+							{OptionId: "deny-command", Kind: acpsdk.PermissionOptionKindRejectOnce},
+						},
+					}
+					cached := false
+					providerCall := func() (acpsdk.RequestPermissionResponse, error) {
+						if cached {
+							return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeSelected("remember-command")}, nil
+						}
+						response, err := conv.RequestPermission(t.Context(), params)
+						if response.Outcome.Selected != nil && response.Outcome.Selected.OptionId == "remember-command" {
+							cached = true
+						}
+						return response, err
+					}
+					first, err := providerCall()
+					if err != nil || first.Outcome.Selected == nil {
+						t.Fatalf("automatic approval: response=%#v, error=%v", first, err)
+					}
+					if err := conv.applyTurnSettings(t.Context(), ports.ChatTurnSettings{Approval: stricter}); err != nil {
+						t.Fatal(err)
+					}
+					type result struct {
+						response acpsdk.RequestPermissionResponse
+						err      error
+					}
+					done := make(chan result, 1)
+					go func() { response, err := providerCall(); done <- result{response, err} }()
+					select {
+					case result := <-done:
+						t.Fatalf("command ran after downgrade without asking: response=%#v, error=%v", result.response, result.err)
+					case event := <-opened.Events():
+						if event.Kind != ports.ChatEventApprovalRequested {
+							t.Fatalf("event = %#v, want approval request", event)
+						}
+						if err := opened.ResolveRequest(t.Context(), event.RequestID, ports.ChatDecision{ID: "deny-command"}); err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("timed out waiting for approval after downgrade")
+					}
+					select {
+					case result := <-done:
+						if result.err != nil || result.response.Outcome.Selected == nil || result.response.Outcome.Selected.OptionId != "deny-command" {
+							t.Fatalf("rejection: response=%#v, error=%v", result.response, result.err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("timed out waiting for rejection")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestACPDriverKeepsPermissionPolicyWhenLaterTurnSettingFails(t *testing.T) {
 	agent := &fakeAgent{}
 	driver := New(Config{

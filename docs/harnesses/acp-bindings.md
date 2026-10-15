@@ -25,6 +25,11 @@ agent plugin. AO never downloads, packages, or substitutes the provider CLI.
 Codex remains on its native app-server. Claude Code, Cursor, OpenCode, Droid,
 Kimi, Kimchi, Pi, OMP, and Qwen keep the bindings they already shipped.
 
+AO's shared ACP permission policy uses `allow_once` for automatic replies, so
+changing to a stricter approval mode takes effect on subsequent requests. If a
+provider offers only `allow_always`, AO asks the user instead of automatically caching a grant it
+cannot revoke. Grants explicitly remembered by the user remain provider-owned.
+
 ### Deliberate limitations
 
 - **Vibe** sends no tool kind on a permission request, so AO cannot tell an
