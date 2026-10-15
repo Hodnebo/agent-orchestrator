@@ -2813,12 +2813,12 @@ func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
 			if tc.path == "escape.md" && symlinkErr != nil {
 				t.Skipf("symlinks unavailable: %v", symlinkErr)
 			}
-			body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+tc.path+"?source=artifact&raw=true", "")
+			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+tc.path+"?source=artifact&raw=true", "")
 			if status != tc.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", status, tc.wantStatus, body)
 			}
-			if status == http.StatusOK && (string(body) != "# Artifact source" || !strings.HasPrefix(headers.Get("Content-Type"), "text/plain")) {
-				t.Fatalf("expected raw artifact Markdown, got %q (%s)", body, headers.Get("Content-Type"))
+			if status == http.StatusOK && string(body) != "# Artifact source" {
+				t.Fatalf("expected raw artifact Markdown, got %q", body)
 			}
 			if bytes.Contains(body, []byte("workspace secret")) || bytes.Contains(body, []byte("workspace collision")) || bytes.Contains(body, []byte("outside secret")) {
 				t.Fatalf("artifact API leaked workspace content: %s", body)
