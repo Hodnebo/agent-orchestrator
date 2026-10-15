@@ -1697,9 +1697,8 @@ func TestSessionsAPI_GetExposesArtifactFilesAndServesHTMLArtifact(t *testing.T) 
 }
 
 // TestSessionsAPI_ArtifactRawURLIsUnambiguousUnderWorkspaceCollision covers
-// the raw-content fetch the artifact file viewer uses for non-HTML artifacts
-// (markdown/generic files, opened inline in the Files inspector rather than
-// the Browser panel). Unlike the legacy __ao_artifacts__/ path-prefix route,
+// the raw-content URL exported for non-HTML artifacts (markdown/generic files).
+// Unlike the legacy __ao_artifacts__/ path-prefix route,
 // rawUrl is built on the artifact preview origin — a distinct host from the
 // workspace preview origin — so a real workspace file at the same literal
 // path cannot shadow it.
@@ -2781,6 +2780,51 @@ func TestSessionsAPI_PreviewOriginErrorContract(t *testing.T) {
 	svc.sessions["ao-1"] = s
 	body, status, _ := doPreviewOriginRequest(t, srv, validURL, "/")
 	assertErrorCode(t, body, status, http.StatusNotFound, "NO_PREVIEW_ENTRY")
+}
+
+func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	for _, file := range []struct{ root, name, content string }{
+		{workspace, "report.md", "workspace collision"},
+		{workspace, "workspace-only.md", "workspace secret"},
+		{artifacts, "report.md", "# Artifact source"},
+		{filepath.Dir(artifacts), "secret.md", "outside secret"},
+	} {
+		if err := os.WriteFile(filepath.Join(file.root, file.name), []byte(file.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	symlinkErr := os.Symlink(filepath.Join(workspace, "workspace-only.md"), filepath.Join(artifacts, "escape.md"))
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+	for _, tc := range []struct {
+		path       string
+		wantStatus int
+	}{
+		{"report.md", http.StatusOK},
+		{"workspace-only.md", http.StatusNotFound},
+		{"escape.md", http.StatusNotFound},
+		{"%2e%2e/secret.md", http.StatusNotFound},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if tc.path == "escape.md" && symlinkErr != nil {
+				t.Skipf("symlinks unavailable: %v", symlinkErr)
+			}
+			body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+tc.path+"?source=artifact&raw=true", "")
+			if status != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", status, tc.wantStatus, body)
+			}
+			if status == http.StatusOK && (string(body) != "# Artifact source" || !strings.HasPrefix(headers.Get("Content-Type"), "text/plain")) {
+				t.Fatalf("expected raw artifact Markdown, got %q (%s)", body, headers.Get("Content-Type"))
+			}
+			if bytes.Contains(body, []byte("workspace secret")) || bytes.Contains(body, []byte("workspace collision")) || bytes.Contains(body, []byte("outside secret")) {
+				t.Fatalf("artifact API leaked workspace content: %s", body)
+			}
+		})
+	}
 }
 
 func TestSessionsAPI_PreviewRoutesRejectSymlinkOutsideWorkspace(t *testing.T) {
