@@ -83,7 +83,8 @@ describe("BillingSection", () => {
 		expect(within(card("free")).getByText("Current")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("Recommended")).toBeInTheDocument();
 		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
-		expect(within(card("starter")).getByText("$20 / month")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("/ month")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("2 sessions at once")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("16 sessions in total")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("16 session hours every 6 h")).toBeInTheDocument();

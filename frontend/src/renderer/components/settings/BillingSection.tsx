@@ -14,6 +14,8 @@ import { reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
+import { BayerVortex } from "./BayerVortex";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -30,13 +32,13 @@ const ENTERPRISE_BOOKING_URL = "https://cal.com/agentwrapper/ao-design-partner?o
  * plan, and the actions an admin takes on it. Payment happens on Stripe's pages
  * in the system browser, which return to the app afterwards.
  */
-export function BillingSection({ titleHidden }: { titleHidden?: boolean }) {
+export function BillingSection() {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
-	return <BillingSectionInner titleHidden={titleHidden} />;
+	return <BillingSectionInner />;
 }
 
-function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
+function BillingSectionInner() {
 	const { t } = useTranslation();
 	const { status } = useCloudSession();
 	const { client } = useCloudCp();
@@ -58,16 +60,16 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	const title = t("settings.billing.title");
 	if (status !== "authenticated") {
-		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.signIn")} />;
+		return <Notice title={title} text={t("settings.billing.signIn")} />;
 	}
 	// Plans exist only for self-serve orgs. A contract org is billed outside the
 	// app, and a deployment without Stripe has nothing to buy.
 	if (offering.loaded && !offering.selfServeBilling) {
-		return <Notice title={title} titleHidden={titleHidden} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
+		return <Notice title={title} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
 	}
 	if (!offering.isError && (!offering.loaded || billing.isPending)) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+			<SettingsSection title={title} sectionId="billing" titleHidden grouped>
 				<p className="settings-row-bar justify-start gap-2 text-sm text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 					{t("settings.billing.loading")}
@@ -77,7 +79,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	if (billing.isError || !billing.data) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+			<SettingsSection title={title} sectionId="billing" titleHidden grouped>
 				<div className="settings-row-bar">
 					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
 					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
@@ -87,7 +89,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	}
 	const summary = billing.data;
 	if (!summary.enabled || (summary.billingMode !== undefined && summary.billingMode !== "self_serve")) {
-		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.disabled")} />;
+		return <Notice title={title} text={t("settings.billing.disabled")} />;
 	}
 
 	const runAction = async (name: string, action: () => Promise<void>) => {
@@ -130,7 +132,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 
 	return (
 		<>
-			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+			<SettingsSection title={title} sectionId="billing" titleHidden>
 				{summary.exempt ? <p className="settings-row-bar text-sm text-settings-muted">{t("settings.billing.exempt")}</p> : null}
 				{endsAt ? (
 					<div className="settings-row-bar">
@@ -154,82 +156,85 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						</Button>
 					</div>
 				) : null}
-				<PlanRow
-					name={t("settings.billing.planFree")}
-					price={t("settings.billing.freePrice")}
-					features={[
-						t("settings.billing.freeLocal"),
-						t("settings.billing.freeAgents"),
-						t("settings.billing.freeOrchestrator"),
-						t("settings.billing.freeNoCloud"),
-					]}
-					current={currentPlan === "free"}
-					action={endsAt ? (
-						<span className="text-xs text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
-					) : subscribed && manage ? (
-						<Button size="sm" variant="ghost" className={ghostAction} disabled={pending !== null} onClick={() => void openCancel()}>
-							{pending === "portal:cancel" ? spinner : null}
-							{t("settings.billing.downgrade")}
-						</Button>
-					) : null}
-					t={t}
-				/>
-				{offers.map((offer) => {
-					const isCurrent = currentPlan === offer.name;
-					const recommended = !subscribed && offer.name === RECOMMENDED_PLAN;
-					const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
-					let label = t("settings.billing.upgrade");
-					let onClick = () => void openCheckout(offer.name);
-					if (isCurrent) {
-						label = t("settings.billing.manage");
-						onClick = () => void openPortal();
-					} else if (subscribed) {
-						label = t("settings.billing.switchPlan");
-						onClick = () => void openPortal();
-					}
-					return (
-						<PlanRow
-							key={offer.name}
-							name={planName(offer.name)}
-							price={offerPrice(offer, t)}
-							features={offer.limits ? planFeatures(offer.name, offer.limits, t) : []}
-							current={isCurrent}
-							recommended={recommended}
-							action={manage ? (
-								// The recommended upgrade is the page's one primary action;
-								// every other plan action is a quiet row action.
-								<Button size="sm" variant={recommended ? "primary" : "ghost"}
-									className={recommended ? undefined : ghostAction} disabled={pending !== null} onClick={onClick}>
-									{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
-									{label}
-								</Button>
-							) : null}
-							t={t}
-						/>
-					);
-				})}
-				<PlanRow
-					name={t("settings.billing.planEnterprise")}
-					price={t("settings.billing.enterprisePrice")}
-					features={[
-						t("settings.billing.enterpriseSessions"),
-						t("settings.billing.enterpriseOrchestrators"),
-						t("settings.billing.enterpriseHours"),
-						t("settings.billing.enterpriseCoder"),
-						t("settings.billing.enterpriseSso"),
-						t("settings.billing.enterpriseSupport"),
-					]}
-					current={false}
-					action={(
-						<Button size="sm" variant="ghost" className={ghostAction} onClick={() => void aoBridge.app.openExternal(ENTERPRISE_BOOKING_URL)}>
-							<ExternalLink className="size-icon-sm" aria-hidden="true" />
-							{t("settings.billing.talkToFounder")}
-						</Button>
-					)}
-					t={t}
-				/>
-				{manage ? null : <p className="settings-row-bar text-xs text-settings-muted">{t("settings.billing.adminOnly")}</p>}
-				{actionError ? <p role="alert" className="settings-row-bar text-xs text-error">{actionError}</p> : null}
+				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+					<PlanCard
+						name={t("settings.billing.planFree")}
+						amount="$0"
+						interval={t("settings.billing.intervalMonth")}
+						features={[
+							t("settings.billing.freeLocal"),
+							t("settings.billing.freeAgents"),
+							t("settings.billing.freeOrchestrator"),
+							t("settings.billing.freeNoCloud"),
+							t("settings.billing.freeHosts"),
+						]}
+						current={currentPlan === "free"}
+						action={endsAt ? (
+							<Button size="sm" variant="secondary" className="w-full" disabled>
+								{t("settings.billing.freeStarts", { date: endsAt })}
+							</Button>
+						) : subscribed && manage ? (
+							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openCancel()}>
+								{pending === "portal:cancel" ? spinner : null}
+								{t("settings.billing.downgrade")}
+							</Button>
+						) : null}
+						t={t}
+					/>
+					{offers.map((offer) => {
+						const isCurrent = currentPlan === offer.name;
+						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
+						let label = t("settings.billing.upgrade");
+						let onClick = () => void openCheckout(offer.name);
+						if (isCurrent) {
+							label = t("settings.billing.manage");
+							onClick = () => void openPortal();
+						} else if (subscribed) {
+							label = t("settings.billing.switchPlan");
+							onClick = () => void openPortal();
+						}
+						return (
+							<PlanCard
+								key={offer.name}
+								name={planName(offer.name)}
+								{...offerPrice(offer, t)}
+								{...(offer.limits ? planFeatures(offer.name, offer.limits, t) : { features: [] })}
+								current={isCurrent}
+								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
+								action={manage ? (
+									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
+										className="w-full" disabled={pending !== null} onClick={onClick}>
+										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
+										{label}
+									</Button>
+								) : null}
+								t={t}
+							/>
+						);
+					})}
+					<PlanCard
+						name={t("settings.billing.planEnterprise")}
+						amount={t("settings.billing.enterprisePrice")}
+						features={[
+							t("settings.billing.enterpriseSessions"),
+							t("settings.billing.enterpriseOrchestrators"),
+							t("settings.billing.enterpriseHours"),
+							t("settings.billing.enterpriseCoder"),
+							t("settings.billing.enterpriseSso"),
+							t("settings.billing.enterpriseSupport"),
+						]}
+						current={false}
+						action={(
+							<Button size="sm" variant="secondary" className="w-full" onClick={() => void aoBridge.app.openExternal(ENTERPRISE_BOOKING_URL)}>
+								<ExternalLink className="size-icon-sm" aria-hidden="true" />
+								{t("settings.billing.talkToFounder")}
+							</Button>
+						)}
+						t={t}
+					/>
+				</div>
+				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
+				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
 				<>
@@ -292,9 +297,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	);
 }
 
-function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boolean; text: string }) {
+function Notice({ title, text }: { title: string; text: string }) {
 	return (
-		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
+		<SettingsSection title={title} sectionId="billing" titleHidden grouped>
 			<p className="settings-row-bar text-sm text-settings-muted">{text}</p>
 		</SettingsSection>
 	);
@@ -303,14 +308,90 @@ function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boo
 /** Muted ghost row action, the settings default for every non-primary action. */
 const ghostAction = "text-settings-muted hover:text-settings-label";
 
+/** A theme token as a hex string, resolved from the live document so every theme style is followed. */
+function tokenHex(name: string): string | null {
+	const probe = document.createElement("span");
+	probe.style.color = `var(${name})`;
+	document.body.appendChild(probe);
+	const computed = getComputedStyle(probe).color;
+	probe.remove();
+	const canvas = document.createElement("canvas");
+	canvas.width = 1;
+	canvas.height = 1;
+	const ctx = canvas.getContext("2d", { willReadFrequently: true });
+	if (!ctx || !computed) return null;
+	ctx.fillStyle = computed;
+	ctx.fillRect(0, 0, 1, 1);
+	const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+	return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** The brand logo blue with its hue kept and its saturation raised: the logo token is a muted tone meant for text. */
+function saturatedBrand(): string | null {
+	const hex = tokenHex("--color-brand-logo");
+	if (!hex) return null;
+	const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+	const max = Math.max(r, g, b);
+	const min = Math.min(r, g, b);
+	const d = max - min;
+	let h = 0;
+	if (d > 0) {
+		if (max === r) h = ((g - b) / d) % 6;
+		else if (max === g) h = (b - r) / d + 2;
+		else h = (r - g) / d + 4;
+		h *= 60;
+		if (h < 0) h += 360;
+	}
+	const l = 0.36;
+	const sat = 0.9;
+	const c = (1 - Math.abs(2 * l - 1)) * sat;
+	const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+	const m = l - c / 2;
+	const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+	return `#${[r1, g1, b1].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+
 /**
- * One plan as a row of the Plans card: name, price and status on the first
- * line, its limits under it, the plan action at the trailing edge. The current
- * plan is the selected row (raised surface + accent "Current").
+ * The recommended plan's highlight: a slow dithered vortex across the top half
+ * of the card that fades into the surface: saturated brand-blue dither on a
+ * transparent ground, so the card shows through. The color resolves on the first render, so it is there with the card and never
+ * pops in. Held still for reduced motion.
  */
-function PlanRow({ name, price, features, current, recommended, action, t }: {
+function PlanGlow() {
+	const resolvedTheme = useResolvedTheme();
+	const themeStyle = useUiStore((state) => state.themeStyle);
+	const [color, setColor] = useState(saturatedBrand);
+	useEffect(() => {
+		// The theme class lands on the document after the store updates, so re-read a frame later.
+		const frame = requestAnimationFrame(() => {
+			const next = saturatedBrand();
+			setColor((current) => next ?? current);
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [resolvedTheme, themeStyle]);
+	if (!color) return null;
+	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	return (
+		<div
+			aria-hidden="true"
+			className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-1/2 opacity-50 [mask-image:linear-gradient(to_bottom,black,transparent)]"
+		>
+			<BayerVortex key={color} color={color} pixel={12} arms={10} speed={reducedMotion ? 0 : 3} center={[0.5, 0]} />
+		</div>
+	);
+}
+
+/**
+ * One plan as a column: name and status, a large price, the plan action, then
+ * what it adds over the plan below it. The current or recommended plan sits on
+ * the raised surface; the rest stay on the quiet one, with no outlines.
+ */
+function PlanCard({ name, amount, interval, intro, features, current, recommended, action, t }: {
 	name: string;
-	price: string;
+	amount: string;
+	interval?: string;
+	intro?: string;
 	features: string[];
 	current: boolean;
 	recommended?: boolean;
@@ -323,31 +404,37 @@ function PlanRow({ name, price, features, current, recommended, action, t }: {
 			data-plan={name.toLowerCase()}
 			aria-current={current ? "true" : undefined}
 			className={cn(
-				"settings-content-row flex items-center gap-3",
-				current && "bg-(--color-bg-settings-row-hover)",
+				"flex flex-col gap-4 rounded-lg p-4",
+				current ? "bg-(--color-bg-tertiary)" : "bg-(--color-bg-secondary)",
+				// The recommended plan carries a dithered glow behind its header.
+				recommended && "relative isolate overflow-hidden",
 			)}
 		>
-			<div className="flex min-w-0 flex-1 flex-col gap-1">
-				<div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-					<span className="text-sm font-medium text-settings-label">{name}</span>
-					<span className="text-xs tabular-nums text-settings-muted">{price}</span>
-					{current ? (
-						<span className="text-xs font-medium text-accent">{t("settings.billing.current")}</span>
-					) : null}
-					{recommended ? (
-						<span className="text-xs font-medium text-accent">{t("settings.billing.recommended")}</span>
-					) : null}
-				</div>
-				<ul className="flex flex-wrap gap-x-3 gap-y-1">
-					{features.map((feature) => (
-						<li key={feature} className="flex items-start gap-1 text-xs leading-4 text-settings-muted">
-							<Check className="mt-px size-icon-sm shrink-0" aria-hidden="true" />
-							{feature}
-						</li>
-					))}
-				</ul>
+			{recommended ? <PlanGlow /> : null}
+			{/* Fixed-height slots above the list keep the divider and the first
+			    feature on one line across every column, whatever a plan omits. */}
+			<div className="flex h-5 items-center justify-between gap-2">
+				<span className="text-control font-medium text-settings-label">{name}</span>
+				{current || recommended ? (
+					<span className="text-xs font-medium text-settings-label">
+						{t(current ? "settings.billing.current" : "settings.billing.recommended")}
+					</span>
+				) : null}
 			</div>
-			{action ? <div className="flex shrink-0 items-center">{action}</div> : null}
+			<div className="flex h-9 items-baseline gap-1">
+				<span className={cn("font-semibold tracking-tight tabular-nums text-settings-title", interval ? "text-3xl leading-9" : "text-xl leading-9")}>{amount}</span>
+				{interval ? <span className="text-control text-settings-muted">/ {interval}</span> : null}
+			</div>
+			<div className="flex h-8 flex-col justify-center">{action}</div>
+			<p className="min-h-4 text-xs text-settings-muted">{intro}</p>
+			<ul className="flex flex-1 flex-col gap-2 border-t border-border pt-3">
+				{features.map((feature) => (
+					<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-label">
+						<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
+						{feature}
+					</li>
+				))}
+			</ul>
 		</div>
 	);
 }
@@ -407,11 +494,12 @@ function planName(plan: string): string {
  * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
  * builds on Starter), then the limits from its Stripe product.
  */
-function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): string[] {
-	const included = plan === RECOMMENDED_PLAN
-		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub")]
-		: [t("settings.billing.everythingInStarter")];
-	return [
+function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro: string; features: string[] } {
+	const starter = plan === RECOMMENDED_PLAN;
+	const included = starter
+		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"), t("settings.billing.starterHosts")]
+		: [t("settings.billing.proHosts")];
+	const features = [
 		...included,
 		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
 		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
@@ -420,14 +508,18 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): st
 		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
 		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
 	];
+	return {
+		intro: starter ? t("settings.billing.everythingInFree") : t("settings.billing.everythingInStarter"),
+		features,
+	};
 }
 
-function offerPrice(offer: CloudCpPlanOffer, t: TFunction): string {
-	if (offer.unitAmount === undefined || !offer.currency) return "";
-	return t("settings.billing.price", {
-		price: formatMoney(offer.unitAmount, offer.currency),
+function offerPrice(offer: CloudCpPlanOffer, t: TFunction): { amount: string; interval: string } {
+	if (offer.unitAmount === undefined || !offer.currency) return { amount: "", interval: "" };
+	return {
+		amount: formatMoney(offer.unitAmount, offer.currency),
 		interval: offer.interval === "year" ? t("settings.billing.intervalYear") : t("settings.billing.intervalMonth"),
-	});
+	};
 }
 
 function formatMoney(minorUnits: number, currency: string): string {
