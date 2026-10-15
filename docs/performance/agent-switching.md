@@ -52,20 +52,27 @@ of the first message.
 first runs an activation turn and the message is sent after it, so main's
 number covers both.
 
-| Switch | main | This branch | Speedup | Quiz (main / branch) |
-| --- | --- | --- | --- | --- |
-| Claude Code to Codex | 11.57s | 0.36s | 32× | 5/5 / 5/5 |
-| Codex to Claude Code | 8.85s | 2.03s | 4.4× | 5/5 / 5/5 |
-| Claude Code to pi | refused | 0.76s | new | n/a / 5/5 |
-| Claude Code to Grok | refused | 0.70s | new | n/a / 5/5 |
-| Claude Code to omp | refused | 1.09s | new | n/a / 5/5 |
-| Claude Code to fx | refused | 1.61s | new | n/a / 5/5 |
-| Claude Code to opencode | refused | 1.72s | new | n/a / 5/5 |
-| Claude Code to Droid | refused | 2.6 to 3.3s | new | n/a / 5/5 |
-| Claude Code to Cursor | refused | 5.7 to 10.5s, usually ~6s | new | n/a / 5/5 |
-
 Main refuses every chat switch outside Claude Code and Codex with
-`UNSUPPORTED_SWITCH_HARNESS`. pi's first ever start on a machine took 4.8s.
+`UNSUPPORTED_SWITCH_HARNESS`. For those agents the baseline is main's protocol
+run on this branch: switch with no message, wait for the activation turn, then
+send the quiz. That baseline already includes this branch's startup fixes, so
+it understates main. For Codex it measured 7.44s against real main's 11.57s,
+and for Claude Code 8.03s against 8.85s.
+
+| Switch from Claude Code to | main | main's protocol | This branch | Speedup | Quiz |
+| --- | --- | --- | --- | --- | --- |
+| Codex | 11.57s | 7.44s | 0.36s | 32× vs main | 5/5 |
+| Grok | refused | 19.91s | 0.70s | 28× | 5/5 |
+| pi | refused | 7.92s | 0.76s | 10× | 5/5 |
+| omp | refused | 8.39s | 1.09s | 7.7× | 5/5 |
+| fx | refused | 5.97s | 1.61s | 3.7× | 5/5 |
+| opencode | refused | 11.34s | 1.72s | 6.6× | 5/5 |
+| Droid | refused | 7.53s (4 runs) | 2.63s (5 runs) | 2.9× | 5/5 |
+| Cursor | refused | 14.15s (4 runs) | 4.94s (8 runs, 4.3 to 7.0s) | 2.9× | 5/5 |
+
+Codex to Claude Code: main 8.85s, main's protocol 8.03s, this branch 2.03s
+(4.4× vs main), 5/5. Multi-run numbers are medians. pi's first ever start on a
+machine took 4.8s.
 
 A chain through every agent, Claude Code to Codex, opencode, Droid, Grok, fx,
 omp, pi, Cursor, and back to Claude Code, telling each one a new fact, recalled
@@ -99,7 +106,7 @@ in about 1.1s. Claude Code, Codex, and opencode stop in under 0.2s.
 | omp, fx, opencode | 1.0 to 1.7s |
 | Claude Code | ~1.8s |
 | Droid | 2 to 3s |
-| Cursor | 5.5 to 10s |
+| Cursor | 4 to 6.5s |
 
 ## opencode: the per-worktree install (fixed)
 
@@ -124,9 +131,31 @@ home. That copy is now skipped.
 
 ## Cursor: slow session creation
 
-Cursor's `session/new` takes 5.5 to 6s on a fresh process and about 2s on a
-warm one, measured raw over ACP. That time is spent on Cursor's servers. None of
-these changed it:
+Cursor's first `session/new` on a process makes about a dozen calls to
+`api2.cursor.sh`, mostly one after another. From this machine the round trip is
+about 225ms, and each call took 0.7 to 1.3s, because every call opened a new
+TCP and TLS connection.
+
+The CLI bootstraps `global-agent` 3.0.0, which replaces Node's HTTPS agent with
+a wrapper that declares no `keepAlive` or `maxSockets`. Node then sends
+`Connection: close` on every request. The Cursor driver now loads a small
+preload (`cursoracp/netpreload.cjs`) through `NODE_OPTIONS`:
+
+- When no proxy is configured, it marks the wrapper keep-alive, so requests
+  pool on Node's own keep-alive agent. Reused calls take 0.25 to 0.5s.
+- It opens three TLS connections to the API host at start, which the agent uses
+  for the calls that run in parallel.
+- It removes itself from `NODE_OPTIONS`, so commands Cursor runs for the user
+  never load it, and it does nothing outside `cursor-agent acp`.
+
+Start plus first `session/new`, raw, medians of 6 interleaved runs: 6.90s
+without the preload, 5.81s with keep-alive only, 5.02s with both. A second
+session on the same process went from 2.0s to about 1s. Through AO, a switch to
+Cursor went from a ~6s median to 4.94s.
+
+What remains is Cursor's own server time: about six rounds of settings and
+model calls, several of which take 0.5 to 1.7s on the server. None of these
+changed it:
 
 - CLI flags, a clean `cli-config.json`, or removing MCP servers and skills.
   AO's MCP server adds 0.3 to 0.5s.
@@ -138,7 +167,12 @@ these changed it:
   CLI's global default model in `~/.cursor/cli-config.json`, which changes
   every other Cursor session. Do not change the model at switch time.
 
-The only way to get Cursor under about 4s is to create its session before the
+Droid is similar: its `initialize` takes 0.7 to 1s and its first `session/new`
+0.9s raw, plus about 0.4s inside Droid for AO's MCP server (AO's own MCP
+handshake answers in 12ms). It is a compiled binary, so there is no preload
+equivalent.
+
+The only way to get Cursor well under 4s is to create its session before the
 send: a standby session opened on pick or menu open, handed to the chat when
 the switch commits. That is not built. It costs a Cursor session for every
 pick that is not followed by a send.

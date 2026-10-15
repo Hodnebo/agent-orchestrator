@@ -97,7 +97,19 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		args = append(args, "--plugin-dir", pluginDir)
 	}
 	args = append(args, "acp")
-	return args, nil, nil
+	var env map[string]string
+	if strings.TrimSpace(cfg.DataDir) != "" {
+		preload, err := writeNetPreload(cfg.DataDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		existing, ok := cfg.Env["NODE_OPTIONS"]
+		if !ok {
+			existing = os.Getenv("NODE_OPTIONS")
+		}
+		env = map[string]string{"NODE_OPTIONS": nodeOptionsWithPreload(existing, preload)}
+	}
+	return args, env, nil
 }
 
 func writeStandingRule(ctx context.Context, cfg acpdriver.LaunchConfig) (string, error) {
