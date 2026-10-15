@@ -11996,3 +11996,16 @@ func TestPromptOutputContainsMatchesAStyledPrompt(t *testing.T) {
 		t.Fatal("output without the prompt matched")
 	}
 }
+
+func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, branch, path, repo string, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != path {
+		return false, nil
+	}
+	copied := *next
+	rec.Metadata.ImportSource = &copied
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, path, repo
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
