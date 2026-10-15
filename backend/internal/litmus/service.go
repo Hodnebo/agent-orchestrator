@@ -54,8 +54,9 @@ type Service struct {
 	projectRepo     func(ctx context.Context, projectID string) string // the project's own owner/repo; nil reads none
 	projectHarness  func(ctx context.Context, projectID string) string // the project's worker harness; nil reads none
 
-	mirrorMu   map[string]*sync.Mutex // one at a time per mirror: a fetch and its pin, a clone, or prune's cleanup
-	retryPause time.Duration          // before intake asks gh again about a PR it did not find; tests zero it
+	mirrorMu   map[string]*sync.Mutex   // one at a time per mirror: a fetch and its pin, a clone, or prune's cleanup
+	checkoutMu map[string]chan struct{} // one preparation at a time per checkout
+	retryPause time.Duration            // before intake asks gh again about a PR it did not find; tests zero it
 }
 
 // New builds a service over store. A nil clock uses time.Now.
@@ -65,7 +66,7 @@ func New(store *Store, clock func() time.Time) *Service {
 	}
 	s := &Service{store: store, clock: clock, gh: execGH{}, runner: execRunner{}, sys: realSys(), nodeDirs: defaultNodeDirs, busy: map[string]busyVerb{},
 		engines: map[string]*Engine{}, seqs: map[string]int{}, engExec: realExec, spawnMarkerWait: 10 * time.Second,
-		media: execMedia{}, prepareBudget: PrepareBudget, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts, mirrorMu: map[string]*sync.Mutex{}, retryPause: 2 * time.Second}
+		media: execMedia{}, prepareBudget: PrepareBudget, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts, mirrorMu: map[string]*sync.Mutex{}, checkoutMu: map[string]chan struct{}{}, retryPause: 2 * time.Second}
 	s.closeEngine = s.closeEngines
 	if exe, err := os.Executable(); err == nil {
 		s.binary, _ = resolveBinary(os.Getenv("AO_AGENT_BROWSER_PATH"), exe)

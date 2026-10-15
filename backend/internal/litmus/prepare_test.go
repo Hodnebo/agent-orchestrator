@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // fakeRunner stands in for git, npm, cp and node: it records "dir|cmd args" lines and
@@ -163,6 +165,142 @@ func TestPrepareLegCacheDecisions(t *testing.T) {
 	os.WriteFile(filepath.Join(leg.Worktree, "frontend", "package-lock.json"), []byte("changed"), 0o600)
 	if h3, _ := lockHash(leg.Worktree, r.Install.CacheKey, "24"); h1 == h2 || h1 == h3 {
 		t.Fatal("lock hash ignores node major or lock contents")
+	}
+}
+
+type prepareStep struct {
+	dir, script string
+	done        chan error
+}
+
+type prepareRunner struct {
+	*fakeRunner
+	mu      sync.Mutex
+	entered chan prepareStep
+}
+
+func (f *prepareRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	if name == "sh" {
+		step := prepareStep{dir: dir, script: args[len(args)-1], done: make(chan error, 1)}
+		f.entered <- step
+		select {
+		case err := <-step.done:
+			if err != nil {
+				return nil, err
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fakeRunner.Run(ctx, dir, env, name, args...)
+}
+
+func TestPrepareLegConcurrent(t *testing.T) {
+	for _, name := range []string{"same folder", "different folders", "cancel waiter", "failed holder"} {
+		t.Run(name, func(t *testing.T) {
+			svc, f := prepSvc(t, nil)
+			r, err := ParseRecipe(defaultRecipe)
+			is(t, "")(nil, err)
+			r.Toolchain.Node = ""
+			runner := &prepareRunner{fakeRunner: f, entered: make(chan prepareStep, 4)}
+			svc.runner = runner
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			start := func(ctx context.Context, leg, sha string) <-chan error {
+				done := make(chan error, 1)
+				go func() {
+					_, err := svc.prepareLeg(ctx, DefaultRepo, r, leg, sha)
+					done <- err
+				}()
+				return done
+			}
+			step := func(script string) prepareStep {
+				t.Helper()
+				select {
+				case got := <-runner.entered:
+					if got.script != script {
+						t.Fatalf("step %q, want %q", got.script, script)
+					}
+					return got
+				case <-ctx.Done():
+					t.Fatal("prepare did not reach " + script)
+					return prepareStep{}
+				}
+			}
+			result := func(done <-chan error, want error) {
+				t.Helper()
+				select {
+				case err := <-done:
+					if !errors.Is(err, want) {
+						t.Fatalf("prepare error %v, want %v", err, want)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("prepare did not return promptly")
+				}
+			}
+			noOverlap := func() {
+				t.Helper()
+				select {
+				case got := <-runner.entered:
+					t.Fatalf("overlapping step %q in %s", got.script, got.dir)
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			sha := strings.Repeat("a", 40)
+			first := start(ctx, "head", sha)
+			install := step(r.Install.Cmd)
+			waitCtx, stopWaiter := context.WithCancel(ctx)
+			defer stopWaiter()
+			if name == "different folders" {
+				sha = strings.Repeat("b", 40)
+			}
+			second := start(waitCtx, "base", sha)
+			switch name {
+			case "same folder":
+				noOverlap()
+				install.done <- nil
+				build := step(r.Build.Cmd)
+				noOverlap()
+				build.done <- nil
+				result(first, nil)
+				result(second, nil)
+				m := readManifest(filepath.Dir(install.dir))
+				if m.Install != "warm" || m.InstalledAt.IsZero() || m.PredevAt.IsZero() || f.count("npm ci") != 1 || f.count("npm run predev") != 1 {
+					t.Fatalf("waiter did not reuse the finished build: manifest %+v calls %q", m, f.calls)
+				}
+			case "different folders":
+				other := step(r.Install.Cmd)
+				if install.dir == other.dir {
+					t.Fatal("head and base used the same folder")
+				}
+				install.done <- nil
+				other.done <- nil
+				build, otherBuild := step(r.Build.Cmd), step(r.Build.Cmd)
+				if build.dir == otherBuild.dir {
+					t.Fatal("builds used the same folder")
+				}
+				build.done <- nil
+				otherBuild.done <- nil
+				result(first, nil)
+				result(second, nil)
+			case "cancel waiter":
+				noOverlap()
+				stopWaiter()
+				result(second, context.Canceled)
+				install.done <- nil
+				step(r.Build.Cmd).done <- nil
+				result(first, nil)
+			case "failed holder":
+				noOverlap()
+				install.done <- os.ErrClosed
+				result(first, os.ErrClosed)
+				step(r.Install.Cmd).done <- nil
+				step(r.Build.Cmd).done <- nil
+				result(second, nil)
+			}
+		})
 	}
 }
 

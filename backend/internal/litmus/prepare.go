@@ -268,7 +268,22 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 	if err != nil {
 		return Leg{}, err
 	}
-	dir, full, m, err := s.cloneLeg(ctx, repo, sha)
+	full, err := s.resolveSHA(ctx, repo, sha)
+	if err != nil {
+		return Leg{}, err
+	}
+	dir := filepath.Join(s.store.reposDir(repo), full)
+	lock := s.checkoutLock(dir)
+	select {
+	case lock <- struct{}{}:
+		defer func() { <-lock }()
+	case <-ctx.Done():
+		return Leg{}, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return Leg{}, err
+	}
+	m, err := s.cloneLeg(ctx, repo, dir, full)
 	if err != nil {
 		return Leg{}, err
 	}
@@ -308,17 +323,26 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 	return Leg{Name: leg, Worktree: dir, BuildManifest: manifestPath(dir), State: "prepared"}, writeManifest(dir, m)
 }
 
-// cloneLeg leaves a shared clone of the mirror at <reposDir>/<full sha>, checked out at the commit, and pins the
-// commit in the mirror. A commit the mirror lacks is fetched by id. A copy that is absent, interrupted, at another
-// commit or borrowing its history from anywhere but the mirror is remade. The mirror lock is held for the git work
-// only, not for the install and build that follow.
-func (s *Service) cloneLeg(ctx context.Context, repo, sha string) (dir, full string, m Manifest, err error) {
+// checkoutLock guards checkout, install, build and manifest writes for one folder. Waiters can cancel.
+func (s *Service) checkoutLock(dir string) chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, ok := s.checkoutMu[dir]
+	if !ok {
+		lock = make(chan struct{}, 1)
+		s.checkoutMu[dir] = lock
+	}
+	return lock
+}
+
+// resolveSHA resolves and pins a full commit id before choosing its checkout lock. It releases the mirror lock before waiting.
+func (s *Service) resolveSHA(ctx context.Context, repo, sha string) (full string, err error) {
 	mirror := s.store.mirrorDir(repo)
 	mu := s.mirrorLock(mirror)
 	mu.Lock()
 	defer mu.Unlock()
 	if err := s.ensureMirror(ctx, repo); err != nil {
-		return "", "", m, fmt.Errorf("make the mirror of %s: %w", repo, err)
+		return "", fmt.Errorf("make the mirror of %s: %w", repo, err)
 	}
 	rev := func() (string, error) { return s.git(ctx, mirror, "rev-parse", "--verify", "--quiet", sha+"^{commit}") }
 	full, err = rev()
@@ -328,12 +352,22 @@ func (s *Service) cloneLeg(ctx context.Context, repo, sha string) (dir, full str
 		}
 	}
 	if err != nil {
-		return "", "", m, apierr.Unavailable("TESTING_SHA_MISSING", fmt.Sprintf("commit %s is not in the mirror of %s and could not be fetched", sha, repo))
+		return "", apierr.Unavailable("TESTING_SHA_MISSING", fmt.Sprintf("commit %s is not in the mirror of %s and could not be fetched", sha, repo))
 	}
 	if err := s.pin(ctx, mirror, full); err != nil {
-		return "", "", m, err
+		return "", err
 	}
-	dir = filepath.Join(s.store.reposDir(repo), full)
+	return full, nil
+}
+
+// cloneLeg leaves a shared clone of the mirror at dir, checked out at full.
+// A copy that is absent, interrupted, at another commit or borrowing its history from elsewhere is remade.
+// Callers hold the checkout lock; the mirror lock covers only the git work.
+func (s *Service) cloneLeg(ctx context.Context, repo, dir, full string) (m Manifest, err error) {
+	mirror := s.store.mirrorDir(repo)
+	mu := s.mirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 	m = readManifest(dir)
 	t := time.Now()
 	_, gitErr := os.Stat(filepath.Join(dir, ".git"))
@@ -341,14 +375,14 @@ func (s *Service) cloneLeg(ctx context.Context, repo, sha string) (dir, full str
 		_ = os.RemoveAll(dir) // absent, an interrupted clone, or a copy borrowing from a checkout of the user's
 		m = Manifest{Durations: map[string]float64{}}
 		if _, err := s.runner.Run(ctx, "", baseEnv(""), "git", "clone", "--shared", "--no-checkout", mirror, dir); err != nil {
-			return "", "", m, err
+			return m, err
 		}
 		if _, err := s.git(ctx, dir, "checkout", "--detach", full); err != nil {
-			return "", "", m, err
+			return m, err
 		}
 		m.Durations["clone"] = time.Since(t).Round(time.Millisecond).Seconds()
 	}
-	return dir, full, m, nil
+	return m, nil
 }
 
 // pruneClone forgets the worktrees of a shared clone whose directories are gone and deletes the ao/litmus-*

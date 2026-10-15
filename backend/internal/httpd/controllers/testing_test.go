@@ -406,7 +406,7 @@ func TestTestingAPIProjectSettingsReviewPreservesOmittedValue(t *testing.T) {
 	put(`{"askBeforePosting":true,"review":false}`, `"review":false`)
 }
 
-// The daemon, not the prompt, keeps a tester out of start, post and prune.
+// The daemon, not the prompt, keeps a tester out of start, rerun, post and prune.
 func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-9", nil })
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
@@ -415,9 +415,11 @@ func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	do("POST", "/prune", `{"sessionId":"ao-1","dryRun":true}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/start", `{"sessionId":"ao-1","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/runs/run_ao-1/post", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
+	do("POST", "/rerun", `{"sessionId":"ao-1","runId":"run_ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "rerun")
 
 	// The user's own session, or no session, is allowed through.
 	do("POST", "/prune", `{"sessionId":"ao-orch","dryRun":true}`, http.StatusOK, `"dryRun":true`)
 	do("POST", "/prune", `{"dryRun":true}`, http.StatusOK, `"dryRun":true`)
 	do("POST", "/start", `{"sessionId":"ao-orch","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-9"`)
+	do("POST", "/rerun", `{"sessionId":"ao-orch","runId":"run_ao-1","projectId":"p1"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
 }

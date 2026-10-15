@@ -594,7 +594,7 @@ func runRowLine(r litmus.RunSummary) string {
 func (t *testingCLI) rerunCommand() *cobra.Command {
 	var project string
 	cmd := verb("rerun <runId>", "Start a new tester on the pull request of an earlier run", exactArgs(1), func(cmd *cobra.Command, a []string) error {
-		body := map[string]any{"runId": a[0]}
+		body := withCaller(map[string]any{"runId": a[0]})
 		if id := projectFlag(project); id != "" {
 			body["projectId"] = id
 		}

@@ -82,6 +82,9 @@ func (c *TestingController) Register(r chi.Router) {
 		return s.Discard(r.Context(), chi.URLParam(r, "id"))
 	}))
 	r.Post("/testing/rerun", testingPost(func(r *http.Request, in TestingRequest) (litmus.Rerun, error) {
+		if err := s.RefuseTester(in.SessionID, "rerun"); err != nil {
+			return litmus.Rerun{}, err
+		}
 		return s.Rerun(r.Context(), strings.TrimSpace(in.RunID), strings.TrimSpace(in.ProjectID))
 	}))
 	r.Get("/testing/projects/{id}/settings", func(w http.ResponseWriter, r *http.Request) {
