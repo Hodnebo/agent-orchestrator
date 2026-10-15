@@ -140,8 +140,8 @@ func (s *Service) WithKiller(k Killer) *Service {
 // when the session is unknown.
 type SessionActivity func(ctx context.Context, sessionID string) (state string, since time.Time, found bool)
 
-// WithActivity sets how the sweep reads a tester's activity, to reap one that never ran intake. Without it only the
-// time since spawn applies.
+// WithActivity sets how the sweep detects stopped testers and testers that never ran intake. Without it only the
+// run deadline and time since spawn apply.
 func (s *Service) WithActivity(a SessionActivity) *Service {
 	s.activity = a
 	return s

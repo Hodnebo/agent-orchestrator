@@ -24,6 +24,8 @@ const (
 	SpawnBudget = 5 * time.Minute
 	// ReasonOutOfTime is the note on every check the deadline found without a result.
 	ReasonOutOfTime = "ran out of time"
+	// ReasonStopped is the reason on a run whose tester stopped before finishing.
+	ReasonStopped = "stopped before it finished"
 	// ReasonNoIntake is the reason on a run expired before its tester ever ran intake.
 	ReasonNoIntake = "the tester never ran intake"
 )

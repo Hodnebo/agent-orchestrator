@@ -489,6 +489,13 @@ func TestTestingLaunchPrintsAFailedSeedStep(t *testing.T) {
 	}
 }
 
+func TestRunRowLineShowsStoppedReason(t *testing.T) {
+	out := runRowLine(litmus.RunSummary{ID: "run_w1", State: litmus.RunExpired, Verdict: "expired", Error: litmus.ReasonStopped})
+	if !strings.Contains(out, "expired expired") || !strings.HasSuffix(out, " | "+litmus.ReasonStopped) {
+		t.Fatalf("stopped run: %q", out)
+	}
+}
+
 func TestLaunchLinePrintsOnlyItsBuildSeedGap(t *testing.T) {
 	prGap := "The PR build started without its sample content (seed step 2 failed: no project)."
 	mainGap := "The main build started without its sample content (seed step 2 failed: no project)."
@@ -588,6 +595,7 @@ func TestTestingShowFallbackAndErrors(t *testing.T) {
 	}{
 		{name: "legacy comment", reply: `{"id":"run_w1","commentMd":"legacy comment"}`, want: "legacy comment", status: http.StatusOK, args: []string{"show", "run_w1"}},
 		{name: "unfinished run", reply: `{"id":"run_w1","state":"running","verdict":"none"}`, want: "running verdict none", status: http.StatusOK, args: []string{"show", "run_w1"}},
+		{name: "stopped run", reply: `{"id":"run_w1","state":"expired","verdict":"expired","error":"stopped before it finished"}`, want: "expired verdict expired\n\nstopped before it finished", status: http.StatusOK, args: []string{"show", "run_w1"}},
 		{name: "daemon error", reply: `{"code":"TESTING_RUN_NOT_FOUND","message":"no testing run run_missing","requestId":"req-show"}`, want: "no testing run run_missing (TESTING_RUN_NOT_FOUND) [request req-show]", status: http.StatusNotFound, exit: 1, args: []string{"show", "run_missing"}},
 		{name: "missing id", reply: `{}`, status: http.StatusOK, exit: 2, args: []string{"show"}},
 		{name: "extra id", reply: `{}`, status: http.StatusOK, exit: 2, args: []string{"show", "run_w1", "extra"}},

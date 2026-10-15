@@ -113,6 +113,136 @@ func TestSweepExpiredTransitionsAndRestart(t *testing.T) {
 	}
 }
 
+func TestSweepExpiresAStoppedRunWithChecks(t *testing.T) {
+	for _, ask := range []bool{false, true} {
+		for _, pastDeadline := range []bool{false, true} {
+			t.Run(fmt.Sprintf("ask=%t/past-deadline=%t", ask, pastDeadline), func(t *testing.T) {
+				svc, runDir, g := askSvc(t, ask)
+				_, err := svc.update("run_s1", func(r *Run) { r.State = RunRunning })
+				is(t, "")(nil, err)
+				is(t, "")(nil, svc.store.SaveChecks("run_s1", []Check{{ID: "c1", Name: "unfinished", State: CheckRunning}}))
+				run, err := svc.store.Get("run_s1")
+				is(t, "")(nil, err)
+				now := run.Deadline.Add(-time.Minute)
+				if pastDeadline {
+					now = run.Deadline.Add(time.Second)
+				}
+				svc.clock = func() time.Time { return now }
+				svc.WithActivity(func(_ context.Context, id string) (string, time.Time, bool) {
+					return "exited", now, id == run.SessionID
+				})
+				var cleaned []string
+				svc.closeEngine = func(id string) { cleaned = append(cleaned, id) }
+				if killed := sweep(svc, nil); !slices.Equal(killed, []string{"s1"}) || !slices.Equal(cleaned, []string{run.ID}) {
+					t.Fatalf("killed %v, cleaned %v", killed, cleaned)
+				}
+				got, err := svc.store.Get(run.ID)
+				if err != nil || got.State != RunExpired || got.Error != ReasonStopped || !svc.reaped(run.ID) || got.Legs[0].State != "cleaned" {
+					t.Fatalf("run %+v, reaped %t, err %v", got, svc.reaped(run.ID), err)
+				}
+				if got.CommentState != "" || got.CommentURL != "" || len(g.calls) != 0 {
+					t.Fatalf("comment state %q, URL %q, gh calls %q", got.CommentState, got.CommentURL, g.calls)
+				}
+				for _, name := range []string{"verdict.md", "verdict.json", "comment.md"} {
+					if _, err := os.Stat(filepath.Join(runDir, name)); !os.IsNotExist(err) {
+						t.Errorf("%s exists or could not be checked: %v", name, err)
+					}
+				}
+				checks, err := svc.store.Checks(run.ID)
+				if err != nil || len(checks) != 1 || checks[0].State != CheckRunning || checks[0].Note != "" {
+					t.Fatalf("checks %+v, err %v", checks, err)
+				}
+				detail, err := svc.RunDetail(ctx, run.ID)
+				if err != nil || detail.Error != ReasonStopped || detail.Verdict != verdictExpired || detail.CommentMD != "" {
+					t.Fatalf("detail %+v, err %v", detail, err)
+				}
+				if killed := sweep(svc, nil); len(killed) != 0 || len(cleaned) != 1 {
+					t.Fatalf("reaped again: killed %v, cleaned %v", killed, cleaned)
+				}
+			})
+		}
+	}
+}
+
+func TestSweepNeverSalvagesAStoppedRunLater(t *testing.T) {
+	svc, runDir, g := askSvc(t, true)
+	_, err := svc.update("run_s1", func(r *Run) { r.State, r.Error = RunExpired, ReasonStopped })
+	is(t, "")(nil, err)
+	is(t, "")(nil, svc.store.SaveChecks("run_s1", []Check{{ID: "c1", Name: "unfinished", State: CheckRunning}}))
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	svc.clock = func() time.Time { return run.Deadline.Add(time.Second) }
+	// an earlier tick expired it as stopped but did not reap it, and the session row is gone by now
+	svc.WithActivity(func(context.Context, string) (string, time.Time, bool) { return "", time.Time{}, false })
+	if killed := sweep(svc, nil); !slices.Equal(killed, []string{"s1"}) {
+		t.Fatalf("killed %v", killed)
+	}
+	got, err := svc.store.Get(run.ID)
+	if err != nil || got.State != RunExpired || got.Error != ReasonStopped || got.CommentState != "" || len(g.calls) != 0 {
+		t.Fatalf("run %+v, gh calls %q, err %v", got, g.calls, err)
+	}
+	for _, name := range []string{"verdict.md", "comment.md"} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s exists or could not be checked: %v", name, err)
+		}
+	}
+	if checks, err := svc.store.Checks(run.ID); err != nil || len(checks) != 1 || checks[0].Note != "" {
+		t.Fatalf("checks %+v, err %v", checks, err)
+	}
+}
+
+func TestSweepRetriesTheDeadlineCloseOfAnExpiredRun(t *testing.T) {
+	svc, _, _ := askSvc(t, true)
+	_, err := svc.update("run_s1", func(r *Run) { r.State = RunExpired }) // its deadline close failed on an earlier tick
+	is(t, "")(nil, err)
+	is(t, "")(nil, svc.store.SaveChecks("run_s1", []Check{{ID: "c1", Name: "unfinished", State: CheckRunning}}))
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	svc.clock = func() time.Time { return run.Deadline.Add(time.Second) }
+	svc.WithActivity(func(_ context.Context, id string) (string, time.Time, bool) { // the sweep killed its session
+		return "exited", run.Deadline, id == run.SessionID
+	})
+	sweep(svc, nil)
+	got, err := svc.store.Get(run.ID)
+	if err != nil || got.State != RunAwaitingApproval || got.Error == ReasonStopped {
+		t.Fatalf("run %+v, err %v", got, err)
+	}
+	if checks, err := svc.store.Checks(run.ID); err != nil || len(checks) != 1 || checks[0].Note != ReasonOutOfTime {
+		t.Fatalf("checks %+v, err %v", checks, err)
+	}
+}
+
+func TestSweepSparesARunBeforeItsDeadline(t *testing.T) {
+	for _, c := range []struct {
+		name, state string
+		found, busy bool
+	}{
+		{"active", "active", true, false},
+		{"unknown", "exited", false, false},
+		{"in flight", "exited", true, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc, _, g := askSvc(t, true)
+			run, err := svc.store.Get("run_s1")
+			is(t, "")(nil, err)
+			svc.clock = func() time.Time { return run.Deadline.Add(-time.Minute) }
+			svc.WithActivity(func(context.Context, string) (string, time.Time, bool) {
+				return c.state, time.Time{}, c.found
+			})
+			if c.busy {
+				svc.busy[run.ID+" prepare"] = busyVerb{since: svc.clock(), done: make(chan struct{})}
+			}
+			if killed := sweep(svc, nil); len(killed) != 0 {
+				t.Fatalf("killed %v before the deadline", killed)
+			}
+			got, err := svc.store.Get(run.ID)
+			if err != nil || got.State != run.State || got.Error != run.Error || svc.reaped(run.ID) || len(g.calls) != 0 {
+				t.Fatalf("run %+v, err %v, gh calls %q", got, err, g.calls)
+			}
+		})
+	}
+}
+
 func TestSweepWaitsForInFlightVerbBeforeReaping(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
@@ -223,6 +353,9 @@ func TestSweepClosesARunWithChecksAtItsDeadline(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			svc, runDir, g := askSvc(t, c.ask)
+			svc.WithActivity(func(context.Context, string) (string, time.Time, bool) {
+				return "active", time.Time{}, true
+			})
 			_, err := svc.update("run_s1", func(r *Run) { r.Comment = c.mode })
 			is(t, "")(nil, err)
 			checks, _ := svc.store.Checks("run_s1")

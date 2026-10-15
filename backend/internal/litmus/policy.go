@@ -124,8 +124,8 @@ func IsRunDir(dataDir, path string) bool {
 // neither forgets an expiry nor repeats it.
 const reapedFile = "reaped"
 
-// SweepExpired closes every run past its deadline. A run with checks is finished with what exists, as a submit would
-// (see closeAtDeadline). Any other run flips to expired (so every verb refuses), the session is stopped through kill,
+// SweepExpired closes stopped runs and runs past their deadline. A live run with checks is finished with what exists,
+// as a submit would (see closeAtDeadline). Any other run flips to expired (so every verb refuses), the session is stopped through kill,
 // the engines close and the legs are cleaned. A run is marked reaped only once all of that has
 // worked and no long verb is still in flight, so anything else is retried on
 // the next tick. State is on disk, so a restarted daemon picks up runs the
@@ -153,15 +153,23 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 		if run.State == RunSubmitted || run.State == RunCleaned || run.State == RunAwaitingApproval || s.reaped(run.ID) {
 			continue
 		}
-		if run.State != RunExpired && !s.clock().After(run.Deadline) {
+		stopped := false
+		if s.activity != nil {
+			state, _, found := s.activity(ctx, run.SessionID)
+			stopped = found && state == "exited" && run.State != RunExpired && !s.inFlight(run.ID)
+		}
+		if !stopped && run.State != RunExpired && !s.clock().After(run.Deadline) {
 			continue
 		}
-		if s.closeAtDeadline(ctx, run, log) {
+		if !stopped && s.closeAtDeadline(ctx, run, log) {
 			continue
 		}
 		if _, err := s.update(run.ID, func(r *Run) {
 			if !r.State.Closed() {
 				r.State = RunExpired
+				if stopped {
+					r.Error = ReasonStopped
+				}
 			}
 		}); err != nil {
 			log.Warn("litmus: could not expire a run", "run", run.ID, "error", err)
@@ -193,10 +201,10 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 // ("ran out of time"), the verdict is derived from what exists, verdict.md and comment.md are written, and the run
 // follows its comment mode as a submit does. It reports whether the sweep is done with the run for this tick: it was
 // closed, or a long verb is in flight and the next tick tries again. False sends the run down the plain expiry, which
-// is also where a close that failed ends up. A run whose tester never ran intake has nothing to salvage.
+// is also where a close that failed ends up. A run whose tester never ran intake, or was stopped, has nothing to salvage.
 func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger) bool {
 	checks, err := s.store.Checks(run.ID)
-	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake {
+	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped {
 		return false
 	}
 	if s.inFlight(run.ID) {
@@ -220,7 +228,7 @@ func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger
 		return true
 	}
 	checks, err = s.store.Checks(run.ID)
-	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake {
+	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped {
 		s.mu.Unlock()
 		return false
 	}
