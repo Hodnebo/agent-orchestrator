@@ -27,7 +27,7 @@ Use Discord for questions and the weekly contributor call.
 4. Open a PR with `Fixes #123` and describe how you checked the change.
 5. Address review feedback. Maintainers review and merge when the required checks pass.
 
-Wait for a maintainer on issues marked `blocked`, `needs-discussion`, or `needs-triage`.
+If an issue is waiting for a core-team decision, ask before starting work.
 
 Need the product/run overview first? Start with [README.md](README.md),
 [docs/architecture.md](docs/architecture.md), and
