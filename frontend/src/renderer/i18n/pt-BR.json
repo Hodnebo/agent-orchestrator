@@ -1284,8 +1284,6 @@
 	"settings.cliLink.proposed": "Proposed target: {{target}} ({{version}}).",
 	"settings.cliLink.proposedUnknown": "Proposed target: {{target}}.",
 	"settings.cliLink.linked": "Crie e gerencie sessões do Agent Orchestrator pelo terminal com o comando ao. Ele é atualizado junto com o aplicativo.",
-	"settings.cliLink.missing": "Vincule o comando ao para criar e gerenciar sessões do Agent Orchestrator pelo terminal.",
-	"settings.cliLink.stale": "O comando ao aponta para um local antigo do aplicativo. Vincule-o novamente a este aplicativo.",
 	"settings.cliLink.foreign": "This command is not an Agent Orchestrator link, so it was left unchanged.",
 	"settings.remoteHosts": "Hosts remotos",
 	"settings.terminalCopyOnSelect": "Copiar ao selecionar",
