@@ -37,7 +37,12 @@ The target always starts a new native session, even when switching back to an
 agent that ran earlier in the chat. Resumed Claude Code and Codex sessions
 ignore a new system prompt, so they would miss whatever happened while they
 were away. Cursor ignores the system prompt entirely, so its handoff goes in
-as a text block ahead of the first message.
+as a text block ahead of the first message. fx takes standing instructions as
+an embedded resource only when its URI names an existing local file, so its
+driver writes them to the session's prompt directory and points a `file://`
+URI there; an `ao://` URI made fx drop them, and with them the handoff. fx also
+writes its own diagnostics (`[context] ...`, skill discovery warnings) into the
+reply stream; its driver drops them while they lead a turn.
 
 The chat's approval mode carries over to the target.
 

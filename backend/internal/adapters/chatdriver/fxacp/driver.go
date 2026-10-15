@@ -20,6 +20,9 @@ package fxacp
 import (
 	"context"
 	"log/slog"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -52,6 +55,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		SessionOptions:   sessionOptions,
 		SessionPreamble:  sessionPreamble,
 		PermissionPolicy: permissionPolicy,
+		ProviderNotice:   providerNotice,
 	}, log)
 }
 
@@ -63,29 +67,62 @@ func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[strin
 	return []string{"acp"}, nil, nil
 }
 
-// standingInstructionsURI identifies AO's standing context in the provider's
-// own prompt transcript, so it can be told apart from user context.
-const standingInstructionsURI = "ao://agent-orchestrator/standing-instructions"
+// standingInstructionsFile is where the fx driver keeps a session's standing
+// instructions, in the session's prompt directory under AO's data dir.
+const standingInstructionsFile = "fx-standing-instructions.md"
 
-// sessionPreamble delivers AO's standing instructions as an embedded resource
-// on the first prompt; fx advertises promptCapabilities.embeddedContext. The
-// transport re-arms it on session/load, because standing context is process
-// input rather than transcript history.
+// sessionPreamble delivers AO's standing instructions on the first prompt; fx
+// advertises promptCapabilities.embeddedContext. The transport re-arms it on
+// session/load, because standing context is process input rather than
+// transcript history.
+//
+// fx takes an embedded resource as project instructions only when its URI
+// names a readable local file ("unsafe target" otherwise, and the
+// instructions are dropped). It reads the embedded text, not the file, so the
+// file only has to exist. If it cannot be written, the instructions go as a
+// plain text block, which fx also reads.
 func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if standing == "" {
 		return nil
 	}
+	path, err := writeStandingInstructions(cfg, standing)
+	if err != nil {
+		return []acpsdk.ContentBlock{acpsdk.TextBlock(standing)}
+	}
 	mime := "text/markdown"
 	return []acpsdk.ContentBlock{
 		acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
 			TextResourceContents: &acpsdk.TextResourceContents{
-				Uri:      standingInstructionsURI,
+				Uri:      (&url.URL{Scheme: "file", Path: path}).String(),
 				Text:     standing,
 				MimeType: &mime,
 			},
 		}),
 	}
+}
+
+func writeStandingInstructions(cfg acpdriver.LaunchConfig, standing string) (string, error) {
+	if strings.TrimSpace(cfg.DataDir) == "" || strings.TrimSpace(string(cfg.SessionID)) == "" {
+		return "", os.ErrInvalid
+	}
+	dir := filepath.Join(cfg.DataDir, "prompts", filepath.Base(string(cfg.SessionID)))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, standingInstructionsFile)
+	if err := os.WriteFile(path, []byte(standing+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// providerNotice matches the diagnostics fx writes into the answer stream
+// ahead of its reply: context assembly notes ("[context] ...") and skill
+// discovery warnings about the user's skill directories.
+func providerNotice(text string) bool {
+	text = strings.TrimSpace(text)
+	return strings.HasPrefix(text, "[context] ") || strings.HasPrefix(text, "skill discovery warning:")
 }
 
 // sessionMode maps AO's approval vocabulary onto fx's ACP modes. Only auto

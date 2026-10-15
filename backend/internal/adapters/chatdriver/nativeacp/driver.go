@@ -75,6 +75,8 @@ type Config struct {
 	Standby *acpdriver.StandbyConfig
 	// QuickStop: see acpdriver.Config.QuickStop.
 	QuickStop bool
+	// ProviderNotice: see acpdriver.Config.ProviderNotice.
+	ProviderNotice func(string) bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -173,5 +175,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		Standby:                      cfg.Standby,
 		QuickStop:                    cfg.QuickStop,
+		ProviderNotice:               cfg.ProviderNotice,
 	}
 }
