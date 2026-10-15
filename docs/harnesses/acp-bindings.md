@@ -16,7 +16,7 @@ agent plugin. AO never downloads, packages, or substitutes the provider CLI.
 | --- | --- | --- | --- | --- |
 | Auggie | `auggie --acp` | `--model` at launch and `session/set_model` | ACP requests; `accept-edits`/`bypass` auto-resolve | session-private `--rules` file |
 | Autohand | `autohand-acp` | session-advertised model options | `AUTOHAND_PERMISSION_MODE=external`; `accept-edits`/`auto`/`bypass` auto-resolve | not injectable |
-| Cline | `cline --acp` | `CLINE_MODEL` env and `session/set_config_option` | `--auto-approve true` for `auto`/`bypass`; `accept-edits` auto-resolves edit tools | not injectable (ACP ignores `--system`) |
+| Cline | `cline --acp` | `CLINE_MODEL`/`CLINE_PROVIDER` env and `session/set_config_option` | `--auto-approve true` for `auto`/`bypass`; `accept-edits` auto-resolves edit tools | not injectable (ACP ignores `--system`) |
 | Goose | `goose acp` | session-advertised model options | `GOOSE_MODE` env (`approve`/`smart_approve`/`auto`) | not injectable |
 | Kilo Code | `kilocode acp` | `session/set_config_option` (`model`, `effort`) | `KILO_CONFIG_CONTENT` permission map | `KILO_CONFIG_CONTENT` generated primary agent |
 | Kiro | `kiro-cli acp --agent ao` | `session/set_model` | ACP requests; `accept-edits`/`auto`/`bypass` auto-resolve | workspace-local `ao` custom agent |
@@ -43,6 +43,19 @@ menus select different agents, which would drop AO's standing instructions;
 AO classifies those catalogs as agent controls, hides them in the composer,
 and rejects API attempts to switch agents. Model, effort, and AO approval
 controls remain available. Kilo approval changes still require a Chat restart.
+
+Cline ACP follows an explicit `CLINE_PROVIDER` override first, otherwise AO
+passes the saved `lastUsedProvider` from Cline's `providers.json`. This prevents
+ACP from choosing the first OAuth login when multiple accounts are configured.
+Profile resolution honors `CLINE_PROVIDER_SETTINGS_PATH`, `CLINE_DATA_DIR`,
+`CLINE_DIR`, and the session's home directory. AO passes only the provider ID;
+Cline continues to manage credentials. With no saved selection, Cline's native
+fallback applies. Invalid or stale saved selections produce an actionable error.
+Cline locks its provider picker when `CLINE_PROVIDER` is set; change the saved
+provider with `cline auth` and start a new Chat to use another provider.
+If a Cline turn completes normally without any visible response or activity,
+AO shows a notice suggesting that you check the selected provider's credits and
+sign-in. It does not treat an empty response as proof that authentication failed.
 
 ### Deliberate limitations
 

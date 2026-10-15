@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -35,21 +36,34 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 // configure builds the `cline --acp` argv. Cline's ACP entrypoint reads its
 // launch defaults from CLINE_MODEL/CLINE_PROVIDER rather than the `--model`
 // flag, which is ignored once `--acp` is set, so the model is delivered as an
-// environment override. Only an explicit auto/bypass choice enables
+// environment override. AO also forwards the saved provider selection so ACP
+// cannot substitute the first available OAuth account. Explicit CLINE_PROVIDER
+// overrides take precedence. Only an explicit auto/bypass choice enables
 // `--auto-approve true`; Cline deliberately refuses to auto-approve ACP
 // sessions otherwise.
 //
 // Standing instructions are not injectable in ACP mode: Cline ignores `--system`
 // there and reads its rules from the workspace, so AO's role prompt is not
 // forwarded. This is documented in docs/harnesses/acp-bindings.md.
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"--acp"}
 	switch ports.NormalizePermissionMode(cfg.Permissions) {
 	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
 		args = append(args, "--auto-approve", "true")
 	}
-	if model := strings.TrimSpace(cfg.Model); model != "" {
-		return args, map[string]string{"CLINE_MODEL": model}, nil
+	provider, err := cline.ResolveACPProvider(ctx, cfg.WorkspacePath, cfg.Env)
+	if err != nil {
+		return nil, nil, err
 	}
-	return args, nil, nil
+	var env map[string]string
+	if provider != "" {
+		env = map[string]string{"CLINE_PROVIDER": provider}
+	}
+	if model := strings.TrimSpace(cfg.Model); model != "" {
+		if env == nil {
+			env = make(map[string]string)
+		}
+		env["CLINE_MODEL"] = model
+	}
+	return args, env, nil
 }
