@@ -78,7 +78,8 @@ export function SettingsSection({
 				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">{title}</h2>
 			) : null}
 			{toolbar ? (
-				<div className="flex w-full flex-col">
+				// A search-first page (no visible title) tucks up under the page heading.
+				<div className={cn("flex w-full flex-col", !showTitle && "-mt-6")}>
 					{toolbar}
 					{body}
 				</div>
