@@ -2807,6 +2807,7 @@ func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
 		{"report.md", http.StatusOK},
 		{"workspace-only.md", http.StatusNotFound},
 		{"escape.md", http.StatusNotFound},
+		{"../secret.md", http.StatusNotFound},
 		{"%2e%2e/secret.md", http.StatusNotFound},
 		{"%2e%2e%2fsecret.md", http.StatusNotFound},
 		{"%2e%2e%5csecret.md", http.StatusNotFound},
@@ -2818,6 +2819,9 @@ func TestSessionsAPI_ArtifactRawAPIStaysInsideArtifactDirectory(t *testing.T) {
 			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+tc.path+"?source=artifact&raw=true", "")
 			if status != tc.wantStatus {
 				t.Fatalf("status = %d, want %d; body=%s", status, tc.wantStatus, body)
+			}
+			if status == http.StatusNotFound {
+				assertErrorCode(t, body, status, http.StatusNotFound, "PREVIEW_FILE_NOT_FOUND")
 			}
 			if status == http.StatusOK && string(body) != "# Artifact source" {
 				t.Fatalf("expected raw artifact Markdown, got %q", body)
