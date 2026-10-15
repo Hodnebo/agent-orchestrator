@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/chat/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run an agent's Chat readiness check in the background so a later switch to it skips it */
+        post: operations["prewarmChatAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/install": {
         parameters: {
             query?: never;
@@ -5376,6 +5393,10 @@ export interface components {
             targetKind?: "app" | "api";
             url?: string;
         };
+        PrewarmChatAgentResponse: {
+            /** @description Agent adapter identifier whose Chat check was started. */
+            agent: string;
+        };
         ProbeAgentResponse: {
             agent: components["schemas"]["AgentInfo"];
             installed: boolean;
@@ -6834,6 +6855,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prewarmChatAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrewarmChatAgentResponse"];
                 };
             };
             /** @description Not Implemented */

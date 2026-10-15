@@ -67,6 +67,9 @@ type switchTranscriptFact struct {
 	Path      string
 	Tail      string
 	Truncated bool
+	// Conversation marks a Tail taken from AO's record of a Chat conversation
+	// (every agent's turns) rather than from one provider's transcript.
+	Conversation bool
 }
 
 // deterministicSwitchContext is the context AO can build without asking a

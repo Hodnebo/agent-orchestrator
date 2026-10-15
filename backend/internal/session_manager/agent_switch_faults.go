@@ -30,9 +30,15 @@ type agentSwitchFlightRecorder struct {
 	execution                domain.AgentSwitchExecution
 	mode                     domain.SessionMode
 	runtimeBackend           domain.AgentSwitchRuntimeBackend
-	// stages times each step between boundaries, for the switch timing log.
-	stages     []agentSwitchStageTiming
-	stageStart time.Time
+}
+
+// agentSwitchStageTimer times each switch step between boundaries for the
+// switch timing log. It is kept apart from the flight recorder, which holds
+// only closed observability facts.
+type agentSwitchStageTimer struct {
+	point   domain.AgentSwitchFailurePoint
+	started time.Time
+	stages  []agentSwitchStageTiming
 }
 
 // agentSwitchStageTiming is how long one switch step ran, named by the
@@ -42,17 +48,26 @@ type agentSwitchStageTiming struct {
 	duration time.Duration
 }
 
-// timing closes the running step and renders every step as "point=duration",
-// in order, with the total. Where a switch spends its time is the first thing
-// to know when it feels slow.
-func (r *agentSwitchFlightRecorder) timing() (string, time.Duration) {
-	if !r.stageStart.IsZero() {
-		r.stages = append(r.stages, agentSwitchStageTiming{point: r.failurePoint, duration: time.Since(r.stageStart)})
-		r.stageStart = time.Time{}
+// mark closes the running step and opens the one named by point.
+func (t *agentSwitchStageTimer) mark(point domain.AgentSwitchFailurePoint) {
+	now := time.Now()
+	if !t.started.IsZero() {
+		t.stages = append(t.stages, agentSwitchStageTiming{point: t.point, duration: now.Sub(t.started)})
+	}
+	t.point, t.started = point, now
+}
+
+// render closes the running step and lists every step as "point=duration", in
+// order, with the total. Where a switch spends its time is the first thing to
+// know when it feels slow.
+func (t *agentSwitchStageTimer) render() (string, time.Duration) {
+	if !t.started.IsZero() {
+		t.stages = append(t.stages, agentSwitchStageTiming{point: t.point, duration: time.Since(t.started)})
+		t.started = time.Time{}
 	}
 	var b strings.Builder
 	var total time.Duration
-	for i, stage := range r.stages {
+	for i, stage := range t.stages {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
@@ -119,11 +134,6 @@ func newAgentSwitchFlightRecorder(sw domain.AgentSwitch, mode domain.SessionMode
 }
 
 func (r *agentSwitchFlightRecorder) boundary(point domain.AgentSwitchFailurePoint) {
-	now := time.Now()
-	if !r.stageStart.IsZero() {
-		r.stages = append(r.stages, agentSwitchStageTiming{point: r.failurePoint, duration: now.Sub(r.stageStart)})
-	}
-	r.stageStart = now
 	r.failurePoint = point
 	r.callOutcome = domain.AgentSwitchCallNoEffectFailure
 }

@@ -72,6 +72,34 @@ paths:
       summary: Open the fixed native authentication flow for one agent
       tags:
       - agents
+  /api/v1/agents/{agent}/chat/prewarm:
+    post:
+      operationId: prewarmChatAgent
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmChatAgentResponse'
+          description: Accepted
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run an agent's Chat readiness check in the background so a later switch
+        to it skips it
+      tags:
+      - conversations
   /api/v1/agents/{agent}/install:
     get:
       operationId: getAgentInstallStatus
@@ -15658,6 +15686,14 @@ components:
       - sessionId
       - state
       - logs
+      type: object
+    PrewarmChatAgentResponse:
+      properties:
+        agent:
+          description: Agent adapter identifier whose Chat check was started.
+          type: string
+      required:
+      - agent
       type: object
     ProbeAgentResponse:
       properties:

@@ -31,9 +31,15 @@ func (m *Manager) executeChatAgentSwitch(
 	project := admitted.project
 	targetAgent := admitted.targetAgent
 	recorder := newAgentSwitchFlightRecorder(result, domain.SessionModeChat, domain.AgentSwitchExecutionLive)
+	// Every step boundary feeds both the flight recorder and the timing log.
+	var timer agentSwitchStageTimer
+	stage := func(point domain.AgentSwitchFailurePoint) {
+		recorder.boundary(point)
+		timer.mark(point)
+	}
 	// Registered first so it runs last, after the outcome below is settled.
 	defer func() {
-		stages, total := recorder.timing()
+		stages, total := timer.render()
 		m.logger.Info("agent switch timing",
 			"sessionID", id, "switchID", result.ID, "from", rec.Harness, "to", cfg.TargetHarness,
 			"state", result.State, "total", total.Round(time.Millisecond), "stages", stages)
@@ -69,7 +75,7 @@ func (m *Manager) executeChatAgentSwitch(
 		}
 		rollbackSafe := retErr != nil && sourceStopped && !targetOwnerCommitted && !targetOwnershipAmbiguous
 		if retErr != nil && targetWorkspacePrepared && !targetOwnerCommitted && !targetOwnershipAmbiguous {
-			recorder.boundary(domain.AgentSwitchFailureTargetWorkspaceCleanup)
+			stage(domain.AgentSwitchFailureTargetWorkspaceCleanup)
 			cleanupCtx, cancel := switchDurableContext(workerCtx)
 			cleanupErr := m.cleanupPreparedAgentWorkspaceStrict(
 				cleanupCtx, targetAgent, id, rec.Metadata.WorkspacePath, targetSetupEnv)
@@ -86,7 +92,7 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 		}
 		if rollbackSafe {
-			recorder.boundary(domain.AgentSwitchFailureSourceControllerRestore)
+			stage(domain.AgentSwitchFailureSourceControllerRestore)
 			rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(workerCtx), switchPostStopWait)
 			rollbackErr := m.rollbackStoppedChatAgentSwitchSource(rollbackCtx, rec, project)
 			cancel()
@@ -163,7 +169,7 @@ func (m *Manager) executeChatAgentSwitch(
 		m.retainAgentSwitch(id)
 	}()
 
-	recorder.boundary(domain.AgentSwitchFailureTargetPreflight)
+	stage(domain.AgentSwitchFailureTargetPreflight)
 	if m.chat == nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, ports.ErrChatUnsupported)
 	}
@@ -202,12 +208,13 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
-	resumeCandidate, resumable, err := m.findTargetResumeCandidate(
-		ctx, store, rec, cfg.TargetHarness, targetAgent, targetConfigDir)
-	if err != nil {
-		recorder.failurePoint = domain.AgentSwitchFailureTargetResumeLookup
-		return result, fmt.Errorf("switch Chat agent %s: target resume candidate: %w", id, err)
-	}
+	// The target always starts a fresh native conversation. A resumed one keeps
+	// the instructions it was started with and ignores this switch's handoff, so
+	// an agent coming back would know only its own earlier turns and none of
+	// what the agents in between did. A fresh start gets the whole
+	// conversation, its own earlier turns included, through the handoff.
+	var resumeCandidate domain.AgentNativeSession
+	resumable := false
 	targetStartMode := domain.AgentSwitchTargetStartFresh
 	providerConversationID := ""
 	if resumable {
@@ -219,18 +226,18 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: workspace roots: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureHandoffDirectoryPrepare)
+	stage(domain.AgentSwitchFailureHandoffDirectoryPrepare)
 	if _, _, err := m.prepareAgentHandoffPaths(ctx, id, string(result.ID)); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: prepare handoff directory: %w", id, err)
 	}
 
-	recorder.boundary(domain.AgentSwitchFailureHandoffSettlement)
+	stage(domain.AgentSwitchFailureHandoffSettlement)
 	result, err = m.settleOptionalAgentHandoff(
 		ctx, store, result, domain.AgentHandoffUnavailable)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: close optional source handoff: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureChatSourceQuiesce)
+	stage(domain.AgentSwitchFailureChatSourceQuiesce)
 	if err := handoff.PrepareChatHandoff(
 		ctx, id, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: quiesce source: %w", id, err)
@@ -240,7 +247,7 @@ func (m *Manager) executeChatAgentSwitch(
 	if targetGeneration == "" {
 		return result, fmt.Errorf("switch Chat agent %s: target controller generation is empty", id)
 	}
-	recorder.boundary(domain.AgentSwitchFailureStoppingSourceCommit)
+	stage(domain.AgentSwitchFailureStoppingSourceCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStoppingSource, func(next *domain.AgentSwitch) {
 		next.TargetStartMode = targetStartMode
 		next.TargetGenerationID = targetGeneration
@@ -249,7 +256,7 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	recorder.durable(result)
 
-	recorder.boundary(domain.AgentSwitchFailureSourceControllerStop)
+	stage(domain.AgentSwitchFailureSourceControllerStop)
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
 		recorder.failurePoint = domain.AgentSwitchFailureSourceControllerDrain
 		recorder.callOutcome = domain.AgentSwitchCallEffectUnknown
@@ -260,7 +267,7 @@ func (m *Manager) executeChatAgentSwitch(
 	sourceStopConclusive = true
 	stoppedAt := m.clock()
 	boundaryCtx, cancelBoundary := switchDurableContext(workerCtx)
-	recorder.boundary(domain.AgentSwitchFailureSourceStopCommit)
+	stage(domain.AgentSwitchFailureSourceStopCommit)
 	confirmed, err := m.lcm.ConfirmAgentSwitchSourceStopped(
 		boundaryCtx,
 		domain.AgentSwitchSourceStopConfirmation{
@@ -312,13 +319,18 @@ func (m *Manager) executeChatAgentSwitch(
 	defer cancelPostStop()
 	ctx = postStopCtx
 
-	recorder.boundary(domain.AgentSwitchFailureSourceTranscriptCapture)
+	stage(domain.AgentSwitchFailureSourceTranscriptCapture)
+	// The excerpt comes from AO's own record of the conversation: every agent's
+	// turns, in order. A provider's transcript holds only that provider's turns,
+	// so after a few switches it would leave out what the others said. The
+	// provider transcript, when there is one, stays as a pointer for detail.
 	observedTranscript, sourceTranscriptStatus := m.captureSourceTranscriptFact(
-		ctx, admitted.sourceAgent, admitted.sourceNative, true)
-	if observedTranscript == nil {
-		// Most agents keep no transcript AO can read; AO's own record of this
-		// conversation stands in, so every target starts with the history.
-		observedTranscript = m.chatTranscriptFact(ctx, id)
+		ctx, admitted.sourceAgent, admitted.sourceNative, false)
+	if conversation := m.chatTranscriptFact(ctx, id); conversation != nil {
+		if observedTranscript != nil {
+			conversation.Path = observedTranscript.Path
+		}
+		observedTranscript = conversation
 	}
 	finalContext := deterministicSwitchContext{
 		OriginalTask:          stoppedSession.Metadata.Prompt,
@@ -332,15 +344,15 @@ func (m *Manager) executeChatAgentSwitch(
 	if observedTranscript != nil {
 		finalContext.SourceTranscriptPath = observedTranscript.Path
 	}
-	recorder.boundary(domain.AgentSwitchFailureContinuationBuild)
+	stage(domain.AgentSwitchFailureContinuationBuild)
 	continuation := buildTargetContinuationMessageWithLimit(
 		result, finalContext, observedTranscript, handoffContinuationMaxBytes)
-	recorder.boundary(domain.AgentSwitchFailureFinalArtifactPublish)
+	stage(domain.AgentSwitchFailureFinalArtifactPublish)
 	writtenFinal, err := m.writeFinalizedHandoffFile(ctx, result, continuation)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: retain finalized handoff: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureFinalArtifactCommit)
+	stage(domain.AgentSwitchFailureFinalArtifactCommit)
 	result, err = m.finalizeAgentSwitchHandoff(
 		ctx, store, result, writtenFinal, false, sourceTranscriptStatus)
 	if err != nil {
@@ -350,12 +362,12 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: record finalized handoff: %w", id, err)
 	}
 	finalSystemPrompt := appendAgentSwitchContinuation(systemPrompt, continuation)
-	recorder.boundary(domain.AgentSwitchFailureTargetPromptPrepare)
+	stage(domain.AgentSwitchFailureTargetPromptPrepare)
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, cfg.TargetHarness, finalSystemPrompt)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target system prompt file: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureTargetWorkspacePrepare)
+	stage(domain.AgentSwitchFailureTargetWorkspacePrepare)
 	if err := m.prepareWorkspace(
 		ctx, targetAgent, rec.ID, rec.Metadata.WorkspacePath,
 		finalSystemPrompt, systemPromptFile, agentConfig, targetSetupEnv,
@@ -363,7 +375,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: prepare target workspace: %w", id, err)
 	}
 	targetWorkspacePrepared = true
-	recorder.boundary(domain.AgentSwitchFailureChatProviderBoundaryCommit)
+	stage(domain.AgentSwitchFailureChatProviderBoundaryCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStartingTarget, nil); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: record target start: %w", id, err)
 	}
@@ -389,9 +401,9 @@ func (m *Manager) executeChatAgentSwitch(
 	defer releaseCodexAdmission()
 
 	if resumable {
-		recorder.boundary(domain.AgentSwitchFailureChatProviderResume)
+		stage(domain.AgentSwitchFailureChatProviderResume)
 	} else {
-		recorder.boundary(domain.AgentSwitchFailureChatProviderStart)
+		stage(domain.AgentSwitchFailureChatProviderStart)
 	}
 	historyMode := ports.ChatHistoryImport
 	if resumable {
@@ -441,7 +453,7 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 			var stored domain.AgentNativeSession
 			if resumable {
-				recorder.boundary(domain.AgentSwitchFailureChatNativeIdentityCommit)
+				stage(domain.AgentSwitchFailureChatNativeIdentityCommit)
 				if started.ProviderConversationID != resumeCandidate.NativeSessionID {
 					return emptyCommit, errors.New("resumed target Chat controller changed provider conversation identity")
 				}
@@ -457,7 +469,7 @@ func (m *Manager) executeChatAgentSwitch(
 					return emptyCommit, errors.New("resumed target Chat native session changed concurrently")
 				}
 			} else {
-				recorder.boundary(domain.AgentSwitchFailureChatNativeIdentityCommit)
+				stage(domain.AgentSwitchFailureChatNativeIdentityCommit)
 				now := m.clock()
 				native := domain.AgentNativeSession{
 					ID:          domain.AgentNativeSessionID("native-" + uuid.NewString()),
@@ -471,7 +483,7 @@ func (m *Manager) executeChatAgentSwitch(
 					return emptyCommit, fmt.Errorf("persist target Chat native session: %w", createErr)
 				}
 			}
-			recorder.boundary(domain.AgentSwitchFailureChatProviderBoundaryCommit)
+			stage(domain.AgentSwitchFailureChatProviderBoundaryCommit)
 			if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchStartingTarget, func(next *domain.AgentSwitch) {
 				next.TargetNativeSessionRef = nativeSessionIDPtr(stored.ID)
 			}); err != nil {
@@ -488,7 +500,7 @@ func (m *Manager) executeChatAgentSwitch(
 				ControllerGeneration:   started.ControllerGeneration,
 				ActivatedAt:            activatedAt,
 			}
-			recorder.boundary(domain.AgentSwitchFailureChatTargetActivationCommit)
+			stage(domain.AgentSwitchFailureChatTargetActivationCommit)
 			activated, activationErr := m.lcm.ActivateChatAgentSwitchTarget(
 				ctx,
 				activation,
@@ -551,17 +563,17 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: reload target activation: %w", id, err)
 	}
-	recorder.boundary(domain.AgentSwitchFailureDeliveryOpenCommit)
+	stage(domain.AgentSwitchFailureDeliveryOpenCommit)
 	if err := m.advanceAgentSwitch(ctx, store, &result, domain.AgentSwitchDelivering, nil); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: begin continuation delivery: %w", id, err)
 	}
 	recorder.durable(result)
-	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
+	stage(domain.AgentSwitchFailureChatContinuationRelay)
 	if err := m.deliverChatSwitchOpening(ctx, id, result.ID, cfg.Message); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: deliver continuation: %w", id, err)
 	}
 	acknowledgedAt := m.clock()
-	recorder.boundary(domain.AgentSwitchFailureChatTargetAckCommit)
+	stage(domain.AgentSwitchFailureChatTargetAckCommit)
 	result, acknowledged, err := m.acknowledgeAgentSwitchTargetWithReadback(ctx, store, result, targetGeneration, acknowledgedAt)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: acknowledge continuation: %w", id, err)
@@ -571,7 +583,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, nil
 	}
 	completionCtx, cancelCompletion := switchDurableContext(ctx)
-	recorder.boundary(domain.AgentSwitchFailureCompletionCommit)
+	stage(domain.AgentSwitchFailureCompletionCommit)
 	result, err = m.completeAcknowledgedAgentSwitch(completionCtx, store, result)
 	cancelCompletion()
 	if err != nil {
@@ -644,7 +656,7 @@ func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID) *
 	if strings.TrimSpace(excerpt) == "" {
 		return nil
 	}
-	return &switchTranscriptFact{Tail: excerpt, Truncated: truncated}
+	return &switchTranscriptFact{Tail: excerpt, Truncated: truncated, Conversation: true}
 }
 
 func chatSwitchProviderBoundaryID(switchID domain.AgentSwitchID) string {

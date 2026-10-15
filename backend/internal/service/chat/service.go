@@ -2046,6 +2046,26 @@ func (s *Service) PreflightChat(
 	return capabilityAdmissionError(harness, caps, permissions)
 }
 
+// prewarmTimeout bounds one background readiness check.
+const prewarmTimeout = 30 * time.Second
+
+// PrewarmChat runs PreflightChat's capability probe in the background so a
+// later switch to harness finds it cached. The probe launches a throwaway
+// provider process the first time each harness is checked; that cost (up to
+// ~1.3s) otherwise lands on the switch itself. Failures are not cached, so a
+// later switch still reports them.
+func (s *Service) PrewarmChat(harness domain.AgentHarness) {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), prewarmTimeout)
+		defer cancel()
+		_, _ = s.driverCapabilities(ctx, harness, driver)
+	}()
+}
+
 func capabilityAdmissionError(
 	harness domain.AgentHarness,
 	caps ports.ChatCapabilities,

@@ -5,6 +5,7 @@ import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
 import { useSettings } from "../../hooks/useSettings";
 import { isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
+import { clientForSessionHost } from "../../lib/host-clients";
 import { sessionUiKey } from "../../lib/hosts";
 import { useChatAgentDraftStore, type ChatAgentDraft } from "../../stores/chat-agent-draft-store";
 import type { ChatModel, TurnSettings } from "../../types/conversation";
@@ -71,6 +72,13 @@ export function useSessionAgentSwitch({
 	const clear = () => setDraft(key, undefined);
 	const choose = (harness: string) => {
 		setDraft(key, harness === session.provider ? undefined : { harness, model: "", effort: "" });
+		// The daemon checks an agent can run as a chat the first time it starts one,
+		// which can take a second; run that now so the send does not wait on it.
+		if (harness !== session.provider) {
+			void clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/chat/prewarm", {
+				params: { path: { agent: harness } },
+			}).catch(() => undefined);
+		}
 	};
 	const agentMenu = enabled ? (
 		<AgentMenuSection

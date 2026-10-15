@@ -128,6 +128,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit", c.editQueuedTurn)
 	r.Post("/sessions/{sessionId}/conversation/queue/reorder", c.reorderQueuedTurns)
 	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
+	r.Post("/agents/{agent}/chat/prewarm", c.prewarmAgent)
 	r.Get("/sessions/{sessionId}/conversation/models", c.models)
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
@@ -642,6 +643,25 @@ func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request
 		TokensBefore: result.TokensBefore,
 		TokensAfter:  result.TokensAfter,
 	})
+}
+
+// chatPrewarmer runs an agent's Chat readiness check ahead of need.
+type chatPrewarmer interface {
+	PrewarmChat(harness domain.AgentHarness)
+}
+
+// prewarmAgent starts an agent's Chat readiness check in the background. The
+// client calls it when someone picks that agent, so the switch their next send
+// makes does not wait on the check.
+func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(chatPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/{agent}/chat/prewarm")
+		return
+	}
+	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
+	prewarmer.PrewarmChat(domain.AgentHarness(agent))
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmChatAgentResponse{Agent: agent})
 }
 
 // models serves the provider's catalog for this session plus the current choice.

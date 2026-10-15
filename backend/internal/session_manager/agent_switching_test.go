@@ -1390,7 +1390,11 @@ func TestResolveChatTargetActivationOutcomeRejectsIncompleteOwnershipTuples(t *t
 	}
 }
 
-func TestSwitchAgentChatSwitchBackResumesVerifiedNativeConversation(t *testing.T) {
+// A resumed native conversation keeps the instructions it started with and
+// ignores the switch's handoff, so an agent coming back would miss what the
+// agents in between did. Switching back starts fresh, even though the earlier
+// native conversation is still available.
+func TestSwitchAgentChatSwitchBackStartsFreshNativeConversation(t *testing.T) {
 	manager, store, _ := newSwitchTestManager(t, &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}})
 	rec := store.sessions["proj-1"]
 	rec.Mode = domain.SessionModeChat
@@ -1424,27 +1428,24 @@ func TestSwitchAgentChatSwitchBackResumesVerifiedNativeConversation(t *testing.T
 	if err != nil {
 		t.Fatalf("SwitchAgent: %v", err)
 	}
-	if sw.TargetStartMode != domain.AgentSwitchTargetStartResumed {
-		t.Fatalf("target start mode = %q, want resumed", sw.TargetStartMode)
+	if sw.TargetStartMode != domain.AgentSwitchTargetStartFresh {
+		t.Fatalf("target start mode = %q, want fresh", sw.TargetStartMode)
 	}
-	if sw.TargetNativeSessionRef == nil || *sw.TargetNativeSessionRef != prior.ID {
-		t.Fatalf("target native ref = %v, want reused %q", sw.TargetNativeSessionRef, prior.ID)
+	if sw.TargetNativeSessionRef == nil || *sw.TargetNativeSessionRef == prior.ID {
+		t.Fatalf("target native ref = %v, want a new native session, not %q", sw.TargetNativeSessionRef, prior.ID)
 	}
-	if len(launcher.started) != 1 || launcher.started[0].ProviderConversationID != prior.NativeSessionID {
-		t.Fatalf("Chat starts = %+v, want resume of %q", launcher.started, prior.NativeSessionID)
+	if len(launcher.started) != 1 || launcher.started[0].ProviderConversationID != "" {
+		t.Fatalf("Chat starts = %+v, want one fresh start", launcher.started)
 	}
 	if launcher.started[0].Model != "selected-target-model" {
-		t.Fatalf("resumed Chat target model = %q, want selected-target-model", launcher.started[0].Model)
+		t.Fatalf("Chat target model = %q, want selected-target-model", launcher.started[0].Model)
 	}
 	if launcher.started[0].ProviderScopeID != chatSwitchProviderBoundaryID(sw.ID) {
-		t.Fatalf("resumed Chat target scope = %q, want reserved boundary %q",
+		t.Fatalf("Chat target scope = %q, want reserved boundary %q",
 			launcher.started[0].ProviderScopeID, chatSwitchProviderBoundaryID(sw.ID))
 	}
-	if launcher.started[0].HistoryMode != ports.ChatHistoryDeferred {
-		t.Fatal("switch-back projected target-native history into the source provider branch before activation")
-	}
-	if got := store.native[prior.ID]; got.LastGenerationID != sw.TargetGenerationID {
-		t.Fatalf("reused native generation = %q, want %q", got.LastGenerationID, sw.TargetGenerationID)
+	if got := store.native[prior.ID]; got.LastGenerationID != prior.LastGenerationID {
+		t.Fatalf("earlier native session generation = %q, want it untouched (%q)", got.LastGenerationID, prior.LastGenerationID)
 	}
 }
 
