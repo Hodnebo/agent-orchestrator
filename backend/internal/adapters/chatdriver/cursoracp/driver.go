@@ -38,6 +38,9 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		VersionProbe:         versionProbe,
 		SessionPreamble:      continuationPreamble,
 		Standby:              &acpdriver.StandbyConfig{Warm: warmSharedServices},
+		// Cursor has no session/close and ignores stdin closing; it exits on
+		// SIGTERM in about 50ms.
+		QuickStop: true,
 	}, log)
 }
 
@@ -102,15 +105,15 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	args = append(args, "acp")
 	var env map[string]string
 	if strings.TrimSpace(cfg.DataDir) != "" {
-		preload, err := writeNetPreload(cfg.DataDir)
-		if err != nil {
-			return nil, nil, err
+		// The preload only speeds Cursor's API calls up; any problem with it
+		// launches Cursor without it.
+		if preload, err := writeNetPreload(cfg.DataDir); err == nil && preloadPathUsable(preload) {
+			existing, ok := cfg.Env["NODE_OPTIONS"]
+			if !ok {
+				existing = os.Getenv("NODE_OPTIONS")
+			}
+			env = map[string]string{"NODE_OPTIONS": nodeOptionsWithPreload(existing, preload)}
 		}
-		existing, ok := cfg.Env["NODE_OPTIONS"]
-		if !ok {
-			existing = os.Getenv("NODE_OPTIONS")
-		}
-		env = map[string]string{"NODE_OPTIONS": nodeOptionsWithPreload(existing, preload)}
 	}
 	return args, env, nil
 }
@@ -145,7 +148,9 @@ func writeStandingRule(ctx context.Context, cfg acpdriver.LaunchConfig) (string,
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	rule := "---\ndescription: Agent Orchestrator standing instructions for this managed session\nalwaysApply: true\n---\n\n" + cfg.SystemPrompt + "\n"
+	// The rule applies to every request; a switch's handoff reaches Cursor once,
+	// as its first turn, so it stays out of the rule (and out of this file).
+	rule := "---\ndescription: Agent Orchestrator standing instructions for this managed session\nalwaysApply: true\n---\n\n" + acpdriver.StandingInstructions(cfg.SystemPrompt) + "\n"
 	if err := os.WriteFile(filepath.Join(rulesDir, "ao-standing.mdc"), []byte(rule), 0o600); err != nil {
 		return "", fmt.Errorf("write Cursor ACP standing rule: %w", err)
 	}

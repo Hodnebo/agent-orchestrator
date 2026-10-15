@@ -5096,8 +5096,8 @@ func TestReconcileChatAgentSwitchesUsesControllerBoundaries(t *testing.T) {
 			if len(launcher.turns) != 0 || len(launcher.relayed) != tt.wantTurns {
 				t.Fatalf("recovery activation human=%v automation=%v, want %d automation turns", launcher.turns, launcher.relayed, tt.wantTurns)
 			}
-			if tt.wantTurns == 1 && launcher.relayed[0] != aoTargetActivationPrompt {
-				t.Fatalf("recovery activation turn = %q, want %q", launcher.relayed[0], aoTargetActivationPrompt)
+			if tt.wantTurns == 1 && launcher.relayed[0] != aoTargetRecoveryPrompt {
+				t.Fatalf("recovery activation turn = %q, want %q", launcher.relayed[0], aoTargetRecoveryPrompt)
 			}
 			if len(messenger.msgs) != 0 {
 				t.Fatalf("recovery replayed an unconfirmed continuation: %#v", messenger.msgs)
@@ -5168,7 +5168,7 @@ func TestReconcileChatAgentSwitchTargetReadyRestoresFinalizedContinuationBeforeR
 			t.Fatalf("recovered target system prompt omitted %q:\n%s", want, launcher.started[0].SystemPrompt)
 		}
 	}
-	if len(launcher.turns) != 0 || len(launcher.relayed) != 1 || launcher.relayed[0] != aoTargetActivationPrompt {
+	if len(launcher.turns) != 0 || len(launcher.relayed) != 1 || launcher.relayed[0] != aoTargetRecoveryPrompt {
 		t.Fatalf("recovered target activation human=%v automation=%v, want one automation continuation", launcher.turns, launcher.relayed)
 	}
 	if len(launcher.relayIDs) != 1 || launcher.relayIDs[0] != chatSwitchActivationMessageID(sw.ID) {

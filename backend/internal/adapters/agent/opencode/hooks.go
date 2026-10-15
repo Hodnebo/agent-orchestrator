@@ -138,10 +138,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 // "@opencode-ai/plugin" for each config directory).
 const opencodePluginDependency = "@opencode-ai/plugin"
 
-// opencodeGitignore is what opencode itself writes into a `.opencode`
-// directory it manages, so the stub below is ignored the same way.
-const opencodeGitignore = "node_modules\npackage.json\npackage-lock.json\nbun.lock\n.gitignore"
-
 // seedPluginDependencyStub stops opencode from npm-installing its plugin
 // package into a worktree on the first launch there. That install cost 4-7s on
 // every new session, and every agent switch to opencode lands in one. AO's
@@ -158,9 +154,14 @@ func seedPluginDependencyStub(workspacePath string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", dir, err)
 	}
+	stub := hasDependencyStub(dir)
+	foreign := false
 	for _, entry := range entries {
 		switch entry.Name() {
 		case opencodeSkillSubDir, ".gitignore":
+		case "node_modules", "package-lock.json":
+			// AO's own stub from an earlier launch, or a real install.
+			foreign = foreign || !stub
 		case opencodePluginSubDir:
 			plugins, err := os.ReadDir(filepath.Join(dir, opencodePluginSubDir))
 			if err != nil {
@@ -168,31 +169,49 @@ func seedPluginDependencyStub(workspacePath string) error {
 			}
 			for _, plugin := range plugins {
 				if name := plugin.Name(); name != opencodePluginFileName && name != ".gitignore" {
-					return nil
+					foreign = true
 				}
 			}
 		default:
-			// The repository's own opencode setup, or install state from an
-			// earlier launch: leave it to opencode.
-			return nil
+			foreign = true
 		}
+	}
+	if foreign {
+		// The repository's own opencode setup, or install state from a real
+		// install: leave it to opencode. A stub AO seeded before such plugins
+		// appeared would stop opencode installing what they import, so it goes.
+		if stub {
+			_ = os.Remove(filepath.Join(dir, "package-lock.json"))
+			_ = os.Remove(filepath.Join(dir, "node_modules"))
+		}
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "node_modules"), 0o750); err != nil {
 		return fmt.Errorf("seed opencode node_modules: %w", err)
 	}
-	lock := fmt.Sprintf(`{"name":"ao-opencode","lockfileVersion":3,"requires":true,"packages":{"":{"dependencies":{%q:"*"}}}}`, opencodePluginDependency)
-	if err := hookutil.AtomicWriteFile(filepath.Join(dir, "package-lock.json"), []byte(lock+"\n"), 0o600); err != nil {
+	if err := hookutil.AtomicWriteFile(filepath.Join(dir, "package-lock.json"), []byte(dependencyStubLock+"\n"), 0o600); err != nil {
 		return fmt.Errorf("seed opencode package-lock.json: %w", err)
 	}
-	gitignore := filepath.Join(dir, ".gitignore")
-	if _, err := os.Stat(gitignore); errors.Is(err, os.ErrNotExist) {
-		if err := hookutil.AtomicWriteFile(gitignore, []byte(opencodeGitignore+"\n"), 0o600); err != nil {
-			return fmt.Errorf("seed opencode .gitignore: %w", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("stat %s: %w", gitignore, err)
+	// Ignored like every hook file, so the worktree can still be removed, with
+	// the rest of what opencode ignores there itself. A .gitignore opencode
+	// wrote already covers them.
+	if err := hookutil.EnsureWorkspaceGitignore(dir, "node_modules", "package.json", "package-lock.json", "bun.lock"); err != nil {
+		return fmt.Errorf("seed opencode .gitignore: %w", err)
 	}
 	return nil
+}
+
+var dependencyStubLock = fmt.Sprintf(`{"name":"ao-opencode","lockfileVersion":3,"requires":true,"packages":{"":{"dependencies":{%q:"*"}}}}`, opencodePluginDependency)
+
+// hasDependencyStub reports AO's stub: its exact lock file and an empty
+// node_modules, which a real install never leaves.
+func hasDependencyStub(dir string) bool {
+	lock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+	if err != nil || strings.TrimSpace(string(lock)) != dependencyStubLock {
+		return false
+	}
+	modules, err := os.ReadDir(filepath.Join(dir, "node_modules"))
+	return err == nil && len(modules) == 0
 }
 
 // UninstallHooks removes AO's opencode plugin and the AO-managed using-ao skill

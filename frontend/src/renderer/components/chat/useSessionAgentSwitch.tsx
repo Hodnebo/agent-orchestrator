@@ -85,18 +85,23 @@ export function useSessionAgentSwitch({
 	// Start the picked agent's process now, with the model and effort the send
 	// will carry, so the switch adopts it instead of starting one. Picking the
 	// chat's own agent again drops it. The daemon replaces an earlier standby.
+	// It waits for the choice to settle: each new choice replaces the process the
+	// daemon started for the last one.
 	const prewarmed = useRef(false);
 	useEffect(() => {
 		if (!enabled) return;
 		if (pendingHarness && !catalogLoaded) return;
 		if (!pendingHarness && !prewarmed.current) return;
-		prewarmed.current = Boolean(pendingHarness);
-		void clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/switch-agent/prewarm", {
-			params: { path: { sessionId: session.id } },
-			body: pendingHarness
-				? { targetHarness: pendingHarness, model: modelId || undefined, reasoningEffort: effortId || undefined }
-				: { targetHarness: session.provider },
-		}).catch(() => undefined);
+		const timer = setTimeout(() => {
+			prewarmed.current = Boolean(pendingHarness);
+			void clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/switch-agent/prewarm", {
+				params: { path: { sessionId: session.id } },
+				body: pendingHarness
+					? { targetHarness: pendingHarness, model: modelId || undefined, reasoningEffort: effortId || undefined }
+					: { targetHarness: session.provider },
+			}).catch(() => undefined);
+		}, 400);
+		return () => clearTimeout(timer);
 	}, [enabled, hostId, session.id, session.provider, pendingHarness, catalogLoaded, modelId, effortId]);
 
 	const clear = () => setDraft(key, undefined);

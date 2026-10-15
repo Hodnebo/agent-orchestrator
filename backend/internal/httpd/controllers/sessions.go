@@ -280,6 +280,8 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/orchestrators/delegate", c.delegateTask)
 	r.Post("/projects/{id}/tasks/prepare", c.prepareTask)
 	r.Delete("/task-preparations/{token}", c.cancelTaskPreparation)
+	r.Post("/task-preparations", c.prepareStandaloneTask)
+	r.Post("/task-preparations/{token}/agent", c.prewarmTaskAgent)
 	r.Get("/orchestrators/{id}", c.getOrchestrator)
 }
 
@@ -366,10 +368,11 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	if in.ClientRequestID != "" {
 		keyless := in
 		keyless.ClientRequestID = ""
+		keyless.TaskPreparation = ""
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, TaskPreparation: domain.TaskPreparationToken(strings.TrimSpace(in.TaskPreparation))})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -2286,6 +2289,64 @@ func (c *SessionsController) cancelTaskPreparation(w http.ResponseWriter, r *htt
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// standaloneTaskPreparer reserves a standalone session for a new chat page.
+type standaloneTaskPreparer interface {
+	PrepareStandaloneTask(ctx context.Context) (string, error)
+}
+
+func (c *SessionsController) prepareStandaloneTask(w http.ResponseWriter, r *http.Request) {
+	preparer, ok := c.Svc.(standaloneTaskPreparer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/task-preparations")
+		return
+	}
+	token, err := preparer.PrepareStandaloneTask(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, PrepareTaskResponse{OK: true, TaskPreparation: token})
+}
+
+// taskAgentPrewarmer starts a new-chat page's agent in its task preparation.
+type taskAgentPrewarmer interface {
+	PrewarmTaskAgent(token string, in sessionsvc.PrewarmTaskAgentInput)
+}
+
+// prewarmTaskAgent starts the agent a new-chat page has selected in the task
+// preparation's worktree, without a provider session, so the send adopts it.
+// It returns before the agent is ready.
+func (c *SessionsController) prewarmTaskAgent(w http.ResponseWriter, r *http.Request) {
+	prewarmer, ok := c.Svc.(taskAgentPrewarmer)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/task-preparations/{token}/agent")
+		return
+	}
+	var in PrewarmTaskAgentRequest
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	agent := domain.AgentHarness(strings.TrimSpace(string(in.Agent)))
+	if agent == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "AGENT_REQUIRED", "agent is required", nil)
+		return
+	}
+	model := domain.SanitizeControlChars(strings.TrimSpace(in.Model))
+	if utf8.RuneCountInString(model) > maxModelLen {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
+		return
+	}
+	if in.ApprovalMode != "" && !in.ApprovalMode.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_APPROVAL_MODE", "approvalMode is invalid", nil)
+		return
+	}
+	prewarmer.PrewarmTaskAgent(chi.URLParam(r, "token"), sessionsvc.PrewarmTaskAgentInput{
+		Agent: agent, Model: model, Effort: sanitizedOptionalString(in.Effort), ApprovalMode: in.ApprovalMode,
+	})
+	envelope.WriteJSON(w, http.StatusAccepted, PrewarmTaskAgentResponse{Agent: agent})
 }
 
 func sanitizedOptionalString(value *string) *string {

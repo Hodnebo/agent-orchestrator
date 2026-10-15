@@ -129,6 +129,11 @@ type Config struct {
 	// Standby opts the binding into starting its provider ahead of an agent
 	// switch (ports.ChatStandbyDriver). Nil leaves Prewarm unsupported.
 	Standby *StandbyConfig
+	// QuickStop marks a provider whose stop gains nothing from waiting: it
+	// keeps its session saved after every turn, or never reacts to stdin
+	// closing. It gets a short session/close wait and is signalled after
+	// providerQuickGrace instead of the full stdin grace.
+	QuickStop bool
 	// OnAuthRejected is called when the provider rejects the credential during
 	// a live turn. It is how a cached "this credential works" verdict is
 	// corrected the moment the provider says otherwise, and it is the only
@@ -388,6 +393,15 @@ func (d *Driver) applyLaunchSessionOptions(ctx context.Context, conv *conversati
 	return conv.applySessionOptions(ctx, d.cfg.LaunchSessionOptions(cfg))
 }
 
+// resumedSessionPreamble is the standing context for a conversation the
+// provider already holds. A switch's handoff went in with its first turn and is
+// in the provider's own history, so it is not sent again: re-sent after a
+// restart it reads as a fresh instruction to continue old work.
+func (d *Driver) resumedSessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
+	cfg.SystemPrompt = StandingInstructions(cfg.SystemPrompt)
+	return d.sessionPreamble(cfg)
+}
+
 func (d *Driver) sessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
 	if d.cfg.SessionPreamble == nil {
 		return nil
@@ -489,7 +503,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
-		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		conv.setSessionPreamble(d.resumedSessionPreamble(launchCfg))
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -580,7 +594,7 @@ func (d *Driver) resumeSession(
 	// Standing context is process input, not transcript history, so a resumed
 	// conversation must receive it again even though the provider recovers the
 	// messages itself.
-	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	conv.setSessionPreamble(d.resumedSessionPreamble(launchCfg))
 	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
 		conv.discard()
 		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
@@ -808,7 +822,13 @@ func (d *Driver) connectProcessAt(
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
-	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
+	if d.cfg.QuickStop {
+		proc.quickStop.Store(true)
+	}
+	proc.terminate = persistentTerminate(gate, transport.Stdin, &proc.quickStop, func(shutdownCtx context.Context, quick bool) error {
+		if quick {
+			return persistenthost.ShutdownQuick(shutdownCtx, cfg.DataDir, key.get())
+		}
 		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, key.get())
 	})
 	return proc, nil

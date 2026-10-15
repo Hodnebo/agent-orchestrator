@@ -27,6 +27,9 @@ func writeNetPreload(dataDir string) (string, error) {
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(netPreload) {
 		return path, nil
 	}
+	// Node reads a preload only at process start, so files an older AO wrote
+	// can go once this version's is in place.
+	defer removeStaleNetPreloads(filepath.Dir(path), filepath.Base(path))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("create Cursor preload directory: %w", err)
 	}
@@ -46,6 +49,26 @@ func writeNetPreload(dataDir string) (string, error) {
 		return "", fmt.Errorf("install Cursor preload: %w", err)
 	}
 	return path, nil
+}
+
+func removeStaleNetPreloads(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != keep && strings.HasPrefix(name, "ao-net-") && strings.HasSuffix(name, ".cjs") {
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+}
+
+// preloadPathUsable reports whether path survives NODE_OPTIONS parsing. A
+// failed --require stops Node before Cursor starts, so an unusual data dir
+// path skips the preload instead.
+func preloadPathUsable(path string) bool {
+	return !strings.ContainsAny(filepath.ToSlash(path), "\"\\\n")
 }
 
 // nodeOptionsWithPreload appends the preload to the NODE_OPTIONS the agent

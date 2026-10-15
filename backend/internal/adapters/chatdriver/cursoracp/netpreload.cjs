@@ -22,7 +22,10 @@
     else delete process.env.NODE_OPTIONS;
   }
   if (!process.argv.includes("acp")) return;
-  const proxyVars = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "GLOBAL_AGENT_HTTP_PROXY", "GLOBAL_AGENT_HTTPS_PROXY"];
+  const proxyVars = [
+    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
+    "GLOBAL_AGENT_HTTP_PROXY", "GLOBAL_AGENT_HTTPS_PROXY", "NODE_USE_ENV_PROXY",
+  ];
   if (proxyVars.some((name) => process.env[name])) return;
 
   const http = require("node:http");
@@ -63,7 +66,12 @@
   const agent = https.globalAgent;
   const createConnection = agent.createConnection;
   agent.createConnection = function (opts, callback) {
-    const plain = !opts.ca && !opts.cert && !opts.key && !opts.pfx && opts.rejectUnauthorized !== false;
+    // Only a request with Node's default TLS checks may take a socket dialed
+    // before it existed; anything that pins, swaps, or resolves differently
+    // dials its own.
+    const plain = !opts.ca && !opts.cert && !opts.key && !opts.pfx && opts.rejectUnauthorized !== false &&
+      !opts.checkServerIdentity && !opts.secureContext && !opts.lookup && !opts.family &&
+      (!opts.servername || opts.servername === host);
     if (plain && (opts.host === host || opts.hostname === host) && Number(opts.port || 443) === 443) {
       while (warm.length) {
         const socket = warm.shift();

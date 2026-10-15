@@ -35,6 +35,12 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessGrok,
+		Standby: &acpdriver.StandbyConfig{},
+		// Grok saves its session after every turn: one stopped by SIGTERM
+		// without session/close resumes with its last turn. Its close answer
+		// takes 2.5 to 4s and its exit on stdin closing about 2.5s, so waiting
+		// for either only slows a switch away from it.
+		QuickStop: true,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityModels:        true,
 			ports.ChatCapabilityConfigOptions: true,

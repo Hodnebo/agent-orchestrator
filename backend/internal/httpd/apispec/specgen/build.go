@@ -229,6 +229,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
 	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
 	"ControllersPrewarmAgentSwitchRequest":                 "PrewarmAgentSwitchRequest",
+	"ControllersPrewarmTaskAgentRequest":                   "PrewarmTaskAgentRequest",
+	"ControllersPrewarmTaskAgentResponse":                  "PrewarmTaskAgentResponse",
 	"ControllersPrewarmAgentSwitchResponse":                "PrewarmAgentSwitchResponse",
 	"ControllersRollbackConversationResponse":              "RollbackConversationResponse",
 	"ControllersRetryTurnResponse":                         "RetryTurnResponse",
@@ -3409,6 +3411,26 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/task-preparations", id: "prepareStandaloneTask", tag: "sessions",
+			summary: "Reserve a standalone session and its scratch workspace for a new chat page",
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrepareTaskResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/task-preparations/{token}/agent", id: "prewarmTaskAgent", tag: "projects",
+			summary:    "Start the agent a new-chat page has selected in its task preparation, without a provider session",
+			pathParams: []any{controllers.TaskPreparationTokenParam{}},
+			reqBody:    controllers.PrewarmTaskAgentRequest{},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrewarmTaskAgentResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

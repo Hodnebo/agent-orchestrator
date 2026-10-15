@@ -43,7 +43,10 @@ type chatSwitchStandby struct {
 	targetAgent ports.Agent
 	setupEnv    map[string]string
 	workspace   string
-	timer       *time.Timer
+	// keepWorkspace leaves the agent files in place when the standby expires:
+	// a new chat's worktree may by then belong to a session using them.
+	keepWorkspace bool
+	timer         *time.Timer
 }
 
 // chatStandbyLock serializes prewarm and takeover for one session, so a slow
@@ -63,6 +66,23 @@ func (m *Manager) chatStandbyLock(id domain.SessionID) chan struct{} {
 	return lock
 }
 
+func (m *Manager) chatStandbyEpoch(id domain.SessionID) uint64 {
+	m.chatStandbyMu.Lock()
+	defer m.chatStandbyMu.Unlock()
+	return m.chatStandbyEpochs[id]
+}
+
+// supersedeChatStandby records that a launch went ahead without waiting for a
+// prewarm still in flight.
+func (m *Manager) supersedeChatStandby(id domain.SessionID) {
+	m.chatStandbyMu.Lock()
+	defer m.chatStandbyMu.Unlock()
+	if m.chatStandbyEpochs == nil {
+		m.chatStandbyEpochs = make(map[domain.SessionID]uint64)
+	}
+	m.chatStandbyEpochs[id]++
+}
+
 // PrewarmChatSwitch starts the agent the user picked for a chat's next switch,
 // so the send that carries the switch skips process launch and initialization.
 // Picking the session's current agent drops any standby. Unsupported targets
@@ -76,6 +96,7 @@ func (m *Manager) PrewarmChatSwitch(ctx context.Context, id domain.SessionID, cf
 	}
 	defer func() { <-lock }()
 	m.dropChatStandby(id, true)
+	epoch := m.chatStandbyEpoch(id)
 
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -93,87 +114,164 @@ func (m *Manager) PrewarmChatSwitch(ctx context.Context, id domain.SessionID, cf
 	if m.agentOperationActive(id) {
 		return nil
 	}
-	launcher, ok := m.chat.(chatStandbyLauncher)
-	if !ok || !launcher.SupportsChatStandby(target) {
+	if !m.supportsChatStandby(target) {
 		return nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
 		return fmt.Errorf("prewarm switch %s: project: %w", id, err)
 	}
-	targetAgent, ok := m.agents.Agent(target)
-	if !ok {
-		return fmt.Errorf("prewarm switch %s: %w: %q", id, ErrUnknownHarness, target)
-	}
 	agentConfig, systemPrompt, err := m.chatSwitchTargetConfig(ctx, rec, project, cfg)
 	if err != nil {
 		return fmt.Errorf("prewarm switch %s: %w", id, err)
 	}
-	setupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
-	m.augmentAgentRuntimeEnv(targetAgent, setupEnv)
-	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, target, systemPrompt)
-	if err != nil {
-		return fmt.Errorf("prewarm switch %s: system prompt file: %w", id, err)
-	}
 	workspace := rec.Metadata.WorkspacePath
-	// Agents read their hook and trust files at startup, so they go in before
-	// the process does. The switch rewrites them with its final instructions.
-	if err := m.prepareWorkspace(ctx, targetAgent, id, workspace,
-		systemPrompt, systemPromptFile, agentConfig, setupEnv); err != nil {
-		return fmt.Errorf("prewarm switch %s: prepare workspace: %w", id, err)
-	}
-	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
-	if err != nil {
-		m.cleanupPreparedAgentWorkspace(ctx, targetAgent, id, workspace, setupEnv)
-		return fmt.Errorf("prewarm switch %s: runtime env: %w", id, err)
-	}
-	m.augmentAgentRuntimeEnv(targetAgent, env)
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, workspace)
 	if err != nil {
-		m.cleanupPreparedAgentWorkspace(ctx, targetAgent, id, workspace, setupEnv)
 		return fmt.Errorf("prewarm switch %s: workspace roots: %w", id, err)
 	}
+	err = m.startChatStandby(ctx, chatStandbyStart{
+		record: rec, project: project, target: target, agentConfig: agentConfig,
+		systemPrompt: systemPrompt, workspace: workspace, additionalDirectories: additionalDirectories,
+		liveHarness: rec.Harness,
+		// A switch that stops waiting for this prewarm moves the epoch on; one
+		// still waiting takes the standby when this returns.
+		ttl: chatStandbyTTL, epoch: epoch,
+	})
+	if err != nil {
+		return fmt.Errorf("prewarm switch %s: %w", id, err)
+	}
+	return nil
+}
+
+// workspaceFilesShared reports agents whose workspace setup writes the same
+// files, so preparing one ahead of a switch would change the other's while it
+// still runs. opencode v2 replaces v1's activity plugin.
+func workspaceFilesShared(live, target domain.AgentHarness) bool {
+	opencode := func(h domain.AgentHarness) bool {
+		return h == domain.HarnessOpenCode || h == domain.HarnessOpenCodeV2
+	}
+	return live != "" && opencode(live) && opencode(target)
+}
+
+func (m *Manager) supportsChatStandby(harness domain.AgentHarness) bool {
+	launcher, ok := m.chat.(chatStandbyLauncher)
+	return ok && launcher.SupportsChatStandby(harness)
+}
+
+// chatStandbyStart is everything a later Chat launch of record will use.
+type chatStandbyStart struct {
+	record                domain.SessionRecord
+	project               domain.ProjectRecord
+	target                domain.AgentHarness
+	agentConfig           ports.AgentConfig
+	systemPrompt          string
+	workspace             string
+	additionalDirectories []string
+	ttl                   time.Duration
+	keepWorkspaceOnExpiry bool
+	// liveHarness is the agent still running in workspace, for a switch. Its
+	// session prompt file is left alone, and so are its files when the target
+	// writes into the same place.
+	liveHarness domain.AgentHarness
+	// epoch is the session's standby epoch when the prewarm took its lock.
+	epoch uint64
+	// abandoned reports, once the provider is up, that the launch it was for
+	// will no longer look for it.
+	abandoned func() bool
+}
+
+// startChatStandby prepares the target's workspace files, builds its launch
+// environment, and starts its provider without a session. The caller holds the
+// session's standby lock and has dropped any earlier standby.
+func (m *Manager) startChatStandby(ctx context.Context, in chatStandbyStart) error {
+	launcher, ok := m.chat.(chatStandbyLauncher)
+	if !ok {
+		return nil
+	}
+	rec := in.record
+	id := rec.ID
+	// A launch that stopped waiting owns the workspace files now.
+	superseded := func() bool { return m.chatStandbyEpoch(id) != in.epoch }
+	if superseded() {
+		return nil
+	}
+	targetAgent, ok := m.agents.Agent(in.target)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrUnknownHarness, in.target)
+	}
+	setupEnv := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, in.project.Config.Env)
+	m.augmentAgentRuntimeEnv(targetAgent, setupEnv)
+	// Agents read their hook and trust files at startup, so they go in before
+	// the process does, and the launch rewrites them with its final
+	// instructions. A running chat's prompt file stays the live agent's until
+	// the switch commits.
+	systemPromptFile := ""
+	if in.liveHarness == "" {
+		var err error
+		systemPromptFile, err = m.prepareSystemPromptFile(rec.ID, in.target, in.systemPrompt)
+		if err != nil {
+			return fmt.Errorf("system prompt file: %w", err)
+		}
+	}
+	if !workspaceFilesShared(in.liveHarness, in.target) {
+		if err := m.prepareWorkspace(ctx, targetAgent, id, in.workspace,
+			in.systemPrompt, systemPromptFile, in.agentConfig, setupEnv); err != nil {
+			return fmt.Errorf("prepare workspace: %w", err)
+		}
+	}
+	// After a launch stopped waiting, the agent files are the launch's.
+	cleanupFiles := func() {
+		if !superseded() {
+			m.cleanupPreparedAgentWorkspace(ctx, targetAgent, id, in.workspace, setupEnv)
+		}
+	}
+	env, verifier, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, in.project.Config.Env)
+	if err != nil {
+		cleanupFiles()
+		return fmt.Errorf("runtime env: %w", err)
+	}
+	m.augmentAgentRuntimeEnv(targetAgent, env)
 	started := time.Now()
 	handle, err := launcher.PrewarmChatStandby(ctx, ChatStart{
 		SessionID:             id,
 		ProjectID:             rec.ProjectID,
 		Kind:                  rec.Kind,
-		Harness:               target,
+		Harness:               in.target,
 		DataDir:               m.dataDir,
-		WorkspacePath:         workspace,
+		WorkspacePath:         in.workspace,
 		Env:                   env,
-		Model:                 agentConfig.Model,
-		Effort:                agentConfig.Effort,
-		Permissions:           agentConfig.Permissions,
-		SystemPrompt:          systemPrompt,
-		AdditionalDirectories: additionalDirectories,
+		Model:                 in.agentConfig.Model,
+		Effort:                in.agentConfig.Effort,
+		Permissions:           in.agentConfig.Permissions,
+		SystemPrompt:          in.systemPrompt,
+		AdditionalDirectories: in.additionalDirectories,
 	})
 	if err != nil {
-		m.cleanupPreparedAgentWorkspace(ctx, targetAgent, id, workspace, setupEnv)
+		cleanupFiles()
 		if errors.Is(err, ports.ErrChatUnsupported) {
 			return nil
 		}
-		return fmt.Errorf("prewarm switch %s: %w", id, err)
+		return err
 	}
-	standby := &chatSwitchStandby{
-		session: id, target: target, model: agentConfig.Model, effort: agentConfig.Effort,
-		permissions: agentConfig.Permissions, env: env, verifier: verifier, handle: handle,
-		targetAgent: targetAgent, setupEnv: setupEnv, workspace: workspace,
-	}
-	if m.agentOperationActive(id) {
-		// A switch stopped waiting for this prewarm and started its own agent;
-		// the workspace files are now that switch's.
+	if superseded() || in.abandoned != nil && in.abandoned() {
 		handle.Discard()
 		return nil
 	}
-	standby.timer = time.AfterFunc(chatStandbyTTL, func() { m.expireChatStandby(id, standby) })
+	standby := &chatSwitchStandby{
+		session: id, target: in.target, model: in.agentConfig.Model, effort: in.agentConfig.Effort,
+		permissions: in.agentConfig.Permissions, env: env, verifier: verifier, handle: handle,
+		targetAgent: targetAgent, setupEnv: setupEnv, workspace: in.workspace,
+		keepWorkspace: in.keepWorkspaceOnExpiry,
+	}
+	standby.timer = time.AfterFunc(in.ttl, func() { m.expireChatStandby(id, standby) })
 	m.chatStandbyMu.Lock()
 	if m.chatStandbys == nil {
 		m.chatStandbys = make(map[domain.SessionID]*chatSwitchStandby)
 	}
 	m.chatStandbys[id] = standby
 	m.chatStandbyMu.Unlock()
-	m.logger.Info("agent switch standby ready", "sessionID", id, "target", target,
+	m.logger.Info("agent standby ready", "sessionID", id, "target", in.target,
 		"duration", time.Since(started).Round(time.Millisecond))
 	return nil
 }
@@ -212,12 +310,20 @@ func (m *Manager) chatSwitchTargetConfig(
 // prewarm still in flight. A standby for another target or other settings is
 // dropped, with its workspace files when they belong to a different agent.
 func (m *Manager) takeChatStandby(id domain.SessionID, target domain.AgentHarness, agentConfig ports.AgentConfig) *chatSwitchStandby {
+	m.chatStandbyMu.Lock()
+	_, held := m.chatStandbyLocks[id]
+	m.chatStandbyMu.Unlock()
+	if !held {
+		// No prewarm ever ran for this session.
+		return nil
+	}
 	lock := m.chatStandbyLock(id)
 	wait := time.NewTimer(chatStandbyTakeWait)
 	defer wait.Stop()
 	select {
 	case lock <- struct{}{}:
 	case <-wait.C:
+		m.supersedeChatStandby(id)
 		return nil
 	}
 	defer func() { <-lock }()
@@ -278,7 +384,7 @@ func (m *Manager) expireChatStandby(id domain.SessionID, standby *chatSwitchStan
 	}
 	delete(m.chatStandbys, id)
 	m.chatStandbyMu.Unlock()
-	m.releaseChatStandby(standby, true)
+	m.releaseChatStandby(standby, !standby.keepWorkspace)
 }
 
 // dropChatStandby discards a session's standby. The caller holds its lock.

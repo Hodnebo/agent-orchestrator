@@ -437,7 +437,10 @@ type SpawnSessionRequest struct {
 	ClientRequestID string `json:"clientRequestId,omitempty" maxLength:"128"`
 	// ProjectID is omitted for a standalone worker session.
 	ProjectID domain.ProjectID `json:"projectId,omitempty"`
-	IssueID   domain.IssueID   `json:"issueId,omitempty"`
+	// TaskPreparation claims a standalone preparation from POST
+	// /task-preparations, and the agent a new chat page started in it.
+	TaskPreparation string         `json:"taskPreparation,omitempty" maxLength:"128"`
+	IssueID         domain.IssueID `json:"issueId,omitempty"`
 	// ParentSessionID is supplied by `ao spawn` inside an AO session. The daemon
 	// validates it before deriving inherited worker settings.
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
@@ -1150,6 +1153,20 @@ type DelegateTaskRequest struct {
 	// TaskPreparation is the opaque worktree token returned while the New Task
 	// dialog is open. Missing or expired tokens fall back to normal creation.
 	TaskPreparation string `json:"taskPreparation,omitempty"`
+}
+
+// PrewarmTaskAgentRequest is the agent a new-chat page has selected for its
+// task preparation, with the model, effort, and approval its send will carry.
+type PrewarmTaskAgentRequest struct {
+	Agent        domain.AgentHarness   `json:"agent" description:"Agent selected on the new-chat page."`
+	Model        string                `json:"model,omitempty" maxLength:"256"`
+	Effort       *string               `json:"effort,omitempty" maxLength:"64" description:"Nil inherits the project default; an empty string selects the provider default."`
+	ApprovalMode domain.PermissionMode `json:"approvalMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
+}
+
+// PrewarmTaskAgentResponse acknowledges a background agent start.
+type PrewarmTaskAgentResponse struct {
+	Agent domain.AgentHarness `json:"agent"`
 }
 
 // PrepareTaskResponse returns the opaque token for a speculative task workspace.

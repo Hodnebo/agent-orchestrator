@@ -11019,6 +11019,32 @@ paths:
       summary: Check local machine readiness (git, tmux, agent harness, gh)
       tags:
       - system
+  /api/v1/task-preparations:
+    post:
+      operationId: prepareStandaloneTask
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrepareTaskResponse'
+          description: Accepted
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Reserve a standalone session and its scratch workspace for a new chat
+        page
+      tags:
+      - sessions
   /api/v1/task-preparations/{token}:
     delete:
       operationId: cancelTaskPreparation
@@ -11046,6 +11072,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Cancel an unclaimed speculative task worktree
+      tags:
+      - projects
+  /api/v1/task-preparations/{token}/agent:
+    post:
+      operationId: prewarmTaskAgent
+      parameters:
+      - description: Opaque speculative task-worktree token.
+        in: path
+        name: token
+        required: true
+        schema:
+          description: Opaque speculative task-worktree token.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrewarmTaskAgentRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrewarmTaskAgentResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start the agent a new-chat page has selected in its task preparation,
+        without a provider session
       tags:
       - projects
   /api/v1/usage/memory/pressure:
@@ -15760,6 +15826,38 @@ components:
       required:
       - agent
       type: object
+    PrewarmTaskAgentRequest:
+      properties:
+        agent:
+          description: Agent selected on the new-chat page.
+          type: string
+        approvalMode:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        effort:
+          description: Nil inherits the project default; an empty string selects the
+            provider default.
+          maxLength: 64
+          type:
+          - "null"
+          - string
+        model:
+          maxLength: 256
+          type: string
+      required:
+      - agent
+      type: object
+    PrewarmTaskAgentResponse:
+      properties:
+        agent:
+          type: string
+      required:
+      - agent
+      type: object
     ProbeAgentResponse:
       properties:
         agent:
@@ -18103,6 +18201,9 @@ components:
         requestedOutput:
           enum:
           - artifact
+          type: string
+        taskPreparation:
+          maxLength: 128
           type: string
         trackerProvider:
           enum:

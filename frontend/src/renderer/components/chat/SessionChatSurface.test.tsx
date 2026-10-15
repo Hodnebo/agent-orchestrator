@@ -2,13 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentSwitchesQueryKey } from "../../hooks/useAgentSwitches";
 import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
+import { readChatSessionDraft, writeChatComposerText } from "../../lib/chat-drafts";
 
 const LINK = "http://localhost:5173";
 const REPORT_LINK = "reports/new-report.html";
@@ -106,6 +107,8 @@ vi.mock("../../hooks/useConversation", () => ({
 	clearConversationProviderCatalogs: clearCatalogsMock,
 	conversationQueryKey: (sessionId: string) => ["conversation", sessionId],
 	invalidateConversationProviderCatalogs: invalidateCatalogsMock,
+	releaseSwitchLocalEcho: vi.fn(),
+	seedHeldLocalEcho: vi.fn(),
 	useConversation: (sessionId: string) => ({
 		...conversationState,
 		snapshot: conversationState.snapshot
@@ -980,14 +983,15 @@ describe("SessionChatSurface link routing", () => {
 		await waitFor(() => {
 			expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "true");
 		});
-		// A switch in progress shows in the transcript, not as a card; one that
-		// awaits recovery keeps its card for the reason and the next step.
+		// A switch this window did not start from the composer has no message in
+		// the transcript, so its card explains the locked chat.
+		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
 		if (outcome === "in_progress") {
-			expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
+			const progress = screen.getByRole("list", { name: "Switching…" });
+			expect(progress.querySelector('[aria-current="step"]')).toHaveTextContent("Starting target agent");
 		} else {
-			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", outcome);
+			expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
 		}
-		expect(screen.queryByRole("list", { name: "Switching…" })).not.toBeInTheDocument();
 	});
 
 	it("uses a ready Chat controller as the completed takeover proof", async () => {
@@ -1088,9 +1092,9 @@ describe("SessionChatSurface link routing", () => {
 		);
 
 		await waitFor(() => {
-			expect(catalogObserverState.enabled.at(-1)).toBe(false);
+			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", "in_progress");
 		});
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
+		expect(catalogObserverState.enabled.at(-1)).toBe(false);
 
 		conversationState.snapshot = {
 			capabilities: ["config_options"],
@@ -1162,9 +1166,8 @@ describe("SessionChatSurface link routing", () => {
 		);
 
 		await waitFor(() => {
-			expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "true");
+			expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", "in_progress");
 		});
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
 
 		agentSwitchState.data = [failedSwitch];
 		act(() => {
@@ -1203,7 +1206,7 @@ describe("SessionChatSurface link routing", () => {
 				<SessionChatSurface session={{ ...session, activeAgentSwitch: retrySwitch }} />
 			</Wrapper>,
 		);
-		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
+		expect(screen.getByTestId("chat-agent-switch-status")).toHaveAttribute("data-outcome", "in_progress");
 
 		const completedRetry = {
 			...retrySwitch,
@@ -1243,6 +1246,140 @@ describe("SessionChatSurface link routing", () => {
 		act(() => vi.advanceTimersByTime(3_000));
 		expect(screen.queryByTestId("chat-agent-switch-status")).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-agent-input")).toHaveAttribute("data-disabled", "false");
+	});
+
+	it("holds messages queued before a reload until the switch hands the chat over", async () => {
+		const runningSwitch = {
+			agentHandoffStatus: "not_attempted",
+			fromHarness: "claude-code",
+			id: "switch-running-across-reload",
+			requestedAt: "2026-10-15T00:00:00Z",
+			state: "starting_target",
+			targetHarness: "codex",
+		} satisfies AgentSwitchSummary;
+		window.localStorage.setItem(
+			`ao.chat.held-switch.${session.id}`,
+			JSON.stringify([{ text: "and then run the tests", clientMessageId: "held-1" }]),
+		);
+		const send = vi.fn(async () => undefined);
+		(conversationCommandState as { send?: unknown }).send = send;
+		onTestFinished(() => {
+			delete (conversationCommandState as { send?: unknown }).send;
+		});
+		agentSwitchState.data = [runningSwitch];
+		conversationState.snapshot = { capabilities: [], controller: { state: "ready" }, harness: "codex" };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [runningSwitch]);
+		const view = render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, activeAgentSwitch: runningSwitch }} />
+			</Wrapper>,
+		);
+		await act(async () => {});
+		expect(send).not.toHaveBeenCalled();
+
+		const completed = { ...runningSwitch, state: "completed" } satisfies AgentSwitchSummary;
+		agentSwitchState.data = [completed];
+		act(() => {
+			queryClient.setQueryData(agentSwitchesQueryKey(session.id), [completed]);
+		});
+		view.rerender(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, activeAgentSwitch: completed }} />
+			</Wrapper>,
+		);
+		await waitFor(() => {
+			expect(send).toHaveBeenCalledWith(
+				expect.objectContaining({ text: "and then run the tests" }),
+			);
+		});
+		expect(window.localStorage.getItem(`ao.chat.held-switch.${session.id}`)).toBeNull();
+	});
+
+	it("gives held messages back to the composer when the switch they waited on failed", async () => {
+		const failedSwitch = {
+			agentHandoffStatus: "not_attempted",
+			errorCode: "target_binary_missing",
+			fromHarness: "codex",
+			id: "switch-failed-across-reload",
+			requestedAt: "2026-10-15T00:00:00Z",
+			state: "failed",
+			targetHarness: "claude-code",
+		} satisfies AgentSwitchSummary;
+		window.localStorage.setItem(
+			`ao.chat.held-switch.${session.id}`,
+			JSON.stringify([{ text: "keep this one", clientMessageId: "held-2" }, { text: "  ", clientMessageId: "held-3" }]),
+		);
+		const send = vi.fn(async () => undefined);
+		(conversationCommandState as { send?: unknown }).send = send;
+		onTestFinished(() => {
+			delete (conversationCommandState as { send?: unknown }).send;
+		});
+		agentSwitchState.data = [failedSwitch];
+		conversationState.snapshot = { capabilities: [], controller: { state: "ready" }, harness: "codex" };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [failedSwitch]);
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+
+		await waitFor(() => {
+			expect(window.localStorage.getItem(`ao.chat.held-switch.${session.id}`)).toBeNull();
+		});
+		expect(send).not.toHaveBeenCalled();
+		expect(readChatSessionDraft({ sessionId: session.id, incarnation: session.id }).composer.text).toBe("keep this one");
+	});
+
+	it("returns held messages after the draft when their switch was never recorded", async () => {
+		// The chat moved to codex long ago; a later switch to claude-code was
+		// refused before the daemon recorded it.
+		const olderSwitch = {
+			agentHandoffStatus: "received",
+			fromHarness: "claude-code",
+			id: "switch-older-completed",
+			requestedAt: "2026-10-14T00:00:00Z",
+			state: "completed",
+			targetHarness: "codex",
+		} satisfies AgentSwitchSummary;
+		window.localStorage.setItem(
+			`ao.chat.held-switch.${session.id}`,
+			JSON.stringify([{
+				text: "second message",
+				clientMessageId: "held-4",
+				heldFor: { target: "claude-code", at: Date.parse("2026-10-15T00:00:00Z") },
+			}]),
+		);
+		writeChatComposerText({ sessionId: session.id, incarnation: session.id }, "first message");
+		const send = vi.fn(async () => undefined);
+		(conversationCommandState as { send?: unknown }).send = send;
+		onTestFinished(() => {
+			delete (conversationCommandState as { send?: unknown }).send;
+			writeChatComposerText({ sessionId: session.id, incarnation: session.id }, "");
+		});
+		agentSwitchState.data = [olderSwitch];
+		conversationState.snapshot = { capabilities: [], controller: { state: "ready" }, harness: "codex" };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		queryClient.setQueryData(agentSwitchesQueryKey(session.id), [olderSwitch]);
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={session} />
+			</Wrapper>,
+		);
+
+		await waitFor(() => {
+			expect(window.localStorage.getItem(`ao.chat.held-switch.${session.id}`)).toBeNull();
+		});
+		expect(send).not.toHaveBeenCalled();
+		expect(readChatSessionDraft({ sessionId: session.id, incarnation: session.id }).composer.text)
+			.toBe("first message\n\nsecond message");
 	});
 
 	it("keeps a selected shell renderable when the conversation is unavailable", () => {

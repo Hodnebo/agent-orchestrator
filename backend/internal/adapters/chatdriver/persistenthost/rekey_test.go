@@ -64,6 +64,16 @@ func TestRekeyMovesLiveHostOntoFreeSessionKey(t *testing.T) {
 	}
 }
 
+func TestStandbyKeysAreUniquePerStandby(t *testing.T) {
+	first, second := StandbyKey("worker-1"), StandbyKey("worker-1")
+	if first == second {
+		t.Fatalf("two standbys for one session share key %q", first)
+	}
+	if _, err := hostDir(t.TempDir(), first); err != nil {
+		t.Fatalf("standby key %q is not a valid host key: %v", first, err)
+	}
+}
+
 func TestRekeyRefusesHeldSessionKey(t *testing.T) {
 	dataDir := t.TempDir()
 	workdir := t.TempDir()
@@ -79,13 +89,14 @@ func TestRekeyRefusesHeldSessionKey(t *testing.T) {
 		t.Cleanup(func() { _ = Shutdown(context.Background(), dataDir, key) })
 	}
 	start("worker-1")
-	start(StandbyKey("worker-1"))
+	standby := StandbyKey("worker-1")
+	start(standby)
 
-	err := Rekey(context.Background(), dataDir, StandbyKey("worker-1"), "worker-1", "fp")
+	err := Rekey(context.Background(), dataDir, standby, "worker-1", "fp")
 	if !errors.Is(err, ErrHostExists) {
 		t.Fatalf("rekey onto a live session host = %v, want ErrHostExists", err)
 	}
-	if _, err := readDescriptor(dataDir, StandbyKey("worker-1")); err != nil {
+	if _, err := readDescriptor(dataDir, standby); err != nil {
 		t.Fatalf("refused rekey must leave the standby in place: %v", err)
 	}
 }

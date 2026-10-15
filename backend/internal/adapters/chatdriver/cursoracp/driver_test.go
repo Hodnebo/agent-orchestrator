@@ -349,3 +349,21 @@ func TestSessionOptionsMapOnlyAdvertisedModel(t *testing.T) {
 		t.Fatalf("options = %#v, want only provider-advertised model option %#v", got, want)
 	}
 }
+
+func TestStandingRuleLeavesOutSwitchHandoff(t *testing.T) {
+	dataDir := t.TempDir()
+	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		SessionID: "worker-1", DataDir: dataDir,
+		SystemPrompt: "AO standing\n\n<ao-continuation switch-id=s1>transcript with secrets</ao-continuation>",
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	rule, err := os.ReadFile(filepath.Join(args[1], "rules", "ao-standing.mdc"))
+	if err != nil {
+		t.Fatalf("read rule: %v", err)
+	}
+	if !strings.Contains(string(rule), "AO standing") || strings.Contains(string(rule), "transcript with secrets") {
+		t.Fatalf("rule = %q, want standing instructions without the handoff", rule)
+	}
+}

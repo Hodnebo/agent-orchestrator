@@ -938,6 +938,31 @@ func TestGetAgentHooksSeedsPluginDependencyStub(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("a plugin added after the stub removes it, and a relaunch keeps it otherwise", func(t *testing.T) {
+		workspace := t.TempDir()
+		cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}
+		for range 2 {
+			if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, "package-lock.json")); err != nil {
+			t.Fatalf("relaunch dropped AO's own stub: %v", err)
+		}
+		pluginDir := filepath.Dir(opencodePluginPath(workspace))
+		if err := os.WriteFile(filepath.Join(pluginDir, "repo.ts"), []byte("export default {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"node_modules", "package-lock.json"} {
+			if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stub %s kept beside a repository plugin (err %v)", name, err)
+			}
+		}
+	})
 }
 
 func TestGetAgentHooksRefusesToClobberForeignSkill(t *testing.T) {

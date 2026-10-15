@@ -215,6 +215,11 @@ export function continuableTurnId(snapshot: ConversationSnapshot): string {
 	return snapshot.continueTurnId ?? "";
 }
 
+// A message sent with an agent switch reaches the chat once the new agent has
+// started, within this long of the switch even from a slow start; anything
+// later is an ordinary send.
+const SWITCH_MESSAGE_WINDOW_MS = 120_000;
+
 export interface ChatRetryControl {
 	retry: (turnId: string) => void | Promise<unknown>;
 	pending?: boolean;
@@ -3401,9 +3406,13 @@ export function Timeline({
 		// agent took it, so its timer carries on through the hand-over.
 		for (const marker of agentSwitchMarkers ?? []) {
 			const switchedAt = Date.parse(marker.at);
-			const index = timeline.findIndex((group) =>
-				group.turnId && !group.turnId.startsWith("local:") && groupHasHumanPrompt(group) &&
-				Date.parse(group.items[0]?.createdAt ?? "") >= wholeSecond(marker.at));
+			// Only a message sent with the switch: a switch from the dialog has no
+			// message, and the user's next one may come hours later.
+			const index = timeline.findIndex((group) => {
+				const sentAt = Date.parse(group.items[0]?.createdAt ?? "");
+				return Boolean(group.turnId) && !group.turnId?.startsWith("local:") && groupHasHumanPrompt(group) &&
+					sentAt >= wholeSecond(marker.at) && sentAt - switchedAt <= SWITCH_MESSAGE_WINDOW_MS;
+			});
 			const group = timeline[index];
 			if (!group) continue;
 			const turnRow = snapshot.turns.find((candidate) => candidate.id === group.turnId);

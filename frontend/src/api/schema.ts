@@ -3612,6 +3612,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/task-preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reserve a standalone session and its scratch workspace for a new chat page */
+        post: operations["prepareStandaloneTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/task-preparations/{token}": {
         parameters: {
             query?: never;
@@ -3624,6 +3641,23 @@ export interface paths {
         post?: never;
         /** Cancel an unclaimed speculative task worktree */
         delete: operations["cancelTaskPreparation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/task-preparations/{token}/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the agent a new-chat page has selected in its task preparation, without a provider session */
+        post: operations["prewarmTaskAgent"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5426,6 +5460,18 @@ export interface components {
             /** @description Agent adapter identifier whose Chat check was started. */
             agent: string;
         };
+        PrewarmTaskAgentRequest: {
+            /** @description Agent selected on the new-chat page. */
+            agent: string;
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Nil inherits the project default; an empty string selects the provider default. */
+            effort?: null | string;
+            model?: string;
+        };
+        PrewarmTaskAgentResponse: {
+            agent: string;
+        };
         ProbeAgentResponse: {
             agent: components["schemas"]["AgentInfo"];
             installed: boolean;
@@ -6354,6 +6400,7 @@ export interface components {
             prompt?: string;
             /** @enum {string} */
             requestedOutput?: "artifact";
+            taskPreparation?: string;
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
@@ -20394,6 +20441,44 @@ export interface operations {
             };
         };
     };
+    prepareStandaloneTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareTaskResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     cancelTaskPreparation: {
         parameters: {
             query?: never;
@@ -20415,6 +20500,51 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    prewarmTaskAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Opaque speculative task-worktree token. */
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrewarmTaskAgentRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrewarmTaskAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

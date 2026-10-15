@@ -708,8 +708,12 @@ func (c chatLauncher) SendSessionChatMessage(ctx context.Context, id domain.Sess
 	return turn.ID, nil
 }
 
-func (c chatLauncher) ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int) (string, bool, error) {
-	return c.svc.TranscriptExcerpt(ctx, id, maxBytes)
+func (c chatLauncher) ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int, markers []sessionmanager.ChatTranscriptMarker) (string, bool, error) {
+	converted := make([]chatsvc.TranscriptMarker, 0, len(markers))
+	for _, marker := range markers {
+		converted = append(converted, chatsvc.TranscriptMarker{At: marker.At, Text: marker.Text})
+	}
+	return c.svc.TranscriptExcerpt(ctx, id, maxBytes, converted)
 }
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {

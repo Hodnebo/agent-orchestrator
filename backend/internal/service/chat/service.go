@@ -98,6 +98,9 @@ type Service struct {
 	gates            map[domain.ConversationOwner]controllerGate
 	probeMu          sync.Mutex
 	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	// probeLocks serializes the probe of one harness, so a slow or hanging
+	// probe never holds up another harness's starts.
+	probeLocks map[domain.AgentHarness]*sync.Mutex
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -2149,15 +2152,35 @@ func (s *Service) driverCapabilities(
 	driver ports.ChatDriver,
 ) (ports.ChatCapabilities, error) {
 	s.probeMu.Lock()
-	defer s.probeMu.Unlock()
 	if caps, ok := s.probed[harness]; ok {
+		s.probeMu.Unlock()
+		return caps, nil
+	}
+	if s.probeLocks == nil {
+		s.probeLocks = make(map[domain.AgentHarness]*sync.Mutex)
+	}
+	lock := s.probeLocks[harness]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.probeLocks[harness] = lock
+	}
+	s.probeMu.Unlock()
+
+	lock.Lock()
+	defer lock.Unlock()
+	s.probeMu.Lock()
+	caps, ok := s.probed[harness]
+	s.probeMu.Unlock()
+	if ok {
 		return caps, nil
 	}
 	caps, err := driver.Probe(ctx)
 	if err != nil {
 		return nil, err
 	}
+	s.probeMu.Lock()
 	s.probed[harness] = caps
+	s.probeMu.Unlock()
 	return caps, nil
 }
 

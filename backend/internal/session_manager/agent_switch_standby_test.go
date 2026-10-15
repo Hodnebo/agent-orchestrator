@@ -24,11 +24,18 @@ type standbyChatLauncher struct {
 	*switchAgentChatLauncher
 	prewarmed []ChatStart
 	standbys  []*fakeChatStandby
+	// prewarmEntered and prewarmRelease, when set,, hold a prewarm inside the provider start.
+	prewarmEntered chan struct{}
+	prewarmRelease chan struct{}
 }
 
 func (l *standbyChatLauncher) SupportsChatStandby(domain.AgentHarness) bool { return true }
 
 func (l *standbyChatLauncher) PrewarmChatStandby(_ context.Context, cfg ChatStart) (ports.ChatStandby, error) {
+	if l.prewarmRelease != nil {
+		close(l.prewarmEntered)
+		<-l.prewarmRelease
+	}
 	l.prewarmed = append(l.prewarmed, cfg)
 	standby := &fakeChatStandby{harness: cfg.Harness}
 	l.standbys = append(l.standbys, standby)
@@ -133,5 +140,76 @@ func TestSwitchStopsWaitingForSlowPrewarm(t *testing.T) {
 	}
 	if waited := time.Since(started); waited < chatStandbyTakeWait || waited > 5*time.Second {
 		t.Fatalf("waited %s, want about %s", waited, chatStandbyTakeWait)
+	}
+}
+
+func TestPrewarmFinishingAfterTheSwitchGaveUpBacksOff(t *testing.T) {
+	manager, launcher, id := newStandbySwitchFixture(t)
+	previous := chatStandbyTakeWait
+	chatStandbyTakeWait = 100 * time.Millisecond
+	t.Cleanup(func() { chatStandbyTakeWait = previous })
+	launcher.prewarmEntered = make(chan struct{})
+	launcher.prewarmRelease = make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.PrewarmChatSwitch(context.Background(), id,
+			SwitchAgentConfig{TargetHarness: domain.HarnessCodex})
+	}()
+	<-launcher.prewarmEntered
+	// The switch stops waiting and starts its own agent.
+	if got := manager.takeChatStandby(id, domain.HarnessCodex, ports.AgentConfig{}); got != nil {
+		t.Fatalf("takeChatStandby = %+v, want none while the prewarm runs", got)
+	}
+	close(launcher.prewarmRelease)
+	if err := <-done; err != nil {
+		t.Fatalf("PrewarmChatSwitch: %v", err)
+	}
+	if launcher.standbys[0].discarded.Load() == 0 {
+		t.Fatal("late standby was kept after the switch went ahead without it")
+	}
+	manager.chatStandbyMu.Lock()
+	kept := manager.chatStandbys[id]
+	manager.chatStandbyMu.Unlock()
+	if kept != nil {
+		t.Fatal("late standby was registered for the session")
+	}
+}
+
+func TestSwitchWaitingForAPrewarmTakesItWhenItLands(t *testing.T) {
+	manager, launcher, id := newStandbySwitchFixture(t)
+	launcher.prewarmEntered = make(chan struct{})
+	launcher.prewarmRelease = make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.PrewarmChatSwitch(context.Background(), id,
+			SwitchAgentConfig{TargetHarness: domain.HarnessCodex})
+	}()
+	<-launcher.prewarmEntered
+	rec := manager.store.(*switchTestStore).sessions[id]
+	project, err := manager.loadProject(context.Background(), rec.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentConfig, _, err := manager.chatSwitchTargetConfig(context.Background(), rec, project,
+		SwitchAgentConfig{TargetHarness: domain.HarnessCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The switch is admitted (its operation registered) and waits for the prewarm.
+	manager.agentOpMu.Lock()
+	manager.agentOperations[id] = agentOperationSwitch
+	manager.agentOpMu.Unlock()
+	taken := make(chan *chatSwitchStandby, 1)
+	go func() { taken <- manager.takeChatStandby(id, domain.HarnessCodex, agentConfig) }()
+	time.Sleep(50 * time.Millisecond)
+	close(launcher.prewarmRelease)
+	if err := <-done; err != nil {
+		t.Fatalf("PrewarmChatSwitch: %v", err)
+	}
+	if got := <-taken; got == nil || got.handle != launcher.standbys[0] {
+		t.Fatalf("waiting switch took %+v, want the standby that just landed", got)
+	}
+	if launcher.standbys[0].discarded.Load() != 0 {
+		t.Fatal("standby discarded although the switch was waiting for it")
 	}
 }

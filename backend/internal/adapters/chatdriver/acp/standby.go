@@ -117,11 +117,9 @@ func (d *Driver) Prewarm(ctx context.Context, cfg ports.ChatStartConfig) (ports.
 		Env:   maps.Clone(cfg.Env),
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 	}
+	// The caller discards any earlier standby for the session; each one runs
+	// under its own key.
 	key := newHostKey(persistenthost.StandbyKey(string(cfg.SessionID)))
-	// One standby per session: a later pick replaces the earlier one.
-	if err := persistenthost.Shutdown(ctx, cfg.DataDir, key.get()); err != nil {
-		return nil, fmt.Errorf("replace ACP standby: %w", err)
-	}
 	started := time.Now()
 	proc, err := d.connectProcessAt(ctx, launch, nil, key)
 	if err != nil {
@@ -137,11 +135,25 @@ func (d *Driver) Prewarm(ctx context.Context, cfg ports.ChatStartConfig) (ports.
 	}
 	if d.cfg.Standby.Warm != nil {
 		warmCtx, cancel := context.WithTimeout(ctx, standbyWarmTimeout)
+		// A provider that exits mid warm-up never answers; stop waiting then.
+		go func() {
+			select {
+			case <-conv.conn.Done():
+				cancel()
+			case <-warmCtx.Done():
+			}
+		}()
 		if warmErr := d.cfg.Standby.Warm(warmCtx, conv.legacyWire.request); warmErr != nil {
 			d.log.Info("chat: ACP standby warm-up failed", "sessionID", cfg.SessionID,
 				"harness", d.cfg.Harness, "error", warmErr)
 		}
 		cancel()
+		select {
+		case <-conv.conn.Done():
+			_ = conv.Terminate()
+			return nil, errors.New("ACP standby provider exited while warming up")
+		default:
+		}
 	}
 	d.logStartStage(cfg.SessionID, "standby_ready", started, nil)
 	stored := cfg
@@ -226,16 +238,39 @@ func (s *standby) mismatch(cfg ports.ChatStartConfig) string {
 		return "effort"
 	case cfg.ReadOnly != want.ReadOnly || cfg.DisableNetwork != want.DisableNetwork:
 		return "sandbox"
-	case !strings.HasPrefix(cfg.SystemPrompt, want.SystemPrompt):
+	case strings.TrimSpace(withoutContinuation(cfg.SystemPrompt)) != strings.TrimSpace(want.SystemPrompt):
+		// The standby launched with the standing instructions alone; only a
+		// switch's handoff block may differ, and it travels separately.
 		return "standing instructions"
 	}
 	return ""
 }
 
 const (
-	continuationOpenTag  = "<ao-continuation"
+	// The block always opens with attributes; the continuation protocol ahead
+	// of it names the bare tag in prose, and transcript text inside it has
+	// "<ao-" escaped.
+	continuationOpenTag  = "<ao-continuation "
 	continuationCloseTag = "</ao-continuation>"
 )
+
+// StandingInstructions returns a system prompt without an agent switch's
+// handoff block. The handoff is a one-time message for the switch's first turn;
+// a provider that keeps its own history must not be handed it again.
+func StandingInstructions(systemPrompt string) string {
+	return strings.TrimSpace(withoutContinuation(systemPrompt))
+}
+
+// withoutContinuation removes an agent switch's handoff block from a system
+// prompt, leaving the standing instructions.
+func withoutContinuation(systemPrompt string) string {
+	start := strings.Index(systemPrompt, continuationOpenTag)
+	end := strings.LastIndex(systemPrompt, continuationCloseTag)
+	if start < 0 || end < start {
+		return systemPrompt
+	}
+	return systemPrompt[:start] + systemPrompt[end+len(continuationCloseTag):]
+}
 
 // ContinuationPreamble returns an agent switch's handoff block from a system
 // prompt as a first-prompt text block, or nil when the prompt has none.

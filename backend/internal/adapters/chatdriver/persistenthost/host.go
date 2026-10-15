@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -35,8 +36,11 @@ const (
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
 	// A stopped provider gets providerStdinGrace to exit on stdin closing, then
-	// a terminate signal, and is killed at providerStopDeadline.
-	providerStdinGrace   = 300 * time.Millisecond
+	// a terminate signal, and is killed at providerStopDeadline. One that gains
+	// nothing from waiting (its session is closed, or it never exits on stdin
+	// closing) gets providerQuickGrace.
+	providerStdinGrace   = time.Second
+	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
 )
 
@@ -146,6 +150,8 @@ type hello struct {
 	// To and Fingerprint carry a rekey's new session key and launch identity.
 	To          string `json:"to,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// QuickStop on a shutdown: the provider gains nothing from the stdin grace.
+	QuickStop bool `json:"quickStop,omitempty"`
 }
 
 type helloResponse struct {
@@ -513,6 +519,18 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 // Missing/dead hosts are harmless; unknown live owners fail closed.
 // The protocol acknowledgement only confirms that shutdown was requested.
 func Shutdown(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, false)
+}
+
+// ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
+// grace: it answered session/close, so its session is saved, or it never exits
+// on stdin closing. It is signalled sooner. A host from before this field
+// ignores it and waits the full grace.
+func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, true)
+}
+
+func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
 	d, err := readDescriptor(dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -534,7 +552,7 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	finishHandshake := bindConnToContext(handshakeCtx, conn)
-	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown", QuickStop: quick}); err != nil {
 		return finishHandshake(err)
 	}
 	var response helloResponse
@@ -574,10 +592,18 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 }
 
-// StandbyKey is the host key of a provider started ahead of an agent switch.
-// It never collides with a session id, and Reconcile reaps it on daemon start
-// because no durable session keeps it.
-func StandbyKey(sessionID string) string { return sessionID + ".standby" }
+// StandbyKey returns a fresh host key for a provider started ahead of a launch
+// for sessionID. Each standby gets its own key and directory: an adopted host
+// keeps its prompt journal in its launch directory, so a later standby for the
+// same session must never reuse it. No durable session keeps these keys, so
+// Reconcile reaps any left by a crash on daemon start.
+func isStandbyKey(key string) bool { return strings.Contains(key, ".standby-") }
+
+func StandbyKey(sessionID string) string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return sessionID + ".standby-" + hex.EncodeToString(b[:])
+}
 
 // Rekey moves a running host from one session key to another. An agent switch
 // uses it to adopt a provider that was started under StandbyKey while the
@@ -608,10 +634,10 @@ func Rekey(ctx context.Context, dataDir, from, to, fingerprint string) error {
 	}
 	var response helloResponse
 	if err := json.NewDecoder(conn).Decode(&response); err != nil {
-		return finishHandshake(err)
+		return abandonRekey(ctx, dataDir, to, d.Token, finishHandshake(err))
 	}
 	if err := finishHandshake(nil); err != nil {
-		return err
+		return abandonRekey(ctx, dataDir, to, d.Token, err)
 	}
 	if !response.OK {
 		if response.Error == ErrHostExists.Error() {
@@ -621,12 +647,23 @@ func Rekey(ctx context.Context, dataDir, from, to, fingerprint string) error {
 	}
 	moved, err := readDescriptor(dataDir, to)
 	if err != nil {
-		return fmt.Errorf("rekey chat host: %w", err)
+		return abandonRekey(ctx, dataDir, to, d.Token, fmt.Errorf("rekey chat host: %w", err))
 	}
 	if moved.Token != d.Token {
 		return fmt.Errorf("%w: rekeyed descriptor belongs to another host", ErrOwnershipInconclusive)
 	}
 	return nil
+}
+
+// abandonRekey stops the host if it moved to the target key even though the
+// rekey reported failure, so the caller's cleanup by the old key cannot leave
+// it running unowned. A host under the target key with another token is left
+// alone.
+func abandonRekey(ctx context.Context, dataDir, to, token string, cause error) error {
+	if d, err := readDescriptor(dataDir, to); err == nil && d.Token == token {
+		cause = errors.Join(cause, Shutdown(context.WithoutCancel(ctx), dataDir, to))
+	}
+	return cause
 }
 
 // ownership is the session key a host currently answers to: its launch lock
@@ -682,7 +719,10 @@ func (o *ownership) releaseLock() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.release()
-	if dir, err := hostDir(o.dataDir, o.key); err == nil && dir != o.startDir && o.startDir != "" {
+	// A rekeyed host leaves its launch directory behind, and a standby that was
+	// never adopted leaves its own; each standby key is used once.
+	dir, err := hostDir(o.dataDir, o.key)
+	if err == nil && o.startDir != "" && (dir != o.startDir || isStandbyKey(o.key)) {
 		_ = os.RemoveAll(o.startDir)
 	}
 }
@@ -770,6 +810,10 @@ func Run(ctx context.Context, cfg Config) error {
 	stopProvider := func() {
 		_ = stdin.Close()
 		deadline := time.After(providerStopDeadline)
+		grace := providerStdinGrace
+		if h.quickStop.Load() {
+			grace = providerQuickGrace
+		}
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
@@ -777,7 +821,7 @@ func Run(ctx context.Context, cfg Config) error {
 			// any descendant that did not follow stdin closure.
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
 			return
-		case <-time.After(providerStdinGrace):
+		case <-time.After(grace):
 		}
 		// Some agents (Cursor, Grok) ignore stdin closing and only exit on a
 		// signal; asking them to terminate saves most of the deadline below,
@@ -785,7 +829,7 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = terminateProviderProcess(child)
 		// The provider's output can stay open after it exits when a helper it
 		// started inherited the pipe, so its own exit also ends the wait.
-		exited := time.NewTicker(20 * time.Millisecond)
+		exited := time.NewTicker(100 * time.Millisecond)
 		defer exited.Stop()
 	wait:
 		for {
@@ -842,6 +886,9 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
+	// quickStop is set before shutdown closes for a provider that gains
+	// nothing from the stdin grace.
+	quickStop atomic.Bool
 }
 
 type pendingRequest struct {
@@ -879,6 +926,9 @@ func (h *host) handle(conn net.Conn) {
 	if request.Action == "shutdown" {
 		_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
 		_ = conn.Close()
+		if request.QuickStop {
+			h.quickStop.Store(true)
+		}
 		h.shutdownOnce.Do(func() { close(h.shutdown) })
 		return
 	}

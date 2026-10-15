@@ -42,6 +42,7 @@ const (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessFX,
+		Standby: &acpdriver.StandbyConfig{},
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityModels:        true,
 			ports.ChatCapabilityConfigOptions: true,

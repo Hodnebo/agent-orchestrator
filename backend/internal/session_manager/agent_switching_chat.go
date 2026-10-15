@@ -202,7 +202,16 @@ func (m *Manager) executeChatAgentSwitch(
 	standby := m.takeChatStandby(id, cfg.TargetHarness, agentConfig)
 	if standby != nil {
 		defer standby.handle.Discard()
-		targetWorkspacePrepared = true
+		// The standby wrote the target's files before this switch prepared any.
+		// A switch that fails before preparing them itself removes them best
+		// effort; their removal never decides the switch's outcome.
+		defer func() {
+			if retErr != nil && !targetWorkspacePrepared && !targetOwnerCommitted {
+				cleanupCtx, cancel := switchDurableContext(workerCtx)
+				m.cleanupPreparedAgentWorkspace(cleanupCtx, targetAgent, id, rec.Metadata.WorkspacePath, targetSetupEnv)
+				cancel()
+			}
+		}()
 	}
 
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
@@ -345,7 +354,13 @@ func (m *Manager) executeChatAgentSwitch(
 		finalContext.SourceTranscriptPath = observedTranscript.Path
 	}
 	stage(domain.AgentSwitchFailureContinuationBuild)
-	continuation := m.buildChatSwitchContinuation(ctx, id, result, finalContext, observedTranscript)
+	// When AO's own record cannot be read, the source's native transcript tail
+	// (what the handoff carried before AO kept its own) stands in for it.
+	nativeTail := func() *switchTranscriptFact {
+		fact, _ := m.captureSourceTranscriptFact(ctx, admitted.sourceAgent, admitted.sourceNative, true)
+		return fact
+	}
+	continuation := m.buildChatSwitchContinuation(ctx, id, result, finalContext, observedTranscript, nativeTail)
 	stage(domain.AgentSwitchFailureFinalArtifactPublish)
 	writtenFinal, err := m.writeFinalizedHandoffFile(ctx, result, continuation)
 	if err != nil {
@@ -644,7 +659,34 @@ type chatMessageSender interface {
 // chatTranscriptExcerpter reads AO's own record of a Chat conversation. Every
 // agent has one, whether or not its provider keeps a transcript AO can read.
 type chatTranscriptExcerpter interface {
-	ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int) (excerpt string, truncated bool, err error)
+	ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int, markers []ChatTranscriptMarker) (excerpt string, truncated bool, err error)
+}
+
+// ChatTranscriptMarker labels a point in a Chat conversation's history, placed
+// among its messages by time.
+type ChatTranscriptMarker struct {
+	At   time.Time
+	Text string
+}
+
+// chatSwitchMarkers marks where each earlier completed switch handed the chat
+// to another agent, so the next agent can tell which one said what.
+func (m *Manager) chatSwitchMarkers(ctx context.Context, id domain.SessionID) []ChatTranscriptMarker {
+	switches, err := m.ListAgentSwitches(ctx, id)
+	if err != nil {
+		return nil
+	}
+	markers := make([]ChatTranscriptMarker, 0, len(switches))
+	for _, sw := range switches {
+		if sw.State != domain.AgentSwitchCompleted || sw.RequestedAt.IsZero() {
+			continue
+		}
+		markers = append(markers, ChatTranscriptMarker{
+			At:   sw.RequestedAt,
+			Text: fmt.Sprintf("chat switched from %s to %s; messages below are from %s", sw.FromHarness, sw.TargetHarness, sw.TargetHarness),
+		})
+	}
+	return markers
 }
 
 // deliverChatSwitchOpening opens the target's first turn. A switch made from
@@ -683,12 +725,18 @@ func (m *Manager) buildChatSwitchContinuation(
 	sw domain.AgentSwitch,
 	facts deterministicSwitchContext,
 	native *switchTranscriptFact,
+	nativeTail func() *switchTranscriptFact,
 ) string {
 	transcript := native
 	budget := handoffContinuationMaxBytes
 	for attempt := 0; attempt < 4 && budget > 0; attempt++ {
 		conversation := m.chatTranscriptFact(ctx, id, budget)
 		if conversation == nil {
+			if attempt == 0 && nativeTail != nil {
+				if fallback := nativeTail(); fallback != nil {
+					transcript = fallback
+				}
+			}
 			break
 		}
 		if native != nil {
@@ -711,7 +759,7 @@ func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID, m
 	if !ok {
 		return nil
 	}
-	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, maxBytes)
+	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, maxBytes, m.chatSwitchMarkers(ctx, id))
 	if err != nil {
 		m.logger.Warn("Chat agent switch: AO transcript excerpt unavailable", "sessionID", id, "error", err)
 		return nil
@@ -923,8 +971,10 @@ func (m *Manager) recoverActivatedChatAgentSwitch(
 		return false, err
 	}
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
+	// The human message a composer switch carried lived only in the request
+	// AO was serving when it restarted, so it may never arrive.
 	if _, err := m.chat.RelaySessionChatTurn(
-		ctx, rec.ID, aoTargetActivationPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
+		ctx, rec.ID, aoTargetRecoveryPrompt, chatSwitchActivationMessageID(current.ID), ports.MessageDeliveryOptions{}); err != nil {
 		recorder.userImpact = domain.AgentSwitchUserImpactDeliveryUnknown
 		_, failErr := m.failAgentSwitchWithRecorder(ctx, store, current, domain.AgentSwitchErrorDeliveryUnconfirmed, recorder)
 		return failErr == nil, failErr

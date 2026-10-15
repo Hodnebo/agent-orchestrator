@@ -29,6 +29,7 @@ import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { isComposerAgentSwitch, useSwitchAgent, useSwitchAgentState } from "../../hooks/useSwitchAgent";
+import { restoreChatComposerText } from "../../lib/chat-context-bus";
 import { readChatSessionDraft, writeChatComposerText } from "../../lib/chat-drafts";
 import { useSessionAgentSwitch } from "./useSessionAgentSwitch";
 import {
@@ -77,14 +78,93 @@ export interface ConversationWorkState {
 
 const HTTP_LINK_PATTERN = /https?:\/\/[^\s<>()\[\]{}"']+/i;
 const autoOpenedLinkSessions = new Set<string>();
+const ignorePendingAgentChange = () => undefined;
 
 // Messages sent while an agent switch runs, by session, oldest first. They wait
-// for the new agent to own the chat. Module-level so they survive the chat
-// unmounting mid-switch.
+// for the new agent to own the chat. Kept in local storage as well as memory,
+// so a reload, quit, or crash mid-switch does not lose what the user sent.
 const heldSwitchMessages = new Map<string, ConversationSendInput[]>();
+const HELD_SWITCH_STORAGE_PREFIX = "ao.chat.held-switch.";
+// Past this a composer switch shows its progress card and any controller error:
+// a switch normally lands in a few seconds.
+const SLOW_AGENT_SWITCH_MS = 10_000;
 
-function holdSwitchMessage(sessionKey: string, message: ConversationSendInput) {
-	heldSwitchMessages.set(sessionKey, [...(heldSwitchMessages.get(sessionKey) ?? []), message]);
+function heldSwitchStorage(): Storage | undefined {
+	try {
+		return window.localStorage;
+	} catch {
+		return undefined;
+	}
+}
+
+// A message sent while a switch ran, with the agent that switch was moving
+// to and when it was held. Only that switch landing sends it.
+type HeldSwitchMessage = ConversationSendInput & { heldFor?: { target: string; at: number } };
+
+function readHeldSwitchMessages(sessionKey: string): HeldSwitchMessage[] {
+	const cached = heldSwitchMessages.get(sessionKey);
+	if (cached) return cached;
+	try {
+		const raw = heldSwitchStorage()?.getItem(HELD_SWITCH_STORAGE_PREFIX + sessionKey);
+		const parsed: unknown = raw ? JSON.parse(raw) : [];
+		// A message stored without its images (over quota) and no text has
+		// nothing left to send.
+		const held = Array.isArray(parsed)
+			? parsed.filter((message): message is HeldSwitchMessage =>
+				typeof message?.text === "string" &&
+				(message.text.trim() !== "" || Boolean(message.attachments?.length) || Boolean(message.excerpts?.length)))
+			: [];
+		if (held.length) heldSwitchMessages.set(sessionKey, held);
+		return held;
+	} catch {
+		return [];
+	}
+}
+
+function writeHeldSwitchMessages(sessionKey: string, held: HeldSwitchMessage[]) {
+	if (held.length) heldSwitchMessages.set(sessionKey, held);
+	else heldSwitchMessages.delete(sessionKey);
+	const storage = heldSwitchStorage();
+	if (!storage) return;
+	const key = HELD_SWITCH_STORAGE_PREFIX + sessionKey;
+	try {
+		if (held.length) storage.setItem(key, JSON.stringify(held));
+		else storage.removeItem(key);
+	} catch {
+		// Over quota with images: keep the words.
+		try {
+			storage.setItem(key, JSON.stringify(held.map(({ attachments: _attachments, resources: _resources, ...rest }) => rest)));
+		} catch {
+			// The in-memory copy still serves this window.
+		}
+	}
+}
+
+function holdSwitchMessage(sessionKey: string, message: HeldSwitchMessage) {
+	writeHeldSwitchMessages(sessionKey, [...readHeldSwitchMessages(sessionKey), message]);
+}
+
+function takeHeldSwitchMessages(sessionKey: string): HeldSwitchMessage[] {
+	const held = readHeldSwitchMessages(sessionKey);
+	if (held.length) writeHeldSwitchMessages(sessionKey, []);
+	return held;
+}
+
+function dropHeldSwitchMessage(sessionKey: string, clientMessageId: string | undefined) {
+	const held = readHeldSwitchMessages(sessionKey);
+	writeHeldSwitchMessages(sessionKey, held.filter((message) => message.clientMessageId !== clientMessageId));
+}
+
+// Sessions whose held messages are being sent right now.
+const flushingHeldSwitch = new Set<string>();
+
+// Hands text back after whatever the user has typed since: to the mounted
+// composer, or to the draft it opens with.
+function returnTextToComposer(sessionKey: string, incarnation: string, text: string) {
+	if (!text || restoreChatComposerText(sessionKey, text)) return;
+	const scope = { sessionId: sessionKey, incarnation };
+	const draft = readChatSessionDraft(scope).composer.text;
+	writeChatComposerText(scope, draft.trim() ? `${draft}\n\n${text}` : text);
 }
 
 interface AssistantLinkState {
@@ -314,7 +394,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
 	// Agent-switch presentation for the chat surface progress track and input locks.
 	const switchMutation = useSwitchAgentState(uiSessionId);
-	const agentSwitches = useAgentSwitches(session.id, hostId).data ?? [];
+	const agentSwitchesQuery = useAgentSwitches(session.id, hostId);
+	const agentSwitches = agentSwitchesQuery.data ?? [];
 	const activeHistorySwitch = findActiveAgentSwitch(agentSwitches);
 	const selectedDurableAgentSwitch = selectDurableAgentSwitch(
 		session.activeAgentSwitch,
@@ -565,9 +646,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.map((entry) => Date.parse(entry.requestedAt as string) - 5_000);
 		const switchOpeningTurnIds = new Set<string>();
 		for (const startedAt of switchStarts) {
+			// Only a message sent with the switch, not the user's next one hours later.
 			const opening = snapshot.items.find((item) =>
 				item.kind === "message" && item.role === "user" && item.origin === "human" &&
-				Boolean(item.turnId) && Date.parse(item.createdAt) >= startedAt);
+				Boolean(item.turnId) && Date.parse(item.createdAt) >= startedAt &&
+				Date.parse(item.createdAt) <= startedAt + 125_000);
 			if (opening?.turnId) switchOpeningTurnIds.add(opening.turnId);
 		}
 		for (const item of snapshot.items) {
@@ -606,12 +689,32 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const composerSwitchInProgress = composerSwitch && (switchMutation.isPending || switchPresentation?.outcome === "in_progress");
 	const switchEcho = localEchos.find((echo) => echo.switching);
+	// A composer switch that has not landed after a while shows its progress
+	// card, so a stuck switch is visible.
+	const switchStartedAt = switchEcho ? Date.parse(switchEcho.createdAt) : undefined;
+	const [switchSlow, setSwitchSlow] = useState(false);
+	useEffect(() => {
+		if (!composerSwitchInProgress) {
+			setSwitchSlow(false);
+			return;
+		}
+		const remaining = SLOW_AGENT_SWITCH_MS - (Date.now() - (switchStartedAt ?? Date.now()));
+		if (remaining <= 0) {
+			setSwitchSlow(true);
+			return;
+		}
+		const timer = setTimeout(() => setSwitchSlow(true), remaining);
+		return () => clearTimeout(timer);
+	}, [composerSwitchInProgress, switchStartedAt]);
 	// Chat shows a switch in the transcript ("Switched from X to Y") and the
-	// working message, never as a card. Only a failure or a switch awaiting
-	// recovery, which carry the reason and what to do next, still get one.
+	// working message, not as a card. A failure, a switch awaiting recovery, or
+	// one that is taking too long still gets one.
 	const shownSwitchPresentation =
 		(switchPresentation?.outcome === "failure" && dismissedFailureSwitchId !== agentSwitch?.id) ||
-		switchPresentation?.outcome === "recovery"
+		switchPresentation?.outcome === "recovery" ||
+		// A switch from the dialog, or one this window did not start, has no
+		// message in the transcript to show it; its card explains the locked chat.
+		((switchSlow || !composerSwitch) && switchPresentation?.outcome === "in_progress")
 			? switchPresentation
 			: undefined;
 	// The switch a composer send is making right now, before or after the daemon accepts it.
@@ -622,7 +725,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			: undefined;
 	const agentSwitchMarkers = useMemo(() => {
 		const markers = agentSwitches
-			.filter((entry) => entry.state !== "failed" && Boolean(entry.requestedAt ?? entry.updatedAt))
+			// A failed switch, or one awaiting recovery, has not handed the chat over.
+			.filter((entry) =>
+				entry.state !== "failed" && !(entry.errorCode && entry.state !== "completed") &&
+				Boolean(entry.requestedAt ?? entry.updatedAt))
 			.map((entry) => ({
 				id: entry.id,
 				from: entry.fromHarness,
@@ -649,36 +755,89 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
 	// A failed switch never delivered its message: take the echo down and give
-	// the text back to an empty composer.
-	const switchFailed = composerSwitch && switchPresentation?.outcome === "failure";
+	// the text back to an empty composer. Messages held across a reload count:
+	// the switch they waited on is the one that failed.
+	const heldMessages = readHeldSwitchMessages(uiSessionId);
+	const heldPending = heldMessages.length > 0;
+	const heldFor = heldMessages[0]?.heldFor;
+	// After a reload the dock starts empty; held messages show there again.
+	useEffect(() => {
+		for (const message of readHeldSwitchMessages(uiSessionId)) {
+			if (!message.clientMessageId || localEchos.some((echo) => echo.clientMessageId === message.clientMessageId)) continue;
+			seedHeldLocalEcho(queryClient, session.id, hostId, {
+				clientMessageId: message.clientMessageId,
+				text: message.text,
+				excerpts: message.excerpts,
+				createdAt: new Date(message.heldFor?.at ?? Date.now()).toISOString(),
+			});
+		}
+		// Once per session view; later holds seed their own echo.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [hostId, queryClient, session.id, uiSessionId]);
+	// The newest switch decides where held messages go. After a reload nothing
+	// marks the switch as the composer's, so this is the only proof it landed.
+	const newestSwitch = useMemo(() => {
+		// The switch just created has no timestamp only if the daemon left it out; it is the newest.
+		const at = (entry: (typeof agentSwitches)[number]) =>
+			Date.parse(entry.requestedAt ?? entry.updatedAt ?? "") || Number.MAX_SAFE_INTEGER;
+		return agentSwitches.reduce<(typeof agentSwitches)[number] | undefined>(
+			(newest, entry) => (!newest || at(entry) >= at(newest) ? entry : newest),
+			undefined,
+		);
+	}, [agentSwitches]);
+	// Held messages wait on one switch: toward the agent they were held for,
+	// asked for around when they were held (clocks may differ on a remote host).
+	const newestRequestedAt = Date.parse(newestSwitch?.requestedAt ?? "");
+	const newestIsHeldSwitch = Boolean(newestSwitch) && (!heldFor || (
+		newestSwitch?.targetHarness === heldFor.target &&
+		(Number.isNaN(newestRequestedAt) || Math.abs(newestRequestedAt - heldFor.at) <= 30 * 60_000)
+	));
+	const heldSwitchLanded = !agentSwitching && newestIsHeldSwitch && newestSwitch?.state === "completed" &&
+		newestSwitch.targetHarness === session.provider;
+	// What was held waited on a switch that failed, even one whose card is gone,
+	// or one the daemon never recorded.
+	const heldSwitchLost = heldPending && !agentSwitching && !switchEcho && agentSwitchesQuery.isSuccess &&
+		(newestSwitch?.state === "failed" || !newestIsHeldSwitch);
+	const switchFailed = ((composerSwitch || heldPending) && switchPresentation?.outcome === "failure") || heldSwitchLost;
 	useEffect(() => {
 		if (!switchFailed) return;
-		const held = heldSwitchMessages.get(uiSessionId) ?? [];
-		if (!switchEcho && held.length === 0) return;
-		heldSwitchMessages.delete(uiSessionId);
+		if (!switchEcho && readHeldSwitchMessages(uiSessionId).length === 0) return;
+		if (flushingHeldSwitch.has(uiSessionId)) return;
+		const held = takeHeldSwitchMessages(uiSessionId);
 		for (const echo of [switchEcho, ...held]) {
 			if (echo?.clientMessageId) commands.acknowledgeLocalEcho?.(undefined, echo.clientMessageId);
 		}
 		const text = [switchEcho?.text, ...held.map((message) => message.text)].filter(Boolean).join("\n\n");
-		const scope = { sessionId: uiSessionId, incarnation: session.createdAt ?? uiSessionId };
-		if (text && !readChatSessionDraft(scope).composer.text.trim()) writeChatComposerText(scope, text);
+		returnTextToComposer(uiSessionId, session.createdAt ?? uiSessionId, text);
 	}, [commands, session.createdAt, switchEcho, switchFailed, uiSessionId]);
 	// Once the new agent owns the chat, what was held goes to it in order. It
 	// queues behind the switch's own turn like any send made while one runs.
-	const heldReady = !composerSwitchInProgress && !switchFailed && targetChatControllerReady && !switchEcho;
+	const heldReady = !composerSwitchInProgress && !switchFailed && heldSwitchLanded && targetChatControllerReady && !switchEcho;
 	useEffect(() => {
-		if (!heldReady) return;
-		const held = heldSwitchMessages.get(uiSessionId);
-		if (!held?.length) return;
-		heldSwitchMessages.delete(uiSessionId);
+		if (!heldReady || flushingHeldSwitch.has(uiSessionId)) return;
+		const held = readHeldSwitchMessages(uiSessionId);
+		if (!held.length) return;
+		flushingHeldSwitch.add(uiSessionId);
 		void (async () => {
-			for (const message of held) {
-				// The send shows its own echo in the dock; drop the held one in the same tick.
-				if (message.clientMessageId) releaseSwitchLocalEcho(queryClient, session.id, hostId, message.clientMessageId);
-				await commands.send(message).catch(() => undefined);
+			const unsent: string[] = [];
+			try {
+				for (const { heldFor: _heldFor, ...message } of held) {
+					// The send shows its own echo in the dock; drop the held one in the same tick.
+					if (message.clientMessageId) releaseSwitchLocalEcho(queryClient, session.id, hostId, message.clientMessageId);
+					await commands.send(message).catch(() => {
+						if (message.text.trim()) unsent.push(message.text);
+					});
+					// Stored until sent, so quitting midway loses nothing; a resend
+					// reuses the message's id.
+					dropHeldSwitchMessage(uiSessionId, message.clientMessageId);
+				}
+			} finally {
+				flushingHeldSwitch.delete(uiSessionId);
 			}
+			// What the new agent did not take goes back to the composer.
+			returnTextToComposer(uiSessionId, session.createdAt ?? uiSessionId, unsent.join("\n\n"));
 		})();
-	}, [commands, heldReady, hostId, queryClient, session.id, uiSessionId]);
+	}, [commands, heldReady, hostId, queryClient, session.createdAt, session.id, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		targetChatControllerReady && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
@@ -770,6 +929,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useEffect(() => {
 		if (pendingAgentLanded) clearPendingAgent();
 	}, [clearPendingAgent, pendingAgentLanded]);
+	// After a failed switch the chat stays with its agent; a picked target left
+	// in place would make the next send quietly try the switch again.
+	const failedSwitchId = switchFailed ? (agentSwitch?.id ?? newestSwitch?.id ?? "failed") : undefined;
+	const clearedForSwitch = useRef<string | undefined>(undefined);
+	useEffect(() => {
+		if (!failedSwitchId || clearedForSwitch.current === failedSwitchId) return;
+		clearedForSwitch.current = failedSwitchId;
+		clearPendingAgent();
+	}, [clearPendingAgent, failedSwitchId]);
 	// Held still while the switch runs, as the new chat page holds its launch bar.
 	const pendingAgentLocked = composerSwitchInProgress || Boolean(switchEcho) || pendingAgent?.harness === session.provider;
 	const pendingAgentBar = pendingAgent ? (
@@ -777,7 +945,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			models={pendingAgent.models}
 			settings={pendingAgent.settings}
 			harness={pendingAgent.harness}
-			onChange={pendingAgentLocked ? undefined : pendingAgent.choose}
+			// Locked, it still shows the agent and model the switch is starting.
+			onChange={pendingAgentLocked ? ignorePendingAgentChange : pendingAgent.choose}
+			disabled={pendingAgentLocked}
 			showApprovalMode={false}
 			agentMenu={pendingAgentLocked ? undefined : sessionAgent.agentMenu}
 			agentIcon
@@ -910,7 +1080,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// A switch is under way: hold this in the queue dock and send it to
 					// the new agent once it owns the chat.
 					if (composerSwitchInProgress || switchEcho) {
-						holdSwitchMessage(uiSessionId, message);
+						holdSwitchMessage(uiSessionId, {
+							...message,
+							heldFor: liveComposerSwitch ? { target: liveComposerSwitch.to, at: Date.now() } : undefined,
+						});
 						seedHeldLocalEcho(queryClient, session.id, hostId, {
 							clientMessageId: message.clientMessageId,
 							text,
@@ -922,15 +1095,29 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Another agent is picked: this message rides the switch and is the
 					// first thing the new agent answers.
 					if (pendingAgent && pendingAgent.harness !== session.provider) {
-						await switchAgent.mutateAsync({
-							session,
-							targetHarness: pendingAgent.harness,
-							model: pendingAgent.model,
-							effort: pendingAgent.effort,
-							// The message's own id: a retried send cannot start a second switch.
-							idempotencyKey: message.clientMessageId,
-							message,
-						});
+						try {
+							await switchAgent.mutateAsync({
+								session,
+								targetHarness: pendingAgent.harness,
+								model: pendingAgent.model,
+								effort: pendingAgent.effort,
+								// The message's own id: a retried send cannot start a second switch.
+								idempotencyKey: message.clientMessageId,
+								message,
+							});
+						} catch (error) {
+							// Messages held behind a switch that was not made follow this
+							// one back to the composer, once the composer has it again.
+							window.setTimeout(() => {
+								const held = takeHeldSwitchMessages(uiSessionId);
+								for (const entry of held) {
+									if (entry.clientMessageId) releaseSwitchLocalEcho(queryClient, session.id, hostId, entry.clientMessageId);
+								}
+								returnTextToComposer(uiSessionId, session.createdAt ?? uiSessionId,
+									held.map((entry) => entry.text).filter((text) => text.trim()).join("\n\n"));
+							}, 0);
+							throw error;
+						}
 						return;
 					}
 					return commands.send(message); }}

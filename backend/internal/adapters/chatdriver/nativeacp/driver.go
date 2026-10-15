@@ -73,6 +73,8 @@ type Config struct {
 	// Standby opts the binding into starting its provider ahead of an agent
 	// switch. See acpdriver.StandbyConfig.
 	Standby *acpdriver.StandbyConfig
+	// QuickStop: see acpdriver.Config.QuickStop.
+	QuickStop bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -170,5 +172,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		Standby:                      cfg.Standby,
+		QuickStop:                    cfg.QuickStop,
 	}
 }
