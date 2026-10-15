@@ -6,6 +6,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	_ "embed"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -257,6 +259,7 @@ func Main(args []string) {
 	downloadDir = filepath.Join(dataDir, "rb-downloads")
 	uploadRoot = filepath.Join(dataDir, "rb-upload")
 	agentDir = filepath.Join(dataDir, "rb-agent")
+	agentSocketDir = filepath.Join(dataDir, "rb-agent-socket")
 	// A restarted container keeps -data: stale profile locks would stop Chromium.
 	// The profile itself stays, so logins survive a restart.
 	for _, p := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
@@ -308,9 +311,7 @@ func Main(args []string) {
 	// Attach the agent-browser daemon to the same Chromium.
 	h.restoreTabs(ctx, saved)
 	warmUp := []string{"get", "url"}
-	// A daemon left from before a restart holds a dead connection, and waits
-	// it out for 15 s on its next command.
-	_ = exec.Command("pkill", "-x", "agent-browser").Run()
+	stopStaleAgent()
 	go func() {
 		if out, err := h.runAgent(ctx, warmUp); err != nil {
 			log.Printf("agent-browser warm-up failed: %v\n%s", err, out)
@@ -424,6 +425,11 @@ func launchChromeArgs(ctx context.Context, bin string, port int, args []string) 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
+	// Gone with the service, however it ends (Chromium that did not close in
+	// time on SIGTERM, say): an orphan would hold the profile the next
+	// service's Chromium opens.
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	DieWithParent(cmd.SysProcAttr, syscall.SIGKILL)
 	cmd.Env = chromeEnv()
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if os.Getenv("RB_CHROME_LOG") != "" {
@@ -783,19 +789,45 @@ func (h *host) broadcastControl() {
 func (h *host) runAgent(ctx context.Context, args []string) ([]byte, error) {
 	h.agentMu.Lock()
 	defer h.agentMu.Unlock()
-	full := append([]string{"--cdp", fmt.Sprint(h.cdpPort), "--session", "poc", "--no-auto-dialog"}, args...)
+	full := append([]string{"--cdp", fmt.Sprint(h.cdpPort), "--session", agentSession, "--no-auto-dialog"}, args...)
 	// Its daemon starts in the first command's directory and saves files at
 	// relative paths there.
 	_ = os.MkdirAll(agentDir, 0o755)
 	cmd := exec.CommandContext(ctx, h.abPath, full...)
 	cmd.Dir = agentDir
+	// Its own socket directory: the agent may run agent-browser itself, and
+	// that daemon is none of this service's.
+	cmd.Env = append(os.Environ(), "AGENT_BROWSER_SOCKET_DIR="+agentSocketDir)
 	return cmd.CombinedOutput()
 }
 
-// agentDir is agent-browser's working directory (set by Main). The
-// agent's relative paths (an upload, a screenshot to save) are to its own
-// directory, and to this one here: files travel between the two.
-var agentDir string
+// agentSession is the agent-browser session this service drives.
+const agentSession = "poc"
+
+// stopStaleAgent stops the agent-browser daemon a previous run of this
+// service left: it holds a dead connection and waits that out for 15 s on its
+// next command. Only that daemon, by the PID it recorded.
+func stopStaleAgent() {
+	data, err := os.ReadFile(filepath.Join(agentSocketDir, agentSession+".pid"))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 1 {
+		return
+	}
+	// The PID may since have gone to another process.
+	comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil || strings.TrimSpace(string(comm)) != "agent-browser" {
+		return
+	}
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+}
+
+// agentDir is agent-browser's working directory, and agentSocketDir its
+// daemon's (set by Main). The agent's relative paths (an upload, a screenshot
+// to save) are to its own directory: files travel between the two.
+var agentDir, agentSocketDir string
 
 // savesFile are the agent-browser commands that save a file at a path they are given.
 var savesFile = []string{"screenshot", "pdf", "download", "record", "trace", "profiler", "network", "state"}
@@ -812,9 +844,16 @@ func (h *host) handleAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Args  []string          `json:"args"`
 		Files map[string][]byte `json:"files"` // the caller's files named in Args (upload)
+		// Dir is the caller's working directory when it shares this machine's
+		// files (a cloud sandbox's agent): then no file travels either way.
+		Dir string `json:"dir"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Args) == 0 {
 		http.Error(w, `{"error":"args required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Dir != "" && !filepath.IsAbs(req.Dir) {
+		http.Error(w, `{"error":"dir must be absolute"}`, http.StatusBadRequest)
 		return
 	}
 	// Refuse at once what would only block or misfire: a dialog open in the
@@ -832,23 +871,41 @@ func (h *host) handleAgent(w http.ResponseWriter, r *http.Request) {
 		agentRefused(w, "The person used the page after your last snapshot, so its element refs may point at something else now. Run `snapshot` again and use the new refs.")
 		return
 	}
+	start := time.Now()
+	// The agent may run on another machine: put its files where agent-browser
+	// looks for them, at the same paths. One already there is this machine's
+	// own file, not to be rewritten under whoever is using it.
+	if req.Dir == "" {
+		for p, b := range req.Files {
+			if have, err := os.ReadFile(here(p)); err == nil && bytes.Equal(have, b) {
+				continue
+			}
+			err := os.MkdirAll(filepath.Dir(here(p)), 0o755)
+			if err == nil {
+				err = os.WriteFile(here(p), b, 0o644)
+			}
+			if err != nil {
+				_ = json.NewEncoder(w).Encode(map[string]any{"output": "", "error": "copy " + p + ": " + err.Error(), "ms": 0, "files": map[string][]byte{}})
+				return
+			}
+		}
+	}
 	h.ctl.mu.Lock()
 	h.ctl.agentBusy++
 	h.ctl.mu.Unlock()
 	h.broadcastControl()
-	start := time.Now()
-	// The agent may run on another machine: put its files where agent-browser
-	// looks for them, at the same paths. An upload names them in full:
-	// Chromium, which reads them, runs in another directory.
-	for p, b := range req.Files {
-		if os.MkdirAll(filepath.Dir(here(p)), 0o755) == nil {
-			_ = os.WriteFile(here(p), b, 0o644)
-		}
-	}
 	args := slices.Clone(req.Args)
 	for i, a := range args {
-		if _, ok := req.Files[a]; ok && cmd == "upload" {
-			args[i] = here(a)
+		// An upload names its files in full: Chromium, which reads them, runs
+		// in another directory.
+		if cmd == "upload" {
+			if _, ok := req.Files[a]; ok && req.Dir == "" {
+				args[i] = here(a)
+			} else if req.Dir != "" && filepath.IsLocal(a) {
+				if st, err := os.Stat(filepath.Join(req.Dir, a)); err == nil && st.Mode().IsRegular() {
+					args[i] = filepath.Join(req.Dir, a)
+				}
+			}
 		}
 		// A file saved at a relative path may go in a folder the agent has and
 		// this side lacks (screenshot shots/a.png): agent-browser makes none.
@@ -881,12 +938,33 @@ func (h *host) handleAgent(w http.ResponseWriter, r *http.Request) {
 	h.ctl.agentBusy--
 	h.ctl.mu.Unlock()
 	h.broadcastControl()
-	// The files it was given went up, not down: only what it saved comes back.
-	paths := slices.DeleteFunc(slices.Clone(req.Args), func(p string) bool { _, up := req.Files[p]; return up })
-	for _, m := range absPath.FindAllStringSubmatch(string(out), -1) {
-		paths = append(paths, m[1])
+	files := map[string][]byte{}
+	if req.Dir == "" {
+		paths := slices.Clone(req.Args)
+		for _, m := range absPath.FindAllStringSubmatch(string(out), -1) {
+			paths = append(paths, m[1])
+		}
+		sent := map[string][]byte{}
+		for p, b := range req.Files {
+			sent[here(p)] = b
+		}
+		files = written(paths, ran, sent)
+	} else {
+		// Saved at a relative path, a file is in agent-browser's directory: it
+		// goes to the agent's. One saved at a full path is already in place.
+		local := slices.DeleteFunc(slices.Clone(req.Args), func(p string) bool { return !filepath.IsLocal(p) })
+		for p, b := range written(local, ran, nil) {
+			to := filepath.Join(req.Dir, p)
+			saveErr := os.MkdirAll(filepath.Dir(to), 0o755)
+			if saveErr == nil {
+				saveErr = os.WriteFile(to, b, 0o644)
+			}
+			if saveErr != nil && err == nil {
+				err = fmt.Errorf("save %s: %w", p, saveErr)
+			}
+		}
 	}
-	resp := map[string]any{"output": string(out), "ms": time.Since(start).Milliseconds(), "files": written(paths, ran)}
+	resp := map[string]any{"output": string(out), "ms": time.Since(start).Milliseconds(), "files": files}
 	if err != nil {
 		resp["error"] = err.Error()
 	}
@@ -903,8 +981,10 @@ var absPath = regexp.MustCompile(`(?:^|[\s'"])(/[^\s'"]+)`)
 const fileClockSlack = time.Second
 
 // written returns the files among the agent's paths that changed since start
-// (a screenshot, pdf or download), for an agent on another machine.
-func written(paths []string, start time.Time) map[string][]byte {
+// (a screenshot, pdf or download). A file the agent sent (sent, by where it
+// is here) comes back only if the command wrote over it: a screenshot saved
+// where an older one was.
+func written(paths []string, start time.Time, sent map[string][]byte) map[string][]byte {
 	files := map[string][]byte{}
 	for _, p := range paths {
 		st, err := os.Stat(here(p))
@@ -912,7 +992,9 @@ func written(paths []string, start time.Time) map[string][]byte {
 			continue
 		}
 		if b, err := os.ReadFile(here(p)); err == nil {
-			files[p] = b
+			if up, ok := sent[here(p)]; !ok || !bytes.Equal(b, up) {
+				files[p] = b
+			}
 		}
 	}
 	return files

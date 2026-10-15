@@ -241,7 +241,7 @@ func run(logger *slog.Logger) error {
 	}()
 	// The agent's browser, which the person watches and uses in AO's Browser
 	// panel. Its profile and files stay beside the worker's, out of the checkout.
-	browser, err := agentbrowser.New(filepath.Join(dataDir, "agent-browser"), logger)
+	browser, err := agentbrowser.New(filepath.Join(dataDir, "agent-browser"), filepath.Join(dataDir, "ao-browser.sock"), logger)
 	if err != nil {
 		logger.Info("agent browser off", "reason", err)
 	}

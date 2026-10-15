@@ -1,8 +1,8 @@
 // Package agentbrowser gives a cloud session's coding agent a browser the
 // person watches and uses in AO's Browser panel. The browser service (package
 // host) runs as a child of the worker, started on first use; the agent reaches
-// it on loopback and the desktop through the control plane, over sockets the
-// worker dials out (relay.go).
+// it through a socket in the worker's data directory and the desktop through
+// the control plane, over sockets the worker dials out (relay.go).
 package agentbrowser
 
 import (
@@ -27,6 +27,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/agentbrowser/host"
 )
 
 // HostCommand is the worker subcommand that runs the browser service: the
@@ -44,8 +46,8 @@ var readyClient = &http.Client{Timeout: 2 * time.Second}
 // Service is the session's agent browser: one browser service, started on
 // first use and again after it exits, and stopped when Run's context ends.
 type Service struct {
-	token  string       // the service's token, the agent's RB_TOKEN
-	agent  net.Listener // the agent's loopback listener, its RB_URL
+	token  string       // the service's token; the agent never holds it
+	agent  net.Listener // the agent's socket, its AO_BROWSER_SOCKET
 	logger *slog.Logger
 	// start launches the service and returns once it answers; tests fake it.
 	start func(ctx context.Context) (*instance, error)
@@ -60,10 +62,10 @@ type instance struct {
 	done <-chan struct{} // closed once it has exited
 }
 
-// New prepares the agent browser with its files in dir. Nothing starts until
-// the agent or the desktop uses it. It fails when the sandbox has no Chromium
-// or agent-browser.
-func New(dir string, logger *slog.Logger) (*Service, error) {
+// New prepares the agent browser with its files in dir and the agent's socket
+// at socket. Nothing starts until the agent or the desktop uses it. It fails
+// when the sandbox has no Chromium or agent-browser.
+func New(dir, socket string, logger *slog.Logger) (*Service, error) {
 	chrome, err := find("chromium", "/usr/bin/chromium")
 	if err != nil {
 		return nil, err
@@ -75,8 +77,15 @@ func New(dir string, logger *slog.Logger) (*Service, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	agent, err := net.Listen("tcp", "127.0.0.1:0")
+	// A fixed path, like the worker's other sockets: an agent that outlives the
+	// worker (Freestyle keeps it across a wake) still finds the next worker's.
+	_ = os.Remove(socket)
+	agent, err := net.Listen("unix", socket)
 	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(socket, 0o600); err != nil {
+		_ = agent.Close()
 		return nil, err
 	}
 	var token [32]byte
@@ -95,10 +104,9 @@ func find(name, fallback string) (string, error) {
 	return path, err
 }
 
-// Env is how the agent reaches the browser: RB_URL, its loopback listener, and
-// RB_TOKEN, the service's token.
+// Env is how the agent reaches the browser: AO_BROWSER_SOCKET, its socket.
 func (s *Service) Env() map[string]string {
-	return map[string]string{"RB_URL": "http://" + s.agent.Addr().String(), "RB_TOKEN": s.token}
+	return map[string]string{"AO_BROWSER_SOCKET": s.agent.Addr().String()}
 }
 
 // Run serves the agent's listener and the control plane's relay until ctx
@@ -184,7 +192,10 @@ func (s *Service) startHost(ctx context.Context, dir, chrome, ab string) (*insta
 	cmd.Env = append(os.Environ(), "RB_TOKEN="+s.token)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	dieWithWorker(cmd.SysProcAttr)
+	// SIGTERM when the worker dies, even killed outright (the OOM killer): the
+	// service then closes Chromium, instead of an orphan holding the profile
+	// while the next worker starts a second Chromium on it.
+	host.DieWithParent(cmd.SysProcAttr, syscall.SIGTERM)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = stopGrace
 	if err := cmd.Start(); err != nil {
@@ -245,10 +256,15 @@ func (s *Service) waitReady(ctx context.Context, inst *instance) error {
 	}
 }
 
-// agentHandler passes the agent's requests through to the service unchanged,
-// starting it first if need be. The agent sends the token itself.
+// agentHandler passes the agent's commands through to the service, starting it
+// first if need be, with the service's token: the socket's file mode is what
+// keeps other users out. Nothing else starts the browser.
 func (s *Service) agentHandler(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/agent" {
+			http.NotFound(w, r)
+			return
+		}
 		target, err := s.ensure(ctx)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -257,7 +273,10 @@ func (s *Service) agentHandler(ctx context.Context) http.Handler {
 			return
 		}
 		proxy := &httputil.ReverseProxy{
-			Rewrite:      func(req *httputil.ProxyRequest) { req.SetURL(target) },
+			Rewrite: func(req *httputil.ProxyRequest) {
+				req.SetURL(target)
+				req.Out.Header.Set("Authorization", "Bearer "+s.token)
+			},
 			ErrorHandler: unavailable,
 		}
 		proxy.ServeHTTP(w, r)
@@ -284,6 +303,10 @@ func relayRoute(tail string) bool {
 // relayHandler serves the desktop's requests, which arrive from the control
 // plane, as the daemon's agent browser route does on a self-hosted host. The
 // service's token is added here: the desktop never holds it.
+//
+// Keep relayRoute, the headers dropped and the Location scrub in lockstep with
+// backend/internal/httpd/controllers/agent_browser.go. They cannot share a
+// package: the cloud image builds from cloud/ alone, against a pinned backend.
 func (s *Service) relayHandler(ctx context.Context) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tail := strings.TrimPrefix(r.URL.Path, "/")

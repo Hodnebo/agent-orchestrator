@@ -167,3 +167,26 @@ func TestRelayStopsWhenTheControlPlaneRejectsTheToken(t *testing.T) {
 		t.Fatalf("dialed %d times, want once", dials.Load())
 	}
 }
+
+// A control plane that accepts the control socket and drops it at once (two
+// workers replacing each other's) gets backed-off redials, not a tight loop.
+func TestRelayBacksOffWhenTheControlSocketDropsAtOnce(t *testing.T) {
+	var dials atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dials.Add(1)
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_ = conn.Close(websocket.StatusPolicyViolation, "replaced")
+	}))
+	defer server.Close()
+	s := &Service{logger: slog.New(slog.DiscardHandler)}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	s.relayLoop(ctx, ControlPlane{URL: server.URL, Token: func() string { return "worker-token" }, HTTP: server.Client()}, newStreamListener())
+	// 0.5 s, 1 s, then 2 s apart: three dials in two seconds.
+	if got := dials.Load(); got > 3 {
+		t.Fatalf("dialed %d times in 2 s, want at most 3", got)
+	}
+}

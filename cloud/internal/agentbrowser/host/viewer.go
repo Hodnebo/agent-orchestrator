@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -58,6 +59,13 @@ type viewer struct {
 	signal   chan struct{}
 	out      chan []byte
 	inputs   chan func() // page input, run in order off the read loop
+
+	// History reads run beside each other and retry: histAsked numbers each
+	// read as it is sent, and histSent is the newest one sent to the view, so
+	// an older read that answers late is dropped.
+	histAsked atomic.Int64
+	histMu    sync.Mutex
+	histSent  int64
 
 	mu          sync.Mutex
 	targetID    string
@@ -956,13 +964,21 @@ func clipboardReport(payload string) bool {
 // once more, so Back is not left disabled.
 func (v *viewer) sendHistory() {
 	for try := 1; ; try++ {
+		// CDP answers one session's calls in order: a read sent later saw a
+		// later page.
+		asked := v.histAsked.Add(1)
 		res, err := v.call("Page.getNavigationHistory", nil)
 		var h struct {
 			CurrentIndex int               `json:"currentIndex"`
 			Entries      []json.RawMessage `json:"entries"`
 		}
 		if err == nil && json.Unmarshal(res, &h) == nil {
-			v.sendJSON(map[string]any{"t": "history", "back": h.CurrentIndex > 0, "fwd": h.CurrentIndex < len(h.Entries)-1})
+			v.histMu.Lock()
+			if asked > v.histSent {
+				v.histSent = asked
+				v.sendJSON(map[string]any{"t": "history", "back": h.CurrentIndex > 0, "fwd": h.CurrentIndex < len(h.Entries)-1})
+			}
+			v.histMu.Unlock()
 			return
 		}
 		if try == historyTries {

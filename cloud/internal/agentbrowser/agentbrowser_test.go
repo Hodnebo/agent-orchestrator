@@ -5,10 +5,12 @@ import (
 	"flag"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -156,5 +158,79 @@ func TestRelayHandlerAllowsStreamRoutesWithTheTokenAndNoCredentials(t *testing.T
 	}
 	if starts.Load() != 1 {
 		t.Errorf("browser started %d times, want once", starts.Load())
+	}
+}
+
+// The agent's socket is at a fixed path, so an agent that outlives the worker
+// finds the next worker's; only the agent's command starts the browser, and
+// the service's token is added on the way.
+func TestAgentSocketIsStableAndOnlyTheCommandStartsTheBrowser(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"chromium", "agent-browser"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	sockets, err := os.MkdirTemp("/tmp", "ab") // a socket path must stay short
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockets) })
+	socket := filepath.Join(sockets, "ao-browser.sock")
+	logger := slog.New(slog.DiscardHandler)
+
+	first, err := New(t.TempDir(), socket, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := first.Env()["AO_BROWSER_SOCKET"]; got != socket {
+		t.Fatalf("AO_BROWSER_SOCKET = %q, want %q", got, socket)
+	}
+	if st, err := os.Stat(socket); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode = %v, %v; want 0600", st.Mode().Perm(), err)
+	}
+	// A worker that died left its socket file: the next one takes the path.
+	first.agent.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = first.agent.Close()
+	second, err := New(t.TempDir(), socket, logger)
+	if err != nil {
+		t.Fatalf("a restarted worker could not take the socket: %v", err)
+	}
+	defer second.agent.Close()
+
+	upstream, last := fakeBrowser(t)
+	var starts atomic.Int32
+	second.start = fakeStart(upstream, &starts)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = (&http.Server{Handler: second.agentHandler(ctx)}).Serve(second.agent) }()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}}
+	for _, probe := range []struct{ method, path string }{{"GET", "/"}, {"GET", "/stats"}, {"GET", "/agent"}, {"POST", "/v/cdp"}} {
+		request, _ := http.NewRequest(probe.method, "http://browser"+probe.path, nil)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404", probe.method, probe.path, response.StatusCode)
+		}
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("stray requests started the browser %d times", starts.Load())
+	}
+	response, err := client.Post("http://browser/agent", "application/json", strings.NewReader(`{"args":["snapshot"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || starts.Load() != 1 {
+		t.Fatalf("agent command = %d after %d starts, want 200 after one", response.StatusCode, starts.Load())
+	}
+	if got := last.Load().Header.Get("Authorization"); got != "Bearer "+second.token {
+		t.Errorf("service got Authorization %q, want the service token", got)
 	}
 }

@@ -32,6 +32,10 @@ func agentBrowserRoute(tail string) bool {
 // desktop as the session's agent tab, over the daemon's own authenticated
 // connection. The browser's token is added here: clients never hold it, and
 // the browser's port never leaves the host.
+//
+// Keep agentBrowserRoute, the headers dropped and the Location scrub in
+// lockstep with cloud/internal/agentbrowser/agentbrowser.go, AO Cloud's copy:
+// the cloud image builds against a pinned backend, so they cannot share code.
 // ponytail: one agent browser per host, shown in each of its sessions; route per session when sessions get their own browser.
 func (c *SessionsController) agentBrowser(w http.ResponseWriter, r *http.Request) {
 	if c.AgentBrowser == nil {

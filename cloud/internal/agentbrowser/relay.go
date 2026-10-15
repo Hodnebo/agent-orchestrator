@@ -24,6 +24,9 @@ const (
 	redialFloor   = 500 * time.Millisecond
 	redialCeiling = 5 * time.Second
 	pingInterval  = 20 * time.Second
+	// A control socket held this long was a working one: its drop starts the
+	// backoff over. One dropped sooner backs off like a failed dial.
+	steadyAfter = pingInterval
 )
 
 // errRejected is the control plane refusing the worker's token for good: a
@@ -49,26 +52,30 @@ func (cp ControlPlane) dial(ctx context.Context, path string) (*websocket.Conn, 
 }
 
 // relayLoop holds the control socket, redialing until the control plane
-// rejects the worker's token.
+// rejects the worker's token. Every redial waits: a control plane that accepts
+// the socket and drops it at once (two workers replacing each other's) must
+// not see a tight loop of authenticated dials.
 func (s *Service) relayLoop(ctx context.Context, cp ControlPlane, streams *streamListener) {
 	backoff := redialFloor
-	for ctx.Err() == nil {
+	for {
 		conn, err := cp.dial(ctx, "")
 		if errors.Is(err, errRejected) {
 			s.logger.Warn("agent browser relay stopped", "error", err)
 			return
 		}
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(backoff):
+		if err == nil {
+			held := time.Now()
+			s.readControl(ctx, cp, conn, streams)
+			if time.Since(held) >= steadyAfter {
+				backoff = redialFloor
 			}
-			backoff = min(backoff*2, redialCeiling)
-			continue
 		}
-		backoff = redialFloor
-		s.readControl(ctx, cp, conn, streams)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, redialCeiling)
 	}
 }
 

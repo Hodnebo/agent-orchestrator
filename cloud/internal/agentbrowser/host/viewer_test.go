@@ -120,3 +120,60 @@ func TestHistoryAfterCrossSiteNavigation(t *testing.T) {
 	v.onEvent("S", cdpMsg{Method: "Page.frameStoppedLoading", Params: json.RawMessage(`{"frameId":"T"}`), SessionID: "S"})
 	history("the load stopping")
 }
+
+// History reads run beside each other: one that answers after a newer one
+// was sent (here the server holds the first until then) must not undo it.
+func TestHistoryDropsAnOlderReadThatAnswersLate(t *testing.T) {
+	received := make(chan struct{}, 2)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		var held int64
+		for {
+			_, data, err := c.Read(r.Context())
+			var m cdpMsg
+			if err != nil || json.Unmarshal(data, &m) != nil {
+				return
+			}
+			received <- struct{}{}
+			if held == 0 {
+				held = m.ID // the older page: no Back yet
+				continue
+			}
+			_ = c.Write(r.Context(), websocket.MessageText, fmt.Appendf(nil, `{"id":%d,"result":{"currentIndex":1,"entries":[{},{}]}}`, m.ID))
+			<-release
+			_ = c.Write(r.Context(), websocket.MessageText, fmt.Appendf(nil, `{"id":%d,"result":{"currentIndex":0,"entries":[{},{}]}}`, held))
+		}
+	}))
+	defer srv.Close()
+	cdp, err := dialCDP(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	v := &viewer{h: &host{cdp: cdp}, ctx: ctx, cancel: cancel, session: "S", targetID: "T", out: make(chan []byte, 8)}
+	go v.sendHistory()
+	<-received
+	go v.sendHistory()
+	<-received
+	newer := `{"back":true,"fwd":false,"t":"history"}`
+	select {
+	case b := <-v.out:
+		if string(b) != newer {
+			t.Fatalf("sent %s first, want the newer read: %s", b, newer)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the newer read was never sent")
+	}
+	close(release)
+	select {
+	case b := <-v.out:
+		t.Fatalf("the older read was sent after the newer: %s", b)
+	case <-time.After(500 * time.Millisecond):
+	}
+}

@@ -2,66 +2,67 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestBrowserSendsNamedFilesAndWritesReturnedOnes(t *testing.T) {
+func TestBrowserSendsTheCommandAndItsDirectoryOverTheSocket(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	if err := os.WriteFile("notes.txt", []byte("relative"), 0o600); err != nil {
+	// A short path: a socket's must fit in about 100 bytes.
+	sockets, err := os.MkdirTemp("/tmp", "ab")
+	if err != nil {
 		t.Fatal(err)
 	}
-	absolute := filepath.Join(dir, "page.html")
-	if err := os.WriteFile(absolute, []byte("absolute"), 0o600); err != nil {
+	t.Cleanup(func() { _ = os.RemoveAll(sockets) })
+	socket := filepath.Join(sockets, "b.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
 		t.Fatal(err)
 	}
-	var got []map[string][]byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Args  []string          `json:"args"`
-			Files map[string][]byte `json:"files"`
-		}
-		if r.URL.Path != "/agent" || r.Header.Get("Authorization") != "Bearer rb-token" ||
-			json.NewDecoder(r.Body).Decode(&request) != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+	type request struct {
+		Args  []string          `json:"args"`
+		Dir   string            `json:"dir"`
+		Files map[string][]byte `json:"files"`
+	}
+	var got []request
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in request
+		if r.Method != http.MethodPost || r.URL.Path != "/agent" || json.NewDecoder(r.Body).Decode(&in) != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		got = append(got, request.Files)
-		response := map[string]any{"output": "ok\n", "files": map[string][]byte{"shots/a.png": []byte("png")}}
-		if request.Args[0] == "upload" {
+		got = append(got, in)
+		response := map[string]any{"output": "ok\n"}
+		if in.Args[0] == "upload" {
 			response["error"] = "upload failed"
 		}
 		_ = json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
 
-	t.Setenv("RB_URL", "")
+	t.Setenv("AO_BROWSER_SOCKET", "")
 	if err := runBrowser([]string{"snapshot"}); err == nil || err.Error() != "this sandbox has no browser" {
-		t.Fatalf("without RB_URL: %v, want the no-browser message", err)
+		t.Fatalf("without AO_BROWSER_SOCKET: %v, want the no-browser message", err)
 	}
-	t.Setenv("RB_URL", server.URL)
-	t.Setenv("RB_TOKEN", "rb-token")
+	t.Setenv("AO_BROWSER_SOCKET", socket)
 
-	// A relative name is page text, not a file, outside an upload.
-	if err := runBrowser([]string{"fill", "@e1", "notes.txt", absolute}); err != nil {
+	if err := runBrowser([]string{"--session", "x", "screenshot", "shot.png"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got[0]["notes.txt"]; ok || string(got[0][absolute]) != "absolute" {
-		t.Errorf("fill sent %v, want only the absolute file", got[0])
+	// The browser shares these files: it is told where they are, not sent them.
+	if len(got) != 1 || got[0].Dir == "" || got[0].Files != nil || len(got[0].Args) != 4 || got[0].Args[2] != "screenshot" {
+		t.Fatalf("sent %+v, want the arguments and this directory, no files", got)
 	}
-	if data, err := os.ReadFile(filepath.Join(dir, "shots", "a.png")); err != nil || string(data) != "png" {
-		t.Errorf("returned file = %q, %v", data, err)
+	if want, _ := filepath.EvalSymlinks(dir); func() string { d, _ := filepath.EvalSymlinks(got[0].Dir); return d }() != want {
+		t.Errorf("dir = %q, want %q", got[0].Dir, dir)
 	}
 
-	err := runBrowser([]string{"upload", "@e2", "notes.txt"})
-	if err == nil || err.Error() != "upload failed" {
+	if err := runBrowser([]string{"upload", "@e2", "notes.txt"}); err == nil || err.Error() != "upload failed" {
 		t.Fatalf("upload error = %v, want the browser's error", err)
-	}
-	if string(got[1]["notes.txt"]) != "relative" {
-		t.Errorf("upload sent %v, want the relative file", got[1])
 	}
 }
