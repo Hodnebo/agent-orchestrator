@@ -428,7 +428,14 @@ type ShellLike = {
 
 type WebContentsViewConstructor = new (options: {
   webPreferences: Electron.WebPreferences;
+  webContents?: WebContents;
 }) => BrowserViewLike;
+
+// Electron supplies this native guest to createWindow, but omits the internal
+// field from BrowserWindowConstructorOptions in its public type declaration.
+type BrowserPopupOptions = Electron.BrowserWindowConstructorOptions & {
+  webContents?: WebContents;
+};
 
 export type BrowserViewHostOptions = {
   mainWindow: BrowserWindowLike;
@@ -939,6 +946,7 @@ export function createBrowserViewHost(
     activate: boolean,
     syncNativeOnActivate = false,
     preferredTabId?: string,
+    popupOptions?: BrowserPopupOptions,
   ): BrowserEntry => {
     const tabId = preferredTabId ?? `t${session.nextTabNumber++}`;
     if (session.tabs.has(tabId)) {
@@ -947,17 +955,19 @@ export function createBrowserViewHost(
         `Browser tab ${tabId} already exists`,
       );
     }
+    const webPreferences: Electron.WebPreferences = {
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: session.profilePartition,
+      // Chromium's built-in PDF viewer is plugin-backed in Electron. Keep it
+      // enabled for AO's browser surface so HTTP(S) PDFs render in-panel.
+      plugins: true,
+      preload: options.annotatePreloadPath,
+      sandbox: true,
+    };
     const view = new options.WebContentsView({
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        partition: session.profilePartition,
-        // Chromium's built-in PDF viewer is plugin-backed in Electron. Keep it
-        // enabled for AO's browser surface so HTTP(S) PDFs render in-panel.
-        plugins: true,
-        preload: options.annotatePreloadPath,
-        sandbox: true,
-      },
+      webPreferences,
+      ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
     });
     applyBrowserViewBounds(view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.addChildView(view);
@@ -1098,19 +1108,38 @@ export function createBrowserViewHost(
       view.webContents,
       options,
       entry,
-      isCurrentEntry,
-      (url) => {
-        // Deliberately not the setWindowOpenHandler createWindow path: Electron's
-        // openGuestWindow requires the returned webContents to be one IT created
-        // from the options it computed for this exact guest-window-open event.
-        // AO's tabs are WebContentsViews created through its own createTab/openTab,
-        // with no such linkage — returning one there throws "Invalid webContents.
-        // Created window should be connected to webContents passed with options
-        // object" and crashes the whole app on every link click. Deny the guest
-        // window outright and open (and navigate) our own tab instead; openTab
-        // already handles URL validation and the "popup" tabs-state
-        // event this used to push manually.
-        void openTab(session, url, true, "popup", true).catch(() => undefined);
+      () => isCurrentEntry() && !session.profileReplacing,
+      webPreferences,
+      (windowOptions, details) => {
+        // Adopt Electron's exact guest, rather than creating an unrelated
+        // WebContents. Chromium then preserves the WindowProxy and opener.
+        const popup = createTab(
+          session, false, false, undefined,
+          windowOptions.webContents ? windowOptions : undefined,
+        );
+        // OpenURLFromTab (e.g. a target=_blank link) may have no native guest.
+        // In that case the main process must perform the original navigation.
+        if (!windowOptions.webContents && details.url !== "about:blank") {
+          const postBody = details.postBody;
+          void navigateEntry(popup, details.url, {
+            httpReferrer: details.referrer,
+            ...(postBody
+              ? {
+                  postData: postBody.data,
+                  extraHeaders: `content-type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ""}`,
+                }
+              : {}),
+          }).catch(() => undefined);
+        }
+        // The native guest is still being initialized inside createWindow.
+        // Defer queries/layout until Electron has returned from that callback.
+        setImmediate(() => {
+          if (!isCurrentEntry() || session.tabs.get(popup.tabId) !== popup) return;
+          activateTab(session, popup.tabId, false);
+          queueNativeActiveTabSync(session);
+          pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
+        });
+        return popup.view.webContents as WebContents;
       },
     );
     wireNavEvents(
@@ -1180,7 +1209,12 @@ export function createBrowserViewHost(
     // A newly-created WebContentsView reports about:blank before its renderer
     // has actually been initialized. CDP commands can hang until that initial
     // document has completed, so make readiness explicit for every tab.
-    entry.ready = view.webContents.loadURL("about:blank");
+    entry.ready = popupOptions
+      ? new Promise<void>((resolve) => {
+          view.webContents.on("dom-ready", () => resolve());
+          view.webContents.on("destroyed", () => resolve());
+        })
+      : view.webContents.loadURL("about:blank");
     // Keep an unobserved tab initialization failure from becoming an unhandled
     // rejection; callers that need the target still await the original promise.
     void entry.ready.catch(() => undefined);
@@ -2210,6 +2244,7 @@ export function createBrowserViewHost(
   const navigateEntry = async (
     entry: BrowserEntry,
     url: string,
+    loadOptions?: Electron.LoadURLOptions,
   ): Promise<BrowserNavState> => {
     await entry.ready;
     const normalized = normalizeBrowserURL(url);
@@ -2224,7 +2259,9 @@ export function createBrowserViewHost(
     const pendingNavigation = { url: normalized.href };
     entry.pendingNavigation = pendingNavigation;
     try {
-      await entry.view.webContents.loadURL(normalized.href);
+      if (loadOptions)
+        await entry.view.webContents.loadURL(normalized.href, loadOptions);
+      else await entry.view.webContents.loadURL(normalized.href);
     } catch (err) {
       if ((err as { errorCode?: number })?.errorCode === -3)
         return pushNavState(options, entry);
@@ -4690,17 +4727,25 @@ function hardenWebContents(
   options: BrowserViewHostOptions,
   entry: BrowserEntry,
   isCurrent: () => boolean,
-  openPopup: (url: string) => void,
+  popupWebPreferences: Electron.WebPreferences,
+  createPopup: (
+    windowOptions: BrowserPopupOptions,
+    details: Electron.HandlerDetails,
+  ) => WebContents,
 ): void {
-  contents.setWindowOpenHandler(({ url }) => {
-    if (!isCurrent() || !isAllowedBrowserURL(url, options.rendererOrigin)) {
+  contents.setWindowOpenHandler((details) => {
+    const { url } = details;
+    if (
+      !isCurrent() ||
+      (url !== "about:blank" && !isAllowedBrowserURL(url, options.rendererOrigin))
+    ) {
       return { action: "deny" };
     }
-    // Always deny — never return createWindow. See the call site's comment for
-    // why: Electron's own guest-window linkage check crashes the process
-    // otherwise. Open our own tab instead, outside Electron's guest-window flow.
-    openPopup(url);
-    return { action: "deny" };
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: { webPreferences: popupWebPreferences },
+      createWindow: (windowOptions) => createPopup(windowOptions, details),
+    };
   });
   const blockUnsafeNavigation = (event: Electron.Event, url: string) => {
     if (!isAllowedBrowserURL(url, options.rendererOrigin)) {
