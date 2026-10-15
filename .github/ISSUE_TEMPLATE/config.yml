@@ -2,10 +2,7 @@ blank_issues_enabled: true
 contact_links:
   - name: Discord community
     url: https://discord.com/invite/UZv7JjxbwG
-    about: Questions, mentoring, and contributor discussion. The weekly contributor call is open to everyone; details are shared in Discord.
-  - name: Bug-triaging channel
-    url: https://discord.com/channels/1476302178913357958/1491735678156013588
-    about: Get help describing a bug.
+    about: Questions, mentoring, and the weekly contributor call.
   - name: Contributing guide
     url: https://github.com/OrchestratorInc/agent-orchestrator/blob/main/CONTRIBUTING.md
     about: How to claim issues, open PRs, and work with maintainers.

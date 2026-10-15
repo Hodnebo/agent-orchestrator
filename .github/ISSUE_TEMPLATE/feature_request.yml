@@ -6,9 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Describe the problem first.
-
-        Feature requests wait for discussion on a contributor call and core-team approval on the issue before implementation or PR review. The `needs-discussion` label means approval is still pending. See the [contributing guide](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/CONTRIBUTING.md#bugs-and-features).
+        Lead with the **problem**, not only the solution.
+        If you want to work on this, comment "Can I work on this?" and wait for core-team approval on the issue.
 
   - type: textarea
     id: problem
@@ -42,3 +41,5 @@ body:
       options:
         - label: I searched existing issues / discussions for something similar
           required: true
+        - label: I am willing to help implement this if maintainers agree on scope
+          required: false
