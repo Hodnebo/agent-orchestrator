@@ -6,14 +6,12 @@ const fixtures = vi.hoisted(() => ({
 	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" },
 	navigation: { setOptions: vi.fn() },
 	getPreview: vi.fn(),
-	platform: "android",
 }));
 
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Platform: { get OS() { return fixtures.platform; } },
 		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 	};
@@ -84,7 +82,6 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("IS_REACT_NATIVE_TEST_ENVIRONMENT", true);
 	fixtures.params.id = "session-1";
-	fixtures.platform = "android";
 	fixtures.navigation.setOptions.mockClear();
 	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
 });
@@ -96,19 +93,6 @@ afterEach(() => {
 });
 
 describe("session preview mode", () => {
-	it("lets iOS draw the native pill in both states while changing its selected color", async () => {
-		fixtures.platform = "ios";
-		await openPreview();
-		const nativeToggle = () => fixtures.navigation.setOptions.mock.lastCall?.[0].unstable_headerRightItems()[0];
-		expect(fixtures.navigation.setOptions.mock.lastCall?.[0].headerRight).toBeUndefined();
-		expect(nativeToggle()).toMatchObject({ type: "button", label: "Mobile view", selected: false, variant: "plain", disabled: false });
-		await act(async () => nativeToggle().onPress());
-		expect(nativeToggle()).toMatchObject({ selected: true, variant: "prominent", accessibilityLabel: "Mobile view, on" });
-		expect(nodes("WebView")).toHaveLength(1);
-		await act(async () => nativeToggle().onPress());
-		expect(nativeToggle()).toMatchObject({ selected: false, variant: "plain", accessibilityLabel: "Mobile view, off" });
-		expect(nodes("BrowserLivePane")).toHaveLength(1);
-	});
 
 	it("defaults to the live browser with a labelled toggle only in the header", async () => {
 		await openPreview();
@@ -122,13 +106,13 @@ describe("session preview mode", () => {
 		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
 	});
 
-	it("switches to the authenticated responsive preview and back to streaming", async () => {
+	it("keeps the phone icon while switching to the responsive preview and back to streaming", async () => {
 		await openPreview();
 		await setMobile(true);
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
 		expect(toggle().props.accessibilityState.checked).toBe(true);
-		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("check");
+		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
 		await setMobile(false);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")).toHaveLength(1);

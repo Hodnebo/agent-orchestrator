@@ -1,7 +1,7 @@
 import { Feather } from "../../lib/icons";
-import { useLocalSearchParams, useNavigation, useRouter, type NativeStackHeaderItemButton } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { authHeaders } from "../../lib/config";
@@ -11,7 +11,7 @@ import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { iconSize, radius, space, type } from "../../lib/tokens";
+import { iconSize, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { userFacingError } from "../../lib/connectionError";
 
@@ -43,39 +43,24 @@ function SessionPreviewContent() {
 	const responsive = active === "app" && canShowResponsive;
 
 	useLayoutEffect(() => {
-		const toggle = () => { haptics.tap(); setActive(responsive ? "browser" : "app"); };
-		const hint = canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet.";
-		const nativeToggle: NativeStackHeaderItemButton = {
-			type: "button",
-			label: "Mobile view",
-			selected: responsive,
-			disabled: !canShowResponsive,
-			onPress: toggle,
-			// Let UIKit draw the whole capsule in both states. Painting inside a
-			// custom bar view clips its filled corners against the native glass.
-			variant: responsive ? "prominent" : "plain",
-			tintColor: responsive ? t.blue : t.textSecondary,
-			labelStyle: { fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
-			accessibilityLabel: `Mobile view, ${responsive ? "on" : "off"}`,
-			accessibilityHint: hint,
-		};
 		navigation.setOptions({
 			title: title || "Preview",
-			unstable_headerRightItems: Platform.OS === "ios" && hostMatches && config ? () => [nativeToggle] : undefined,
-			headerRight: Platform.OS !== "ios" && hostMatches && config ? () => <Pressable
+			unstable_headerRightItems: undefined,
+			headerRight: hostMatches && config ? () => <Pressable
 				accessibilityRole="switch"
+				hitSlop={4}
 				accessibilityLabel="Mobile view"
 				accessibilityState={{ checked: responsive, disabled: !canShowResponsive }}
-				accessibilityHint={hint}
+				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
 				disabled={!canShowResponsive}
-				onPress={toggle}
+				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
 				style={({ pressed }) => [styles.modeToggle, responsive && styles.modeToggleActive, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
 			>
-				<Feather name={responsive ? "check" : "smartphone"} size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
+				<Feather name="smartphone" size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
 				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
 			</Pressable> : undefined,
 		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.blue, t.onAccent, t.textSecondary, title]);
+	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.onAccent, t.textSecondary, title]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -140,7 +125,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	modeToggle: { height: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: radius.pill },
+	modeToggle: { height: 36, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 18, borderCurve: "circular", overflow: "hidden" },
 	modeToggleActive: { backgroundColor: t.blue },
 	modeToggleDimmed: { opacity: 0.5 },
 	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
