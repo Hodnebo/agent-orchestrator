@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -13,7 +14,10 @@ import (
 type SwitchAgentInput struct {
 	TargetHarness  domain.AgentHarness
 	Model          string
+	Effort         string
 	IdempotencyKey string
+	// Message, when set, opens the target agent's first turn (Chat only).
+	Message *ports.ChatUserMessage
 }
 
 // SwitchAgent starts or resumes a durable agent-switch saga for a session.
@@ -21,7 +25,9 @@ func (s *Service) SwitchAgent(ctx context.Context, id domain.SessionID, in Switc
 	switchRecord, err := s.manager.SwitchAgent(ctx, id, sessionmanager.SwitchAgentConfig{
 		TargetHarness:  in.TargetHarness,
 		Model:          in.Model,
+		Effort:         in.Effort,
 		IdempotencyKey: in.IdempotencyKey,
+		Message:        in.Message,
 	})
 	return switchRecord, toAPIError(err)
 }

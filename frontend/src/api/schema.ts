@@ -6412,13 +6412,14 @@ export interface components {
         SwitchAgentRequest: {
             /** @description Optional retry key. Reusing it with a different request is rejected. */
             idempotencyKey?: string;
+            /** @description Chat only. The human message the target agent answers first, in place of AO's activation prompt. */
+            message?: components["schemas"]["SendConversationMessageRequest"];
             /** @description Optional model override for the target agent launch or resume. */
             model?: string;
-            /**
-             * @description Agent harness to continue the logical AO session with.
-             * @enum {string}
-             */
-            targetHarness: "claude-code" | "codex" | "fx";
+            /** @description Optional reasoning effort for the target agent's launch. */
+            reasoningEffort?: string;
+            /** @description Agent harness to continue the logical AO session with. Chat sessions accept any agent with a Chat driver; terminal sessions accept claude-code, codex, and fx. */
+            targetHarness: string;
         };
         SyncArtifactVersionsRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */

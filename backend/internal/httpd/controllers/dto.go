@@ -500,9 +500,14 @@ type SpawnSessionResponse struct {
 
 // SwitchAgentRequest is the body of POST /api/v1/sessions/{sessionId}/switch-agent.
 type SwitchAgentRequest struct {
-	TargetHarness  domain.AgentHarness `json:"targetHarness" enum:"claude-code,codex,fx" description:"Agent harness to continue the logical AO session with."`
-	Model          string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
-	IdempotencyKey string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
+	TargetHarness   domain.AgentHarness `json:"targetHarness" description:"Agent harness to continue the logical AO session with. Chat sessions accept any agent with a Chat driver; terminal sessions accept claude-code, codex, and fx."`
+	Model           string              `json:"model,omitempty" maxLength:"256" description:"Optional model override for the target agent launch or resume."`
+	ReasoningEffort string              `json:"reasoningEffort,omitempty" maxLength:"64" description:"Optional reasoning effort for the target agent's launch."`
+	IdempotencyKey  string              `json:"idempotencyKey,omitempty" maxLength:"128" description:"Optional retry key. Reusing it with a different request is rejected."`
+	// Message is the human message that opens the target's first turn. Chat only.
+	// It replaces AO's activation prompt, so a switch made from the composer costs
+	// one model turn, not two.
+	Message *SendConversationMessageRequest `json:"message,omitempty" description:"Chat only. The human message the target agent answers first, in place of AO's activation prompt."`
 }
 
 // AgentSwitchView is the deliberately small public projection of a durable

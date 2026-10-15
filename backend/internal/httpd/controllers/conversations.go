@@ -818,19 +818,41 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
-		// There is no keystroke concept in Chat mode: an empty body is a client
-		// bug, not a way to nudge the agent.
+	msg, msgErr := chatUserMessage(req)
+	if msgErr != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
-			"CHAT_MESSAGE_EMPTY", "message text is required", nil)
+			msgErr.code, msgErr.message, nil)
+		return
+	}
+	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), msg)
+	if err != nil {
+		writeConversationError(w, r, err)
 		return
 	}
 
+	// An empty turn means the client message id was already delivered. Reporting
+	// the duplicate explicitly lets a retrying client stop rather than assume a
+	// new turn began.
+	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{
+		TurnID:         turn.ID,
+		ProviderTurnID: turn.ProviderTurnID,
+		State:          turn.State,
+		Duplicate:      turn.ID == "",
+	})
+}
+
+// chatUserMessage converts a send body into the human message the Chat service
+// delivers. The agent-switch route reuses it for the message that opens the new
+// agent's first turn.
+func chatUserMessage(req SendConversationMessageRequest) (ports.ChatUserMessage, *attachmentError) {
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
+		// There is no keystroke concept in Chat mode: an empty body is a client
+		// bug, not a way to nudge the agent.
+		return ports.ChatUserMessage{}, &attachmentError{code: "CHAT_MESSAGE_EMPTY", message: "message text is required"}
+	}
 	content, attachmentErr := conversationContent(req)
 	if attachmentErr != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
-			attachmentErr.code, attachmentErr.message, nil)
-		return
+		return ports.ChatUserMessage{}, attachmentErr
 	}
 	text := req.Text
 	if text == "" {
@@ -847,28 +869,14 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 			Revision: excerpt.Revision, Text: excerpt.Text,
 		})
 	}
-	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), ports.ChatUserMessage{
+	return ports.ChatUserMessage{
 		Text:            text,
 		Content:         content,
 		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
 		Continuation:    req.Continuation,
-	})
-	if err != nil {
-		writeConversationError(w, r, err)
-		return
-	}
-
-	// An empty turn means the client message id was already delivered. Reporting
-	// the duplicate explicitly lets a retrying client stop rather than assume a
-	// new turn began.
-	envelope.WriteJSON(w, http.StatusAccepted, SendConversationMessageResponse{
-		TurnID:         turn.ID,
-		ProviderTurnID: turn.ProviderTurnID,
-		State:          turn.State,
-		Duplicate:      turn.ID == "",
-	})
+	}, nil
 }
 
 func conversationContent(req SendConversationMessageRequest) ([]ports.ChatContent, *attachmentError) {

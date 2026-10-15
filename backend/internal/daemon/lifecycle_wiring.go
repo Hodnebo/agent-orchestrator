@@ -689,6 +689,18 @@ func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.Sessio
 	return c.svc.RelaySessionChatTurn(ctx, id, text, clientMessageID, options)
 }
 
+func (c chatLauncher) SendSessionChatMessage(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (string, error) {
+	turn, err := c.svc.Send(ctx, id, msg)
+	if err != nil {
+		return "", err
+	}
+	return turn.ID, nil
+}
+
+func (c chatLauncher) ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int) (string, bool, error) {
+	return c.svc.TranscriptExcerpt(ctx, id, maxBytes)
+}
+
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
 		Text: text,

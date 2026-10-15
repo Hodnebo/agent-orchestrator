@@ -1909,6 +1909,8 @@ func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var in SwitchAgentRequest
+	// The opening message may carry images, so it gets a send's body budget.
+	r.Body = http.MaxBytesReader(w, r.Body, maxConversationBody)
 	if err := decodeJSONStrict(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
@@ -1923,15 +1925,31 @@ func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
 		return
 	}
+	effort := strings.TrimSpace(domain.SanitizeControlChars(in.ReasoningEffort))
+	if len(effort) > 64 {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "REASONING_EFFORT_TOO_LONG", "reasoningEffort must be 64 characters or fewer", nil)
+		return
+	}
 	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
 	if len(idempotencyKey) > maxIdempotencyKey {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "IDEMPOTENCY_KEY_TOO_LONG", "idempotencyKey is too long", nil)
 		return
 	}
+	var message *ports.ChatUserMessage
+	if in.Message != nil {
+		msg, msgErr := chatUserMessage(*in.Message)
+		if msgErr != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", msgErr.code, msgErr.message, nil)
+			return
+		}
+		message = &msg
+	}
 	switchRecord, err := c.Svc.SwitchAgent(r.Context(), sessionID(r), sessionsvc.SwitchAgentInput{
 		TargetHarness:  targetHarness,
 		Model:          model,
+		Effort:         effort,
 		IdempotencyKey: idempotencyKey,
+		Message:        message,
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)

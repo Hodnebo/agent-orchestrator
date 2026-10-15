@@ -883,6 +883,63 @@ func TestGetAgentHooksRecoversPartialSkillInstall(t *testing.T) {
 	}
 }
 
+// opencode npm-installs its plugin package into every .opencode it loads; AO's
+// own .opencode gets a stub that skips that 4-7s install, while a repository's
+// own plugins keep the real install.
+func TestGetAgentHooksSeedsPluginDependencyStub(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "opencode"}
+	ctx := context.Background()
+
+	t.Run("AO-only .opencode gets the stub", func(t *testing.T) {
+		workspace := t.TempDir()
+		if err := plugin.GetAgentHooks(ctx, ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(workspace, opencodePluginDirName)
+		if info, err := os.Stat(filepath.Join(dir, "node_modules")); err != nil || !info.IsDir() {
+			t.Fatalf("node_modules = (%v, %v), want a directory", info, err)
+		}
+		lock, err := os.ReadFile(filepath.Join(dir, "package-lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Packages map[string]struct {
+				Dependencies map[string]string `json:"dependencies"`
+			} `json:"packages"`
+		}
+		if err := json.Unmarshal(lock, &parsed); err != nil {
+			t.Fatalf("package-lock.json is not JSON: %v", err)
+		}
+		if _, ok := parsed.Packages[""].Dependencies[opencodePluginDependency]; !ok {
+			t.Fatalf("package-lock.json root does not name %s: %s", opencodePluginDependency, lock)
+		}
+		ignore, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+		if err != nil || !strings.Contains(string(ignore), "node_modules") {
+			t.Fatalf(".gitignore = (%q, %v), want it to ignore node_modules", ignore, err)
+		}
+	})
+
+	t.Run("a repository's own plugin keeps opencode's install", func(t *testing.T) {
+		workspace := t.TempDir()
+		pluginDir := filepath.Dir(opencodePluginPath(workspace))
+		if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pluginDir, "repo.ts"), []byte("export default {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := plugin.GetAgentHooks(ctx, ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: workspace}); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"node_modules", "package-lock.json"} {
+			if _, err := os.Stat(filepath.Join(workspace, opencodePluginDirName, name)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s seeded beside a repository plugin (err %v); opencode must install for it", name, err)
+			}
+		}
+	})
+}
+
 func TestGetAgentHooksRefusesToClobberForeignSkill(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()

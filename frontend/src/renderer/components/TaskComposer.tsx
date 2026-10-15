@@ -1159,7 +1159,7 @@ function TaskModelPicker({
 
 // The agent choice as the first row of the chat model menu. Its submenu lists
 // the launchable agents, then a way to set up more, like the standalone chip.
-function AgentMenuSection({
+export function AgentMenuSection({
 	agents,
 	value,
 	onChange,

@@ -31,6 +31,13 @@ func (m *Manager) executeChatAgentSwitch(
 	project := admitted.project
 	targetAgent := admitted.targetAgent
 	recorder := newAgentSwitchFlightRecorder(result, domain.SessionModeChat, domain.AgentSwitchExecutionLive)
+	// Registered first so it runs last, after the outcome below is settled.
+	defer func() {
+		stages, total := recorder.timing()
+		m.logger.Info("agent switch timing",
+			"sessionID", id, "switchID", result.ID, "from", rec.Harness, "to", cfg.TargetHarness,
+			"state", result.State, "total", total.Round(time.Millisecond), "stages", stages)
+	}()
 
 	sourceStopConclusive := false
 	sourceStopped := false
@@ -177,8 +184,10 @@ func (m *Manager) executeChatAgentSwitch(
 		Kind:      rec.Kind,
 		Harness:   cfg.TargetHarness,
 		AgentConfig: ports.AgentConfig{
-			Model: strings.TrimSpace(cfg.Model),
+			Model:  strings.TrimSpace(cfg.Model),
+			Effort: strings.TrimSpace(cfg.Effort),
 		},
+		EffortOverride: strings.TrimSpace(cfg.Effort) != "",
 	}, domain.ProjectConfig{AgentConfig: baseAgentConfig})
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
@@ -189,7 +198,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
 	systemPrompt = appendAgentContinuationProtocol(systemPrompt)
-	targetConfigDir, err := nativeConfigDir(ctx, targetAgent, targetSetupEnv)
+	targetConfigDir, err := nativeConfigDirForMode(ctx, targetAgent, targetSetupEnv, domain.SessionModeChat)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
@@ -306,6 +315,11 @@ func (m *Manager) executeChatAgentSwitch(
 	recorder.boundary(domain.AgentSwitchFailureSourceTranscriptCapture)
 	observedTranscript, sourceTranscriptStatus := m.captureSourceTranscriptFact(
 		ctx, admitted.sourceAgent, admitted.sourceNative, true)
+	if observedTranscript == nil {
+		// Most agents keep no transcript AO can read; AO's own record of this
+		// conversation stands in, so every target starts with the history.
+		observedTranscript = m.chatTranscriptFact(ctx, id)
+	}
 	finalContext := deterministicSwitchContext{
 		OriginalTask:          stoppedSession.Metadata.Prompt,
 		LatestUserPrompt:      stoppedSession.Metadata.LatestUserPrompt,
@@ -313,6 +327,7 @@ func (m *Manager) executeChatAgentSwitch(
 		Workspaces:            m.captureWorkspaceFacts(ctx, stoppedSession),
 		PullRequests:          m.capturePRFacts(ctx, id),
 		CapturedAt:            m.clock(),
+		HumanMessageFollows:   cfg.Message != nil,
 	}
 	if observedTranscript != nil {
 		finalContext.SourceTranscriptPath = observedTranscript.Path
@@ -542,8 +557,7 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	recorder.durable(result)
 	recorder.boundary(domain.AgentSwitchFailureChatContinuationRelay)
-	if _, err := m.chat.RelaySessionChatTurn(
-		ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(result.ID), ports.MessageDeliveryOptions{}); err != nil {
+	if err := m.deliverChatSwitchOpening(ctx, id, result.ID, cfg.Message); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: deliver continuation: %w", id, err)
 	}
 	acknowledgedAt := m.clock()
@@ -579,6 +593,58 @@ func committedChatSwitchConversation(
 	conversation.Settings.ReasoningEffort = ""
 	conversation.UpdatedAt = activatedAt
 	return conversation
+}
+
+// chatMessageSender delivers a human message through the ordinary Chat send
+// path, with the same idempotency and attachment handling as the composer.
+type chatMessageSender interface {
+	SendSessionChatMessage(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (string, error)
+}
+
+// chatTranscriptExcerpter reads AO's own record of a Chat conversation. Every
+// agent has one, whether or not its provider keeps a transcript AO can read.
+type chatTranscriptExcerpter interface {
+	ChatTranscriptExcerpt(ctx context.Context, id domain.SessionID, maxBytes int) (excerpt string, truncated bool, err error)
+}
+
+// deliverChatSwitchOpening opens the target's first turn. A switch made from
+// the composer carries the user's message, which the target answers directly;
+// otherwise AO's brief activation prompt starts it.
+func (m *Manager) deliverChatSwitchOpening(
+	ctx context.Context,
+	id domain.SessionID,
+	switchID domain.AgentSwitchID,
+	message *ports.ChatUserMessage,
+) error {
+	if message == nil {
+		_, err := m.chat.RelaySessionChatTurn(
+			ctx, id, aoTargetActivationPrompt, chatSwitchActivationMessageID(switchID), ports.MessageDeliveryOptions{})
+		return err
+	}
+	sender, ok := m.chat.(chatMessageSender)
+	if !ok {
+		return errors.New("chat launcher cannot deliver a human message")
+	}
+	_, err := sender.SendSessionChatMessage(ctx, id, *message)
+	return err
+}
+
+// chatTranscriptFact is the bounded tail of AO's record of this conversation,
+// or nil when there is none to read.
+func (m *Manager) chatTranscriptFact(ctx context.Context, id domain.SessionID) *switchTranscriptFact {
+	excerpter, ok := m.chat.(chatTranscriptExcerpter)
+	if !ok {
+		return nil
+	}
+	excerpt, truncated, err := excerpter.ChatTranscriptExcerpt(ctx, id, handoffTranscriptMaxBytes)
+	if err != nil {
+		m.logger.Warn("Chat agent switch: AO transcript excerpt unavailable", "sessionID", id, "error", err)
+		return nil
+	}
+	if strings.TrimSpace(excerpt) == "" {
+		return nil
+	}
+	return &switchTranscriptFact{Tail: excerpt, Truncated: truncated}
 }
 
 func chatSwitchProviderBoundaryID(switchID domain.AgentSwitchID) string {

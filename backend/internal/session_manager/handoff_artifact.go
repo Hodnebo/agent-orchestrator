@@ -83,6 +83,9 @@ type deterministicSwitchContext struct {
 	Workspaces            []switchWorkspaceFact
 	PullRequests          []switchPRFact
 	CapturedAt            time.Time
+	// HumanMessageFollows is set when the human's message, not AO's activation
+	// prompt, opens the target's first turn.
+	HumanMessageFollows bool
 }
 
 type writtenAgentHandoff struct {

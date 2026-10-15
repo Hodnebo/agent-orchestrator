@@ -111,6 +111,8 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	// The daemon refused an agent switch, so the message it carried never left.
+	"AGENT_SWITCH_REJECTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
