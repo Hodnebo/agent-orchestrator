@@ -2,9 +2,13 @@
 //
 // Context: on app launch, after both attach attempts fail (inspectExistingDaemon
 // and resolveDaemonFromPort both returned null/non-ready), a process may still
-// be holding the daemon port. Spawning a new daemon then makes the Go child
-// collide on the port and exit 1. This helper names the process to kill, and
-// only ever names one it can identify as the AO daemon.
+// be holding the daemon port. Leaving it there is not harmless: a new daemon
+// does not exit on a busy port, it falls back to an ephemeral one, and the only
+// guard against a second daemon is the old one answering /healthz with the PID
+// in running.json. A hung daemon answers nothing, so the new one would start
+// beside it on the same data dir (or contend for a database lock the hung one
+// holds). This helper names the process to kill, and only ever names one it can
+// identify as the AO daemon.
 //
 // A running.json PID that is merely alive proves nothing: the file outlives the
 // daemon after a crash, hard kill, or reboot, and the OS then hands that PID to
@@ -41,6 +45,12 @@ export type PortHolderEvidence = {
 	processStartMs: (pid: number) => Promise<number | null>;
 };
 
+export type PortHolderDecision =
+	/** The AO daemon to signal. */
+	| { pid: number }
+	/** Nothing to signal; `reason` says why, for the log. */
+	| { pid: null; reason: string };
+
 // The caller signals -pid (the daemon's process group) and falls back to pid. For
 // 0 that is the caller's own group, for -1 every process the user may signal, and
 // 1 is init/launchd. None of those is ever the daemon, whatever the file says.
@@ -49,8 +59,8 @@ function isSignalablePid(pid: number): boolean {
 }
 
 /**
- * The PID of the AO daemon to kill before spawning, or null when none can be
- * identified (spawn immediately; never signal a process we cannot vouch for).
+ * The AO daemon to kill before spawning, or no PID when none can be identified
+ * (spawn immediately; never signal a process we cannot vouch for).
  *
  * When a PID is returned the caller should signal it, wait for the port to free,
  * clear the stale run-file, then spawn a fresh daemon.
@@ -59,16 +69,29 @@ export async function portHolderPidToReplace({
 	probe,
 	runFile,
 	processStartMs,
-}: PortHolderEvidence): Promise<number | null> {
+}: PortHolderEvidence): Promise<PortHolderDecision> {
 	// An AO daemon answered. By the time this runs both attach paths already
 	// returned null, so that is unexpected (e.g. a race); replace it rather than
 	// colliding on spawn, and signal the PID it reported itself, not the file's.
-	if (probe) return isSignalablePid(probe.pid) ? probe.pid : null;
+	if (probe) {
+		return isSignalablePid(probe.pid)
+			? { pid: probe.pid }
+			: { pid: null, reason: "the daemon that answered the probe reported an unusable pid" };
+	}
 
-	if (!runFile || !isSignalablePid(runFile.pid) || !(runFile.startedAtMs > 0)) return null;
+	if (!runFile) return { pid: null, reason: "nothing answered the probe and there is no readable running.json" };
+	if (!isSignalablePid(runFile.pid) || !(runFile.startedAtMs > 0)) {
+		return { pid: null, reason: "running.json has no usable pid or start time" };
+	}
 	const startMs = await processStartMs(runFile.pid);
-	if (startMs === null) return null;
-	return startMs <= runFile.startedAtMs + RUN_FILE_START_SKEW_MS ? runFile.pid : null;
+	if (startMs === null) {
+		return { pid: null, reason: "its start time could not be read (ps missing, slow or failed; Windows has no reader)" };
+	}
+	if (startMs <= runFile.startedAtMs + RUN_FILE_START_SKEW_MS) return { pid: runFile.pid };
+	return {
+		pid: null,
+		reason: `it started ${Math.round((startMs - runFile.startedAtMs) / 1000)} s after running.json was written, so it is not the daemon that wrote it`,
+	};
 }
 
 export type BrowserDaemonOwnershipDecision =

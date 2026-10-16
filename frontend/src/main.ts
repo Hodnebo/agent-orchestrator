@@ -1872,7 +1872,8 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// daemon is already surfaced as an error status upstream by
 	// resolveDaemonFromPort (not killed here), and a foreign non-AO process holding
 	// the port is not replaced (out of scope). When no holder is identified, skip
-	// straight to spawn; the new daemon overwrites a stale run-file itself.
+	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
+	// process that is left alone is logged below.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
 	let runFile: ReturnType<typeof parseRunFile> = null;
@@ -1883,11 +1884,17 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
-	const holderPid = await portHolderPidToReplace({
+	const holder = await portHolderPidToReplace({
 		probe: orphanProbe,
 		runFile,
 		processStartMs: readProcessStartMs,
 	});
+	// Declining to signal is otherwise silent, so say why a live process named by
+	// running.json is left alone (a hung daemon that is not replaced shows up here).
+	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
+		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
+	}
+	const holderPid = holder.pid;
 	if (holderPid !== null) {
 		try {
 			process.kill(-holderPid, "SIGTERM");

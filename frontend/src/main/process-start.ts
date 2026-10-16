@@ -40,13 +40,15 @@ const defaultDeps: ProcessStartDeps = {
  * means "cannot vouch for it", never a reason to signal.
  *
  * ponytail: Windows has no ps, so it reports null there and a hung daemon that
- * stopped answering /healthz is no longer force-killed. Add a PowerShell
- * Get-Process reader once it can be verified on a Windows host.
+ * stopped answering /healthz is no longer force-killed; the replacement daemon
+ * then starts beside it (see daemon-takeover.ts). Add a Windows reader through
+ * PowerShell Get-Process once it can be verified on a Windows host.
  */
 export async function readProcessStartMs(pid: number, deps: ProcessStartDeps = defaultDeps): Promise<number | null> {
 	if (!Number.isSafeInteger(pid) || pid <= 1 || deps.platform === "win32") return null;
-	// Sampled before ps runs, so the estimate errs towards "older", the side the
-	// caller's check treats as the daemon.
+	// Sampled just before ps runs. ps reports whole seconds, truncated, and reads
+	// the process table slightly after this clock reading, so the estimate is off by
+	// up to about a second in either direction; the caller's skew allowance covers it.
 	const now = deps.now();
 	try {
 		const elapsedMs = parseElapsedMs(await deps.ps(pid));
