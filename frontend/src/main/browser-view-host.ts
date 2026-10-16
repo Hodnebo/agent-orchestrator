@@ -1666,6 +1666,9 @@ export function createBrowserViewHost(
   ): Promise<void> =>
     withBrowserOperation(session, async () => {
       const id = `a${(session.agentTabNumber = (session.agentTabNumber ?? 0) + 1)}`;
+      // With no tab in use (the person closed them all), the agent's tab is
+      // the one in front: a panel with tabs always has an active one.
+      activate ||= !session.tabs.has(session.activeTabId);
       const entry = createTab(session, activate, false, id);
       entry.agentTab = agentTab;
       entry.listed = listed;

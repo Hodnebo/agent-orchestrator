@@ -3709,6 +3709,18 @@ describe("agent browser runtime", () => {
 			const tabs = async () => ((await host.invoke("browser:getTabs", viewId)) as { tabs: Tab[] }).tabs;
 			return { ...host, viewId, tabs, agent: host.views[1].webContents };
 		};
+		it("puts the agent tab in front of a panel with no tabs, so the panel always has an active tab", async () => {
+			const host = setupTabHost();
+			// The panel opened empty (or the person closed every tab) before the agent first browsed.
+			const { viewId } = (await host.invoke("browser:ensure", "sess-1", false)) as { viewId: string };
+			await host.invoke("browser:openTab", { viewId, url: viewer });
+			await settle();
+			const state = (await host.invoke("browser:getTabs", viewId)) as { tabs: Tab[]; activeTabId: string };
+			expect(state.tabs).toHaveLength(1);
+			expect(state.activeTabId).toBe(state.tabs[0].id);
+			// Laying the panel out reads the active tab: it must not throw in main.
+			expect(() => host.emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true })).not.toThrow();
+		});
 		// A viewer page whose script runs: a failed load leaves an error page without __rbHost.
 		const running = (contents: { executeJavaScript: ReturnType<typeof vi.fn> }) =>
 			contents.executeJavaScript.mockImplementation(async (script: string) => script.startsWith("typeof window.__rbHost") || undefined);
