@@ -86,6 +86,21 @@ describe("TurnOutcome", () => {
 			"https://example.com/billing",
 		);
 	});
+
+	it("shows a JSON-RPC message and keeps its payload in collapsed details", () => {
+		const payload = JSON.stringify({
+			code: -32000,
+			message: "Insufficient balance",
+			data: { provider: "openai-codex", account: "meraj@example.com" },
+		});
+		render(<TurnOutcome state="failed" error={`ACP session/prompt: ${payload}`} />);
+
+		expect(screen.getByText("Insufficient balance")).toBeInTheDocument();
+		const details = screen.getByText("Details").closest("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details).toHaveTextContent(payload);
+		expect(screen.queryByText(`ACP session/prompt: ${payload}`)).not.toBeInTheDocument();
+	});
 });
 
 describe("AssistantMessage streaming", () => {
