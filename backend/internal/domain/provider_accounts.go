@@ -117,6 +117,7 @@ type ProviderAccountUsage struct {
 	SignInEnding      bool                         `json:"signInEnding,omitempty" description:"The saved sign-in still works but has stopped renewing, so it will stop working."`
 	SignInEndsAt      string                       `json:"signInEndsAt,omitempty" description:"When a sign-in that has stopped renewing stops working, if known."`
 	Requests          []ProviderAccountRequests    `json:"requests,omitempty" description:"Requests in the last twenty ten-minute slices, oldest first."`
+	CountingSince     string                       `json:"countingSince,omitempty" description:"When the account helper began counting requests, failures and first words; they start from zero when it restarts."`
 	Tokens            *ProviderAccountTokens       `json:"tokens,omitempty"`
 	Activity          *ProviderAccountActivity     `json:"activity,omitempty" description:"What the account helper counted passing through this account."`
 	Health            *ProviderAccountHealth       `json:"health,omitempty"`

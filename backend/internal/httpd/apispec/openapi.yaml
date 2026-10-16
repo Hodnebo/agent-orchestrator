@@ -14895,6 +14895,10 @@ components:
           description: What the account helper counted passing through this account.
         addedAt:
           type: string
+        countingSince:
+          description: When the account helper began counting requests, failures and
+            first words; they start from zero when it restarts.
+          type: string
         credits:
           $ref: '#/components/schemas/ProviderAccountCredits'
         extraUsage:

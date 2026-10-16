@@ -25,6 +25,7 @@ type Activity struct {
 	changed  bool
 	accounts map[string]*tally
 	requests sync.Map // request id → ticket hash, while the request runs and a minute after
+	started  time.Time // failures, first words and request slices are counted from here
 }
 
 // tally is one account's counts; the exported fields are the saved ones.
@@ -48,7 +49,7 @@ type event struct {
 
 // OpenActivity starts from the saved counts when they are readable, and empty otherwise.
 func OpenActivity(path string) *Activity {
-	a := &Activity{path: path}
+	a := &Activity{path: path, started: time.Now()}
 	data, _ := os.ReadFile(path)
 	if json.Unmarshal(data, &a.accounts) != nil || a.accounts == nil {
 		a.accounts = map[string]*tally{}
@@ -151,6 +152,7 @@ func (a *Activity) report(out gin.H, id string, now time.Time) gin.H {
 	if len(health) > 0 {
 		out["health"] = health
 	}
+	out["countingSince"] = a.started.UTC().Format(time.RFC3339)
 	return out
 }
 

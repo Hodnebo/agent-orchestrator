@@ -775,7 +775,7 @@ func (s *Service) usages(ctx context.Context, accounts []domain.ProviderAccount)
 					s.memo.Lock()
 					defer s.memo.Unlock()
 					last := s.usage[a.AuthID]
-					last.Activity, last.Health, last.Requests = own.Activity, own.Health, own.Requests
+					last.Activity, last.Health, last.Requests, last.CountingSince = own.Activity, own.Health, own.Requests, own.CountingSince
 					s.usage[a.AuthID] = last
 				}
 			})
@@ -801,7 +801,7 @@ func (s *Service) usages(ctx context.Context, accounts []domain.ProviderAccount)
 				s.stamps[good] = s.now()
 			case last.Status == "available" && s.now().Sub(s.stamps[good]) < 30*time.Minute:
 				// A provider that did not answer this time: its last reading stands for half an hour, with what the helper knows now.
-				last.Activity, last.Health, last.Requests = usage.Activity, usage.Health, usage.Requests
+				last.Activity, last.Health, last.Requests, last.CountingSince = usage.Activity, usage.Health, usage.Requests, usage.CountingSince
 				usage, ttl = last, time.Minute
 			default:
 				usage.Status, ttl = "unavailable", time.Minute

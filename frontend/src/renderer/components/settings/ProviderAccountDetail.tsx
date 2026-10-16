@@ -2,11 +2,9 @@ import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } fro
 import { useTranslation } from "react-i18next";
 import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, SquareArrowOutUpRight, X, type LucideIcon } from "lucide-react";
 import { accountProvider, canMoveSessions, PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
-import { useSessionUsageSummaries } from "../../hooks/useSessionUsageSummaries";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { aoBridge } from "../../lib/bridge";
 import { findSession } from "../../lib/command-palette";
-import { formatCostNanos } from "../../lib/format-cost";
 import { isArchivedSession } from "../../lib/standalone-archive";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
@@ -113,25 +111,43 @@ function Choice({ label, menuClassName = "min-w-52", children, ...props }: Compo
 	);
 }
 const Tick = ({ on }: { on: boolean }) => <Check aria-hidden="true" className={on ? "size-3.5" : "invisible size-3.5"} />;
-// What is left of an allowance. Colour appears only when it is nearly used (caution) or used up (needs attention).
-function MeterRow({ testId, title, hint, percent, value, meterLabel = title }: { testId?: string; title: string; hint?: string; percent: number; value?: string; meterLabel?: string }) {
+// What is left of an allowance. Colour appears only when it is nearly used or behind a steady pace (caution), or used up (needs attention).
+// The tick is what a steady pace would leave by now: left of it, the allowance runs out before it resets.
+function MeterRow({ testId, title, hint, percent, value, meterLabel = title, pace }: { testId?: string; title: string; hint?: string; percent: number; value?: string; meterLabel?: string; pace?: number }) {
 	const { t } = useTranslation();
 	const reached = percent === 0;
-	const low = !reached && percent <= 20;
+	const behind = !reached && pace !== undefined && percent < pace;
+	const low = !reached && (percent <= 20 || behind);
 	return (
 		<div data-testid={testId} className="flex min-h-15 items-center gap-5 px-4 py-3">
 			<div className="w-44 shrink-0">
 				<p className="truncate text-sm font-medium text-foreground" title={title}>{title}</p>
 				{hint ? <p className="mt-px truncate text-xs text-muted-foreground">{hint}</p> : null}
 			</div>
-			<div role="progressbar" aria-label={meterLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className={cn("h-1.5 min-w-0 max-w-[420px] flex-1 overflow-hidden rounded-full", reached ? "bg-status-needs-you/40" : "bg-muted")}>
-				<div className={cn("h-full rounded-full transition-[width]", low ? "bg-warning" : "bg-muted-foreground")} style={{ width: `${percent}%` }} />
+			<div className="relative h-1.5 min-w-0 max-w-[420px] flex-1">
+				<div role="progressbar" aria-label={meterLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className={cn("h-full overflow-hidden rounded-full", reached ? "bg-status-needs-you/40" : "bg-muted")}>
+					<div className={cn("h-full rounded-full transition-[width]", low ? "bg-warning" : "bg-muted-foreground")} style={{ width: `${percent}%` }} />
+				</div>
+				{pace === undefined ? null : <span aria-hidden="true" title={t("providerAccounts.paceTick", { percent: pace })} className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded-full bg-foreground/60" style={{ left: `${pace}%` }} />}
 			</div>
-			<span className={cn("ml-auto min-w-20 shrink-0 text-right text-sm tabular-nums", reached ? "text-status-needs-you" : low ? "text-warning" : "text-foreground")}>
-				{value ?? (reached ? t("providerAccounts.usageReached") : t("providerAccounts.usageRemaining", { percent }))}
-			</span>
+			<div className="ml-auto min-w-24 shrink-0 text-right">
+				<p className={cn("text-sm tabular-nums", reached ? "text-status-needs-you" : low ? "text-warning" : "text-foreground")}>
+					{value ?? (reached ? t("providerAccounts.usageReached") : t("providerAccounts.usageRemaining", { percent }))}
+				</p>
+				{pace === undefined || reached ? null : (
+					<p className={cn("mt-px flex items-center justify-end gap-1 text-xs", behind ? "text-warning" : "text-muted-foreground")}>
+						{behind ? <AlertCircle aria-hidden="true" className="size-3" /> : null}{t(behind ? "providerAccounts.behindPace" : "providerAccounts.lastsUntilReset")}
+					</p>
+				)}
+			</div>
 		</div>
 	);
+}
+// What a steady pace would leave of a window by now, when the provider says how long it is and when it resets.
+function steadyPace(durationSeconds?: number, resetTime?: string): number | undefined {
+	const left = (resetTime ? new Date(resetTime).getTime() : Number.NaN) - Date.now(), length = (durationSeconds ?? 0) * 1000;
+	// A reset further off than the window is long says nothing about pace.
+	return length > 0 && left > 0 && left <= length ? Math.round((left / length) * 100) : undefined;
 }
 function CopyIcon({ value, label, icon: Icon, page }: { value: string; label: string; icon: LucideIcon; page: AccountsPage }) {
 	const { t } = useTranslation();
@@ -211,34 +227,50 @@ function AccountSessions({ account, page, others, language }: { account: Provide
 		</Rows>
 	);
 }
-// What passed through AO on this account: a bar a day, then the totals.
-function AccountThroughput({ account, language }: { account: ProviderAccount; language: string }) {
+// What passed through AO on this account, a bar a day for two weeks.
+function AccountDays({ account, language, active }: { account: ProviderAccount; language: string; active: number }) {
 	const { t } = useTranslation();
-	const activity = account.usage?.activity;
-	const costs = useSessionUsageSummaries().data;
-	const nanos = account.sessions.reduce((sum, id) => sum + (costs?.get(id)?.estimatedCost?.totalNanos ?? 0), 0);
-	const days = activity?.days ?? [];
-	const peak = Math.max(1, ...days.map((day) => day.tokens));
+	const days = account.usage?.activity?.days ?? [];
+	if (!days.some((entry) => entry.tokens)) return null;
+	const peak = Math.max(1, ...days.map((entry) => entry.tokens));
 	const day = (date: string) => new Intl.DateTimeFormat(language, { month: "short", day: "numeric" }).format(new Date(`${date}T12:00:00`));
 	return (
 		<>
-			{days.some((entry) => entry.tokens) ? (
-				<div className="px-4 pb-2.5 pt-3.5" role="img" aria-label={t("providerAccounts.tokensPerDay")}>
-					<div className="flex h-14 items-end gap-1">
-						{days.map((entry, index) => <span key={entry.date} title={`${day(entry.date)} · ${formatCount(entry.tokens, language)}`} className={cn("min-h-0.5 flex-1 rounded-sm", index === days.length - 1 ? "bg-foreground" : "bg-muted-foreground/55")} style={{ height: `${(entry.tokens / peak) * 100}%` }} />)}
-					</div>
-					<div className="mt-1.5 flex justify-between text-2xs text-passive"><span>{day(days[0]!.date)}</span><span>{t("providerAccounts.tokensPerDay")}</span><span>{t("providerAccounts.today")}</span></div>
+			<div className="mb-2 mt-6 flex items-baseline justify-between gap-3 text-sm text-muted-foreground">
+				<h4 className="font-normal">{t("providerAccounts.last14Days")}</h4>
+				<span className="text-xs">{active ? t("providerAccounts.sessionsActive", { count: active }) : t("providerAccounts.noSessionsUsing")}</span>
+			</div>
+			<div className="rounded-xl bg-foreground/[0.035] px-4 pb-2.5 pt-3.5" role="img" aria-label={t("providerAccounts.tokensPerDay")}>
+				<div className="flex h-14 items-end gap-1">
+					{days.map((entry, index) => <span key={entry.date} title={`${day(entry.date)} · ${formatCount(entry.tokens, language)}`} className={cn("min-h-0.5 flex-1 rounded-sm", index === days.length - 1 ? "bg-foreground" : "bg-muted-foreground/55")} style={{ height: `${(entry.tokens / peak) * 100}%` }} />)}
 				</div>
-			) : null}
-			{activity ? (
-				<>
-					<Fact label={t("providerAccounts.throughToday")}>{formatCount(activity.today, language)}</Fact>
-					<Fact label={t("providerAccounts.throughWeek")}>{formatCount(activity.week, language)}</Fact>
-					{activity.since ? <Fact label={t("providerAccounts.throughSince", { date: day(activity.since) })}>{formatCount(activity.total, language)}</Fact> : null}
-				</>
-			) : null}
-			{nanos > 0 ? <Fact label={<span title={t("providerAccounts.costHint")}>{t("providerAccounts.sessionsCost")}</span>}>{formatCostNanos(nanos)}</Fact> : null}
+				<div className="mt-1.5 flex justify-between text-2xs text-passive"><span>{day(days[0]!.date)}</span><span>{t("providerAccounts.today")}</span></div>
+			</div>
 		</>
+	);
+}
+// The account's figures at a glance. The helper counts requests and first words in memory, so they say since when while that is inside their window.
+function UsageFacts({ account, language }: { account: ProviderAccount; language: string }) {
+	const { t } = useTranslation();
+	const usage = account.usage, activity = usage?.activity, requests = usage?.requests ?? [], firstWord = usage?.health?.firstWordMs;
+	const failed = requests.reduce((sum, slice) => sum + slice.failed, 0), total = requests.reduce((sum, slice) => sum + slice.succeeded, failed);
+	const since = (hours: number) => (usage?.countingSince && Date.now() - new Date(usage.countingSince).getTime() < hours * 3_600_000 ? t("providerAccounts.countingSince", { time: formatWhen(usage.countingSince, "soon") }) : undefined);
+	const cells: [string, string, string | undefined][] = [
+		[t("providerAccounts.today"), activity ? formatCount(activity.today, language) : "—", t("providerAccounts.tokensUnit")],
+		[t("providerAccounts.sevenDays"), activity ? formatCount(activity.week, language) : "—", t("providerAccounts.tokensUnit")],
+		[t("providerAccounts.requestsThreeHours"), new Intl.NumberFormat(language).format(total), since(3) ?? (failed ? t("providerAccounts.requestsFailed", { failed }) : t("providerAccounts.requestsNoneFailed"))],
+		[t("providerAccounts.firstWord"), firstWord ? t("providerAccounts.seconds", { value: new Intl.NumberFormat(language, { maximumFractionDigits: 1 }).format(firstWord / 1000) }) : "—", since(1) ?? t("providerAccounts.firstWordHint")],
+	];
+	return (
+		<div data-testid="provider-account-facts" className="mt-6 grid grid-cols-4 divide-x divide-border rounded-xl bg-foreground/[0.035] @max-3xl:grid-cols-2 @max-3xl:divide-x-0">
+			{cells.map(([label, value, note]) => (
+				<div key={label} className="min-w-0 px-4 py-3">
+					<p className="truncate text-xs text-muted-foreground">{label}</p>
+					<p className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">{value}</p>
+					{note ? <p className="truncate text-xs text-muted-foreground">{note}</p> : null}
+				</div>
+			))}
+		</div>
 	);
 }
 export type AccountTab = "account" | "usage" | "models";
@@ -312,7 +344,6 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 	const resetBlocked = upcoming(usage?.resetBlockedUntil);
 	const tokens = usage?.tokens;
 	const requests = usage?.requests ?? [];
-	const failed = requests.reduce((sum, slice) => sum + slice.failed, 0);
 	// The narrow column: what the plan is, then what the account has been doing. A missing figure is left out.
 	const facts = (rows: [string, ReactNode][]) => rows.filter(([, value]) => value).map(([label, value]) => <Fact key={label} label={label}>{value}</Fact>);
 	const figure = (value?: number | null, unit?: "day") => (typeof value !== "number" ? null : unit ? formatSpan(value, unit, language) : formatCount(value, language));
@@ -338,13 +369,13 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 		[t("providerAccounts.longestStreak"), figure(tokens.longestStreakDays, "day")],
 	]) : [];
 	// What the helper counted is known even while the provider is not answering.
-	const activity = requests.length > 0 || tokenFacts.length > 0 || Boolean(account.usage?.activity);
+	const activity = requests.length > 0 || Boolean(account.usage?.activity) || Boolean(account.usage?.health);
 	const signInHint = !signedIn ? (count ? t("providerAccounts.sessionsWaitingFor", { count }) : t("providerAccounts.signInToUse"))
 		: account.usage?.signInEndsAt ? t("providerAccounts.signInEndsAt", { time: formatWhen(account.usage.signInEndsAt, "soon") }) : t("providerAccounts.signInEndsSoon");
 	const health = account.usage?.health;
 	const models_ = account.usage?.activity?.models ?? [];
 	const modelTokens = models_.reduce((sum, model) => sum + model.tokens, 0);
-	const twoColumns = signedIn && (tab === "account" ? planFacts.length > 0 : tab === "usage" && (activity || modelTokens > 0));
+	const twoColumns = signedIn && tab === "account" && planFacts.length > 0;
 	// A sign-in the helper holds can be replaced by a fresh one from its provider.
 	const renewable = signedIn && !apiKey && Boolean(usage?.refreshedAt || usage?.addedAt || usage?.requests);
 	const share = (model: { tokens: number }) => Math.round((model.tokens / modelTokens) * 100);
@@ -386,58 +417,6 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 					) : null}
 					{signedIn && tab === "account" ? (
 						<>
-							<Rows title={t("providerAccounts.limitsHeading")}>
-								{paused ? (
-									<Row icon={<CirclePause aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.pausedUntil", { time: formatWhen(paused, "soon") })} hint={t(usage?.pausedReason === "quota" || usage?.pausedReason === "credential_quota" ? "providerAccounts.pausedRateLimited" : "providerAccounts.pausedRefused")}>
-										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "resume" }, t("providerAccounts.accountResumed", { name }), false)}>{t("providerAccounts.resumeNow")}</Button>
-									</Row>
-								) : null}
-								{windows.map((window, index) => {
-									const seconds = window.durationSeconds ?? 0;
-									const length = seconds === 7 * DAY ? t("automations.schedule.weekly")
-										: seconds >= DAY && seconds % DAY === 0 ? t("providerAccounts.usageWindowDays", { days: seconds / DAY })
-											: seconds >= 3600 ? t("providerAccounts.usageWindowHours", { hours: Math.round(seconds / 3600) }) : "";
-									const scope = window.scope && window.scope !== "model" ? t(SCOPES[window.scope]) : window.name ?? "";
-									const title = scope || length || t("providerAccounts.usageLabel");
-									const hint = [scope ? length : "", window.resetTime ? t("providerAccounts.usageResets", { reset: formatWhen(window.resetTime, "time") }) : ""].filter(Boolean).join(" · ");
-									const meterLabel = t("providerAccounts.usageMeterLabel", { account: account.email, window: [scope, length].filter(Boolean).join(" · ") || title });
-									return <MeterRow key={index} testId={`provider-account-usage-${account.id}${index ? `-${index}` : ""}`} title={title} hint={hint} percent={percentLeft(window.remainingFraction)} meterLabel={meterLabel} />;
-								})}
-								{windows.length ? null : <div data-testid={`provider-account-usage-${account.id}`}><Row title={t(!account.usage ? "providerAccounts.loading" : apiKey ? "providerAccounts.usageNotReported" : "providerAccounts.usageUnavailable")} /></div>}
-								{!extra ? null : extra.limitCents > 0 ? (
-									<MeterRow
-										title={t("providerAccounts.extraUsage")}
-										hint={t("providerAccounts.extraUsageSpent", { used: money(extra.usedCents), limit: money(extra.limitCents) })}
-										percent={percentLeft(1 - extra.usedCents / extra.limitCents)}
-										value={t("providerAccounts.amountLeft", { amount: money(Math.max(0, extra.limitCents - extra.usedCents)) })}
-									/>
-								) : <Row title={t("providerAccounts.extraUsage")} hint={t("providerAccounts.extraUsageSpentNoCap", { used: money(extra.usedCents) })} />}
-								{usage?.credits ? (
-									<Row title={t("providerAccounts.credits")} hint={t("providerAccounts.creditsHint")}>
-										<span className="text-sm tabular-nums text-foreground">{usage.credits.unlimited ? t("providerAccounts.creditsUnlimited") : t("providerAccounts.creditsAmount", { amount: new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(Number(usage.credits.balance)) })}</span>
-									</Row>
-								) : null}
-							</Rows>
-							{typeof resetCount === "number" || (!apiKey && usage) ? (
-								<Rows title={t("providerAccounts.resetsHeading")}>
-									{!resetCount || resetCount <= 0 ? <Row title={t("providerAccounts.noResets")} /> : resetting ? (
-										<Row label={t("providerAccounts.useReset")} title={t("providerAccounts.confirmUseReset", { name })} hint={t(usage?.resetUsable ? "providerAccounts.confirmUseResetHint" : "providerAccounts.confirmUseResetEarly")}>
-											<Button type="button" variant="ghost" className="text-muted-foreground" disabled={page.pending} onClick={() => setResetting(false)}>{t("confirm.cancel")}</Button>
-											<Button type="button" disabled={page.pending} onClick={() => void spendReset()}>{t("providerAccounts.useReset")}</Button>
-										</Row>
-									) : (
-										<Row title={t("providerAccounts.limitResets")} hint={usage?.resetUsable ? t("providerAccounts.resetUsableHint") : resetBlocked ? t("providerAccounts.resetBlockedHint", { time: formatWhen(resetBlocked, "soon") }) : t("providerAccounts.resetIdleHint")}>
-											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.resetsAvailableShort", { count: resetCount ?? 0 })}</span>
-											<Button type="button" variant={usage?.resetUsable ? "primary" : "secondary"} disabled={page.pending || Boolean(resetBlocked)} onClick={() => setResetting(true)}>{t("providerAccounts.useReset")}</Button>
-										</Row>
-									)}
-									{(resetCount && resetCount > 0 ? usage?.resets ?? [] : []).map((reset, index) => (
-										<Fact key={index} label={[reset.label || t("providerAccounts.resetItem", { number: index + 1 }), reset.total > 1 ? t("providerAccounts.resetLeftOf", { left: reset.left, total: reset.total }) : ""].filter(Boolean).join(" · ")}>
-											{reset.expiresAt ? t("providerAccounts.resetExpires", { date: formatWhen(reset.expiresAt, "day") }) : null}
-										</Fact>
-									))}
-								</Rows>
-							) : null}
 							<Rows title={t("providerAccounts.sessionsHeading")}>
 								<Row title={t("providerAccounts.newSessionsTitle", { agent: info.agentName })} hint={account.primary ? t("providerAccounts.startHere") : currentDefault ? t("providerAccounts.startOn", { name: currentDefault.displayName }) : undefined}>
 									{account.primary
@@ -480,24 +459,96 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 					) : null}
 					{signedIn && tab === "usage" ? (
 						<>
-							<AccountSessions account={account} page={page} others={others} language={language} />
-							{/* How the account's recent requests went, as the helper saw them. */}
-							{health?.lastFailure || health?.firstWordMs ? (
-								<Rows title={t("providerAccounts.healthHeading")}>
-									{health.lastFailure ? (
-										<Row icon={<AlertCircle aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.lastFailure")} hint={`${t(FAILURES[health.lastFailure.kind])} · ${new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(health.lastFailure.at))}`}>
-											<span className="flex gap-2.5 text-[13px] tabular-nums text-muted-foreground">
-												{(["limit", "signIn", "server", "other"] as const).filter((kind) => health.failures?.[kind]).map((kind) => <span key={kind}><span className="font-medium text-foreground">{health.failures![kind]}</span> {t(FAILURES[kind === "signIn" ? "sign-in" : kind]).toLowerCase()}</span>)}
-											</span>
+							<Rows title={t("providerAccounts.limitsHeading")}>
+								{paused ? (
+									<Row icon={<CirclePause aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.pausedUntil", { time: formatWhen(paused, "soon") })} hint={t(usage?.pausedReason === "quota" || usage?.pausedReason === "credential_quota" ? "providerAccounts.pausedRateLimited" : "providerAccounts.pausedRefused")}>
+										<Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.act(account.id, { action: "resume" }, t("providerAccounts.accountResumed", { name }), false)}>{t("providerAccounts.resumeNow")}</Button>
+									</Row>
+								) : null}
+								{windows.map((window, index) => {
+									const seconds = window.durationSeconds ?? 0;
+									const length = seconds === 7 * DAY ? t("automations.schedule.weekly")
+										: seconds >= DAY && seconds % DAY === 0 ? t("providerAccounts.usageWindowDays", { days: seconds / DAY })
+											: seconds >= 3600 ? t("providerAccounts.usageWindowHours", { hours: Math.round(seconds / 3600) }) : "";
+									const scope = window.scope && window.scope !== "model" ? t(SCOPES[window.scope]) : window.name ?? "";
+									const title = scope || length || t("providerAccounts.usageLabel");
+									const hint = [scope ? length : "", window.resetTime ? t("providerAccounts.usageResets", { reset: formatWhen(window.resetTime, "time") }) : ""].filter(Boolean).join(" · ");
+									const meterLabel = t("providerAccounts.usageMeterLabel", { account: account.email, window: [scope, length].filter(Boolean).join(" · ") || title });
+									return <MeterRow key={index} testId={`provider-account-usage-${account.id}${index ? `-${index}` : ""}`} title={title} hint={hint} percent={percentLeft(window.remainingFraction)} meterLabel={meterLabel} pace={steadyPace(window.durationSeconds, window.resetTime)} />;
+								})}
+								{windows.length ? null : !account.usage ? (
+								// Rows the size of the limits they stand for, so nothing moves when they arrive.
+								<div data-testid={`provider-account-usage-${account.id}`} aria-busy="true" aria-label={t("providerAccounts.loading")}>
+									{[0, 1].map((row) => <div key={row} className="flex min-h-15 items-center gap-5 px-4 py-3"><span className="h-3 w-28 rounded bg-muted" /><span className="h-1.5 max-w-[420px] flex-1 rounded-full bg-muted" /></div>)}
+								</div>
+							) : (
+								<div data-testid={`provider-account-usage-${account.id}`}>
+									<Row title={t(apiKey ? "providerAccounts.usageNotReported" : "providerAccounts.usageUnavailable")} hint={apiKey ? undefined : t("providerAccounts.usageUnavailableHint")}>
+										{apiKey ? null : <Button type="button" variant="secondary" disabled={page.pending} onClick={() => void page.recheck()}>{t("providerAccounts.tryNow")}</Button>}
+									</Row>
+								</div>
+							)}
+								{!extra ? null : extra.limitCents > 0 ? (
+									<MeterRow
+										title={t("providerAccounts.extraUsage")}
+										hint={t("providerAccounts.extraUsageSpent", { used: money(extra.usedCents), limit: money(extra.limitCents) })}
+										percent={percentLeft(1 - extra.usedCents / extra.limitCents)}
+										value={t("providerAccounts.amountLeft", { amount: money(Math.max(0, extra.limitCents - extra.usedCents)) })}
+									/>
+								) : <Row title={t("providerAccounts.extraUsage")} hint={t("providerAccounts.extraUsageSpentNoCap", { used: money(extra.usedCents) })} />}
+								{usage?.credits ? (
+									<Row title={t("providerAccounts.credits")} hint={t("providerAccounts.creditsHint")}>
+										<span className="text-sm tabular-nums text-foreground">{usage.credits.unlimited ? t("providerAccounts.creditsUnlimited") : t("providerAccounts.creditsAmount", { amount: new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(Number(usage.credits.balance)) })}</span>
+									</Row>
+								) : null}
+							</Rows>
+							{typeof resetCount === "number" || (!apiKey && usage) ? (
+								<Rows title={t("providerAccounts.resetsHeading")}>
+									{!resetCount || resetCount <= 0 ? <Row title={t("providerAccounts.noResets")} /> : resetting ? (
+										<Row label={t("providerAccounts.useReset")} title={t("providerAccounts.confirmUseReset", { name })} hint={t(usage?.resetUsable ? "providerAccounts.confirmUseResetHint" : "providerAccounts.confirmUseResetEarly")}>
+											<Button type="button" variant="ghost" className="text-muted-foreground" disabled={page.pending} onClick={() => setResetting(false)}>{t("confirm.cancel")}</Button>
+											<Button type="button" disabled={page.pending} onClick={() => void spendReset()}>{t("providerAccounts.useReset")}</Button>
 										</Row>
-									) : null}
-									{health.firstWordMs ? (
-										<Row title={t("providerAccounts.firstWord")} hint={t("providerAccounts.firstWordHint")}>
-											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.seconds", { value: new Intl.NumberFormat(language, { maximumFractionDigits: 1 }).format(health.firstWordMs / 1000) })}</span>
+									) : (
+										<Row title={t("providerAccounts.limitResets")} hint={usage?.resetUsable ? t("providerAccounts.resetUsableHint") : resetBlocked ? t("providerAccounts.resetBlockedHint", { time: formatWhen(resetBlocked, "soon") }) : t("providerAccounts.resetIdleHint")}>
+											<span className="text-sm tabular-nums text-foreground">{t("providerAccounts.resetsAvailableShort", { count: resetCount ?? 0 })}</span>
+											<Button type="button" variant={usage?.resetUsable ? "primary" : "secondary"} disabled={page.pending || Boolean(resetBlocked)} onClick={() => setResetting(true)}>{t("providerAccounts.useReset")}</Button>
 										</Row>
-									) : null}
+									)}
+									{(resetCount && resetCount > 0 ? usage?.resets ?? [] : []).map((reset, index) => (
+										<Fact key={index} label={[reset.label || t("providerAccounts.resetItem", { number: index + 1 }), reset.total > 1 ? t("providerAccounts.resetLeftOf", { left: reset.left, total: reset.total }) : ""].filter(Boolean).join(" · ")}>
+											{reset.expiresAt ? t("providerAccounts.resetExpires", { date: formatWhen(reset.expiresAt, "day") }) : null}
+										</Fact>
+									))}
 								</Rows>
 							) : null}
+							{activity ? <UsageFacts account={account} language={language} /> : tokenFacts.length ? null : <Rows className="mt-6"><Row title={t("providerAccounts.noUsageYet")} hint={t("providerAccounts.noUsageYetHint")} /></Rows>}
+							{/* The last request a provider refused, and how many it refused lately, as the helper saw them. */}
+							{health?.lastFailure ? (
+								<Rows className="mt-3">
+									<Row icon={<AlertCircle aria-hidden="true" className="size-4 shrink-0 text-warning" />} title={t("providerAccounts.lastFailure")} hint={`${t(FAILURES[health.lastFailure.kind])} · ${new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(new Date(health.lastFailure.at))}`}>
+										<span className="flex gap-2.5 text-[13px] tabular-nums text-muted-foreground">
+											{(["limit", "signIn", "server", "other"] as const).filter((kind) => health.failures?.[kind]).map((kind) => <span key={kind}><span className="font-medium text-foreground">{health.failures![kind]}</span> {t(FAILURES[kind === "signIn" ? "sign-in" : kind]).toLowerCase()}</span>)}
+										</span>
+									</Row>
+								</Rows>
+							) : null}
+							<AccountDays account={account} language={language} active={active} />
+							<AccountSessions account={account} page={page} others={others} language={language} />
+							{modelTokens ? (
+								<Rows title={t("providerAccounts.byModel")}>
+									<div className="grid gap-2 px-4 py-3">
+										{models_.map((model) => (
+											<div key={model.model} className="grid grid-cols-[minmax(0,1fr)_120px_36px] items-center gap-2.5 text-[13px]">
+												<span className="truncate text-foreground" title={model.model}>{model.model}</span>
+												<span className="h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-muted-foreground" style={{ width: `${share(model)}%` }} /></span>
+												<span className="text-right tabular-nums text-muted-foreground">{share(model)}%</span>
+											</div>
+										))}
+									</div>
+								</Rows>
+							) : null}
+							{tokenFacts.length ? <Rows title={t("providerAccounts.providerCount", { provider: info.name })}>{tokenFacts}</Rows> : null}
 						</>
 					) : null}
 					{tab === "account" ? <Rows title={t("providerAccounts.account")}>
@@ -534,33 +585,6 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 				{twoColumns ? (
 					<aside className="min-w-0">
 						{planFacts.length && tab === "account" ? <Rows title={t(apiKey ? "providerAccounts.apiKeyLabel" : "providerAccounts.planHeading")}>{planFacts}</Rows> : null}
-						{activity && tab === "usage" ? (
-							<Rows title={t("providerAccounts.activityHeading")}>
-								<AccountThroughput account={account} language={language} />
-								{requests.length ? (
-									<Row title={t("providerAccounts.requests")} hint={t("providerAccounts.requestsWindow")}>
-										<div className="text-right">
-											<p className="text-sm tabular-nums text-foreground">{new Intl.NumberFormat(language).format(requests.reduce((sum, slice) => sum + slice.succeeded, failed))}</p>
-											<p className="mt-px text-xs tabular-nums text-muted-foreground">{failed ? t("providerAccounts.requestsFailed", { failed }) : t("providerAccounts.requestsNoneFailed")}</p>
-										</div>
-									</Row>
-								) : null}
-								{tokenFacts}
-							</Rows>
-						) : null}
-						{modelTokens && tab === "usage" ? (
-							<Rows title={t("providerAccounts.byModel")}>
-								<div className="grid gap-2 px-4 py-3">
-									{models_.map((model) => (
-										<div key={model.model} className="grid grid-cols-[minmax(0,1fr)_72px_36px] items-center gap-2.5 text-[13px]">
-											<span className="truncate text-foreground" title={model.model}>{model.model}</span>
-											<span className="h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-muted-foreground" style={{ width: `${share(model)}%` }} /></span>
-											<span className="text-right tabular-nums text-muted-foreground">{share(model)}%</span>
-										</div>
-									))}
-								</div>
-							</Rows>
-						) : null}
 					</aside>
 				) : null}
 			</div>

@@ -176,7 +176,11 @@ func TestAccountStateReportsLocalFactsUnderTheUsageTypesNames(t *testing.T) {
 	if len(requests) != 20 || !reflect.DeepEqual(requests[0], map[string]any{"succeeded": float64(0), "failed": float64(0)}) {
 		t.Fatalf("requests=%v", state["requests"])
 	}
+	if since, _ := state["countingSince"].(string); since == "" {
+		t.Fatalf("countingSince missing: %v", state)
+	}
 	delete(state, "requests")
+	delete(state, "countingSince")
 	want := map[string]any{"addedAt": "2029-09-03T08:00:00Z", "refreshedAt": "2030-01-01T06:18:00Z", "pausedUntil": paused.Format(time.RFC3339), "pausedReason": "credential_quota", "renewsAt": "2030-02-01T00:00:00Z"}
 	if !reflect.DeepEqual(state, want) {
 		t.Fatalf("state=%v\nwant %v", state, want)

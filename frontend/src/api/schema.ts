@@ -5122,6 +5122,8 @@ export interface components {
             /** @description What the account helper counted passing through this account. */
             activity?: components["schemas"]["ProviderAccountActivity"];
             addedAt?: string;
+            /** @description When the account helper began counting requests, failures and first words; they start from zero when it restarts. */
+            countingSince?: string;
             credits?: components["schemas"]["ProviderAccountCredits"];
             /** @description Present only when pay-as-you-go spending is switched on. */
             extraUsage?: components["schemas"]["ProviderAccountExtraUsage"];

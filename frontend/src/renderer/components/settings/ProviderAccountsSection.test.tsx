@@ -226,6 +226,8 @@ describe("account usage", () => {
 		inventory.accounts[2].usage = { status: "available", plan: "max", planTier: "20x", windows: [{ durationSeconds: 604800, remainingFraction: 0.34 }], extraUsage: { usedCents: 1820, limitCents: 5000 } };
 		inventory.accounts.push({ ...clara, id: "d", displayName: "Pine Claude", primary: false, usage: { status: "unavailable" } });
 		const user = await start();
+		// The limits are the first thing on the Usage tab.
+		await showTab(user, "Usage");
 		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent(/^5-hourResets Jan 1.*75% left$/);
 		expect(screen.getByTestId("provider-account-usage-a-1")).toHaveTextContent("WeeklyReached");
 		expect(screen.getByTestId("provider-account-usage-a-2")).toHaveTextContent(/^Code reviewWeekly · Resets Jan 1.*96% left$/);
@@ -241,11 +243,34 @@ describe("account usage", () => {
 		expect(screen.getByRole("progressbar", { name: "Extra usage" })).toHaveAttribute("aria-valuenow", "64");
 		// A provider that will not say, and an API key, which has no limits to report.
 		await user.click(screen.getByTestId("provider-account-d"));
-		expect(await screen.findByTestId("provider-account-usage-d")).toHaveTextContent("Usage unavailable");
+		expect(await screen.findByTestId("provider-account-usage-d")).toHaveTextContent("Usage unavailableThe provider didn't send its limits. Tokens below are still counted.Try now");
+		const refreshes = mock.get.mock.calls.filter(([, options]) => options?.params?.query?.refresh).length;
+		await user.click(within(detail()).getByRole("button", { name: "Try now" }));
+		await waitFor(() => expect(mock.get.mock.calls.filter(([, options]) => options?.params?.query?.refresh).length).toBe(refreshes + 1));
 		await open(user, bob);
 		expect(screen.getByTestId("provider-account-usage-b")).toHaveTextContent("Not reported for API keys");
+		expect(within(detail()).queryByRole("button", { name: "Try now" })).toBeNull();
 		expect(detail()).toHaveTextContent("Codex·API key");
+		await showTab(user, "Account");
 		expect(detail()).toHaveTextContent("Key label");
+	});
+	it("marks where a steady pace would be, and says whether a limit lasts until it resets", async () => {
+		const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+		inventory.accounts[0].usage = { status: "available", windows: [
+			{ durationSeconds: 18000, remainingFraction: 0.5, resetTime: inHours(1) },
+			{ durationSeconds: 604800, remainingFraction: 0.6, resetTime: inHours(144) },
+			{ durationSeconds: 604800, remainingFraction: 0.9 },
+		] };
+		const user = await start();
+		await showTab(user, "Usage");
+		// An hour of five left: a steady pace would leave 20%, and half is left.
+		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent(/50% leftLasts until reset$/);
+		expect(within(screen.getByTestId("provider-account-usage-a")).getByTitle("A steady pace would leave 20% by now")).toHaveStyle({ left: "20%" });
+		// Six days of seven left: a steady pace would leave 86%, and only 60% is.
+		expect(screen.getByTestId("provider-account-usage-a-1")).toHaveTextContent(/60% leftBehind pace$/);
+		// With no reset time there is no pace to keep.
+		expect(screen.getByTestId("provider-account-usage-a-2")).toHaveTextContent(/90% left$/);
+		expect(within(screen.getByTestId("provider-account-usage-a-2")).queryByTitle(/steady pace/)).toBeNull();
 	});
 	it("sums an account up by the general limit with the least left, as every account menu does", async () => {
 		inventory.accounts[0].usage = { status: "available", windows: [
@@ -591,6 +616,8 @@ describe("signing in again", () => {
 		const user = await start();
 		const warning = (account: ProviderAccount) => screen.getByTestId(`provider-account-sign-in-ending-${account.id}`);
 		expect(warning(alice)).toHaveTextContent(/Sign-in is not renewingWorks until Jan 1.*Sign in again to keep using it\.Sign in again/);
+		await showTab(user, "Usage");
+		expect(warning(alice)).toBeInTheDocument();
 		expect(detail()).toHaveTextContent("14% left");
 		await open(user, bob);
 		expect(warning(bob)).toHaveTextContent("It will stop working. Sign in again to keep using it.");
@@ -607,6 +634,7 @@ describe("account resets", () => {
 	it("lists each reset with its expiry and asks once before spending one", async () => {
 		inventory.accounts[0].usage = limited();
 		const user = await start();
+		await showTab(user, "Usage");
 		expect(detail()).toHaveTextContent("Limit resetsClears the usage limits.2 availableUse reset");
 		expect(detail()).toHaveTextContent("Reset 1Expires Jan 21, 2030");
 		expect(detail()).toHaveTextContent("Launch bonus · 2 of 3 leftExpires Feb 4, 2030");
@@ -640,6 +668,7 @@ describe("account resets", () => {
 		inventory.accounts[2].usage = { ...limited(), resetUsable: false, windows: [{ durationSeconds: 18000, remainingFraction: 0.6 }] };
 		inventory.accounts.push({ ...pine, usage: { status: "available", windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] } }, { ...fir, usage: { status: "unavailable" } });
 		const user = await start();
+		await showTab(user, "Usage");
 		expect(detail()).toHaveTextContent(/Limit resetsNext reset after Jan 1.*2 availableUse reset/);
 		expect(within(detail()).getByRole("button", { name: "Use reset" })).toBeDisabled();
 		await open(user, bob);
@@ -665,6 +694,7 @@ describe("a paused account", () => {
 		inventory.accounts[0].usage = { status: "available", pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "quota", windows: [{ durationSeconds: 18000, remainingFraction: 0.14 }] };
 		inventory.accounts[1].usage = { status: "available", pausedUntil: "2001-01-01T00:00:00Z", windows: [{ durationSeconds: 18000, remainingFraction: 0.14 }] };
 		const user = await start();
+		await showTab(user, "Usage");
 		expect(detail()).toHaveTextContent(/Paused until Jan 1.*The provider rate-limited this account\.Resume now/);
 		await user.click(within(detail()).getByRole("button", { name: "Resume now" }));
 		expect(await screen.findByText("Cedar Codex resumed.")).toBeInTheDocument();
@@ -677,6 +707,7 @@ describe("a paused account", () => {
 describe("plan and activity", () => {
 	const quiet = Array.from({ length: 18 }, () => ({ succeeded: 0, failed: 0 }));
 	const aside = () => within(detail()).getByRole("complementary");
+	const facts = () => screen.getByTestId("provider-account-facts");
 	it("puts the plan facts and recent requests beside the limits", async () => {
 		inventory.accounts[0].usage = { status: "available", windows: [{ durationSeconds: 18000, remainingFraction: 0.5 }] };
 		inventory.accounts[1] = { ...bob, kind: "api_key", usage: { status: "unavailable", addedAt: "2030-09-28T00:00:00Z", requests: [...quiet, { succeeded: 2, failed: 0 }, { succeeded: 1, failed: 0 }] } };
@@ -701,8 +732,9 @@ describe("plan and activity", () => {
 		// Its recent requests are on the Usage tab, which the running sessions row opens.
 		await user.click(within(detail()).getByRole("button", { name: "Open usage" }));
 		expect(within(detail()).getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
-		expect(aside()).toHaveTextContent("RequestsLast 3 hours163 failed");
-		expect(aside()).not.toHaveTextContent("Plan");
+		expect(facts()).toHaveTextContent("Requests, 3 h163 failed");
+		// The Usage tab is one column; the plan stays on the Account tab.
+		expect(within(detail()).queryByRole("complementary")).toBeNull();
 		// An API key has no limits and no sign-in to renew, but its activity is known.
 		await showTab(user, "Account");
 		await open(user, bob);
@@ -710,7 +742,7 @@ describe("plan and activity", () => {
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 		expect(within(detail()).queryByRole("button", { name: "Manage plan" })).toBeNull();
 		await showTab(user, "Usage");
-		expect(aside()).toHaveTextContent("RequestsLast 3 hours3None failed");
+		expect(facts()).toHaveTextContent("Requests, 3 h3None failed");
 	});
 	it("shows the plan and what the helper counted even while the limits are unavailable", async () => {
 		inventory.accounts[0].usage = { status: "unavailable", plan: "pro", activity: {
@@ -719,24 +751,26 @@ describe("plan and activity", () => {
 			models: [{ model: "gpt-5.3-codex", tokens: 750 }, { model: "gpt-5.2", tokens: 250 }],
 		} };
 		inventory.accounts[1].usage = { status: "unavailable", activity: { today: 0, week: 0, total: 0 } };
-		mock.costs = new Map([["session-a", { estimatedCost: { totalNanos: 2_500_000_000 } }]]);
 		const user = await start();
-		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent("Usage unavailable");
 		expect(detail()).toHaveTextContent("Codex·Pro");
 		expect(aside()).toHaveTextContent("PlanPro");
 		await showTab(user, "Usage");
-		// A bar a day, the busiest the tallest and today's the last, then the totals and what its sessions cost.
-		const bars = within(aside()).getByRole("img", { name: "Tokens per day" });
+		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent("Usage unavailable");
+		expect(facts()).toHaveTextContent("Today1.2Ktokens7 days5.4Ktokens");
+		// A bar a day for two weeks, the busiest the tallest and today's the last.
+		const bars = within(detail()).getByRole("img", { name: "Tokens per day" });
 		expect(Array.from(bars.querySelectorAll<HTMLElement>("[title]"), bar => [bar.title, bar.style.height])).toEqual([["Feb 1 · 600", "50%"], ["Feb 2 · 0", "0%"], ["Feb 3 · 1.2K", "100%"]]);
 		expect(bars.querySelector("[title^='Feb 3']")).toHaveClass("bg-foreground");
-		expect(bars).toHaveTextContent("Feb 1Tokens per dayToday");
-		expect(aside()).toHaveTextContent("Through AO today1.2KThrough AO, 7 days5.4KThrough AO since Feb 198KEstimated cost of its sessions$2.50");
-		expect(within(aside()).getByText("Estimated cost of its sessions")).toHaveAttribute("title", "Token counts priced with AO's price list. A subscription is not billed this way.");
-		expect(aside()).toHaveTextContent("By model, 7 daysgpt-5.3-codex75%gpt-5.225%");
-		// A quiet account has totals but no bars, no cost and no model split.
+		expect(bars).toHaveTextContent("Feb 1Today");
+		expect(detail()).toHaveTextContent("Last 14 days");
+		// Cost comes with pricing, in a later change.
+		expect(detail()).not.toHaveTextContent(/\$|Estimated cost/);
+		expect(detail()).toHaveTextContent("By model, 7 daysgpt-5.3-codex75%gpt-5.225%");
+		// A quiet account has its figures but no bars and no model split.
 		await open(user, bob);
-		expect(aside()).toHaveTextContent(/^ActivityThrough AO today0Through AO, 7 days0$/);
-		expect(within(aside()).queryByRole("img")).toBeNull();
+		expect(facts()).toHaveTextContent("Today0tokens7 days0tokens");
+		expect(within(detail()).queryByRole("img", { name: "Tokens per day" })).toBeNull();
+		expect(detail()).not.toHaveTextContent("By model");
 	});
 	it("adds the provider's token tally, leaving out the figures it does not report", async () => {
 		const today = new Date().toISOString().slice(0, 10);
@@ -747,12 +781,13 @@ describe("plan and activity", () => {
 		expect(within(detail()).getByRole("button", { name: "Renew" })).toBeEnabled();
 		expect(detail()).not.toHaveTextContent("Last renewed");
 		await showTab(user, "Usage");
-		for (const fact of ["RequestsLast 3 hours0None failed", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days"]) expect(aside()).toHaveTextContent(fact);
+		expect(facts()).toHaveTextContent("Requests, 3 h0None failed");
+		for (const fact of ["Codex's own count", "Tokens today1.2M", "Lifetime tokens482M", "Peak day9.4M", "Longest turn1 hr 12 min", "Current streak6 days", "Longest streak23 days"]) expect(detail()).toHaveTextContent(fact);
 		// A tally whose latest day is not today names the day; with nothing from the helper there is no sign-in row.
 		await open(user, bob);
-		expect(aside()).toHaveTextContent("Tokens on Jan 5, 20303.8K");
-		expect(aside()).toHaveTextContent("Lifetime tokens96M");
-		expect(aside()).not.toHaveTextContent(/Peak day|Requests/);
+		expect(detail()).toHaveTextContent("Tokens on Jan 5, 20303.8K");
+		expect(detail()).toHaveTextContent("Lifetime tokens96M");
+		expect(detail()).not.toHaveTextContent(/Peak day|Requests, 3 h|Nothing on this account yet/);
 		await showTab(user, "Account");
 		expect(within(detail()).queryByRole("button", { name: "Renew" })).toBeNull();
 	});
@@ -760,15 +795,20 @@ describe("plan and activity", () => {
 describe("account health", () => {
 	it("says how the last failure went, counts the recent ones by kind, and gives the time to the first word", async () => {
 		inventory.accounts[0].usage = { status: "unavailable", health: { lastFailure: { kind: "sign-in", at: "2030-03-04T12:00:00Z" }, failures: { limit: 3, signIn: 1, server: 0 }, firstWordMs: 1840 } };
-		inventory.accounts[1].usage = { status: "available", windows: [], health: { firstWordMs: 900 } };
+		// The helper started ten minutes ago, so its in-memory figures say since when.
+		inventory.accounts[1].usage = { status: "available", windows: [], health: { firstWordMs: 900 }, countingSince: new Date(Date.now() - 10 * 60_000).toISOString() };
 		const user = await start();
 		await showTab(user, "Usage");
-		expect(detail()).toHaveTextContent(/RequestsLast failureSign-in refused · Mar 4, 2030, \d+:\d\d.*M3 limit reached1 sign-in refusedTime to first wordTypical, last hour1\.8 s/);
+		const facts = () => screen.getByTestId("provider-account-facts");
+		expect(facts()).toHaveTextContent("Time to first word1.8 sTypical, last hour");
+		expect(detail()).toHaveTextContent(/Last failureSign-in refused · Mar 4, 2030, \d+:\d\d.*M3 limit reached1 sign-in refused/);
 		await open(user, bob);
-		expect(detail()).toHaveTextContent("RequestsTime to first wordTypical, last hour0.9 s");
+		expect(facts()).toHaveTextContent(/Requests, 3 h0Since \d.*Time to first word0\.9 sSince \d/);
 		expect(detail()).not.toHaveTextContent("Last failure");
+		// An account nothing has passed through says so.
 		await open(user, clara);
-		expect(detail()).not.toHaveTextContent(/Requests|Time to first word/);
+		expect(detail()).not.toHaveTextContent(/Requests, 3 h|Time to first word/);
+		expect(detail()).toHaveTextContent("Nothing on this account yetUsage shows here after its first request.");
 	});
 });
 describe("the sessions on an account", () => {

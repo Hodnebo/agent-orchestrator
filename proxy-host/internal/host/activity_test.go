@@ -32,7 +32,13 @@ func openTestActivity(t *testing.T) *Activity {
 func reported(t *testing.T, a *Activity, account string, now time.Time) map[string]any {
 	t.Helper()
 	data, err := json.Marshal(a.report(gin.H{}, account, now))
-	return parsed(t, string(data), err)
+	out := parsed(t, string(data), err)
+	// Every report says when the in-memory counts began.
+	if out["countingSince"] != a.started.UTC().Format(time.RFC3339) {
+		t.Fatalf("countingSince = %v, want the helper's start", out["countingSince"])
+	}
+	delete(out, "countingSince")
+	return out
 }
 func parsed(t *testing.T, text string, err error) map[string]any {
 	t.Helper()
