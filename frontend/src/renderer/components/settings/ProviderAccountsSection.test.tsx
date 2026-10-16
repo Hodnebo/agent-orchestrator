@@ -265,12 +265,12 @@ describe("account usage", () => {
 		await showTab(user, "Usage");
 		// An hour of five left: a steady pace would leave 20%, and half is left.
 		expect(screen.getByTestId("provider-account-usage-a")).toHaveTextContent(/50% leftLasts until reset$/);
-		expect(within(screen.getByTestId("provider-account-usage-a")).getByTitle("A steady pace would leave 20% by now")).toHaveStyle({ left: "20%" });
+		expect(within(screen.getByTestId("provider-account-usage-a")).getByTitle("Even use would leave 20% by now")).toHaveStyle({ left: "20%" });
 		// Six days of seven left: a steady pace would leave 86%, and only 60% is.
-		expect(screen.getByTestId("provider-account-usage-a-1")).toHaveTextContent(/60% leftBehind pace$/);
+		expect(screen.getByTestId("provider-account-usage-a-1")).toHaveTextContent(/60% leftMay run out before reset$/);
 		// With no reset time there is no pace to keep.
 		expect(screen.getByTestId("provider-account-usage-a-2")).toHaveTextContent(/90% left$/);
-		expect(within(screen.getByTestId("provider-account-usage-a-2")).queryByTitle(/steady pace/)).toBeNull();
+		expect(within(screen.getByTestId("provider-account-usage-a-2")).queryByTitle(/Even use/)).toBeNull();
 	});
 	it("sums an account up by the general limit with the least left, as every account menu does", async () => {
 		inventory.accounts[0].usage = { status: "available", windows: [

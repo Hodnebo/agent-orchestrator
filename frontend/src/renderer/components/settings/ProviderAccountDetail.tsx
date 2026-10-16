@@ -136,7 +136,7 @@ function MeterRow({ testId, title, hint, percent, value, meterLabel = title, pac
 				</p>
 				{pace === undefined || reached ? null : (
 					<p className={cn("mt-px flex items-center justify-end gap-1 text-xs", behind ? "text-warning" : "text-muted-foreground")}>
-						{behind ? <AlertCircle aria-hidden="true" className="size-3" /> : null}{t(behind ? "providerAccounts.behindPace" : "providerAccounts.lastsUntilReset")}
+						{behind ? <AlertCircle aria-hidden="true" className="size-3" /> : null}{t(behind ? "providerAccounts.mayRunOut" : "providerAccounts.lastsUntilReset")}
 					</p>
 				)}
 			</div>
