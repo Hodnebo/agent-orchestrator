@@ -32,7 +32,7 @@ vi.mock("./connectionError", () => ({ userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
-	useApp: () => ({ config: fixtures.config, currentHostId: "host-1", connection: "open" }),
+	useApp: () => ({ config: fixtures.config, currentHostId: fixtures.config.hostId, connection: "open" }),
 }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#888" });
@@ -82,6 +82,8 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("IS_REACT_NATIVE_TEST_ENVIRONMENT", true);
 	fixtures.params.id = "session-1";
+	fixtures.params.hostId = "host-1";
+	fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" };
 	fixtures.navigation.setOptions.mockClear();
 	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
 });
@@ -136,6 +138,47 @@ describe("session preview mode", () => {
 		fixtures.params.id = "session-2";
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
+		expect(toggle().props.accessibilityState.checked).toBe(false);
+	});
+
+	it.each(["explicit", "disabled-sharing fallback"])("preserves %s Mobile view across a LAN-to-tunnel endpoint switch", async (choice) => {
+		await openPreview();
+		if (choice === "explicit") await setMobile(true);
+		else await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		let resolve!: (preview: typeof appPreview) => void;
+		fixtures.getPreview.mockReturnValue(new Promise((done) => { resolve = done; }));
+		fixtures.config = { ...fixtures.config, host: "tunnel.example.com", httpPort: "443" };
+		await act(async () => { screen.update(<SessionPreviewScreen />); });
+		// Keep the selected surface while fetching a URL for the new endpoint.
+		// An old URL must never be rendered with the new endpoint's credentials.
+		expect(nodes("BrowserLivePane")).toHaveLength(0);
+		expect(nodes("WebView")).toHaveLength(0);
+		expect(toggle().props.accessibilityState.checked).toBe(true);
+		const updated = { ...appPreview, url: "https://tunnel.example.com/preview/artifacts/index.html" };
+		await act(async () => resolve(updated));
+		expect(nodes("BrowserLivePane")).toHaveLength(0);
+		expect(nodes("WebView")[0].props.source.uri).toBe(updated.url);
+		expect(toggle().props.accessibilityState.checked).toBe(true);
+	});
+
+	it("preserves an explicit Browser choice across an endpoint switch after disabled sharing", async () => {
+		await openPreview();
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		await setMobile(false);
+		fixtures.config = { ...fixtures.config, host: "tunnel.example.com", httpPort: "443" };
+		await act(async () => { screen.update(<SessionPreviewScreen />); });
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props.accessibilityState.checked).toBe(false);
+	});
+
+	it("starts a different host in streaming mode rather than keeping its predecessor's selection", async () => {
+		await openPreview();
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		fixtures.params.hostId = "host-2";
+		fixtures.config = { ...fixtures.config, hostId: "host-2" };
+		await act(async () => { screen.update(<SessionPreviewScreen />); });
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
 		expect(toggle().props.accessibilityState.checked).toBe(false);
 	});
 

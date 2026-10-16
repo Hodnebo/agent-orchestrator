@@ -41,12 +41,15 @@ function SessionPreviewContent() {
 	currentRoute.current = `${routeHostId ?? ""}|${sessionID}`;
 	const [previewError, setPreviewError] = useState<string>();
 	const canShowResponsive = Boolean(preview);
-	const [disabledStream, setDisabledStream] = useState<{ config: typeof config; id: string; hostId?: string } | null>(null);
-	const sharingDisabled = disabledStream?.config === config && disabledStream?.id === sessionID && disabledStream?.hostId === routeHostId;
-	const responsive = canShowResponsive && (active === "app" || (active === null && sharingDisabled));
+	const [disabledStream, setDisabledStream] = useState<{ id: string; hostId?: string } | null>(null);
+	const sharingDisabled = disabledStream?.id === sessionID && disabledStream?.hostId === routeHostId;
+	const wantsResponsive = active === "app" || (active === null && sharingDisabled);
+	const refreshingResponsive = wantsResponsive && !previewError && loaded !== null &&
+		loaded.id === sessionID && loaded.config.hostId === routeHostId && Boolean(loaded.value) && loaded.config !== config;
+	const responsive = wantsResponsive && (canShowResponsive || refreshingResponsive);
 	const onBrowserDisabled = useCallback(() => {
-		setDisabledStream({ config, id: sessionID, hostId: routeHostId });
-	}, [config, routeHostId, sessionID]);
+		setDisabledStream({ id: sessionID, hostId: routeHostId });
+	}, [routeHostId, sessionID]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({
@@ -84,10 +87,11 @@ function SessionPreviewContent() {
 
 	useEffect(() => {
 		setActive(null);
-	}, [config, routeHostId, sessionID]);
+	}, [routeHostId, sessionID]);
 
 	useEffect(() => {
-		setLoaded(null);
+		// Retain selection knowledge during endpoint changes; previewForConfig
+		// still prevents rendering its old URL with the new endpoint credentials.
 		setPreviewError(undefined);
 		if (!hostMatches) return;
 		void refreshPreview();
@@ -100,7 +104,7 @@ function SessionPreviewContent() {
 	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Connecting to this machine…</Text></View>;
 
 	return <View style={styles.screen}>
-		{!responsive || !preview ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
+		{refreshingResponsive ? <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Loading mobile preview…</Text></View> : !responsive || !preview ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
 			<View style={styles.appBar}>
 				<Feather name="globe" size={iconSize.sm} color={t.textTertiary} />
 				<Text numberOfLines={1} style={styles.appPath}>{preview.entry}</Text>
