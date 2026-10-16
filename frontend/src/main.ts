@@ -158,6 +158,7 @@ import {
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -2706,6 +2707,13 @@ ipcMain.handle("clipboard:writeText", (_event, text: string) => {
 	}
 });
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
+registerChatImageIpc({
+	ipcMain,
+	clipboard,
+	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
+	dialog,
+	downloadsDirectory: () => app.getPath("downloads"),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
