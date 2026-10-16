@@ -5,6 +5,7 @@ import "context"
 // Ownership distinguishes a saved process incarnation from a reusable PID.
 type Ownership string
 
+// Ownership states describe the saved process incarnation, not PID liveness alone.
 const (
 	OwnershipUnknown  Ownership = "unknown"
 	OwnershipMatching Ownership = "matching"

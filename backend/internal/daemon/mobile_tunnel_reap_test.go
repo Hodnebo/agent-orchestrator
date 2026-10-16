@@ -17,8 +17,10 @@ func TestMobileTunnelReapBlocksReplacementUntilCleanupSucceeds(t *testing.T) {
 		}
 		return nil
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if guard() || guard() {
-		t.Fatal("unresolved owner allowed a replacement connector")
+	for range 2 {
+		if guard() {
+			t.Fatal("unresolved owner allowed a replacement connector")
+		}
 	}
 	if !guard() {
 		t.Fatal("successful cleanup still blocked connector resolution")

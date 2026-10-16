@@ -54,9 +54,10 @@ func TestDaemonTakeoverChecksSavedOwnerBeforeSignaling(t *testing.T) {
 				t.Fatal("test sleeper has no observable process start identity")
 			}
 			startID := identity.StartID
-			if mode == "reused" {
+			switch mode {
+			case "reused":
 				startID += "-previous-process"
-			} else if mode == "missing" {
+			case "missing":
 				startID = ""
 			}
 			runFile := filepath.Join(t.TempDir(), "running.json")
