@@ -88,7 +88,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 	}
 
 	effort, effortOverride := optionalTuningValue(in.Effort)
-	worker, _, _, err := s.manager.Spawn(ctx, ports.SpawnConfig{
+	worker, _, _, err := s.spawnWithTelemetry(ctx, ports.SpawnConfig{
 		ClientRequestID:   in.ClientRequestID,
 		ClientRequestHash: in.ClientRequestHash,
 		ProjectID:         in.ProjectID,
@@ -110,7 +110,7 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		// finishes starting in the background.
 		Async:           true,
 		TaskPreparation: in.TaskPreparation,
-	})
+	}, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)
 	}
