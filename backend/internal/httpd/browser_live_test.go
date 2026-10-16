@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
 type browserLiveSessionStub struct{ calls int }
@@ -112,47 +113,83 @@ func TestBrowserLiveLeaseIsExclusiveAndRevocable(t *testing.T) {
 	releaseAgain()
 }
 
-func TestBrowserLivePreviewTargetMatchesWhatTheDesktopWouldOpen(t *testing.T) {
-	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+func TestBrowserLivePreviewTargetUsesOnlyStoredSelection(t *testing.T) {
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	for _, root := range []string{workspace, artifacts} {
+		if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<h1>hi</h1>"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workspaceURL, err := preview.FileURL("http://127.0.0.1:4317", "s1", "index.html")
+	if err != nil {
 		t.Fatal(err)
 	}
+	artifactURL, err := preview.ArtifactFileURL("http://127.0.0.1:4317", "s1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldArtifactURL, err := preview.ArtifactFileURL("http://127.0.0.1:9999", "s1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, selection, want string
+	}{
+		{"unselected repository index", "", ""},
+		{"cleared selection", "  ", ""},
+		{"running app", " http://localhost:5173/ ", "http://localhost:5173/"},
+		{"external page", "https://example.com/app", "https://example.com/app"},
+		{"workspace file", "index.html", workspaceURL},
+		{"legacy workspace URL", "http://localhost:9999/api/v1/sessions/s1/preview/files/index.html", workspaceURL},
+		{"artifact file", "__ao_artifacts__/index.html", artifactURL},
+		{"artifact URL with stale port", oldArtifactURL, artifactURL},
+		{"missing selected file", "missing.html", ""},
+		{"unsupported scheme", "file:///tmp/index.html", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			hub := NewBrowserLiveHub(nil, nil, nil, nil)
+			hub.SetLoopbackBaseURL("http://127.0.0.1:4317")
+			session := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{
+				PreviewURL: tt.selection, WorkspacePath: workspace, ArtifactDir: artifacts,
+			}}
+			if got := hub.previewTarget(session); got != tt.want {
+				t.Fatalf("preview target = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// A same-named workspace file cannot substitute for a missing artifact.
 	hub := NewBrowserLiveHub(nil, nil, nil, nil)
-	explicit := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{PreviewURL: " http://localhost:5173/ ", WorkspacePath: workspace}}
-	if got := hub.previewTarget(explicit); got != "http://localhost:5173/" {
-		t.Fatalf("explicit preview target = %q", got)
-	}
-
-	// A workspace entrypoint that was never opened with `ao preview` is what the
-	// phone's App preview tab shows, so the streamed browser must open it too.
-	discovered := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
-	if got := hub.previewTarget(discovered); got != "" {
-		t.Fatalf("preview target without a loopback origin = %q, want empty", got)
-	}
 	hub.SetLoopbackBaseURL("http://127.0.0.1:4317")
-	got := hub.previewTarget(discovered)
-	if !strings.HasPrefix(got, "http://") || !strings.Contains(got, ":4317/") || !strings.HasSuffix(got, "index.html") {
-		t.Fatalf("discovered preview target = %q", got)
+	session := domain.Session{ID: "s1", Metadata: domain.SessionMetadata{
+		PreviewURL: oldArtifactURL, WorkspacePath: workspace, ArtifactDir: t.TempDir(),
+	}}
+	if got := hub.previewTarget(session); got != "" {
+		t.Fatalf("missing artifact target = %q, want empty", got)
 	}
-
-	empty := domain.Session{ID: "s2", Metadata: domain.SessionMetadata{WorkspacePath: t.TempDir()}}
-	if got := hub.previewTarget(empty); got != "" {
-		t.Fatalf("preview target for an empty workspace = %q, want empty", got)
+	session.Metadata.PreviewURL = "index.html"
+	hub.SetLoopbackBaseURL("")
+	if got := hub.previewTarget(session); got != "" {
+		t.Fatalf("file target without loopback origin = %q, want empty", got)
 	}
 }
 
 // A phone can start watching before the agent has produced a page. Keep the
-// stream open and verify the newly generated entry is offered without any
+// stream open and verify the newly selected entry is offered without any
 // desktop panel being mounted or a mobile reconnect.
 type livePreviewSession struct {
+	mu        sync.Mutex
 	workspace string
+	selection string
 	lookedUp  chan struct{}
 	once      sync.Once
 }
 
 func (s *livePreviewSession) Get(context.Context, domain.SessionID) (domain.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.once.Do(func() { close(s.lookedUp) })
-	return domain.Session{ID: "s1", Metadata: domain.SessionMetadata{WorkspacePath: s.workspace}}, nil
+	return domain.Session{ID: "s1", Metadata: domain.SessionMetadata{WorkspacePath: s.workspace, PreviewURL: s.selection}}, nil
 }
 
 type livePreviewBroker struct{ offers chan string }
@@ -170,7 +207,7 @@ func (b *livePreviewBroker) Send(ctx context.Context, _ string, kind string, pay
 	}
 	return nil
 }
-func TestBrowserLiveOffersPreviewGeneratedAfterConnection(t *testing.T) {
+func TestBrowserLiveOffersPreviewSelectedAfterConnection(t *testing.T) {
 	workspace := t.TempDir()
 	sessions := &livePreviewSession{workspace: workspace, lookedUp: make(chan struct{})}
 	broker := &livePreviewBroker{offers: make(chan string, 4)}
@@ -184,6 +221,9 @@ func TestBrowserLiveOffersPreviewGeneratedAfterConnection(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte("<h1>new page</h1>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	sessions.mu.Lock()
+	sessions.selection = "index.html"
+	sessions.mu.Unlock()
 	for range 2 {
 		select {
 		case target := <-broker.offers:
@@ -191,7 +231,7 @@ func TestBrowserLiveOffersPreviewGeneratedAfterConnection(t *testing.T) {
 				t.Fatalf("offered target = %q", target)
 			}
 		case <-time.After(6 * time.Second):
-			t.Fatal("generated preview was not offered or retried")
+			t.Fatal("selected preview was not offered or retried")
 		}
 	}
 	cancel()

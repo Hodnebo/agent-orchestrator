@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -66,28 +67,42 @@ func (h *BrowserLiveHub) SetLoopbackBaseURL(base string) {
 	h.mu.Unlock()
 }
 
-// previewTarget is what the desktop browser panel would open for this session:
-// the target set by `ao preview`, else the workspace's web entrypoint (the same
-// file the phone's App preview tab shows).
+// previewTarget seeds only the session's explicit preview selection, matching
+// GET /preview. Resolve stored file selections against the current daemon origin
+// and their selected root; unrelated repository entrypoints are never discovered.
 func (h *BrowserLiveHub) previewTarget(session domain.Session) string {
-	if target := strings.TrimSpace(session.Metadata.PreviewURL); target != "" {
-		return target
+	target := strings.TrimSpace(session.Metadata.PreviewURL)
+	if entry, ok := preview.StoredEntryFromPreview(target, session.ID); ok {
+		root := session.Metadata.WorkspacePath
+		if entry.Scope == preview.StoredEntryScopeArtifact {
+			root = session.Metadata.ArtifactDir
+		}
+		if _, exists := preview.EntryAtPath(root, entry.Path); !exists {
+			return ""
+		}
+		h.mu.Lock()
+		base := h.loopbackBase
+		h.mu.Unlock()
+		if base == "" {
+			return ""
+		}
+		var resolved string
+		var err error
+		if entry.Scope == preview.StoredEntryScopeArtifact {
+			resolved, err = preview.ArtifactFileURL(base, session.ID, entry.Path)
+		} else {
+			resolved, err = preview.FileURL(base, session.ID, entry.Path)
+		}
+		if err != nil {
+			return ""
+		}
+		return resolved
 	}
-	h.mu.Lock()
-	base := h.loopbackBase
-	h.mu.Unlock()
-	if base == "" {
-		return ""
+	if parsed, err := url.Parse(target); err == nil &&
+		(parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
+		return parsed.String()
 	}
-	entry, ok := preview.DiscoverWebEntrypoint(session.Metadata.WorkspacePath)
-	if !ok {
-		return ""
-	}
-	target, err := preview.FileURL(base, session.ID, entry.Path)
-	if err != nil {
-		return ""
-	}
-	return target
+	return ""
 }
 
 // CloseAll revokes every active mobile browser lease.
