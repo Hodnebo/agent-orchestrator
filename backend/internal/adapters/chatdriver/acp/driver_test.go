@@ -776,6 +776,7 @@ type fakeAgent struct {
 
 	mu                  sync.Mutex
 	initParams          acpsdk.InitializeRequest
+	authMethods         []string
 	capabilities        *acpsdk.AgentCapabilities
 	initErr             error
 	newParams           acpsdk.NewSessionRequest
@@ -955,7 +956,10 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 
 var _ acpsdk.Agent = (*fakeAgent)(nil)
 
-func (a *fakeAgent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
+func (a *fakeAgent) Authenticate(_ context.Context, params acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
+	a.mu.Lock()
+	a.authMethods = append(a.authMethods, params.MethodId)
+	a.mu.Unlock()
 	return acpsdk.AuthenticateResponse{}, nil
 }
 func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
@@ -1363,6 +1367,70 @@ func TestACPDriverValidatesHandshakeIdentityBeforeOpeningSession(t *testing.T) {
 	agent.mu.Unlock()
 	if opened {
 		t.Fatal("session/new ran before the handshake identity was admitted")
+	}
+}
+
+func TestACPDriverRunsAfterInitializeBeforeOpeningSession(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		AfterInitialize: func(ctx context.Context, conn *acpsdk.ClientSideConnection, _ acpsdk.InitializeResponse, launchCfg LaunchConfig) error {
+			if launchCfg.Env["GEMINI_HOME"] != "/session/gemini" {
+				t.Errorf("AfterInitialize environment = %v", launchCfg.Env)
+			}
+			agent.mu.Lock()
+			opened := agent.newParams.Cwd != ""
+			agent.mu.Unlock()
+			if opened {
+				t.Error("session/new ran before AfterInitialize")
+			}
+			_, err := conn.Authenticate(ctx, acpsdk.AuthenticateRequest{MethodId: "oauth-personal"})
+			return err
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_HOME": "/session/gemini"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conversation.Close() }()
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.authMethods) != 1 || agent.authMethods[0] != "oauth-personal" {
+		t.Fatalf("authenticate calls = %v, want [oauth-personal]", agent.authMethods)
+	}
+	if agent.newParams.Cwd == "" {
+		t.Fatal("session/new did not run after AfterInitialize succeeded")
+	}
+}
+
+func TestACPDriverAfterInitializeFailureStopsStart(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		AfterInitialize: func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, LaunchConfig) error {
+			return &acpsdk.RequestError{Code: -32000, Message: "Authentication required"}
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("Start error = %v, want ErrChatAuthRequired", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.newParams.Cwd != "" {
+		t.Fatal("session/new ran after AfterInitialize failed")
 	}
 }
 
@@ -2992,6 +3060,60 @@ func TestRawCommandFromInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := rawCommandFromInput(tt.raw); got != tt.want {
 				t.Fatalf("rawCommandFromInput(%v) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolEventPreservesCommandExitCode(t *testing.T) {
+	intPtr := func(value int) *int { return &value }
+	for _, tt := range []struct {
+		name         string
+		raw          string
+		kind         acpsdk.ToolKind
+		status       acpsdk.ToolCallStatus
+		terminalExit *int
+		wantExit     *int
+		wantStatus   domain.ActivityStatus
+	}{
+		{"nonzero shell exit", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, intPtr(7), domain.ActivityStatusFailed},
+		{"successful shell exit", `{"output":"command output\n","metadata":{"exit":0}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, intPtr(0), domain.ActivityStatusCompleted},
+		{"missing exit", `{"output":"command output\n","metadata":{}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"null exit", `{"output":"command output\n","metadata":{"exit":null}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"string exit", `{"output":"command output\n","metadata":{"exit":"7"}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"fractional exit", `{"output":"command output\n","metadata":{"exit":1.5}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"non-command metadata", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindRead, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"provider failure stays failed", `{"output":"command output\n","metadata":{"exit":0}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusFailed, nil, intPtr(0), domain.ActivityStatusFailed},
+		{"terminal exit takes precedence", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, intPtr(0), intPtr(0), domain.ActivityStatusCompleted},
+		{"terminal nonzero exit", `{"output":"command output\n"}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, intPtr(7), intPtr(7), domain.ActivityStatusFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw any
+			if err := json.Unmarshal([]byte(tt.raw), &raw); err != nil {
+				t.Fatal(err)
+			}
+			tool := &toolState{id: "command-1", kind: tt.kind, status: tt.status, rawOutput: raw, rawInput: map[string]any{"command": "printf test; exit 7"}}
+			if tt.terminalExit != nil {
+				tool.meta = map[string]any{"terminal_exit": map[string]any{"exit_code": *tt.terminalExit}}
+			}
+			conv := &conversation{}
+			event := conv.toolEvent("turn-1", tool, true)
+			if event.Kind != ports.ChatEventActivityCompleted || event.ActivityStatus != tt.wantStatus {
+				t.Fatalf("event kind/status = %s/%s, want completed/%s", event.Kind, event.ActivityStatus, tt.wantStatus)
+			}
+			var detail map[string]any
+			if err := json.Unmarshal(event.Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantExit == nil {
+				if _, exists := detail["exitCode"]; exists {
+					t.Fatalf("unexpected exitCode: %#v", detail["exitCode"])
+				}
+			} else if detail["exitCode"] != float64(*tt.wantExit) {
+				t.Fatalf("exitCode = %#v, want %d", detail["exitCode"], *tt.wantExit)
+			}
+			if detail["output"] != "command output\n" {
+				t.Fatalf("output changed: %#v", detail["output"])
 			}
 		})
 	}

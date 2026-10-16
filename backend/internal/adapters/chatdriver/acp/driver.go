@@ -59,6 +59,12 @@ type Config struct {
 	// invoking an adapter-specific version flag, which many stdio agents do not
 	// implement and which can emit protocol bytes instead of a version string.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// AfterInitialize runs once on a freshly initialized provider connection,
+	// before any session is created. It is for bindings whose agent needs a
+	// one-time ACP call on the connection, such as authenticating with a method
+	// the user has already completed elsewhere. It does not run when AO
+	// reattaches to a persistent host, whose provider is already set up.
+	AfterInitialize func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, LaunchConfig) error
 	// SessionMeta carries adapter-defined ACP extensions whenever AO creates the
 	// provider-side session object: session/new, session/load, or
 	// session/resume. Standing context such as a system prompt is process input,
@@ -71,8 +77,9 @@ type Config struct {
 	// SessionPreamble returns standing context to attach to the first prompt of a
 	// session as an embedded ACP resource. It is for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta, but do execute
-	// prompt content blocks. Delivered on session/new and again on session/load,
-	// because standing context is process input rather than transcript history.
+	// prompt content blocks. It leads the first prompt of a new session. A
+	// resumed conversation that already has turns received it then, so it is not
+	// repeated (see conversation.setSessionPreamble).
 	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
@@ -414,6 +421,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			}
 		}
 		conv.liveState = live
+		conv.hasDurableTurns = cfg.HasPriorTurns
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -500,6 +508,7 @@ func (d *Driver) resumeSession(
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
+	conv.hasDurableTurns = cfg.HasPriorTurns
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -652,6 +661,12 @@ func (d *Driver) initialize(
 		}
 	}
 	conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+	if d.cfg.AfterInitialize != nil {
+		if err := d.cfg.AfterInitialize(ctx, conv.conn, init, cfg); err != nil {
+			conv.discard()
+			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP after initialize", err)
+		}
+	}
 	return conv, init, nil, nil
 }
 
