@@ -792,6 +792,104 @@ func TestCompletedConfiguredTaskSelectsSessionBranchInFreshClone(t *testing.T) {
 	}
 }
 
+func TestCompletedTaskPartialCloneAuthenticatesLazyBlobFetch(t *testing.T) {
+	for _, fixed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "managed", true: "fixed"}[fixed], func(t *testing.T) {
+			repo, git := namingRepository(t)
+			branch := "ao/login/root"
+			git(repo, "checkout", "-b", branch)
+			if err := os.WriteFile(filepath.Join(repo, "session.txt"), []byte("pushed session work\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			git(repo, "add", "session.txt")
+			git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "session work")
+			blob := git(repo, "rev-parse", "HEAD:session.txt")
+			git(repo, "checkout", "main")
+			origin := filepath.Join(t.TempDir(), "origin.git")
+			git(repo, "clone", "--bare", repo, origin)
+			git(origin, "config", "uploadpack.allowFilter", "true")
+			git(origin, "config", "uploadpack.allowReachableSHA1InWant", "true")
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			uploadPack, err := exec.LookPath("git-upload-pack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical := filepath.Join(t.TempDir(), "checkout")
+			data, bin := t.TempDir(), t.TempDir()
+			missing := filepath.Join(t.TempDir(), "missing-after-clone")
+			quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+			url := "https://github.com/acme/naming-regression.git"
+			// Use real filtered upload-pack, but require the same credentials as
+			// a private origin. The initial clone has the scoped grant; lazy blob
+			// fetches must invoke the actual AO helper and local token broker.
+			ssh := filepath.Join(bin, "private-ssh")
+			gate := "#!/bin/sh\nset -eu\ntoken=${AO_GIT_TOKEN:-}\nif [ -z \"$token\" ]; then\n credential=$(printf 'protocol=https\\nhost=github.com\\npath=acme/naming-regression.git\\n\\n' | GIT_TERMINAL_PROMPT=0 " + quote(realGit) + " credential fill)\n token=$(printf '%s\\n' \"$credential\" | sed -n 's/^password=//p')\nfi\n[ \"$token\" = fixture-github-token ] || { echo 'private origin requires credentials' >&2; exit 1; }\nexec " + quote(uploadPack) + " " + quote(origin) + "\n"
+			if err := os.WriteFile(ssh, []byte(gate), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Preserve the authorized origin for validation while redirecting
+			// actual network operations to the local credential-gated transport.
+			shim := "#!/bin/sh\nset -eu\nclone=0\nfor arg do\n case \"$arg\" in remote) exec " + quote(realGit) + " \"$@\" ;; clone) clone=1 ;; esac\ndone\n" + quote(realGit) + " -c " + quote("url.ssh://private-git.fixture/naming.git.insteadOf="+url) + " \"$@\"\nif [ \"$clone\" = 1 ]; then\n " + quote(realGit) + " -C " + quote(canonical) + " rev-list --objects --all --missing=print > " + quote(missing) + "\nfi\n"
+			if err := os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			t.Setenv("GIT_CONFIG_COUNT", "0")
+			t.Setenv("GIT_ALLOW_PROTOCOL", "ssh")
+			t.Setenv("GIT_SSH_COMMAND", quote(ssh))
+			t.Setenv("GIT_SSH_VARIANT", "simple")
+			t.Setenv("AO_GIT_TOKEN", "")
+			t.Setenv(worker.PartialCloneEnv, "1")
+			if err := os.WriteFile(filepath.Join(data, "worker-token"), []byte("fixture-worker-token"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var tokenRequests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/worker/checkout-grant":
+					_ = json.NewEncoder(w).Encode(worker.CheckoutGrantResponse{CloneURL: url, Token: "fixture-github-token", ExpiresAt: time.Now().Add(time.Hour)})
+				case "/api/cloud/v1/worker/github-token":
+					if r.Header.Get("Authorization") != "Worker fixture-worker-token" || r.URL.Query().Get("repo") != "acme/naming-regression" {
+						t.Errorf("unscoped lazy-fetch credential request: %s", r.URL)
+						http.Error(w, "invalid credential request", http.StatusUnauthorized)
+						return
+					}
+					tokenRequests.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]string{"token": "fixture-github-token"})
+				default:
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			bootstrap := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", RepositoryURL: url, Branch: branch, DefaultBranch: "main", TaskNamingState: domain.TaskNamingDone, TaskNameSlug: "login"}}
+			path, err := prepareNamedWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &bootstrap, canonical, data, server.URL, worker.ReuseDecision{Workspace: canonical}, fixed, nil)
+			if err != nil {
+				t.Fatalf("restore private partial clone: %v", err)
+			}
+			objects, err := os.ReadFile(missing)
+			if err != nil || !strings.Contains(string(objects), "?"+blob) {
+				t.Fatalf("fixture did not omit the pushed branch blob: %s, %v", objects, err)
+			}
+			if tokenRequests.Load() == 0 {
+				t.Fatal("lazy blob fetch did not authenticate through the worker token broker")
+			}
+			content, err := os.ReadFile(filepath.Join(path, "session.txt"))
+			if err != nil || string(content) != "pushed session work\n" {
+				t.Fatalf("pushed branch blob not restored: %q, %v", content, err)
+			}
+			if got := git(path, "branch", "--show-current"); got != branch {
+				t.Fatalf("restored branch = %s", got)
+			}
+		})
+	}
+}
+
 func TestFixedTaskWorkspaceRecoversDurableRenameIntentThroughAdoption(t *testing.T) {
 	for _, current := range []string{"preparation", "renamed", "unrelated"} {
 		t.Run(current, func(t *testing.T) {

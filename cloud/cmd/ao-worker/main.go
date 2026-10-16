@@ -176,6 +176,9 @@ func run(logger *slog.Logger) error {
 	if bootstrap.Launch.SessionID == "" {
 		bootstrap.Launch.SessionID = bootstrap.SessionID
 	}
+	if err := (worker.SetupRunner{DataDir: dataDir, FirstStart: firstStart}).Prepare(ctx, bootstrap.Launch.PostCreate); err != nil {
+		return fmt.Errorf("preserve initial project Setup: %w", err)
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// Naming and checkout run before any transport or agent factory captures a

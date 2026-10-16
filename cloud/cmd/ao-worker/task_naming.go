@@ -695,6 +695,13 @@ func prepareNamedWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 		if err := worker.PrepareCheckoutWithOptions(ctx, worker.ExecGitRunner{}, canonical, grant, worker.CheckoutOptions{PartialClone: os.Getenv(worker.PartialCloneEnv) == "1"}); err != nil {
 			return canonical, err
 		}
+		// Selecting or restoring another branch can lazily fetch blobs from a
+		// partial clone after the checkout grant's scoped environment is gone.
+		// Install the shared credential helper before either operation, without
+		// changing HEAD; linked worktrees inherit this repository configuration.
+		if err := worker.ConfigureWorkerGitOnBranch(ctx, worker.ExecGitRunner{}, canonical, dataDir, publicURL, bootstrap.SessionID, bootstrap.Launch.Branch); err != nil {
+			return canonical, err
+		}
 	}
 	// A truly unborn new repository cannot host a linked worktree. Preserve
 	// the legacy first-commit path, recording that choice durably before launch.
@@ -774,11 +781,6 @@ func prepareNamedWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 		actual, err = finalizeTaskWorkspace(ctx, logger, c, bootstrap, canonical, dataDir, fixed, name)
 		if err != nil {
 			return canonical, fmt.Errorf("finalize task workspace: %w", err)
-		}
-	}
-	if !reuse.Reused && !legacyUnborn {
-		if err := worker.ConfigureWorkerGitOnBranch(ctx, worker.ExecGitRunner{}, actual, dataDir, publicURL, bootstrap.SessionID, bootstrap.Launch.Branch); err != nil {
-			return canonical, err
 		}
 	}
 	cloneExtraRepos(ctx, logger, grant.Token, bootstrap.Launch.ExtraRepos, actual, dataDir)
