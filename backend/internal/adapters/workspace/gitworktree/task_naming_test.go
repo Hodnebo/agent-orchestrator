@@ -78,7 +78,7 @@ func TestNameTaskWorkspace(t *testing.T) {
 				if got := gitOutput(t, git, child.Path, "branch", "--show-current"); got != info.Root.Branch {
 					t.Fatalf("child branch = %q", got)
 				}
-				if got := gitOutput(t, git, child.RepoPath, "worktree", "list", "--porcelain"); !strings.Contains(got, child.Path) {
+				if got := gitOutput(t, git, child.RepoPath, "worktree", "list", "--porcelain"); !strings.Contains(got, filepath.ToSlash(child.Path)) {
 					t.Fatalf("stale registration: %s", got)
 				}
 			}
@@ -257,7 +257,7 @@ func TestNameTaskWorkspaceRepairCanResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, wt := range info.Worktrees {
-		if !strings.Contains(gitOutput(t, git, wt.RepoPath, "worktree", "list", "--porcelain"), wt.Path) {
+		if !strings.Contains(gitOutput(t, git, wt.RepoPath, "worktree", "list", "--porcelain"), filepath.ToSlash(wt.Path)) {
 			t.Fatalf("registration not repaired: %+v", wt)
 		}
 		if got := gitOutput(t, git, wt.Path, "branch", "--show-current"); got != "ao/fix-login/root" {
