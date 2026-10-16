@@ -685,6 +685,31 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 							}}
 						/>
 					</SettingsRow>
+                    <SettingsRow
+                        label={t("awake.lowPowerPermission", "Low Power Mode authorization")}
+                        description={t("awake.lowPowerPermissionHelp", "Grants this account four fixed Low Power Mode commands. macOS asks for administrator approval once. Saved active policies may resume after approval.")}
+                    >
+                        {state?.observation.lowPowerAuthorized ? <span className="text-sm text-settings-muted">{t("awake.authorized", "Authorized")}</span> :
+                        <Button variant="footer" disabled={awake.busy || !capability("low_power_authorization")?.available}
+                            onClick={() => awake.act({ kind: "authorizeLowPower" })}>{t("awake.authorize", "Authorize…")}</Button>}
+                    </SettingsRow>
+                    <SettingsRow label={t("awake.lowPowerBattery", "Low Power Mode below battery percentage")}
+                        description={capability("low_power")?.available ? t("awake.lowPowerBatteryHelp", "While an awake request is active. 0 disables this rule; otherwise 10–90%. Restores AO-owned changes after recovery or when the request ends.") : capabilityReason("low_power")}>
+                        <Input className="w-20" type="number" min={0} max={90} key={state?.settings.lowPowerBatteryPercent}
+                            aria-label={t("awake.lowPowerBattery", "Low Power Mode below battery percentage")}
+                            defaultValue={state?.settings.lowPowerBatteryPercent ?? 0} disabled={awake.busy || !capability("low_power")?.available}
+                            onBlur={(e) => { const value = Number(e.target.value); if (state && value !== state.settings.lowPowerBatteryPercent) update({ lowPowerBatteryPercent: value }); }} />
+                    </SettingsRow>
+                    {boolRow("lowPowerOnSeriousHeat", t("awake.lowPowerHeat", "Low Power Mode on serious heat"), t("awake.lowPowerHeatHelp", "Applies to the current power source during awake requests. Critical heat still stops wake requests. AO preserves existing user settings."), "low_power")}
+                    <SettingsRow label={t("awake.lowPowerCurrent", "Current Low Power Mode")}>
+                        <span className="text-sm text-settings-muted">{state?.observation.lowPowerMode ? t("common.on", "On") : t("common.off", "Off")}</span>
+                    </SettingsRow>
+                    {state?.reason?.startsWith("low_power_") ? <SettingsRow label={t("awake.lowPowerRecovery", "Low Power Mode needs attention")}
+                        description={t("awake.lowPowerRecoveryHelp", "End desktop wake requests and retry restoring AO-owned Low Power Mode changes. If permission was removed, authorize it again first.")}>
+                        <Button variant="footer" disabled={awake.busy} onClick={() => {
+                            if (window.confirm(t("awake.lowPowerRecoverConfirm", "End desktop wake requests and restore AO-owned Low Power Mode changes?"))) awake.act({ kind: "recover" });
+                        }}>{t("awake.recoverPower", "Recover Low Power Mode")}</Button>
+                    </SettingsRow> : null}
 					<SettingsRow
 						label={t("awake.thermal", "Thermal state")}
 						description={t(

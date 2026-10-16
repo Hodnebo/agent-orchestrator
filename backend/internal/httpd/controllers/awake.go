@@ -29,6 +29,7 @@ type AwakeService interface {
 	UpdateSettings(context.Context, domain.AwakeSettings) error
 	UpdateRules(context.Context, []domain.AwakeRule) error
 	Downloads([]string) error
+	AuthorizeLowPower(context.Context) error
 }
 
 // AwakeController serves desktop wake routes.
@@ -210,5 +211,12 @@ func (c *AwakeController) ClearHistory(w http.ResponseWriter, r *http.Request) {
 func (c *AwakeController) Observe(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		envelope.WriteJSON(w, http.StatusOK, c.Svc.ObserveStatus(r.Context()))
+	}
+}
+
+// AuthorizeLowPower opens a user-initiated macOS authorization prompt.
+func (c *AwakeController) AuthorizeLowPower(w http.ResponseWriter, r *http.Request) {
+	if c.available(w, r) {
+		c.reply(w, r, c.Svc.AuthorizeLowPower(r.Context()))
 	}
 }

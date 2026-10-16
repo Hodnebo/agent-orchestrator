@@ -102,24 +102,26 @@ type AwakeApplication struct {
 
 // AwakeObservation contains transient host readings for wake policy.
 type AwakeObservation struct {
-	DisplayControl   bool               `json:"displayControl"`
-	KeyboardControl  bool               `json:"keyboardControl"`
-	ObservedAt       time.Time          `json:"observedAt"`
-	BatteryPercent   *int               `json:"batteryPercent,omitempty"`
-	OnBattery        *bool              `json:"onBattery,omitempty"`
-	Thermal          string             `json:"thermal"`
-	UptimeSeconds    float64            `json:"uptimeSeconds"`
-	ExternalDisplays int                `json:"externalDisplays"`
-	AgentActive      *bool              `json:"agentActive,omitempty"`
-	NetworkAddresses []string           `json:"networkAddresses"`
-	Devices          []string           `json:"devices"`
-	LowPowerMode     bool               `json:"lowPowerMode"`
-	Applications     []AwakeApplication `json:"applications"`
-	AudioControl     bool               `json:"audioControl"`
-	AppPause         bool               `json:"appPause"`
-	Browsers         []AwakeApplication `json:"browsers"`
-	NetworkConnected *bool              `json:"networkConnected,omitempty"`
-	KnownNetworks    []string           `json:"knownNetworks"`
+	DisplayControl     bool               `json:"displayControl"`
+	KeyboardControl    bool               `json:"keyboardControl"`
+	ObservedAt         time.Time          `json:"observedAt"`
+	BatteryPercent     *int               `json:"batteryPercent,omitempty"`
+	OnBattery          *bool              `json:"onBattery,omitempty"`
+	Thermal            string             `json:"thermal"`
+	UptimeSeconds      float64            `json:"uptimeSeconds"`
+	ExternalDisplays   int                `json:"externalDisplays"`
+	AgentActive        *bool              `json:"agentActive,omitempty"`
+	NetworkAddresses   []string           `json:"networkAddresses"`
+	Devices            []string           `json:"devices"`
+	LowPowerControl    bool               `json:"lowPowerControl"`
+	LowPowerAuthorized bool               `json:"lowPowerAuthorized"`
+	LowPowerMode       bool               `json:"lowPowerMode"`
+	Applications       []AwakeApplication `json:"applications"`
+	AudioControl       bool               `json:"audioControl"`
+	AppPause           bool               `json:"appPause"`
+	Browsers           []AwakeApplication `json:"browsers"`
+	NetworkConnected   *bool              `json:"networkConnected,omitempty"`
+	KnownNetworks      []string           `json:"knownNetworks"`
 }
 
 // AwakeState combines durable requests with current host status.

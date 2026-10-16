@@ -56,3 +56,18 @@ func TestAwakeHTTPValidationAndRuntimeErrors(t *testing.T) {
 		t.Fatalf("missing service status=%d", w.Code)
 	}
 }
+
+func (s *awakeHTTPStub) AuthorizeLowPower(context.Context) error { s.starts++; return s.err }
+func TestAwakeLowPowerAuthorizationResult(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+	}{{nil, http.StatusOK}, {errors.New("authorization canceled"), http.StatusInternalServerError}} {
+		svc := &awakeHTTPStub{err: tc.err}
+		w := httptest.NewRecorder()
+		(&AwakeController{Svc: svc}).AuthorizeLowPower(w, httptest.NewRequest(http.MethodPost, "/api/v1/awake/low-power/authorize", nil))
+		if w.Code != tc.status || svc.starts != 1 {
+			t.Fatalf("status=%d calls=%d", w.Code, svc.starts)
+		}
+	}
+}

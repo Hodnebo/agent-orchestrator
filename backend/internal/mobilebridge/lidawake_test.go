@@ -340,6 +340,9 @@ func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
 	if err := l.SetProtection(30); err != nil {
 		t.Fatal(err)
 	}
+	if err := l.ConfigureLowPower(40, true); err != nil {
+		t.Fatal(err)
+	}
 	if err := l.ConfigureEffects(true, []string{"example.app"}, true, true); err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +357,7 @@ func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
 	if err := json.Unmarshal(data, &lease); err != nil {
 		t.Fatal(err)
 	}
-	if lease.LidClosed == nil || *lease.LidClosed || !lease.DisplayAwake || lease.ExpiresAt == nil || lease.StopBatteryPercent != 30 || !lease.MuteAudio || !lease.RestoreDisplay || !lease.DarkenKeyboard || len(lease.PauseApps) != 1 {
+	if lease.LidClosed == nil || *lease.LidClosed || !lease.DisplayAwake || lease.ExpiresAt == nil || lease.StopBatteryPercent != 30 || lease.LowPowerBatteryPercent != 40 || !lease.LowPowerOnSeriousHeat || !lease.MuteAudio || !lease.RestoreDisplay || !lease.DarkenKeyboard || len(lease.PauseApps) != 1 {
 		t.Fatalf("policy lost in native lease: %+v", lease)
 	}
 }

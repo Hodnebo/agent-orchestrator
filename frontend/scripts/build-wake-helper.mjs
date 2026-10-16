@@ -10,7 +10,7 @@ export function wakeHelperBuildOptions(arch, root = frontend) {
   return {
     output: path.join(root, "wake-helper", "ao-wake"),
     args: ["swiftc", "-target", `${cpu}-apple-macosx11.0`, "-O",
-      path.join(root, "native/wake-helper/WakePolicy.swift"), path.join(root, "native/wake-helper/WakeEffects.swift"), path.join(root, "native/wake-helper/WakeLights.swift"), path.join(root, "native/wake-helper/WakeBrowserActions.swift"), path.join(root, "native/wake-helper/WakeNetworkActions.swift"), path.join(root, "native/wake-helper/main.swift")],
+      path.join(root, "native/wake-helper/WakePolicy.swift"), path.join(root, "native/wake-helper/WakeLowPower.swift"), path.join(root, "native/wake-helper/WakeEffects.swift"), path.join(root, "native/wake-helper/WakeLights.swift"), path.join(root, "native/wake-helper/WakeBrowserActions.swift"), path.join(root, "native/wake-helper/WakeNetworkActions.swift"), path.join(root, "native/wake-helper/main.swift")],
   };
 }
 export function buildWakeHelper({ arch = process.arch, platform = process.platform, run = spawnSync, ensureDirectory = mkdirSync } = {}) {

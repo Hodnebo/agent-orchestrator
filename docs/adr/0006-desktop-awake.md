@@ -1,6 +1,6 @@
 # ADR 0006: desktop Stay Awake ownership
 
-Status: implementation in progress; physical acceptance and privileged power-control decision pending.
+Status: implementation; physical acceptance pending.
 
 ## Intent and controls
 
@@ -47,7 +47,7 @@ silently resume paused rules.
 
 ## Native protocol and recovery
 
-Protocol 3 extends the existing unprivileged launchd coordinator rather than
+Protocol 4 extends the existing unprivileged launchd coordinator rather than
 installing a second owner of the global clamshell control. Each desktop daemon
 has a lease separate from its mobile lease. Idle and display wake use
 process-owned IOPM assertions. Closed-lid ownership is independent of optional
@@ -56,7 +56,7 @@ closed-lid meaning. A coordinator watchdog terminates a stalled coordinator so
 launchd can replay its already-fsynced journals. Scratch/custom data directories
 cannot join or install this coordinator.
 
-A protocol-2 registration is not silently replaced. Open the lid, disable
+A protocol-2 or protocol-3 registration is not silently replaced. Open the lid, disable
 closed-lid requests in every AO instance, wait for recovery, and run:
 
 ```sh
@@ -103,17 +103,35 @@ close the browser again automatically. Tab recovery belongs to the browser.
 ## Settings surface and unfinished capabilities
 
 The current settings page exposes session modes, uptime, lid/display defaults,
-automatic activation, and battery/heat protection. Optional display/keyboard/audio
+automatic activation, battery/heat protection and Low Power Mode controls. Optional display/keyboard/audio
 effects, app pausing, hotspot recovery, agent reconnection, browser relaunch,
 and explicit recovery/history operations have backend/native contracts but no
 settings controls in this version. Their presence in the API is not a claim that
 the desktop settings expose the complete original PR2 feature list.
 
-## Unfinished capabilities and acceptance
+## Low Power Mode and native acceptance
 
-Automatic Low Power Mode needs a product decision about a macOS-authorized
-privileged power helper versus opening macOS settings. No root installation or
-sudoers changes are part of this implementation so far. Display-brightness and keyboard-backlight controls use runtime-gated private
+Automatic Low Power Mode uses an explicit macOS authorization step. It installs
+one root-owned sudoers fragment granting only four exact `pmset` on/off commands
+for the current UID's battery and charger profiles. Each root command has a
+five-second sudoers timeout. The AO executable remains unprivileged. The approved
+installer uses fixed OS commands; the policy loop never prompts and receives no
+arbitrary-command grant. Authorization only installs permission; already-saved
+active policies may resume afterward. The UI exposes a battery threshold, serious-heat toggle, current effective mode and explicit
+recovery. Battery activation has three-point hysteresis; serious heat holds
+through fair and releases at nominal. Critical heat still stops wake requests.
+
+The shared native coordinator owns a separate fsynced Low Power Mode journal.
+It records intent before mutation, verifies success, never adopts a pre-existing
+on preference, and restores only AO-owned changes after their last owner ends.
+A detectable manual off suppresses reapplication for those leases. Unknown/High
+Power profiles are refused. Unacknowledged writes and previous-boot claims
+require explicit recovery; failed restores preserve the journal. Writing the
+same value as AO is not distinguishable as a separate user change. The permission
+fragment persists independently of awake sessions; removal and revocation recovery
+are documented in [the physical test handoff](../stay-awake-physical-tests.md).
+
+Display-brightness and keyboard-backlight controls use runtime-gated private
 APIs only on macOS 26–27; older supported macOS versions retain core wake/lid
 support. Keyboard selectors must match their measured ABI. Missing symbols,
 unsupported hardware and missing fresh open-lid brightness samples prevent
@@ -138,8 +156,8 @@ manufactures a new prompt. Provider adapters without a reconnect-only contract
 fail explicitly. Uncertain attempts are not automatically replayed. Terminal
 agents and independently managed CLI conversations are not restarted.
 
-Automatic Low Power Mode still reports unavailable with a reason. It is not an
-implemented capability and must not be advertised as completed.
+The remaining advanced Settings controls are deferred to a future PR; see
+[the follow-up scope](../awake-follow-up-controls.md).
 
 Automated tests and compilation do not establish physical MacBook behavior.
 The ADR 0005 matrix remains a release gate: AC/battery and charger transitions,

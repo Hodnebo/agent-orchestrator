@@ -3488,6 +3488,7 @@ func awakeOperations() []operation {
 		common(http.MethodPost, "/api/v1/awake/sessions/{awakeId}/extend", "extendAwake", controllers.ExtendAwakeRequest{}, []any{controllers.AwakeIDParam{}}),
 		common(http.MethodPut, "/api/v1/awake/settings", "setAwakeSettings", domain.AwakeSettings{}, nil),
 		common(http.MethodPut, "/api/v1/awake/rules", "setAwakeRules", controllers.AwakeRulesRequest{}, nil),
+		common(http.MethodPost, "/api/v1/awake/low-power/authorize", "authorizeAwakeLowPower", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/stop", "stopAwake", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/resume", "resumeAwake", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),

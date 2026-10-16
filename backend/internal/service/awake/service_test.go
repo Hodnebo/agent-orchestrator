@@ -570,3 +570,59 @@ func TestAwakeIdlePolicyDoesNotPollNativeHelper(t *testing.T) {
 		t.Fatal("active policy lost native monitoring")
 	}
 }
+
+type authorizingHost struct {
+	fakeHost
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *authorizingHost) AuthorizeLowPower(ctx context.Context) error {
+	close(h.entered)
+	select {
+	case <-h.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func TestLowPowerAuthorizationDoesNotBlockPolicyStatus(t *testing.T) {
+	host := &authorizingHost{entered: make(chan struct{}), release: make(chan struct{})}
+	svc, err := New(context.Background(), &memoryStore{}, host, &fakeBindings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- svc.AuthorizeLowPower(context.Background()) }()
+	<-host.entered
+	status := make(chan struct{})
+	go func() { _ = svc.Status(); close(status) }()
+	select {
+	case <-status:
+	case <-time.After(time.Second):
+		t.Fatal("macOS authorization holds the policy lock")
+	}
+	close(host.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if host.observes != 1 {
+		t.Fatal("authorization did not refresh capability discovery")
+	}
+}
+func TestLowPowerAuthorizationCancellationDoesNotSaveSettings(t *testing.T) {
+	host := &authorizingHost{entered: make(chan struct{}), release: make(chan struct{})}
+	store := &memoryStore{}
+	svc, err := New(context.Background(), store, host, &fakeBindings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.AuthorizeLowPower(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("authorization error: %v", err)
+	}
+	if store.writes != 0 || svc.Status().Settings.LowPowerBatteryPercent != 0 {
+		t.Fatal("canceled authorization changed settings")
+	}
+}

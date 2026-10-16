@@ -59,6 +59,8 @@ beforeEach(() => {
 			keyboardControl: false,
 			externalDisplays: 0,
 			lowPowerMode: false,
+			lowPowerControl: false,
+			lowPowerAuthorized: false,
 		},
 		active: false,
 		lidActive: false,
@@ -120,10 +122,11 @@ describe("General Stay Awake settings", () => {
 			}),
 		);
 	});
-	it("only offers controls that work and leaves removed groups out", () => {
+	it("offers Low Power Mode permission while leaving deferred groups out", () => {
 		show();
 		fireEvent.click(screen.getByText("Battery and heat protection"));
-		expect(screen.queryByRole("switch", { name: "Low Power Mode" })).toBeNull();
+		expect(screen.getByRole("switch", { name: "Low Power Mode on serious heat" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Authorize…" })).toBeDisabled();
 		expect(screen.queryByText("Display, keyboard and audio")).toBeNull();
 		expect(screen.queryByText("Apps, network and agent actions")).toBeNull();
 		expect(screen.queryByText("Recovery and history")).toBeNull();
@@ -150,4 +153,23 @@ describe("General Stay Awake settings", () => {
 			expect.anything(),
 		);
 	});
+});
+
+it("requires explicit Low Power Mode authorization and sends only the selected policy", () => {
+ test.state!.capabilities.push({ id: "low_power_authorization", available: true, reason: "" });
+ const view = show();
+ fireEvent.click(screen.getByText("Battery and heat protection"));
+ fireEvent.click(screen.getByRole("button", { name: "Authorize…" }));
+ expect(test.act).toHaveBeenCalledWith({ kind: "authorizeLowPower" });
+ test.act.mockClear();
+ view.unmount();
+ test.state!.observation.lowPowerAuthorized = true;
+ test.state!.capabilities.find(c => c.id === "low_power")!.available = true;
+ show();
+ fireEvent.click(screen.getByText("Battery and heat protection"));
+ const input = screen.getByRole("spinbutton", { name: "Low Power Mode below battery percentage" });
+ fireEvent.change(input, { target: { value: "30" } }); fireEvent.blur(input);
+ expect(test.act).toHaveBeenCalledWith({ kind: "settings", settings: expect.objectContaining({ lowPowerBatteryPercent: 30, lowPowerOnSeriousHeat: false }) });
+ fireEvent.click(screen.getByRole("switch", { name: "Low Power Mode on serious heat" }));
+ expect(test.act).toHaveBeenCalledWith({ kind: "settings", settings: expect.objectContaining({ lowPowerOnSeriousHeat: true }) });
 });

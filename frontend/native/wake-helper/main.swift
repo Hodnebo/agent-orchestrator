@@ -6,7 +6,7 @@ import CoreGraphics
 import AppKit
 import Darwin
 
-let protocolVersion = 3
+let protocolVersion = 4
 let home = FileManager.default.homeDirectoryForCurrentUser
 let directory = home.appendingPathComponent(".ao/data/wake")
 let leasesDirectory = directory.appendingPathComponent("leases")
@@ -197,12 +197,22 @@ func serve() throws {
         _ = restore()
         throw error
     }
+    var lowPower: WakeLowPower
+    do { lowPower = try WakeLowPower(url: directory.appendingPathComponent("low-power.json")) }
+    catch {
+        _ = effects.reconcile([], owners: [])
+        _ = restore()
+        try? write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
+            active: false, reason: "low_power_recovery_failed", leases: [], blocked: ownership.journal.blocked), statusURL)
+        throw error
+    }
     defer {
+        let powerClean = lowPower.reconcile([], onBattery: nil, percent: nil, thermal: "unknown")
         _ = assertions.update(idle: false, display: false)
         _ = effects.reconcile([], owners: [])
         let clean = restore()
         try? write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
-                              active: false, reason: clean ? "helper_unavailable" : "recovery_failed",
+                              active: false, reason: !powerClean ? lowPower.reason : clean ? "helper_unavailable" : "recovery_failed",
                               leases: [], blocked: ownership.journal.blocked), statusURL)
     }
     var policy = WakePolicy()
@@ -266,7 +276,17 @@ func serve() throws {
         let recovery = try? read(RecoveryRequest.self, recoveryURL)
         let forceRecovery = recovery.map { UUID(uuidString: $0.id) != nil && now - $0.writtenAt >= -5 && now - $0.writtenAt < 30 } ?? false
         let effectOK = effects.reconcile(effectsWanted, owners: Set(live.map(\.pid)), forceRecovery: forceRecovery && effectsWanted.isEmpty)
-        if forceRecovery && effectsWanted.isEmpty && effectOK { try? FileManager.default.removeItem(at: recoveryURL) }
+        let thermal: String
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: thermal = "nominal"
+        case .fair: thermal = "fair"
+        case .serious: thermal = "serious"
+        case .critical: thermal = "critical"
+        @unknown default: thermal = "unknown"
+        }
+        let powerOK = lowPower.reconcile(accepted, onBattery: onBattery, percent: percent, thermal: thermal,
+            force: forceRecovery && !accepted.contains { ($0.lowPowerBatteryPercent ?? 0) > 0 || $0.lowPowerOnSeriousHeat == true })
+        if forceRecovery && effectsWanted.isEmpty && effectOK && powerOK { try? FileManager.default.removeItem(at: recoveryURL) }
         if !effectOK {
             try effects.block(effectsWanted, reason: effects.reason)
         }
@@ -308,7 +328,7 @@ func serve() throws {
             _ = assertions.update(idle: false, display: false)
             idleActive = false
         }
-        if reason.isEmpty { reason = effectReason }
+        if reason.isEmpty { reason = lowPower.reason.isEmpty ? effectReason : lowPower.reason }
         try write(WakeStatus(version: protocolVersion, updatedAt: now, active: idleActive, reason: reason,
                              leases: idleActive ? accepted.map(\.id) : [], blocked: ownership.journal.blocked, lidActive: active, effectsBlocked: effects.journal.blocked), statusURL)
         sleep(2)
@@ -350,7 +370,8 @@ if CommandLine.arguments == [CommandLine.arguments[0], "probe"] {
     if #available(macOS 12.0, *) { lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled }
     var object: [String: Any] = ["thermal": thermal, "uptimeSeconds": ProcessInfo.processInfo.systemUptime,
         "externalDisplays": displayOK ? displays.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 }.count : -1,
-        "lowPowerMode": lowPower, "applications": apps,
+        "lowPowerMode": lowPower, "lowPowerControl": supported && WakePowerCommands.parse(WakePowerCommands.run("/usr/bin/pmset", ["-g", "custom"]).1).count == 2,
+        "lowPowerAuthorized": supported && WakePowerCommands.authorized(), "applications": apps,
         "displayControl": WakeLights().available("display"), "keyboardControl": WakeLights().available("keyboard"), "audioControl": WakeEffects.canMute(), "appPause": WakeEffects.inputBusy() == false,
         "knownNetworks": wakeKnownNetworks(),
         "browsers": wakeBrowserTargets.filter { trustedBrowser($0) != nil }.map { ["id": $0.id, "name": $0.name, "identity": "", "protected": false] }]
@@ -358,6 +379,23 @@ if CommandLine.arguments == [CommandLine.arguments[0], "probe"] {
     if let battery { object["onBattery"] = battery }
     if let percent { object["batteryPercent"] = percent }
     if let data = try? JSONSerialization.data(withJSONObject: object) { FileHandle.standardOutput.write(data) }
+} else if CommandLine.arguments == [CommandLine.arguments[0], "authorize-low-power"] {
+    var ok = false
+    var detail = "Low Power Mode authorization is unavailable on this Mac."
+    if supported && getuid() > 0 {
+        do {
+            try secureDirectory(directory)
+            let fd = open(directory.appendingPathComponent("power-authorization.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard fd >= 0 else { throw NSError(domain: "authorization lock", code: 1) }
+            defer { close(fd) }
+            guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw NSError(domain: "authorization in progress", code: 1) }
+            let result = WakePowerCommands.run("/usr/bin/osascript", ["-e", WakePowerCommands.authorizationScript(getuid())], timeout: 110)
+            ok = result.0 == 0 && WakePowerCommands.authorized()
+            detail = ok ? "" : "macOS authorization was canceled or could not be verified. Review permissions and retry."
+        } catch { detail = "Low Power Mode authorization is already running or its state directory is unavailable." }
+    }
+    let output = try! JSONSerialization.data(withJSONObject: ["ok": ok, "error": detail])
+    FileHandle.standardOutput.write(output)
 } else if CommandLine.arguments == [CommandLine.arguments[0], "join-known-network"] {
     struct Request: Decodable { let ssid: String }
     do {

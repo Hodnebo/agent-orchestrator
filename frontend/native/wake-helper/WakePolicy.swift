@@ -15,6 +15,8 @@ struct WakeLease: Codable {
     var pauseApps: [String]? = nil
     var restoreDisplay: Bool? = nil
     var darkenKeyboard: Bool? = nil
+    var lowPowerBatteryPercent: Int? = nil
+    var lowPowerOnSeriousHeat: Bool? = nil
 
     // Mobile leases omit the flag and retain closed-lid behavior. Optional
     // audio/app actions must never decide whether lid control is requested.

@@ -21,21 +21,23 @@ import (
 // HostAdapter uses a distinct lease from mobile. Ending desktop wake cannot
 // withdraw mobile's lease, or another daemon's native ownership.
 type HostAdapter struct {
-	control         *mobilebridge.KeepAwake
-	binary          string
-	mu              sync.Mutex
-	applications    []domain.AwakeApplication
-	observed        time.Time
-	native          *mobilebridge.LidAwake
-	nativeGuard     bool
-	lid             bool
-	display         bool
-	audioControl    bool
-	displayControl  bool
-	keyboardControl bool
-	appPause        bool
-	browsers        []domain.AwakeApplication
-	knownNetworks   []string
+	control            *mobilebridge.KeepAwake
+	binary             string
+	mu                 sync.Mutex
+	applications       []domain.AwakeApplication
+	observed           time.Time
+	native             *mobilebridge.LidAwake
+	nativeGuard        bool
+	lowPowerControl    bool
+	lowPowerAuthorized bool
+	lid                bool
+	display            bool
+	audioControl       bool
+	displayControl     bool
+	keyboardControl    bool
+	appPause           bool
+	browsers           []domain.AwakeApplication
+	knownNetworks      []string
 }
 
 // NewHost creates a desktop adapter with ownership separate from mobile.
@@ -101,6 +103,7 @@ func (h *HostAdapter) Capabilities() []domain.AwakeCapability {
 	lid, _, reason := h.LidStatus()
 	core := h.Supported()
 	h.mu.Lock()
+	lowPowerControl, lowPowerAuthorized := h.lowPowerControl, h.lowPowerAuthorized
 	audio, apps := h.audioControl, h.appPause
 	lights, keyboard := h.displayControl, h.keyboardControl
 	browsers := len(h.browsers) > 0
@@ -112,7 +115,8 @@ func (h *HostAdapter) Capabilities() []domain.AwakeCapability {
 		{ID: "idle", Available: core, Reason: "Stay Awake requires macOS."},
 		{ID: "lid", Available: lid, Reason: reason},
 		{ID: "display_awake", Available: core, Reason: "Display assertions require macOS."},
-		{ID: "low_power", Reason: "Automatic Low Power Mode requires a macOS-authorized power helper."},
+		{ID: "low_power", Available: h.nativeGuard && lowPowerControl && lowPowerAuthorized && fresh, Reason: "Authorize Low Power Mode in Stay Awake settings first."},
+		{ID: "low_power_authorization", Available: h.nativeGuard && lowPowerControl && fresh, Reason: "Automatic Low Power Mode requires readable battery and charger power profiles on a supported Mac."},
 		{ID: "display_restore", Available: lid && lights && fresh, Reason: "Owned display brightness control requires compatible native APIs on macOS 26–27."},
 		{ID: "keyboard", Available: lid && keyboard && fresh, Reason: "Keyboard control requires compatible native APIs and a built-in backlight on macOS 26–27."},
 		{ID: "audio", Available: lid && audio && fresh, Reason: "Owned audio-output recovery is not available on this host."},
@@ -164,6 +168,7 @@ func (h *HostAdapter) Observe(ctx context.Context) (domain.AwakeObservation, err
 	h.displayControl, h.keyboardControl = result.DisplayControl, result.KeyboardControl
 	h.browsers = append([]domain.AwakeApplication{}, result.Browsers...)
 	h.knownNetworks = append([]string{}, result.KnownNetworks...)
+	h.lowPowerControl, h.lowPowerAuthorized = result.LowPowerControl, result.LowPowerAuthorized
 	h.observed = time.Now()
 	h.mu.Unlock()
 	return result, nil
@@ -210,6 +215,9 @@ func (h *HostAdapter) SetProtection(percent int) error { return h.native.SetProt
 
 // ConfigureEffects sets optional journaled native effects.
 func (h *HostAdapter) ConfigureEffects(settings domain.AwakeSettings) error {
+	if err := h.native.ConfigureLowPower(settings.LowPowerBatteryPercent, settings.LowPowerOnSeriousHeat); err != nil {
+		return err
+	}
 	return h.native.ConfigureEffects(settings.MuteAudio, settings.PauseApps, settings.RestoreDisplay, settings.DarkenKeyboard)
 }
 
@@ -239,8 +247,18 @@ func (h *HostAdapter) JoinNetwork(ctx context.Context, ssid string) error {
 	}{ssid})
 }
 
+// AuthorizeLowPower opens an explicit macOS approval for fixed power commands.
+func (h *HostAdapter) AuthorizeLowPower(ctx context.Context) error {
+	if !h.nativeGuard {
+		return errors.New("low power mode authorization requires the default desktop installation")
+	}
+	return h.runActionTimeout(ctx, "authorize-low-power", struct{}{}, 120*time.Second)
+}
 func (h *HostAdapter) runAction(ctx context.Context, action string, request any) error {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	return h.runActionTimeout(ctx, action, request, 12*time.Second)
+}
+func (h *HostAdapter) runActionTimeout(ctx context.Context, action string, request any, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	data, err := json.Marshal(request)
 	if err != nil {

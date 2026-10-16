@@ -18,7 +18,7 @@ type Action =
 	| { kind: "start"; request: Partial<AwakeStart> }
 	| { kind: "end"; id: string }
 	| { kind: "extend"; id: string; seconds: number }
-	| { kind: "stop" | "resume" | "recover" | "clearHistory" }
+	| { kind: "stop" | "resume" | "recover" | "clearHistory" | "authorizeLowPower" }
 	| { kind: "browser"; id: string; browserId: string }
 	| { kind: "settings"; settings: AwakeSettings }
 	| { kind: "rules"; rules: AwakeRule[] };
@@ -65,6 +65,8 @@ export function useAwake(enabled = true, detailed = false) {
 							params: { path: { awakeId: action.id } },
 							body: { durationSeconds: action.seconds },
 						});
+					case "authorizeLowPower":
+						return apiClient.POST("/api/v1/awake/low-power/authorize");
 					case "stop":
 						return apiClient.POST("/api/v1/awake/stop");
 					case "resume":

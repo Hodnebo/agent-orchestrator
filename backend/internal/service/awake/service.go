@@ -1052,3 +1052,26 @@ func (s *Service) ObserveStatus(ctx context.Context) domain.AwakeState {
 	s.mu.Unlock()
 	return s.Status()
 }
+
+// AuthorizeLowPower requests explicit macOS consent without holding the policy lock.
+func (s *Service) AuthorizeLowPower(ctx context.Context) error {
+	authorizer, ok := s.host.(interface{ AuthorizeLowPower(context.Context) error })
+	if !ok {
+		return invalid("this host cannot authorize Low Power Mode")
+	}
+	s.mu.Lock()
+	allowed := !s.closed
+	s.mu.Unlock()
+	if !allowed {
+		return errors.New("stay awake is shutting down")
+	}
+	if err := authorizer.AuthorizeLowPower(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.refresh(ctx)
+	}
+	return nil
+}
