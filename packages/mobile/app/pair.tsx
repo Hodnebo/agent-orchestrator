@@ -18,6 +18,7 @@ import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { pairFromCode } from "../lib/pairFlow";
+import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
 import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
 import { loadAccount } from "../lib/account";
@@ -196,6 +197,10 @@ export default function PairScreen() {
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
 		await finish();
+		// A deliberate scan is the moment to ask for notifications: the OS prompt
+		// shows once, and a granted device registers with this machine straight
+		// away instead of waiting for the user to find the Settings switch.
+		void registerForPush(result.config, { ask: true }).catch((e) => console.warn("[push] registration failed", e));
 	}
 
 	function retry() {
