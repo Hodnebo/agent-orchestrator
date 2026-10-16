@@ -1,9 +1,12 @@
 package workerexec
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -28,7 +31,11 @@ func TestTaskNamingCredentialsAreIsolatedForEveryHarness(t *testing.T) {
 	} {
 		t.Run(tc.harness, func(t *testing.T) {
 			b := HarnessBuilder{DataDir: t.TempDir(), Env: map[string]string{"PROJECT_SECRET": "project"}}
-			cfg, cleanup, err := b.BuildTaskNaming(context.Background(), worker.LaunchContext{Harness: tc.harness, Model: "selected-model", SystemPrompt: "project rules"}, worker.CredentialResponse{Provider: tc.harness, CredentialType: tc.kind, Secret: "selected-secret"})
+			secret := "selected-secret"
+			if tc.harness == "codex" {
+				secret = `{"OPENAI_API_KEY":"selected-secret"}`
+			}
+			cfg, cleanup, err := b.BuildTaskNaming(context.Background(), worker.LaunchContext{Harness: tc.harness, Model: "selected-model", SystemPrompt: "project rules"}, worker.CredentialResponse{Provider: tc.harness, CredentialType: tc.kind, Secret: secret})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,7 +56,7 @@ func TestTaskNamingCredentialsAreIsolatedForEveryHarness(t *testing.T) {
 			}
 			if tc.harness == "codex" {
 				body, err := os.ReadFile(filepath.Join(cfg.Env["CODEX_HOME"], "auth.json"))
-				if err != nil || string(body) != "selected-secret" {
+				if err != nil || string(body) != secret {
 					t.Fatalf("auth = %q, %v", body, err)
 				}
 			}
@@ -58,6 +65,88 @@ func TestTaskNamingCredentialsAreIsolatedForEveryHarness(t *testing.T) {
 				t.Fatal("disposable credentials retained")
 			}
 		})
+	}
+}
+
+func TestTaskNamingCodexPreservesAgentRefreshAuthority(t *testing.T) {
+	secret := `{"auth_mode":"chatgpt","tokens":{"access_token":"usable-access","id_token":"opaque-id","account_id":"account-1","refresh_token":"single-use-refresh","future":{"number":123456789012345678901}},"last_refresh":"2026-10-17T00:00:00Z","future_root":true}`
+	credential := worker.CredentialResponse{Provider: "codex", CredentialType: "auth_json", Secret: secret}
+	b := HarnessBuilder{DataDir: t.TempDir(), ConfigRoot: t.TempDir()}
+	launch := worker.LaunchContext{SessionID: "session-1", Harness: "codex", Mode: "standard"}
+	cfg, cleanup, err := b.BuildTaskNaming(context.Background(), launch, credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	body, err := os.ReadFile(filepath.Join(cfg.Env["CODEX_HOME"], "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(body, []byte("single-use-refresh")) {
+		t.Fatal("cosmetic naming received the agent's refresh authority")
+	}
+	var original, isolated map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(secret), &original); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &isolated); err != nil {
+		t.Fatal(err)
+	}
+	var originalTokens, isolatedTokens map[string]json.RawMessage
+	if err := json.Unmarshal(original["tokens"], &originalTokens); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(isolated["tokens"], &isolatedTokens); err != nil {
+		t.Fatal(err)
+	}
+	if string(isolatedTokens["refresh_token"]) != `""` {
+		t.Fatal("native Codex requires an empty string refresh token")
+	}
+	delete(originalTokens, "refresh_token")
+	delete(isolatedTokens, "refresh_token")
+	delete(original, "tokens")
+	delete(isolated, "tokens")
+	if !reflect.DeepEqual(original, isolated) || !reflect.DeepEqual(originalTokens, isolatedTokens) {
+		t.Fatal("naming changed fields other than refresh authority")
+	}
+	cleanup()
+	command, err := b.BuildInteractive(launch, credential, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Cleanup != nil {
+		t.Cleanup(command.Cleanup)
+	}
+	agentAuth, err := os.ReadFile(filepath.Join(command.Env["CODEX_HOME"], "auth.json"))
+	if err != nil || string(agentAuth) != secret || credential.Secret != secret {
+		t.Fatal("naming changed the real agent's original authentication")
+	}
+}
+
+func TestTaskNamingCodexAPIKeyAuthJSONIsUnchanged(t *testing.T) {
+	secret := "{\n  \"OPENAI_API_KEY\": \"api-key\", \"tokens\": null, \"future\": 1\n}"
+	cfg, cleanup, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildTaskNaming(context.Background(), worker.LaunchContext{Harness: "codex"}, worker.CredentialResponse{Provider: "codex", CredentialType: "auth_json", Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	body, err := os.ReadFile(filepath.Join(cfg.Env["CODEX_HOME"], "auth.json"))
+	if err != nil || string(body) != secret {
+		t.Fatal("API key authentication changed")
+	}
+}
+
+func TestTaskNamingRejectsInvalidCodexAuthBeforeCreatingFiles(t *testing.T) {
+	for _, secret := range []string{"private-invalid-auth", "null", "[]", `{"tokens":[]}`, `{"tokens":"private-token-shape"}`} {
+		data := t.TempDir()
+		_, cleanup, err := (HarnessBuilder{DataDir: data}).BuildTaskNaming(context.Background(), worker.LaunchContext{Harness: "codex"}, worker.CredentialResponse{Provider: "codex", CredentialType: "auth_json", Secret: secret})
+		if err == nil || err.Error() != "invalid Codex authentication for task naming" || cleanup != nil {
+			t.Fatal("invalid authentication must fail with a content-free error")
+		}
+		entries, err := os.ReadDir(data)
+		if err != nil || len(entries) != 0 {
+			t.Fatal("invalid authentication wrote files")
+		}
 	}
 }
 

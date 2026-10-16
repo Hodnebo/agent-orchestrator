@@ -2,6 +2,7 @@ package workerexec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,6 +26,31 @@ func (b HarnessBuilder) BuildTaskNaming(ctx context.Context, launch worker.Launc
 	}
 	if !tasknaming.Supported(harness) {
 		return cfg, nil, errors.New("task naming harness is unsupported")
+	}
+	if launch.Harness == "codex" && credential.CredentialType == "auth_json" {
+		var auth map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(credential.Secret), &auth); err != nil || auth == nil {
+			return cfg, nil, errors.New("invalid Codex authentication for task naming")
+		}
+		if raw, ok := auth["tokens"]; ok && string(raw) != "null" {
+			var tokens map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &tokens); err != nil || tokens == nil {
+				return cfg, nil, errors.New("invalid Codex authentication for task naming")
+			}
+			// Cosmetic naming must not rotate the real agent's single-use OAuth
+			// refresh token. Stale access instead uses the existing naming fallback.
+			tokens["refresh_token"] = json.RawMessage(`""`)
+			isolatedTokens, err := json.Marshal(tokens)
+			if err != nil {
+				return cfg, nil, errors.New("invalid Codex authentication for task naming")
+			}
+			auth["tokens"] = isolatedTokens
+			isolated, err := json.Marshal(auth)
+			if err != nil {
+				return cfg, nil, errors.New("invalid Codex authentication for task naming")
+			}
+			credential.Secret = string(isolated)
+		}
 	}
 	parent := filepath.Join(b.DataDir, "background-tasks")
 	if err := os.MkdirAll(parent, 0o700); err != nil {
