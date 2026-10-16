@@ -178,7 +178,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE id = ?
 `
 
@@ -251,6 +251,9 @@ type GetSessionRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -325,6 +328,9 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
+		&i.ClientRequestID,
+		&i.ClientRequestHash,
+		&i.ClientRequestCommitted,
 	)
 	return i, err
 }
@@ -346,7 +352,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -419,6 +425,9 @@ type GetSessionByAutomationRunIDRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -493,6 +502,9 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
 		&i.HibernatedAt,
+		&i.ClientRequestID,
+		&i.ClientRequestHash,
+		&i.ClientRequestCommitted,
 	)
 	return i, err
 }
@@ -677,7 +689,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions ORDER BY project_id, num
 `
 
@@ -750,6 +762,9 @@ type ListAllSessionsRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -830,6 +845,9 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
+			&i.ClientRequestID,
+			&i.ClientRequestHash,
+			&i.ClientRequestCommitted,
 		); err != nil {
 			return nil, err
 		}
@@ -894,7 +912,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     requested_output,
     provision_state, provision_error, provision_steps, branch_state, is_task_preparation, automation_run_id, automation_launch_completed,
     claude_activity_facts, codex_activity_facts,
-    hibernated_at
+    hibernated_at, client_request_id, client_request_hash, client_request_committed
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -967,6 +985,9 @@ type ListSessionsByProjectRow struct {
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
 	HibernatedAt                     sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1047,6 +1068,9 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
 			&i.HibernatedAt,
+			&i.ClientRequestID,
+			&i.ClientRequestHash,
+			&i.ClientRequestCommitted,
 		); err != nil {
 			return nil, err
 		}

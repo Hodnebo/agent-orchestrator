@@ -219,8 +219,8 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
-// SetSessionProvisionSteps publishes an asynchronous Chat start's checklist. Like
-// SetSessionProvisionState it writes only its own column.
+// SetSessionProvisionSteps publishes start progress and the pre-launch setup
+// checkpoint. Like SetSessionProvisionState it writes only its own column.
 func (s *Store) SetSessionProvisionSteps(
 	ctx context.Context,
 	id domain.SessionID,
@@ -831,6 +831,9 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
 		Revision:                  row.Revision,
 		ID:                        row.ID,
+		ClientRequestID:           row.ClientRequestID,
+		ClientRequestHash:         row.ClientRequestHash,
+		ClientRequestCommitted:    row.ClientRequestCommitted,
 		ProjectID:                 projectIDValue(row.ProjectID),
 		AutomationRunID:           row.AutomationRunID,
 		AutomationLaunchCompleted: row.AutomationLaunchCompleted,
@@ -904,8 +907,8 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 }
 
 // decodeProvisionSteps reads the start-up checklist. A malformed value reads as
-// no checklist: it only drives display, and ProvisionState stays the start's
-// authoritative outcome.
+// no checklist. Missing setup evidence never authorizes interrupted-request
+// cleanup, and ProvisionState stays the start's authoritative outcome.
 func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 	if raw == "" {
 		return nil
