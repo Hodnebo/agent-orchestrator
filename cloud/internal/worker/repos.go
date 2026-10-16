@@ -2,29 +2,15 @@ package worker
 
 import (
 	"path/filepath"
-	"strings"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // ExtraRepoDirName derives a safe local directory name from a repo URL, e.g.
-// "https://github.com/owner/ChartSnip" -> "ChartSnip".
+// "https://github.com/owner/ChartSnip" -> "ChartSnip" (domain.RepoDirName, which
+// the control plane also uses to validate a project's repositories).
 func ExtraRepoDirName(repoURL string) string {
-	trimmed := strings.TrimSuffix(strings.Trim(repoURL, "/"), ".git")
-	name := trimmed
-	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
-		name = trimmed[idx+1:]
-	}
-	name = strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			return r
-		default:
-			return '-'
-		}
-	}, name)
-	if name == "" || name == "." || name == ".." {
-		return "repo"
-	}
-	return name
+	return domain.RepoDirName(repoURL)
 }
 
 // ExtraRepoPath returns where an additional dev-kit repo is checked out: a
