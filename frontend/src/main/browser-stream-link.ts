@@ -8,6 +8,7 @@ const MAX_FRAME_BYTES = 2 << 20;
 const MAX_PACKET_BYTES = MAX_FRAME_BYTES + 64;
 const RETRY_INITIAL_MS = 200;
 const RETRY_MAX_MS = 2_000;
+const READ_ONLY_ERROR_INTERVAL_MS = 500;
 
 export type BrowserStreamControl = {
 	type: string;
@@ -58,6 +59,7 @@ export function connectBrowserStream(
 	let backoff = RETRY_INITIAL_MS;
 	let buffered: Buffer<ArrayBufferLike> = Buffer.alloc(0);
 	const controlChains = new Map<string, Promise<void>>();
+	const lastReadOnlyError = new Map<number, number>();
 	// At most one unsent frame per stream. Socket backpressure replaces stale
 	// frames rather than growing an image queue without bound.
 	const pendingFrames = new Map<number, Buffer>();
@@ -79,6 +81,7 @@ export function connectBrowserStream(
 		connected = false;
 		buffered = Buffer.alloc(0);
 		pendingFrames.clear();
+		lastReadOnlyError.clear();
 		writeBlocked = false;
 		if (target) {
 			target.removeAllListeners();
@@ -156,15 +159,32 @@ export function connectBrowserStream(
 		if (!control || typeof control.type !== "string") return;
 		const key = typeof control.sessionId === "string" ? control.sessionId : "";
 		const previous = controlChains.get(key) ?? Promise.resolve();
-		const next = previous.then(() => options.onControl(control)).then(() => undefined).catch((error) => {
+		const next = previous.then(() => {
+			if ((control.type === "start" || control.type === "stop") && control.streamId !== undefined) {
+				lastReadOnlyError.delete(control.streamId);
+			}
+			return options.onControl(control);
+		}).then(() => undefined).catch((error) => {
+			const code = (error as { code?: string })?.code ?? "BROWSER_HOST_ERROR";
+			const streamId = control.streamId;
+			const readOnly = code === "BROWSER_REMOTE_READ_ONLY" && streamId !== undefined;
+			const now = performance.now();
+			if (readOnly) {
+				// A drag can reject input at 120 Hz while the agent owns the page.
+				// Keep one immediate rejection, then coalesce the burst so a slow
+				// frame write cannot fill the broker's ordered control queue.
+				const last = lastReadOnlyError.get(streamId);
+				if (last !== undefined && now - last < READ_ONLY_ERROR_INTERVAL_MS) return;
+			}
 			log(`browser-stream-link: control failed: ${String(error)}`);
-			sendControl({
+			const sent = sendControl({
 				type: "error",
 				streamId: control.streamId,
 				sessionId: control.sessionId,
-				code: (error as { code?: string })?.code ?? "BROWSER_HOST_ERROR",
+				code,
 				message: error instanceof Error ? error.message : "Browser host command failed",
 			});
+			if (readOnly && sent) lastReadOnlyError.set(streamId, now);
 		});
 		controlChains.set(key, next);
 		void next.finally(() => {
