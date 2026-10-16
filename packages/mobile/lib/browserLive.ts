@@ -1,3 +1,4 @@
+import { ApiError, apiRequest } from "./api";
 import { authHeaders, type ServerConfig } from "./config";
 import { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
 
@@ -24,6 +25,7 @@ type BrowserLiveHandlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
 	onState(state: BrowserLiveState): void;
 	onFrame(frame: BrowserLiveFrame): void;
+	onDisabled?(): void;
 };
 
 export class BrowserLiveClient {
@@ -50,15 +52,28 @@ export class BrowserLiveClient {
 			socket.onerror = () => {
 				this.reportedError = true;
 				this.handlers.onStatus("error");
+				// Native WebSocket errors omit the HTTP handshake response body.
+				if (this.handlers.onDisabled) void this.checkSharing(socket);
 			};
 			socket.onclose = () => {
-				this.socket = null;
+				// Retain the socket identity for a pending handshake-error check.
+				// Explicit close/reconnect invalidates that check.
 				if (this.closed) this.handlers.onStatus("closed");
 				else if (!this.reportedError) this.handlers.onStatus("error", "The browser stream ended. Try reconnecting.");
 			};
 			socket.onmessage = (event) => { void this.handleMessage(event.data); };
 		} catch (error) {
 			this.handlers.onStatus("error", error instanceof Error ? error.message : "The browser stream could not connect.");
+		}
+	}
+
+	private async checkSharing(socket: WebSocket): Promise<void> {
+		try {
+			await apiRequest(this.config, `/api/v1/sessions/${encodeURIComponent(this.sessionID)}/browser/live`, undefined, 5_000);
+		} catch (error) {
+			if (!this.closed && this.reportedError && this.socket === socket && error instanceof ApiError && error.code === "BROWSER_REMOTE_DISABLED") {
+				this.handlers.onDisabled?.();
+			}
 		}
 	}
 

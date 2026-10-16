@@ -18,7 +18,7 @@ import { iconSize, space, type } from "../tokens";
 
 type BrowserStatus = "connecting" | "open" | "error";
 
-export function BrowserLivePane({ sessionID }: { sessionID: string }) {
+export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; onDisabled?(): void }) {
 	const { config } = useApp();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -77,6 +77,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 					setError(message);
 				}
 			},
+			onDisabled: () => { if (!disposed) onDisabled?.(); },
 			onState: (state) => {
 				if (disposed) return;
 				pageWidth.current = state.width;
@@ -103,7 +104,7 @@ export function BrowserLivePane({ sessionID }: { sessionID: string }) {
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, config, sessionID]);
+	}, [attempt, config, onDisabled, sessionID]);
 
 	const normalizedPoint = (x: number, y: number) => {
 		const rect = frameRectRef.current;

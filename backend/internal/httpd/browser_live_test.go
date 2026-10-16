@@ -56,9 +56,34 @@ func TestBrowserLiveRequiresDesktopOptIn(t *testing.T) {
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("disabled status = %d, want 403", res.Code)
 	}
+	if !strings.Contains(res.Body.String(), `"code":"BROWSER_REMOTE_DISABLED"`) {
+		t.Fatalf("disabled sharing error = %s", res.Body.String())
+	}
 	if sessions.calls != 0 {
 		t.Fatalf("session lookup calls = %d, want 0", sessions.calls)
 	}
+}
+
+func TestBrowserLiveHTTPProbeDoesNotReserveOrStartBrowser(t *testing.T) {
+	sessions := &browserLiveSessionStub{}
+	hub := NewBrowserLiveHub(nil, sessions, func() bool { return true }, nil)
+	r := chi.NewRouter()
+	mountBrowserLive(r, hub)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/s1/browser/live", nil)
+	req = req.WithContext(requestscope.WithLAN(req.Context()))
+	res := httptest.NewRecorder()
+	r.ServeHTTP(res, req)
+	if res.Code != http.StatusUpgradeRequired {
+		t.Fatalf("plain HTTP status = %d, want 426", res.Code)
+	}
+	if sessions.calls != 0 {
+		t.Fatalf("session lookup calls = %d, want 0", sessions.calls)
+	}
+	_, release, ok := hub.reserve("s1")
+	if !ok {
+		t.Fatal("plain HTTP request reserved a lease")
+	}
+	release()
 }
 
 func TestBrowserLiveRechecksDesktopOptInAfterReserve(t *testing.T) {
@@ -71,6 +96,7 @@ func TestBrowserLiveRechecksDesktopOptInAfterReserve(t *testing.T) {
 	r := chi.NewRouter()
 	mountBrowserLive(r, hub)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/s1/browser/live", nil)
+	req.Header.Set("Upgrade", "websocket")
 	req = req.WithContext(requestscope.WithLAN(req.Context()))
 	res := httptest.NewRecorder()
 	r.ServeHTTP(res, req)

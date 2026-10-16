@@ -106,6 +106,39 @@ describe("session preview mode", () => {
 		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
 	});
 
+	it("falls back to Mobile view when sharing is disabled and preserves an explicit switch back", async () => {
+		await openPreview();
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		expect(nodes("WebView")[0].props.source.uri).toBe(appPreview.url);
+		expect(toggle().props.accessibilityState.checked).toBe(true);
+		await setMobile(false);
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props.accessibilityState.checked).toBe(false);
+	});
+
+	it("waits for a selected preview before applying the disabled-sharing fallback", async () => {
+		let resolve!: (preview: typeof appPreview) => void;
+		fixtures.getPreview.mockReturnValue(new Promise((done) => { resolve = done; }));
+		await openPreview();
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		expect(toggle().props.accessibilityState.disabled).toBe(true);
+		await act(async () => resolve(appPreview));
+		expect(nodes("WebView")[0].props.source.uri).toBe(appPreview.url);
+	});
+
+	it("does not carry disabled sharing to another session", async () => {
+		await openPreview();
+		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
+		expect(nodes("WebView")).toHaveLength(1);
+		fixtures.params.id = "session-2";
+		await act(async () => { screen.update(<SessionPreviewScreen />); });
+		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
+		expect(toggle().props.accessibilityState.checked).toBe(false);
+	});
+
 	it("keeps the phone icon while switching to the responsive preview and back to streaming", async () => {
 		await openPreview();
 		await setMobile(true);

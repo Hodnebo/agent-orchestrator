@@ -153,6 +153,13 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "BROWSER_REMOTE_DISABLED", "Browser viewing from mobile is disabled on the desktop", nil)
 		return
 	}
+	// A failed native WebSocket handshake hides the HTTP error envelope from
+	// mobile. Allow an authenticated HTTP retry to identify disabled sharing,
+	// but never reserve a browser lease or start capture for a plain request.
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		envelope.WriteAPIError(w, r, http.StatusUpgradeRequired, "upgrade_required", "WEBSOCKET_REQUIRED", "A WebSocket connection is required", nil)
+		return
+	}
 	sessionID := strings.TrimSpace(chi.URLParam(r, "id"))
 	if sessionID == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SESSION_ID_REQUIRED", "session id is required", nil)

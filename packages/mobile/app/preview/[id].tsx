@@ -22,7 +22,7 @@ export default function SessionPreviewScreen() {
 }
 
 function SessionPreviewContent() {
-	const { id: rawID, title, hostId: routeHostId } = useLocalSearchParams<{ id: string; title?: string; previewUrl?: string; hostId?: string }>();
+	const { id: rawID, title, hostId: routeHostId } = useLocalSearchParams<{ id: string; title?: string; hostId?: string }>();
 	const sessionID = String(rawID ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
@@ -31,7 +31,8 @@ function SessionPreviewContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
-	const [active, setActive] = useState<"browser" | "app">("browser");
+	// An explicit choice wins over the initial disabled-sharing fallback.
+	const [active, setActive] = useState<"browser" | "app" | null>(null);
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
 	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
 	const currentConfig = useRef(config);
@@ -40,7 +41,12 @@ function SessionPreviewContent() {
 	currentRoute.current = `${routeHostId ?? ""}|${sessionID}`;
 	const [previewError, setPreviewError] = useState<string>();
 	const canShowResponsive = Boolean(preview);
-	const responsive = active === "app" && canShowResponsive;
+	const [disabledStream, setDisabledStream] = useState<{ config: typeof config; id: string; hostId?: string } | null>(null);
+	const sharingDisabled = disabledStream?.config === config && disabledStream?.id === sessionID && disabledStream?.hostId === routeHostId;
+	const responsive = canShowResponsive && (active === "app" || (active === null && sharingDisabled));
+	const onBrowserDisabled = useCallback(() => {
+		setDisabledStream({ config, id: sessionID, hostId: routeHostId });
+	}, [config, routeHostId, sessionID]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({
@@ -77,8 +83,8 @@ function SessionPreviewContent() {
 	}, [config, hostMatches, routeHostId, sessionID]);
 
 	useEffect(() => {
-		setActive("browser");
-	}, [sessionID]);
+		setActive(null);
+	}, [config, routeHostId, sessionID]);
 
 	useEffect(() => {
 		setLoaded(null);
@@ -94,7 +100,7 @@ function SessionPreviewContent() {
 	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Connecting to this machine…</Text></View>;
 
 	return <View style={styles.screen}>
-		{!responsive || !preview ? <BrowserLivePane sessionID={sessionID} /> : <View style={styles.appPane}>
+		{!responsive || !preview ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
 			<View style={styles.appBar}>
 				<Feather name="globe" size={iconSize.sm} color={t.textTertiary} />
 				<Text numberOfLines={1} style={styles.appPath}>{preview.entry}</Text>

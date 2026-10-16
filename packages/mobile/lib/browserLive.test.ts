@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError, apiRequest } from "./api";
 import { BrowserLiveClient } from "./browserLive";
 import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame } from "./browserLiveProtocol";
 
@@ -6,7 +7,14 @@ vi.mock("./config", () => ({
 	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+vi.mock("./api", () => ({
+	ApiError: class extends Error {
+		constructor(readonly status: number, message: string, readonly code?: string) { super(message); }
+	},
+	apiRequest: vi.fn(),
+}));
+
+afterEach(() => { vi.unstubAllGlobals(); vi.mocked(apiRequest).mockReset(); });
 
 function encodedFrame(): ArrayBuffer {
 	const bytes = new Uint8Array(25);
@@ -65,6 +73,54 @@ describe("browser live transport", () => {
 		client.connect();
 		FakeWebSocket.instance.onerror?.();
 		expect(statuses.at(-1)).toEqual({ status: "error", message: undefined });
+	});
+
+	it.each([
+		["BROWSER_REMOTE_DISABLED", true],
+		["UNAUTHORIZED", false],
+		["BROWSER_CONTROL_IN_USE", false],
+		["WEBSOCKET_REQUIRED", false],
+	])("identifies handshake rejection %s without guessing from an HTTP status", async (code, disabled) => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onerror?: () => void;
+			onclose?: () => void;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		vi.mocked(apiRequest).mockRejectedValue(new ApiError(403, "Rejected", code));
+		const onDisabled = vi.fn();
+		const config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" };
+		const client = new BrowserLiveClient(config, "worker/a", { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDisabled });
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		FakeWebSocket.instance.onclose?.();
+		await Promise.resolve();
+		expect(apiRequest).toHaveBeenCalledWith(config, "/api/v1/sessions/worker%2Fa/browser/live", undefined, 5_000);
+		expect(onDisabled).toHaveBeenCalledTimes(disabled ? 1 : 0);
+	});
+
+	it("ignores a disabled-sharing probe that finishes after closing the stream", async () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onerror?: () => void;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		let reject!: (error: Error) => void;
+		vi.mocked(apiRequest).mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+		const onDisabled = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDisabled });
+		client.connect();
+		FakeWebSocket.instance.onerror?.();
+		client.close();
+		reject(new ApiError(403, "Disabled", "BROWSER_REMOTE_DISABLED"));
+		await Promise.resolve();
+		expect(onDisabled).not.toHaveBeenCalled();
 	});
 
 	it("restores an open stream when a valid frame follows a recoverable host error", async () => {
