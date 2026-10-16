@@ -350,6 +350,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					disconnect: async () => undefined,
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+					agentBrowserUrl: async () => "",
+					externalUrl: async (_hostId: string, url: string) => url,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -371,6 +373,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
 			(window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
@@ -1208,6 +1211,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					disconnect: async () => undefined,
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+					agentBrowserUrl: async () => "",
+					externalUrl: async (_hostId: string, url: string) => url,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1229,6 +1234,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					openStream: async () => ({ streamId: "stream_test" }),
 					closeStream: () => undefined,
 					onStreamEvent: unsubscribe,
+					agentBrowserUrl: async () => "",
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

@@ -734,6 +734,12 @@ const api = {
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
 			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
+		// The host's agent browser for the session's agent tab ("" when none).
+		agentBrowserUrl: (hostId: string, sessionId: string) =>
+			ipcRenderer.invoke("remotes:agentBrowserUrl", hostId, sessionId) as Promise<string>,
+		// A preview's address for a browser outside AO; any other URL unchanged.
+		externalUrl: (hostId: string, url: string) =>
+			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
@@ -775,6 +781,9 @@ const api = {
 		closeStream: (streamId: string) => {
 			ipcRenderer.send("cloudCp:closeStream", streamId);
 		},
+		/** A cloud session's agent browser for its agent tab; "" when its sandbox has none. */
+		agentBrowserUrl: (baseUrl: string, orgId: string, sessionId: string) =>
+			ipcRenderer.invoke("cloudCp:agentBrowserUrl", baseUrl, orgId, sessionId) as Promise<string>,
 		onStreamEvent: (streamId: string, listener: (event: CloudCpStreamEvent) => void) => {
 			const channel = `cloudCp:stream:${streamId}`;
 			const wrapped = (_event: Electron.IpcRendererEvent, event: CloudCpStreamEvent) => listener(event);
