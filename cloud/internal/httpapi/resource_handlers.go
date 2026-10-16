@@ -271,9 +271,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
-		return
-	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
@@ -307,6 +304,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
 			return
 		}
+	}
+	// Checked on the merged config, so the coder dev kit's extra repositories
+	// sent as the separate coder input are admin-gated like "repos".
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
 	}
 	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")

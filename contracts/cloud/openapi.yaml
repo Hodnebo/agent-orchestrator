@@ -2862,7 +2862,9 @@ components:
         github.com repository granted to the organization's GitHub App through
         the same installation as the main one; none may repeat the main
         repository or share a folder name with another. Replaces the legacy
-        coder.extraRepos, which is still read when repos is absent.
+        coder.extraRepos, which is still read when repos is absent. A
+        repository whose name starts with a dot is refused. Only organization
+        owners and admins may set it.
       items:
         $ref: "#/components/schemas/ProjectRepository"
     ProjectRepository:
@@ -2897,7 +2899,9 @@ components:
       maxLength: 16384
       description: >-
         Standing instructions added to every session's system prompt
-        (agentRules for workers, orchestratorRules for orchestrators).
+        (agentRules for workers, orchestratorRules for orchestrators). Only
+        organization owners and admins may set them, like repos,
+        agentStartsIn and workingDirectory.
     ProjectScriptStep:
       type: object
       additionalProperties: false
@@ -2913,8 +2917,10 @@ components:
           description: >-
             The project repository the command runs in (its URL, the main
             repository or one of repos); absent runs it in the main
-            repository's checkout. Stored as a plain command when it names the
-            main repository.
+            repository's checkout. Accepted on input only: the project stores
+            every step as a plain command, a step in an additional repository
+            as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases
+            that predate per-repository steps keep and run it.
     ProjectScriptCommands:
       type: array
       maxItems: 20
@@ -2935,7 +2941,10 @@ components:
         10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND,
         AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH,
         AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and
-        AO_PROJECT_NAME. An empty array clears them.
+        AO_PROJECT_NAME. An empty array clears them. A stored step of the form
+        "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that
+        additional repository's folder, which must be one of the project's
+        repositories. Only organization owners and admins may set them.
     ProjectCoderConfig:
       type: object
       additionalProperties: false

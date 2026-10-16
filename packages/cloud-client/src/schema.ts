@@ -1701,7 +1701,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. */
+        /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
         ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
         ProjectRepository: {
             /**
@@ -1719,17 +1719,17 @@ export interface components {
         ProjectAgentStartsIn: "repository" | "parent";
         /** @description Where sessions work in a bring-your-own Coder workspace when AO runs as the workspace user, for example ~/work/{repo}; it overrides the Coder connection's working directory. Ignored otherwise. */
         ProjectWorkingDirectory: string;
-        /** @description Standing instructions added to every session's system prompt (agentRules for workers, orchestratorRules for orchestrators). */
+        /** @description Standing instructions added to every session's system prompt (agentRules for workers, orchestratorRules for orchestrators). Only organization owners and admins may set them, like repos, agentStartsIn and workingDirectory. */
         ProjectRules: string;
         ProjectScriptStep: {
             command: string;
             /**
              * Format: uri
-             * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Stored as a plain command when it names the main repository.
+             * @description The project repository the command runs in (its URL, the main repository or one of repos); absent runs it in the main repository's checkout. Accepted on input only: the project stores every step as a plain command, a step in an additional repository as "(\ncd -- '../<folder>' || exit 1\n<command>\n)", so releases that predate per-repository steps keep and run it.
              */
             repository?: string;
         };
-        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. */
+        /** @description A project's Setup (postCreate) or Cleanup (preRemove) shell commands, the same settings a local project has. Setup commands run in order with sh -c in the session's working directory after its checkout and before the coding agent starts, once per session, each within 10 minutes; a failing step keeps the agent from starting until the session is reopened. Cleanup commands run in order before the session's workspace is deleted (Coder only), best effort and within 10 minutes in total. Both see AO_SESSION_ID, AO_SESSION_KIND, AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH, AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and AO_PROJECT_NAME. An empty array clears them. A stored step of the form "(\ncd -- '../<folder>' || exit 1\n<command>\n)" runs in that additional repository's folder, which must be one of the project's repositories. Only organization owners and admins may set them. */
         ProjectScriptCommands: (string | components["schemas"]["ProjectScriptStep"])[];
         /** @description Coder dev-kit settings inherited by every Coder session of the project. */
         ProjectCoderConfig: {

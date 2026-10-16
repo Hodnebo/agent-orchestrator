@@ -75,6 +75,7 @@ func TestBuildNamesExtraRepositoriesForEveryRole(t *testing.T) {
 			ProjectID:         "project-1",
 			RepositoryURL:     "https://github.com/acme/mercury",
 			MainRepositoryDir: "repository",
+			MultiRepoWorker:   true,
 			ExtraRepos: []RepoRef{
 				{URL: "https://github.com/acme/mercury-lib", Dir: "mercury-lib"},
 				{URL: "https://github.com/acme/mercury-docs", Branch: "draft", Dir: "mercury-docs"},
@@ -112,9 +113,30 @@ func TestBuildSaysWhereTheAgentStarts(t *testing.T) {
 		RepositoryURL:       "https://github.com/acme/mercury",
 		ExtraRepos:          []RepoRef{{URL: "https://github.com/acme/mercury-lib", Dir: "mercury-lib"}},
 		AgentStartsInParent: true,
+		MultiRepoWorker:     true,
 	})
 	if !strings.Contains(prompt, "starts in the folder that holds every repository's checkout") {
 		t.Fatalf("parent start mode missing from the prompt:\n%s", prompt)
+	}
+}
+
+// A worker without the multi-repo capability keeps the earlier wording: it
+// clones the additional repositories but does not put them on the session
+// branch, start elsewhere or open pull requests in them.
+func TestBuildKeepsTheEarlierWordingForAnOlderWorker(t *testing.T) {
+	prompt := Build(Config{
+		Role:                RoleWorker,
+		RepositoryURL:       "https://github.com/acme/mercury",
+		ExtraRepos:          []RepoRef{{URL: "https://github.com/acme/mercury-lib", Branch: "draft", Dir: "mercury-lib"}},
+		AgentStartsInParent: true,
+	})
+	if !strings.Contains(prompt, "- Additional repositories (part of this project, checked out alongside the primary):\n  - https://github.com/acme/mercury-lib (branch draft)") {
+		t.Fatalf("older worker prompt:\n%s", prompt)
+	}
+	for _, unwanted := range []string{"session branch", `"repository"`, "starts in the folder"} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("older worker prompt promises %q:\n%s", unwanted, prompt)
+		}
 	}
 }
 

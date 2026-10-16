@@ -106,6 +106,9 @@ func ParseProjectScriptSteps(kind string, raw json.RawMessage) ([]ProjectScriptS
 	if err := ValidateProjectScriptCommands(kind, commands); err != nil {
 		return nil, err
 	}
+	if err := validateStoredScriptSteps(kind, steps); err != nil {
+		return nil, err
+	}
 	return steps, nil
 }
 

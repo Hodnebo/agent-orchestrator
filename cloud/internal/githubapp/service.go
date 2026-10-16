@@ -54,7 +54,10 @@ type Store interface {
 	ApplyGitHubInstallationEvent(context.Context, string, string, string, string) error
 	WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
 	WorkerRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
-	WorkerSessionExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
+	// WorkerSessionGrantedExtraRepos is the project's additional repositories
+	// that still have an active grant through the main repository's GitHub App
+	// installation: the only ones an App token or pull request may cover.
+	WorkerSessionGrantedExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
 	CreatePullRequestRecord(
 		ctx context.Context,
 		orgID, sessionID string,
@@ -574,7 +577,7 @@ func (s *Service) checkoutRepositoryIDs(
 	authorization domain.GitHubCheckoutContext,
 ) []int64 {
 	primary := authorization.GitHubRepositoryID
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
 	if err != nil {
 		s.logger.Warn("load session extra repositories for checkout scope",
 			"error", err, "org_id", orgID, "session_id", sessionID)
@@ -772,7 +775,7 @@ func (s *Service) pushRepositoryID(
 // the session's project declares no such repository: a session may only touch
 // repositories it checked out.
 func (s *Service) declaredExtraRepository(ctx context.Context, orgID, sessionID, requested string) (string, error) {
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
 	if err != nil {
 		return "", err
 	}

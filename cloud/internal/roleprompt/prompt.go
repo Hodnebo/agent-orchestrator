@@ -37,6 +37,13 @@ type Config struct {
 	// Standalone is whether the project has no repository: its workspace starts
 	// as an empty folder and there is nothing to open pull requests against.
 	Standalone bool
+	// MultiRepoWorker is whether the worker advertised
+	// worker.CapabilityMultiRepo: it checks every repository out on the
+	// session branch, honours AgentStartsInParent and opens pull requests in
+	// any project repository. An older worker gets the earlier wording, which
+	// promises none of that, so its agent never asks the pull request socket
+	// for a repository the worker would ignore.
+	MultiRepoWorker bool
 }
 
 // RepoRef names one additional project repository for the prompt. Kept minimal
@@ -133,6 +140,9 @@ func extraRepositoriesSection(cfg Config) string {
 	if len(lines) == 0 {
 		return ""
 	}
+	if !cfg.MultiRepoWorker {
+		return legacyExtraRepositoriesSection(cfg.ExtraRepos)
+	}
 	main := "  - " + value(cfg.RepositoryURL) + " (main"
 	if dir := strings.TrimSpace(cfg.MainRepositoryDir); dir != "" {
 		main += ", folder " + dir
@@ -149,6 +159,28 @@ func extraRepositoriesSection(cfg Config) string {
 		"- Every repository is on the session branch. Open a separate pull request in each repository you change. " +
 		"The AO pull request socket opens it in the main repository unless the request names another one, for example " +
 		"`\"repository\": \"owner/name\"`; `gh pr create` run inside a repository's folder also works."
+}
+
+// legacyExtraRepositoriesSection is the additional-repository list a worker
+// without worker.CapabilityMultiRepo gets: the repositories, without the
+// session branch, start folder or per-repository pull request promises.
+func legacyExtraRepositoriesSection(repos []RepoRef) string {
+	lines := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		url := strings.TrimSpace(repo.URL)
+		if url == "" {
+			continue
+		}
+		if branch := strings.TrimSpace(repo.Branch); branch != "" {
+			lines = append(lines, fmt.Sprintf("  - %s (branch %s)", url, branch))
+		} else {
+			lines = append(lines, "  - "+url)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "- Additional repositories (part of this project, checked out alongside the primary):\n" + strings.Join(lines, "\n")
 }
 
 func projectName(cfg Config) string {

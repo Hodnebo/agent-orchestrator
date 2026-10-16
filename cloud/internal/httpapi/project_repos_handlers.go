@@ -119,8 +119,13 @@ func (s *Server) validatePatchedProjectRepos(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	names := additionalRepoFullNames(normalized)
-	if len(names) == 0 || project.GitHubRepositoryID == nil {
+	if len(names) == 0 {
 		return true
+	}
+	if project.GitHubRepositoryID == nil {
+		// The project reaches GitHub through a personal access token, so every
+		// additional repository must be reachable with one, as on create.
+		return s.probeAdditionalReposWithPAT(w, r, domain.ProjectAdditionalRepos(normalized))
 	}
 	access, ok, err := s.projectRepositoryAccess(r.Context(), principalFrom(r), orgID, *project.GitHubRepositoryID, names)
 	if err != nil {
@@ -130,9 +135,66 @@ func (s *Server) validatePatchedProjectRepos(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return true
 	}
+	if access.MainInstallation == "" {
+		// The main repository's App grant is gone (or the project's access does
+		// not come from a grant), so no additional repository can be confirmed
+		// to share its installation: fail closed.
+		mainRepositoryAccessUnconfirmed().write(w, r)
+		return false
+	}
 	if problem := checkAdditionalRepoAccess(access, access.MainInstallation, names); problem != nil {
 		problem.write(w, r)
 		return false
+	}
+	return true
+}
+
+// mainRepositoryAccessUnconfirmed is the problem for additional repositories
+// on a project whose main repository has no active GitHub App grant.
+func mainRepositoryAccessUnconfirmed() *projectRepoProblem {
+	return &projectRepoProblem{"repository_not_accessible",
+		"AO's GitHub App can't access this project's main repository right now, so additional repositories can't be added. " +
+			"Give the App access to the main repository in GitHub, then try again."}
+}
+
+// probeAdditionalReposWithPAT requires each repository to be reachable with
+// the requester's GitHub personal access token. A store without provider
+// connections (a test double) skips the probe. It reports whether the request
+// may continue and writes the error when not.
+func (s *Server) probeAdditionalReposWithPAT(w http.ResponseWriter, r *http.Request, repos []domain.RepoRef) bool {
+	if len(repos) == 0 {
+		return true
+	}
+	userStore, ok := s.store.(userProviderConnectionStore)
+	if !ok || s.secretCipher == nil {
+		return true
+	}
+	principal := principalFrom(r)
+	encrypted, nonce, err := userStore.UserProviderConnectionSecret(r.Context(), principal, githubPATProvider, defaultAgentConnectionLabel)
+	if err != nil || len(encrypted) == 0 {
+		writeError(w, r, http.StatusUnprocessableEntity, "token_missing",
+			"This project reaches GitHub with a personal access token. Add one first, so AO can check it reaches the additional repositories.")
+		return false
+	}
+	secret, err := s.secretCipher.Decrypt(encrypted, nonce, providerSecretAssociatedData("user:"+principal.UserID, githubPATProvider))
+	if err != nil {
+		s.logger.Error("decrypt GitHub personal access token", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "Failed to decrypt the GitHub token.")
+		return false
+	}
+	defer clear(secret)
+	for _, repo := range repos {
+		reachable, _, err := s.probeRepositoryAccess(r.Context(), repo.URL, string(secret))
+		if err != nil {
+			s.logger.Error("probe additional repository access", "error", err, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "provider_unavailable", "GitHub is temporarily unavailable. Please try again later.")
+			return false
+		}
+		if !reachable {
+			writeError(w, r, http.StatusUnprocessableEntity, "repository_unreachable",
+				fmt.Sprintf("Can't reach %s with your GitHub token. It may be private, or the URL may be wrong.", repo.URL))
+			return false
+		}
 	}
 	return true
 }
@@ -160,8 +222,13 @@ func (s *Server) prepareGitHubProjectRepos(
 		problem.write(w, r)
 		return nil, false
 	}
-	if checked && access.MainURL != "" {
-		if problem := checkAdditionalRepoAccess(access, access.MainInstallation, additionalRepoFullNames(normalized)); problem != nil {
+	if checked {
+		names := additionalRepoFullNames(normalized)
+		if len(names) > 0 && (access.MainURL == "" || access.MainInstallation == "") {
+			mainRepositoryAccessUnconfirmed().write(w, r)
+			return nil, false
+		}
+		if problem := checkAdditionalRepoAccess(access, access.MainInstallation, names); problem != nil {
 			problem.write(w, r)
 			return nil, false
 		}

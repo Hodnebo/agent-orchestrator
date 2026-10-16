@@ -188,6 +188,12 @@ func NormalizeProjectRepos(mainURL string, repos []RepoRef) ([]RepoRef, error) {
 		}
 		seen[key] = true
 		dir := RepoDirName(canonical)
+		if strings.HasPrefix(dir, ".") {
+			// A sibling of the main checkout is often in the workspace user's
+			// home, where a dot folder (.ssh, .aws, .docker, .claude) is
+			// configuration, never a checkout.
+			return nil, fmt.Errorf("%s would check out into the folder %q; a repository whose name starts with a dot cannot be an additional repository", canonical, dir)
+		}
 		if other, taken := dirs[strings.ToLower(dir)]; taken {
 			if other == "repository" || other == ".ao" {
 				return nil, fmt.Errorf("%s would check out into the folder %q, which AO uses itself", canonical, dir)
@@ -204,18 +210,29 @@ func NormalizeProjectRepos(mainURL string, repos []RepoRef) ([]RepoRef, error) {
 }
 
 // ProjectScriptStep is one Setup or Cleanup command. Repository, when set, is
-// the canonical URL of the project repository the command runs in; empty runs
-// it in the main repository. A step is stored as a plain string when it has
-// no repository, so configs written before per-repository steps stay valid.
+// the canonical URL of the project repository the command runs in; Folder,
+// when set, is that repository's folder beside the main checkout as read back
+// from a stored step. Both empty runs it in the main repository.
+//
+// A step is stored as a plain string either way (see RepoScriptCommand), so a
+// control plane or desktop release that predates per-repository steps reads,
+// runs and keeps it. The {command, repository} object form is accepted on
+// input only.
 type ProjectScriptStep struct {
 	Command    string `json:"command"`
 	Repository string `json:"repository,omitempty"`
+	Folder     string `json:"-"`
 }
 
-// UnmarshalJSON accepts a plain command string or {"command", "repository"}.
+// UnmarshalJSON accepts a plain command string, including the stored
+// RepoScriptCommand form, or {"command", "repository"}.
 func (s *ProjectScriptStep) UnmarshalJSON(raw []byte) error {
 	var command string
 	if err := json.Unmarshal(raw, &command); err == nil {
+		if dir, inner, ok := ParseRepoScriptCommand(command); ok {
+			*s = ProjectScriptStep{Command: inner, Folder: dir}
+			return nil
+		}
 		*s = ProjectScriptStep{Command: command}
 		return nil
 	}
@@ -230,23 +247,30 @@ func (s *ProjectScriptStep) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// MarshalJSON writes a step without a repository as a plain string.
+// MarshalJSON writes the stored, plain-string form of a step.
 func (s ProjectScriptStep) MarshalJSON() ([]byte, error) {
-	if s.Repository == "" {
-		return json.Marshal(s.Command)
+	return json.Marshal(s.storedForm())
+}
+
+func (s ProjectScriptStep) storedForm() string {
+	switch {
+	case s.Repository != "":
+		return RepoScriptCommand(RepoDirName(s.Repository), s.Command)
+	case s.Folder != "":
+		return RepoScriptCommand(s.Folder, s.Command)
+	default:
+		return s.Command
 	}
-	type step ProjectScriptStep
-	return json.Marshal(step(s))
 }
 
 // ShellCommand is the command the worker runs from the main repository's
 // checkout: the command itself, or, for a step in another repository, the
 // command run in a subshell from that repository's folder beside the main one.
 func (s ProjectScriptStep) ShellCommand(mainURL string) string {
-	if s.Repository == "" || strings.EqualFold(s.Repository, mainURL) {
+	if s.Repository != "" && strings.EqualFold(s.Repository, mainURL) {
 		return s.Command
 	}
-	return RepoScriptCommand(RepoDirName(s.Repository), s.Command)
+	return s.storedForm()
 }
 
 // RepoScriptCommand wraps a Setup or Cleanup command so it runs in another
@@ -436,6 +460,17 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 			known[strings.ToLower(canonical)] = canonical
 		}
 	}
+	// Folders a per-repository step may run in, lower-cased, mapped to the
+	// folder as the repository checks out into it ("" for the main one).
+	folders := map[string]string{}
+	if mainErr == nil {
+		folders[strings.ToLower(RepoDirName(mainCanonical))] = ""
+	}
+	for _, canonical := range known {
+		if canonical != "" {
+			folders[strings.ToLower(RepoDirName(canonical))] = RepoDirName(canonical)
+		}
+	}
 	for _, key := range []string{"postCreate", "preRemove"} {
 		raw, ok := values[key]
 		if !ok {
@@ -447,22 +482,36 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 		}
 		rewrite := false
 		for index, step := range steps {
-			if step.Repository == "" {
-				continue
+			switch {
+			case step.Repository != "":
+				rewrite = true
+				canonical, _, err := CanonicalGitHubRepoURL(step.Repository)
+				if err != nil {
+					return nil, fmt.Errorf("%s step %d names %q, which is not one of the project's repositories", key, index+1, step.Repository)
+				}
+				stored, isProjectRepo := known[strings.ToLower(canonical)]
+				if !isProjectRepo {
+					return nil, fmt.Errorf("%s step %d runs in %s, which is not one of the project's repositories", key, index+1, canonical)
+				}
+				// Stored as a plain command for the main repository, and as the
+				// folder form for an additional one.
+				steps[index] = ProjectScriptStep{Command: step.Command}
+				if stored != "" {
+					steps[index].Folder = RepoDirName(stored)
+				}
+			case step.Folder != "":
+				rewrite = true
+				folder, isProjectFolder := folders[strings.ToLower(step.Folder)]
+				if !isProjectFolder {
+					return nil, fmt.Errorf("%s step %d runs in the folder %q, which is not one of the project's repositories", key, index+1, step.Folder)
+				}
+				steps[index] = ProjectScriptStep{Command: step.Command, Folder: folder}
 			}
-			rewrite = true
-			canonical, _, err := CanonicalGitHubRepoURL(step.Repository)
-			if err != nil {
-				return nil, fmt.Errorf("%s step %d names %q, which is not one of the project's repositories", key, index+1, step.Repository)
-			}
-			stored, isProjectRepo := known[strings.ToLower(canonical)]
-			if !isProjectRepo {
-				return nil, fmt.Errorf("%s step %d runs in %s, which is not one of the project's repositories", key, index+1, canonical)
-			}
-			// The main repository maps to "", which stores the step as a plain command.
-			steps[index].Repository = stored
 		}
 		if rewrite {
+			if err := validateStoredScriptSteps(key, steps); err != nil {
+				return nil, err
+			}
 			values[key], _ = json.Marshal(steps)
 			changed = true
 		}
@@ -481,4 +530,15 @@ type GitHubRepositoryAccess struct {
 	MainURL          string
 	MainInstallation string
 	Installations    map[string]string
+}
+
+// validateStoredScriptSteps checks the stored form of each step against the
+// command limits, so a release that predates per-repository steps accepts the
+// list when it is saved back.
+func validateStoredScriptSteps(kind string, steps []ProjectScriptStep) error {
+	stored := make([]string, len(steps))
+	for index, step := range steps {
+		stored[index] = step.storedForm()
+	}
+	return ValidateProjectScriptCommands(kind, stored)
 }

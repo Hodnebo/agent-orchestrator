@@ -530,10 +530,10 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	if config, ok = s.prepareGitHubProjectRepos(w, r, orgID, githubRepositoryID, config); !ok {
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
 		return
 	}
-	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+	if config, ok = s.prepareGitHubProjectRepos(w, r, orgID, githubRepositoryID, config); !ok {
 		return
 	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,78 @@ func TestUpdateProjectSettingsChecksRepositorySettingsAgainstTheMainRepository(t
 		if _, err := store.UpdateProjectSettings(ctx, principal, fixture.orgID, fixture.projectID, domain.ProjectSettingsPatch{Config: json.RawMessage(bad)}); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v, want ErrInvalid", bad, err)
 		}
+	}
+}
+
+// App tokens and pull requests only cover additional repositories that still
+// have an active grant through the main repository's installation.
+func TestWorkerSessionGrantedExtraReposKeepsOnlyActiveSameInstallationGrants(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store, err := Open(context.Background(), os.Getenv("AO_CLOUD_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	ctx := context.Background()
+	suffix := uuid.NewString()[:8]
+	mainID := seedGitHubRepository(t, admin, "octo/main-"+suffix)
+	grantedID := seedGitHubRepository(t, admin, "octo/granted-"+suffix)
+	revokedID := seedGitHubRepository(t, admin, "octo/revoked-"+suffix)
+	foreignID := seedGitHubRepository(t, admin, "other/foreign-"+suffix)
+	seedGitHubRepository(t, admin, "octo/ungranted-"+suffix)
+	installations := map[string]string{}
+	for _, account := range []string{"octo", "other"} {
+		var id string
+		if err := admin.QueryRow(ctx, `INSERT INTO ao_github_installations
+			(org_id, github_installation_id, github_account_id, account_login, account_type, repository_selection, installed_by_user_id)
+			VALUES ($1, $2, $2, $3, 'Organization', 'selected', $4) RETURNING id::text`,
+			fixture.orgID, time.Now().UnixNano(), account, fixture.userID).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		installations[account] = id
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `UPDATE ao_projects SET github_repository_id = NULL, github_repository_grant_id = NULL WHERE id = $1`, fixture.projectID)
+		for _, id := range installations {
+			_, _ = admin.Exec(context.Background(), `DELETE FROM ao_github_repository_grants WHERE installation_id = $1`, id)
+			_, _ = admin.Exec(context.Background(), `DELETE FROM ao_github_installations WHERE id = $1`, id)
+		}
+	})
+	grants := map[int64]string{}
+	for repositoryID, account := range map[int64]string{mainID: "octo", grantedID: "octo", revokedID: "octo", foreignID: "other"} {
+		var grantID string
+		if err := admin.QueryRow(ctx, `INSERT INTO ao_github_repository_grants (org_id, installation_id, github_repository_id, repository_selection)
+			VALUES ($1, $2, $3, 'selected') RETURNING id::text`, fixture.orgID, installations[account], repositoryID).Scan(&grantID); err != nil {
+			t.Fatal(err)
+		}
+		grants[repositoryID] = grantID
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_github_repository_grants SET revoked_at = now() WHERE id = $1`, grants[revokedID]); err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf(`{"repos":[{"url":"https://github.com/octo/granted-%[1]s"},{"url":"https://github.com/octo/revoked-%[1]s"},{"url":"https://github.com/other/foreign-%[1]s"},{"url":"https://github.com/octo/ungranted-%[1]s"}]}`, suffix)
+	if _, err := admin.Exec(ctx, `UPDATE ao_projects SET repository_url = $1, config = $2::jsonb, github_repository_id = $3, github_repository_grant_id = $4 WHERE id = $5`,
+		"https://github.com/octo/main-"+suffix, config, mainID, grants[mainID], fixture.projectID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.WorkerSessionGrantedExtraRepos(ctx, fixture.orgID, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].URL != "https://github.com/octo/granted-"+suffix {
+		t.Fatalf("granted extras = %+v", got)
+	}
+	declared, err := store.WorkerSessionExtraRepos(ctx, fixture.orgID, fixture.sessionID)
+	if err != nil || len(declared) != 4 {
+		t.Fatalf("declared extras = %+v %v", declared, err)
+	}
+
+	// Once the main repository's grant is revoked, no additional repository is covered.
+	if _, err := admin.Exec(ctx, `UPDATE ao_github_repository_grants SET revoked_at = now() WHERE id = $1`, grants[mainID]); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.WorkerSessionGrantedExtraRepos(ctx, fixture.orgID, fixture.sessionID); err != nil || len(got) != 0 {
+		t.Fatalf("extras without a main grant = %+v %v", got, err)
 	}
 }

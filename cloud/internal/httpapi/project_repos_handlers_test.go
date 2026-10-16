@@ -34,6 +34,7 @@ type projectReposFakeStore struct {
 	createdKeys     []string
 	project         domain.Project
 	settingsPatched int
+	adminErr        error
 }
 
 func (s *projectReposFakeStore) GitHubRepositoryAccess(_ context.Context, _ domain.Principal, _ string, _ int64, _ []string) (domain.GitHubRepositoryAccess, error) {
@@ -62,7 +63,7 @@ func (s *projectReposFakeStore) UpdateProjectSettings(_ context.Context, _ domai
 }
 
 func (s *projectReposFakeStore) RequireOrgAdmin(context.Context, domain.Principal, string) error {
-	return nil
+	return s.adminErr
 }
 
 func grantedAccess(installations map[string]string) domain.GitHubRepositoryAccess {
@@ -94,11 +95,13 @@ func TestCreateGitHubProjectValidatesItsAdditionalRepositories(t *testing.T) {
 		wantConfig   string
 	}{
 		{
-			name:       "granted in the same installation",
-			config:     `{"repos":[{"url":"https://www.github.com/acme/web.git"}],"postCreate":[{"command":"npm ci","repository":"https://github.com/acme/web"}]}`,
-			access:     grantedAccess(map[string]string{"acme/web": "inst-1"}),
-			status:     http.StatusCreated,
-			wantConfig: `{"postCreate":[{"command":"npm ci","repository":"https://github.com/acme/web"}],"repos":[{"url":"https://github.com/acme/web"}]}`,
+			name:   "granted in the same installation",
+			config: `{"repos":[{"url":"https://www.github.com/acme/web.git"}],"postCreate":[{"command":"npm ci","repository":"https://github.com/acme/web"}]}`,
+			access: grantedAccess(map[string]string{"acme/web": "inst-1"}),
+			status: http.StatusCreated,
+			// Stored as a plain command, which releases that predate
+			// per-repository steps still keep and run.
+			wantConfig: `{"postCreate":["(\ncd -- '../web' || exit 1\nnpm ci\n)"],"repos":[{"url":"https://github.com/acme/web"}]}`,
 		},
 		{
 			name:       "legacy coder list becomes repos",
@@ -235,7 +238,7 @@ func TestLaunchContextCarriesEveryProjectRepository(t *testing.T) {
 		ProjectConfig: json.RawMessage(`{"sandboxProvider":"freestyle","agentStartsIn":"parent",
 			"repos":[{"url":"https://github.com/acme/web","branch":"develop"}],
 			"postCreate":["make up",{"command":"npm ci","repository":"https://github.com/acme/web"}]}`),
-	}, true)
+	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,11 +257,27 @@ func TestLaunchContextCarriesEveryProjectRepository(t *testing.T) {
 		}
 	}
 
+	// A worker without the multi-repo capability gets the earlier wording, no
+	// start folder and no per-repository pull request instructions.
+	launch, err = launchContextFrom(domain.WorkerLaunch{
+		SessionID: "session-1", Kind: "worker", Harness: "claude-code",
+		RepositoryURL: reposTestMainURL, DefaultBranch: "main",
+		ProjectConfig: json.RawMessage(`{"agentStartsIn":"parent","repos":[{"url":"https://github.com/acme/web"}]}`),
+	}, launchCapabilities{resolvesWorkspacePath: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.AgentStartsIn != "" || len(launch.ExtraRepos) != 1 ||
+		!strings.Contains(launch.SystemPrompt, "- Additional repositories (part of this project, checked out alongside the primary):\n  - https://github.com/acme/web") ||
+		strings.Contains(launch.SystemPrompt, `"repository"`) || strings.Contains(launch.SystemPrompt, "session branch") {
+		t.Fatalf("legacy worker launch = %q\n%s", launch.AgentStartsIn, launch.SystemPrompt)
+	}
+
 	// A single-repo project launches exactly as before.
 	launch, err = launchContextFrom(domain.WorkerLaunch{
 		SessionID: "session-1", Kind: "worker", Harness: "claude-code", RepositoryURL: reposTestMainURL,
 		ProjectConfig: json.RawMessage(`{"postCreate":["npm ci"]}`),
-	}, true)
+	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
 	if err != nil || launch.ExtraRepos != nil || launch.AgentStartsIn != "" || strings.Contains(launch.SystemPrompt, "Repositories (") {
 		t.Fatalf("single repo launch = %+v %v", launch, err)
 	}
@@ -293,5 +312,62 @@ func TestPATPullRequestCloneURLTargetsADeclaredRepository(t *testing.T) {
 	}
 	if _, err := server.patPullRequestCloneURL(context.Background(), claims, domain.StandaloneRepositoryURL("p"), ""); !errors.Is(err, postgres.ErrForbidden) {
 		t.Fatalf("standalone err = %v", err)
+	}
+}
+
+// Only an admin may create a project with additional repositories (or the
+// other admin settings), on every create path, legacy coder input included.
+func TestCreatingAProjectWithAdminSettingsRequiresAnAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name, target, body string
+		create             func(*Server, http.ResponseWriter, *http.Request)
+	}{
+		{"github repos", "/github/projects", `{"githubRepositoryId":"42","config":{"repos":[{"url":"https://github.com/acme/web"}]}}`,
+			(*Server).createGitHubProject},
+		{"github legacy extraRepos", "/github/projects", `{"githubRepositoryId":"42","config":{"coder":{"extraRepos":[{"url":"https://github.com/acme/web"}]}}}`,
+			(*Server).createGitHubProject},
+		{"github rules", "/github/projects", `{"githubRepositoryId":"42","config":{"agentRules":"x"}}`,
+			(*Server).createGitHubProject},
+		{"standalone start folder", "/projects/standalone", `{"displayName":"Box","config":{"workingDirectory":"~/work"}}`,
+			(*Server).createStandaloneProject},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &projectReposFakeStore{access: grantedAccess(map[string]string{"acme/web": "inst-1"}), adminErr: postgres.ErrForbidden}
+			recorder := httptest.NewRecorder()
+			tc.create(reposTestServer(store), recorder, reposTestRequest(t, http.MethodPost, tc.target, tc.body))
+			if recorder.Code != http.StatusForbidden || store.createdGitHub != nil || store.created != nil {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+	// A member may still create a single-repository project.
+	store := &projectReposFakeStore{access: grantedAccess(nil), adminErr: postgres.ErrForbidden}
+	recorder := httptest.NewRecorder()
+	reposTestServer(store).createGitHubProject(recorder, reposTestRequest(t, http.MethodPost, "/github/projects", `{"githubRepositoryId":"42","config":{}}`))
+	if recorder.Code != http.StatusCreated || store.createdGitHub == nil {
+		t.Fatalf("member single-repo create: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Without an active App grant on the main repository, additional repositories
+// cannot be confirmed to share its installation, so they are refused.
+func TestAdditionalReposFailClosedWithoutAMainGrant(t *testing.T) {
+	store := &projectReposFakeStore{access: domain.GitHubRepositoryAccess{Installations: map[string]string{"acme/web": "inst-1"}}}
+	recorder := httptest.NewRecorder()
+	reposTestServer(store).createGitHubProject(recorder, reposTestRequest(t, http.MethodPost, "/github/projects",
+		`{"githubRepositoryId":"42","config":{"repos":[{"url":"https://github.com/acme/web"}]}}`))
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "repository_not_accessible") {
+		t.Fatalf("create: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	mainID := int64(42)
+	store = &projectReposFakeStore{
+		access:  domain.GitHubRepositoryAccess{MainURL: reposTestMainURL, Installations: map[string]string{"acme/web": "inst-1"}},
+		project: domain.Project{ID: reposTestProjectID, RepositoryURL: reposTestMainURL, GitHubRepositoryID: &mainID},
+	}
+	recorder = httptest.NewRecorder()
+	reposTestServer(store).updateProjectSettings(recorder, reposTestRequest(t, http.MethodPatch, "/settings",
+		`{"config":{"repos":[{"url":"https://github.com/acme/web"}]}}`))
+	if recorder.Code != http.StatusUnprocessableEntity || store.settingsPatched != 0 {
+		t.Fatalf("patch: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

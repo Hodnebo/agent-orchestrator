@@ -139,7 +139,10 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder))
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             slices.Contains(input.Capabilities, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "BOOTSTRAP_FAILED", "The project's role instructions are invalid.")
@@ -231,7 +234,10 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	launchContext, err := launchContextFrom(launch, headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder))
+	launchContext, err := launchContextFrom(launch, launchCapabilities{
+		resolvesWorkspacePath: headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder),
+		multiRepo:             headerReportsCapability(r, worker.CapabilityMultiRepo),
+	})
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
@@ -257,10 +263,20 @@ func headerReportsCapability(r *http.Request, capability string) bool {
 	return false
 }
 
+// launchCapabilities is what the worker a launch context is for reported it
+// can do.
+type launchCapabilities struct {
+	// resolvesWorkspacePath is whether the worker substitutes
+	// worker.WorkspacePathPlaceholder.
+	resolvesWorkspacePath bool
+	// multiRepo is whether the worker advertised worker.CapabilityMultiRepo.
+	multiRepo bool
+}
+
 // launchContextFrom projects a stored launch spec onto the wire type shared by
-// bootstrap and reconnect. resolvesWorkspacePath is whether the worker
-// substitutes worker.WorkspacePathPlaceholder.
-func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (worker.LaunchContext, error) {
+// bootstrap and reconnect, for a worker with the given capabilities.
+func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabilities) (worker.LaunchContext, error) {
+	resolvesWorkspacePath := capabilities.resolvesWorkspacePath
 	var agentConfig domain.ProjectAgentConfig
 	if len(launch.AgentConfig) > 0 {
 		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
@@ -287,8 +303,10 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 			promptExtras = append(promptExtras, roleprompt.RepoRef{URL: repo.URL, Branch: repo.Branch, Dir: domain.RepoDirName(repo.URL)})
 		}
 	}
+	// Only a multi-repo worker honours the start folder; an older one always
+	// starts in the main checkout, so the prompt must not claim otherwise.
 	agentStartsIn := ""
-	if domain.ProjectAgentStartsIn(launch.ProjectConfig) == domain.ProjectAgentStartsInParent {
+	if capabilities.multiRepo && domain.ProjectAgentStartsIn(launch.ProjectConfig) == domain.ProjectAgentStartsInParent {
 		agentStartsIn = domain.ProjectAgentStartsInParent
 	}
 	systemPrompt := roleprompt.Build(roleprompt.Config{
@@ -307,6 +325,7 @@ func launchContextFrom(launch domain.WorkerLaunch, resolvesWorkspacePath bool) (
 		ExtraRepos:          promptExtras,
 		AgentStartsInParent: agentStartsIn == domain.ProjectAgentStartsInParent,
 		Standalone:          domain.IsStandaloneRepositoryURL(launch.RepositoryURL),
+		MultiRepoWorker:     capabilities.multiRepo,
 	})
 	return worker.LaunchContext{
 		SessionID:       launch.SessionID,

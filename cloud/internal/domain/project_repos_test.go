@@ -124,9 +124,21 @@ func TestProjectScriptStepJSON(t *testing.T) {
 	if !reflect.DeepEqual(steps, want) {
 		t.Fatalf("steps = %+v", steps)
 	}
+	// Steps are stored as plain strings, so a release that predates
+	// per-repository steps keeps them.
 	encoded, err := json.Marshal(steps)
-	if err != nil || string(encoded) != `["make up",{"command":"npm ci","repository":"https://github.com/acme/web"}]` {
+	if err != nil || string(encoded) != `["make up","(\ncd -- '../web' || exit 1\nnpm ci\n)"]` {
 		t.Fatalf("encoded = %s %v", encoded, err)
+	}
+	var stored []ProjectScriptStep
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored, []ProjectScriptStep{{Command: "make up"}, {Command: "npm ci", Folder: "web"}}) {
+		t.Fatalf("stored steps read back = %+v", stored)
+	}
+	if again, _ := json.Marshal(stored); string(again) != string(encoded) {
+		t.Fatalf("stored steps re-encoded = %s", again)
 	}
 	for _, bad := range []string{`[1]`, `[{"repository":"x"}]`, `[["x"]]`} {
 		if err := json.Unmarshal([]byte(bad), &steps); err == nil {
@@ -184,8 +196,14 @@ func TestNormalizeProjectRepoSettings(t *testing.T) {
 	if string(got["repos"]) != `[{"url":"https://github.com/acme/web"}]` {
 		t.Fatalf("repos = %s", got["repos"])
 	}
-	if string(got["postCreate"]) != `["make up",{"command":"npm ci","repository":"https://github.com/acme/web"},"make seed"]` {
+	if string(got["postCreate"]) != `["make up","(\ncd -- '../web' || exit 1\nnpm ci\n)","make seed"]` {
 		t.Fatalf("postCreate = %s", got["postCreate"])
+	}
+	// Normalizing the stored form again keeps it as it is.
+	if again, err := NormalizeProjectRepoSettings(mainRepo, normalized); err != nil {
+		t.Fatal(err)
+	} else if err := json.Unmarshal(again, &got); err != nil || string(got["postCreate"]) != `["make up","(\ncd -- '../web' || exit 1\nnpm ci\n)","make seed"]` {
+		t.Fatalf("renormalized postCreate = %s %v", got["postCreate"], err)
 	}
 	if string(got["worker"]) != `{"agent":"claude-code"}` || string(got["agentStartsIn"]) != `"parent"` {
 		t.Fatalf("other keys changed: %s", normalized)
@@ -282,5 +300,44 @@ func TestSettingsPatchAcceptsMultiRepoSettings(t *testing.T) {
 	}
 	if err := ValidateProjectScriptsConfig(json.RawMessage(`{"postCreate":[{"command":"","repository":"https://github.com/acme/web"}]}`)); err == nil {
 		t.Fatal("an empty object step must be rejected")
+	}
+}
+
+func TestNormalizeProjectRepoSettingsChecksStoredStepFolders(t *testing.T) {
+	// A stored step whose folder is one of the project's repositories is kept
+	// (in that repository's spelling); the main repository's folder becomes a
+	// plain command; any other folder, including one whose repository was just
+	// removed, is refused with the step named.
+	config := json.RawMessage(`{"repos":[{"url":"https://github.com/acme/web"}],"postCreate":["(\ncd -- '../WEB' || exit 1\nnpm ci\n)","(\ncd -- '../alice' || exit 1\nmake seed\n)"]}`)
+	normalized, err := NormalizeProjectRepoSettings(mainRepo, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(normalized, &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got["postCreate"]) != `["(\ncd -- '../web' || exit 1\nnpm ci\n)","make seed"]` {
+		t.Fatalf("postCreate = %s", got["postCreate"])
+	}
+	_, err = NormalizeProjectRepoSettings(mainRepo, json.RawMessage(`{"repos":[],"preRemove":["(\ncd -- '../web' || exit 1\nmake down\n)"]}`))
+	if err == nil || !strings.Contains(err.Error(), "preRemove step 1") {
+		t.Fatalf("step in a removed repository: err = %v", err)
+	}
+}
+
+func TestNormalizeProjectReposRejectsDotFolders(t *testing.T) {
+	for _, name := range []string{".aws", ".ssh", ".docker", ".claude", ".github"} {
+		if _, err := NormalizeProjectRepos(mainRepo, []RepoRef{{URL: "https://github.com/acme/" + name}}); err == nil {
+			t.Errorf("%s must be refused", name)
+		}
+	}
+}
+
+func TestStoredStepsStayWithinTheCommandLimit(t *testing.T) {
+	long := strings.Repeat("x", MaxProjectScriptCommandBytes-5)
+	raw, _ := json.Marshal([]ProjectScriptStep{{Command: long, Repository: "https://github.com/acme/web"}})
+	if _, err := ParseProjectScriptSteps("postCreate", raw); err == nil {
+		t.Fatal("a step whose stored form passes the 4 KB limit must be refused")
 	}
 }
