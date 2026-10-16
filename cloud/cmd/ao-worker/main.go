@@ -314,7 +314,7 @@ func run(logger *slog.Logger) error {
 			return command, nil
 		}
 		var gitRefReporter func(context.Context) error
-		if bootstrap.Launch.RepositoryURL != "" {
+		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			gitRefReporter = func(ctx context.Context) error { return client.reportGitRefs(ctx, workspace) }
 		}
 		chatRunner = &workerexec.Supervisor{
@@ -511,7 +511,8 @@ func run(logger *slog.Logger) error {
 		// Restore a previously deleted session's state before the agent launches.
 		// A fresh session finds nothing captured and this returns quickly.
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
-		if bootstrap.Launch.RepositoryURL != "" {
+		// A standalone session has no repository on GitHub to report branches of.
+		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			if err := client.reportGitRefs(runCtx, workspace); err != nil {
 				logger.Warn("report restored branch heads", "error", err)
 			}

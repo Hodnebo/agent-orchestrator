@@ -108,6 +108,26 @@ it("will not remove a repository a Setup step still runs in", async () => {
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
 
+it("reports an invalid draft as unsaveable so the dialog can close", async () => {
+	mocks.get.mockResolvedValue({ project: project({
+		repos: [{ url: "https://github.com/acme/11x" }],
+		postCreate: ["(\ncd -- '../11x' || exit 1\nmake dev-up\n)"],
+	}) });
+	const onSaveState = vi.fn();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} />);
+	await userEvent.click(await screen.findByRole("button", { name: "Remove acme/11x" }));
+	expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ dirty: true, unsaveable: true }));
+});
+
+it("refuses {repo} in a standalone project's working folder", async () => {
+	mocks.orgCoderConfig = { connected: true };
+	mocks.get.mockResolvedValue({ project: project({ source: "standalone", sandboxProvider: "coder" }, "https://scratch.ao.local/p") });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	await userEvent.type(await screen.findByLabelText("Working folder"), "~/work/{{repo}");
+	expect(screen.getByText(/cannot use \{repo\}/)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
 it("surfaces the control plane's reason when a save is refused", async () => {
 	mocks.patch.mockReset().mockRejectedValue(new Error("acme/voice-calling-ai is not connected to this organization's GitHub App"));
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);

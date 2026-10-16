@@ -196,7 +196,7 @@ export const MAX_WORKING_DIRECTORY_LENGTH = 512;
  * domain.ValidateCoderWorkingDirectory on the trimmed value; undefined when it
  * is accepted ("" keeps the connection's).
  */
-export function workingDirectoryProblem(value: string): "length" | "characters" | "form" | "segments" | "placeholder" | undefined {
+export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "placeholder" | "standaloneRepo" | undefined {
 	const directory = value.trim();
 	if (directory === "") return undefined;
 	if ([...directory].length > MAX_WORKING_DIRECTORY_LENGTH) return "length";
@@ -207,6 +207,8 @@ export function workingDirectoryProblem(value: string): "length" | "characters" 
 	if (rest === undefined || rest.replace(/^\/+|\/+$/g, "") === "") return "form";
 	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return "segments";
 	if (/[{}$`\\]/.test(rest.split("{repo}").join(""))) return "placeholder";
+	// A standalone project has no repository to name the folder after.
+	if (options.standalone && rest.includes("{repo}")) return "standaloneRepo";
 	return undefined;
 }
 

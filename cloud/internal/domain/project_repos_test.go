@@ -341,3 +341,16 @@ func TestStoredStepsStayWithinTheCommandLimit(t *testing.T) {
 		t.Fatal("a step whose stored form passes the 4 KB limit must be refused")
 	}
 }
+
+func TestStandaloneProjectRejectsRepoPlaceholderInWorkingFolder(t *testing.T) {
+	standalone := StandaloneRepositoryURL("6f2c5d7e-0000-4000-8000-000000000000")
+	if _, err := NormalizeProjectRepoSettings(standalone, json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`)); err == nil {
+		t.Fatal("a standalone project accepted {repo} in its working folder")
+	}
+	if _, err := NormalizeProjectRepoSettings(standalone, json.RawMessage(`{"workingDirectory":"~/work/scratch"}`)); err != nil {
+		t.Fatalf("a named working folder was refused: %v", err)
+	}
+	if _, err := NormalizeProjectRepoSettings("https://github.com/acme/alice", json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`)); err != nil {
+		t.Fatalf("a repository project refused {repo}: %v", err)
+	}
+}

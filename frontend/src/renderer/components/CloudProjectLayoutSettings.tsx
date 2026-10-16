@@ -61,7 +61,7 @@ function CloudProjectSettingsPage({ projectId, cloudOrgId, onSaveState, children
  * Saves one settings page's patch on "Save changes" and reports its state to
  * the dialog the way the Scripts page does.
  */
-function useSettingsPageSave(project: CloudCpProject, dirty: boolean, onSaveState?: (state: ProjectSettingsSaveState) => void) {
+function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable: boolean, onSaveState?: (state: ProjectSettingsSaveState) => void) {
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const [savedAt, setSavedAt] = useState(false);
@@ -78,9 +78,12 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, onSaveStat
 			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : savedAt && !dirty ? "saved" : "idle",
 			dirty,
 			requestPending: mutation.isPending,
+			// An invalid draft cannot be saved, so closing the dialog drops it
+			// instead of waiting for a save that never starts.
+			unsaveable: dirty && unsaveable,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
-	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
+	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
 	return { mutation, savedAt, edited: () => setSavedAt(false) };
 }
 
@@ -113,6 +116,8 @@ function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workin
 			return t("settings.cloudProject.workingDirectoryCharacters", { defaultValue: "The working folder contains invalid characters." });
 		case "segments":
 			return t("settings.cloudProject.workingDirectorySegments", { defaultValue: "The working folder must not contain . or .. segments." });
+		case "standaloneRepo":
+			return t("settings.cloudProject.workingDirectoryStandaloneRepo", { defaultValue: "This project has no repository, so its working folder cannot use {repo}. Name the folder, for example ~/work/scratch." });
 		case "placeholder":
 			return t("settings.cloudProject.workingDirectoryPlaceholderOnly", { defaultValue: "The working folder may only use {repo} as a placeholder." });
 		default:
@@ -141,7 +146,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const filledExtras = extras.filter((url) => url !== "");
 	const reposChanged = JSON.stringify(filledExtras) !== JSON.stringify(saved.extras);
 	const dirty = reposChanged || startsIn !== saved.startsIn || workingDirectory.trim() !== saved.workingDirectory;
-	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, onSaveState);
 	const repos = useCloudGitHubAppRepositories(project.orgId, !standalone);
 	// The working folder only applies to a bring-your-own Coder workspace run as
 	// its own user; show it there, or while a value is stored so it can be cleared.
@@ -155,8 +159,9 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		.filter((repo) => !filledExtras.some((url) => sameRepository(url, repo.url)) && stepFolders.has(repoDirName(repo.url)))
 		.map((repo) => gitHubFullName(repo.url) ?? repo.url);
 	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined || removedInUse.length > 0;
-	const workingDirectoryError = workingDirectoryProblem(workingDirectory);
+	const workingDirectoryError = workingDirectoryProblem(workingDirectory, { standalone });
 	const workingDirectoryInvalid = workingDirectoryError !== undefined;
+	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState);
 	const locked = readOnly || mutation.isPending;
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
@@ -222,9 +227,11 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			<Field label={t("settings.cloudProject.workingDirectory", { defaultValue: "Working folder" })} htmlFor="cloudProjectWorkingDirectory"
 				hint={workingDirectoryInvalid
 					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
-					: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where this project's sessions check out the main repository in your own Coder workspace, for example ~/work/{repo}; the other repositories go beside it. Leave empty to use the folder set for your Coder connection." })}>
+					: standalone
+						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "The folder this project's sessions start in, in your own Coder workspace, for example ~/work/scratch. Leave empty to use the default folder." })
+						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where this project's sessions check out the main repository in your own Coder workspace, for example ~/work/{repo}; the other repositories go beside it. Leave empty to use the folder set for your Coder connection." })}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
-					placeholder={t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
+					placeholder={standalone ? "~/work/scratch" : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}
 					onChange={(event) => { setWorkingDirectory(event.target.value); edited(); }} />
 			</Field>
@@ -249,8 +256,8 @@ function InstructionsForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const [orchestratorRules, setOrchestratorRules] = useState(() => projectConfigText(project.config, "orchestratorRules"));
 	const [saved, setSaved] = useState(() => ({ agentRules: projectConfigText(project.config, "agentRules"), orchestratorRules: projectConfigText(project.config, "orchestratorRules") }));
 	const dirty = agentRules !== saved.agentRules || orchestratorRules !== saved.orchestratorRules;
-	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, onSaveState);
 	const tooLong = utf8Bytes(agentRules) > MAX_PROJECT_RULES_BYTES || utf8Bytes(orchestratorRules) > MAX_PROJECT_RULES_BYTES;
+	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, tooLong, onSaveState);
 	const locked = readOnly || mutation.isPending;
 	const submit = () => {
 		if (tooLong) return;

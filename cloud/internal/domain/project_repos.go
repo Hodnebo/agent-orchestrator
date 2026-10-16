@@ -435,6 +435,11 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 		if err := ValidateCoderWorkingDirectory(strings.TrimSpace(directory)); err != nil {
 			return nil, err
 		}
+		// A standalone project has no repository to name the folder after; the
+		// worker would ignore such a folder and start in its default one.
+		if IsStandaloneRepositoryURL(mainURL) && strings.Contains(directory, "{repo}") {
+			return nil, errors.New("a project without a repository cannot use {repo} in its working folder; name the folder, for example ~/work/scratch")
+		}
 	}
 	for _, key := range []string{"agentRules", "orchestratorRules"} {
 		raw, ok := values[key]
