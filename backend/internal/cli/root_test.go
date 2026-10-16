@@ -178,6 +178,7 @@ func TestTelemetryMetaClassifiesRegisteredCommandPaths(t *testing.T) {
 		"ao chat-host":               {},
 		"ao completion":              {},
 		"ao daemon":                  {},
+		"ao daemon-takeover":         {},
 		"ao help":                    {},
 		"ao mcp":                     {},
 		"ao pty-host":                {},
