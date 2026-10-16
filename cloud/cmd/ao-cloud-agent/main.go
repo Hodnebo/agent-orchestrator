@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -488,7 +489,7 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 		ctx,
 		http.MethodPost,
 		"/worker/pull-requests/claim",
-		worker.ClaimPullRequestRequest{Reference: strings.TrimSpace(args[0])},
+		worker.ClaimPullRequestRequest{Reference: pullRequestReference(ctx, strings.TrimSpace(args[0]))},
 		true,
 		&response,
 	); err != nil {
@@ -499,6 +500,45 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 	}
 	fmt.Printf("claimed PR #%d %s\n", response.Number, response.HTMLURL)
 	return nil
+}
+
+// pullRequestReference turns a bare pull request number into the pull
+// request's URL on the repository checked out in the working directory, so
+// `ao claim-pr 12` run in one of the session's additional repositories claims
+// that repository's pull request rather than the main repository's. A URL, or
+// a number outside a GitHub checkout, is sent as given.
+func pullRequestReference(ctx context.Context, reference string) string {
+	number := strings.TrimPrefix(reference, "#")
+	if _, err := strconv.Atoi(number); err != nil {
+		return reference
+	}
+	output, err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return reference
+	}
+	fullName, ok := githubFullName(strings.TrimSpace(string(output)))
+	if !ok {
+		return reference
+	}
+	return "https://github.com/" + fullName + "/pull/" + number
+}
+
+// githubFullName extracts owner/name from a GitHub https or ssh remote URL.
+func githubFullName(remote string) (string, bool) {
+	path := ""
+	switch {
+	case strings.HasPrefix(remote, "git@github.com:"):
+		path = strings.TrimPrefix(remote, "git@github.com:")
+	case strings.HasPrefix(remote, "https://github.com/"):
+		path = strings.TrimPrefix(remote, "https://github.com/")
+	default:
+		return "", false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", false
+	}
+	return parts[0] + "/" + parts[1], true
 }
 
 // runReview starts AO's reviewer on this session's open pull requests, the

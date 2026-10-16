@@ -36,10 +36,10 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 		"defaultMode": "auto",
 		"deny":        []any{"Bash(rm -rf *)", "Read(.env.*)"},
 	}}
-	if err := applySecretFileProtection(settings, true); err != nil {
+	if err := applySecretFileProtection(settings, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := applySecretFileProtection(settings, true); err != nil {
+	if err := applySecretFileProtection(settings, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	permissions := settings["permissions"].(map[string]any)
@@ -53,7 +53,7 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 			t.Fatalf("deny[%d] = %v, want %s", 1+index, deny[1+index], rule)
 		}
 	}
-	if err := applySecretFileProtection(settings, false); err != nil {
+	if err := applySecretFileProtection(settings, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	if deny := permissions["deny"].([]any); len(deny) != 1 || deny[0] != "Bash(rm -rf *)" {
@@ -61,10 +61,10 @@ func TestApplySecretFileProtectionMergesWithExistingRules(t *testing.T) {
 	}
 
 	untouched := map[string]any{}
-	if err := applySecretFileProtection(untouched, false); err != nil || len(untouched) != 0 {
+	if err := applySecretFileProtection(untouched, false, nil); err != nil || len(untouched) != 0 {
 		t.Fatalf("an unprotected session gained settings: %v, %v", untouched, err)
 	}
-	if err := applySecretFileProtection(map[string]any{"permissions": map[string]any{"deny": "Read(x)"}}, true); err == nil {
+	if err := applySecretFileProtection(map[string]any{"permissions": map[string]any{"deny": "Read(x)"}}, true, nil); err == nil {
 		t.Fatal("a malformed deny list was overwritten")
 	}
 }

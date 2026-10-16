@@ -2,8 +2,10 @@ package workerexec
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // secretFileDenyRules keep Claude Code's file tools out of secret environment
@@ -33,11 +35,33 @@ var secretFileDenyRules = []string{
 	"Edit(!.env.template)",
 }
 
-// applySecretFileProtection adds secretFileDenyRules to a Claude settings
-// object's permissions.deny when protect is set, after any rules already
-// there, and removes exactly those rules when it is not. Other deny rules are
-// left as they are.
-func applySecretFileProtection(settings map[string]any, protect bool) error {
+// checkoutSecretFileDenyRules extend the cwd-relative .env.* rules to a
+// checkout outside the working directory (an additional repository beside the
+// main checkout). The committed-example negations only carve out of
+// cwd-relative rules, so an .env.example in such a checkout is denied too: the
+// price of keeping its real .env files out of the agent's file tools.
+func checkoutSecretFileDenyRules(dir string) []string {
+	pattern := "/" + filepath.ToSlash(filepath.Clean(dir)) + "/**/.env.*"
+	return []string{"Read(" + pattern + ")", "Edit(" + pattern + ")"}
+}
+
+// isCheckoutSecretFileDenyRule recognizes a rule checkoutSecretFileDenyRules
+// wrote, for any checkout, so a launch with other repositories replaces them.
+func isCheckoutSecretFileDenyRule(rule string) bool {
+	for _, tool := range []string{"Read(//", "Edit(//"} {
+		if strings.HasPrefix(rule, tool) && strings.HasSuffix(rule, "/**/.env.*)") {
+			return true
+		}
+	}
+	return false
+}
+
+// applySecretFileProtection adds secretFileDenyRules, plus the .env.* rules
+// for each checkout in extraDirs, to a Claude settings object's
+// permissions.deny when protect is set, after any rules already there, and
+// removes exactly those rules when it is not. Other deny rules are left as
+// they are.
+func applySecretFileProtection(settings map[string]any, protect bool, extraDirs []string) error {
 	permissions, _ := settings["permissions"].(map[string]any)
 	if permissions == nil {
 		if !protect {
@@ -62,13 +86,18 @@ func applySecretFileProtection(settings map[string]any, protect bool) error {
 	}
 	deny := make([]any, 0, len(existing)+len(secretFileDenyRules))
 	for _, rule := range existing {
-		if !slices.Contains(secretFileDenyRules, rule) {
+		if !slices.Contains(secretFileDenyRules, rule) && !isCheckoutSecretFileDenyRule(rule) {
 			deny = append(deny, rule)
 		}
 	}
 	if protect {
 		for _, rule := range secretFileDenyRules {
 			deny = append(deny, rule)
+		}
+		for _, dir := range extraDirs {
+			for _, rule := range checkoutSecretFileDenyRules(dir) {
+				deny = append(deny, rule)
+			}
 		}
 	}
 	if len(deny) == 0 {
@@ -79,17 +108,29 @@ func applySecretFileProtection(settings map[string]any, protect bool) error {
 	return nil
 }
 
-// writeClaudeSecretFileProtection applies the protection (deny rules and the
-// shell guard hook) to the settings.json in Claude's config directory, which
-// both the terminal CLI and the Chat ACP adapter load as user settings.
-func (b HarnessBuilder) writeClaudeSecretFileProtection(configDir string) error {
+// writeClaudeChatSettings applies the secret-file protection (deny rules and
+// the shell guard hook) and the access to the extraDirs checkouts to the
+// settings.json in Claude's config directory, which both the terminal CLI and
+// the Chat ACP adapter load as user settings. A session with neither and no
+// settings yet is left without a settings file.
+func (b HarnessBuilder) writeClaudeChatSettings(configDir string, extraDirs []string) error {
+	path := filepath.Join(configDir, "settings.json")
+	if !b.ProtectSecretFiles && len(extraDirs) == 0 {
+		if _, err := os.Stat(path); err != nil {
+			return nil
+		}
+	}
 	var applyErr error
-	err := updateJSONFile(filepath.Join(configDir, "settings.json"), func(settings map[string]any) {
-		applyErr = applySecretFileProtection(settings, b.ProtectSecretFiles)
+	err := updateJSONFile(path, func(settings map[string]any) {
+		applyClaudeAdditionalDirectories(settings, extraDirs)
+		applyErr = applySecretFileProtection(settings, b.ProtectSecretFiles, extraDirs)
 		applySecretFileGuardHook(settings, b.secretFileGuard())
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("write Claude settings: %w", err)
 	}
-	return applyErr
+	if applyErr != nil {
+		return fmt.Errorf("protect secret files in Claude settings: %w", applyErr)
+	}
+	return nil
 }
