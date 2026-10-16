@@ -2439,6 +2439,7 @@
 	"files.imageAlt": "{{side}} version of {{file}}",
 	"files.diffTruncated": "Diff preview truncated.",
 	"files.contentTruncated": "Rendered preview truncated.",
+	"files.copyCode": "Copy code",
 	"files.retry": "Retry",
 	"files.status.added": "Added",
 	"files.status.deleted": "Deleted",

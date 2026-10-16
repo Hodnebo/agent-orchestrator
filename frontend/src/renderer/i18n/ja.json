@@ -2128,6 +2128,7 @@
 	"files.imageAlt": "{{file}} の{{side}}バージョン",
 	"files.diffTruncated": "diff プレビューは切り詰められました。",
 	"files.contentTruncated": "レンダリングされたプレビューは切り詰められました。",
+	"files.copyCode": "コードをコピー",
 	"files.retry": "再試行",
 	"files.status.added": "追加",
 	"files.status.deleted": "削除",

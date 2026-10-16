@@ -2163,6 +2163,7 @@
 	"files.imageAlt": "Version « {{side}} » de {{file}}",
 	"files.diffTruncated": "Aperçu du diff tronqué.",
 	"files.contentTruncated": "Aperçu rendu tronqué.",
+	"files.copyCode": "Copier le code",
 	"files.retry": "Réessayer",
 	"files.status.added": "Ajouté",
 	"files.status.deleted": "Supprimé",
