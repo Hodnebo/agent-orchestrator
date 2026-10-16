@@ -1845,6 +1845,7 @@
 	"shortcut.noAttentionSessions": "没有其他需要关注的会话",
 	"shortcut.noMatching": "没有匹配的命令。",
 	"shortcut.open-in-editor": "在编辑器中打开",
+	"shortcut.open-orchestrator": "打开编排器",
 	"shortcut.open-settings": "打开设置",
 	"shortcut.pressRecording": "按下快捷键 · Esc 取消",
 	"shortcut.previous-attention-session": "上一个需要关注的会话",

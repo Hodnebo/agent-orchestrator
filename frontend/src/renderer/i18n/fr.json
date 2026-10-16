@@ -1820,6 +1820,7 @@
 	"shortcut.noAttentionSessions": "Aucune autre session ne requiert votre attention",
 	"shortcut.noMatching": "Aucune commande correspondante.",
 	"shortcut.open-in-editor": "Ouvrir dans l'éditeur",
+	"shortcut.open-orchestrator": "Ouvrir l’orchestrateur",
 	"shortcut.open-settings": "Ouvrir les paramètres",
 	"shortcut.pressRecording": "Appuyez sur le raccourci · Échap pour annuler",
 	"shortcut.previous-attention-session": "Session précédente à traiter",

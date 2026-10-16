@@ -1790,6 +1790,7 @@
 	"shortcut.noAttentionSessions": "주의가 필요한 다른 세션이 없습니다",
 	"shortcut.noMatching": "일치하는 명령이 없습니다.",
 	"shortcut.open-in-editor": "편집기에서 열기",
+	"shortcut.open-orchestrator": "오케스트레이터 열기",
 	"shortcut.open-settings": "설정 열기",
 	"shortcut.pressRecording": "단축키 입력 · Esc로 취소",
 	"shortcut.previous-attention-session": "이전 주의 필요 세션",

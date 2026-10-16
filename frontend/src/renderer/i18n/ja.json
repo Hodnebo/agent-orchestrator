@@ -1790,6 +1790,7 @@
 	"shortcut.noAttentionSessions": "他に対応が必要なセッションはありません",
 	"shortcut.noMatching": "一致するコマンドがありません。",
 	"shortcut.open-in-editor": "エディタで開く",
+	"shortcut.open-orchestrator": "オーケストレーターを開く",
 	"shortcut.open-settings": "設定を開く",
 	"shortcut.pressRecording": "ショートカットを押す · Esc でキャンセル",
 	"shortcut.previous-attention-session": "対応が必要な前のセッション",
