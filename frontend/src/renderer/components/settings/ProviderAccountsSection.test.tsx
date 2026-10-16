@@ -119,7 +119,7 @@ describe("accounts list and detail", () => {
 		expect(listItem(clara)).toHaveTextContent("Willow ClaudeDefault");
 		expect(listItem(alice)).toHaveAttribute("aria-current", "true");
 		expect(detail()).toHaveTextContent("New Codex sessionsStart on this account.");
-		expect(detail()).toHaveTextContent("1 session is using this account.");
+		expect(detail()).toHaveTextContent("Running sessions1 active");
 		expect(within(detail()).getByText(alice.email)).toHaveClass("blur-sm");
 		expect(within(detail()).getByText(alice.email)).toHaveAttribute("tabindex", "0");
 		await open(user, bob);
@@ -781,6 +781,16 @@ describe("the sessions on an account", () => {
 		inventory.accounts[0].sessions = ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "gone"];
 		inventory.accounts[0].usage = { status: "available", windows: [], activity: { today: 49_200, week: 49_200, total: 49_200, sessions: { s7: 48_000, s2: 1_200 } } };
 	});
+	it("counts archived sessions apart from active ones", async () => {
+		mock.workspaces = [{ id: "project-1", sessions: [
+			{ ...session("s1", "Fix login", "working"), provider: "codex" },
+			{ ...session("s2", "Parked"), provider: "codex", kanbanColumn: "archive" },
+			{ ...session("s3", "Also parked"), provider: "codex", kanbanColumn: "archive" },
+		] }];
+		inventory.accounts[0].sessions = ["s1", "s2", "s3"];
+		await start();
+		expect(detail()).toHaveTextContent("Running sessions1 active · 2 archived");
+	});
 	it("counts and moves only the sessions the account serves now", async () => {
 		// An ended session keeps its route for a restore, and one now on Claude keeps its Codex route for a switch back.
 		mock.workspaces = [{ id: "project-1", sessions: [
@@ -790,7 +800,7 @@ describe("the sessions on an account", () => {
 		] }];
 		inventory.accounts[0].sessions = ["s1", "s2", "s3"];
 		const user = await start();
-		expect(detail()).toHaveTextContent("1 session is using this account.");
+		expect(detail()).toHaveTextContent("Running sessions1 active");
 		await showTab(user, "Usage");
 		expect(detail()).toHaveTextContent("1 session on this account");
 		expect(list()).not.toHaveTextContent("Ended");

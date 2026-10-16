@@ -7,6 +7,7 @@ import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { aoBridge } from "../../lib/bridge";
 import { findSession } from "../../lib/command-palette";
 import { formatCostNanos } from "../../lib/format-cost";
+import { isArchivedSession } from "../../lib/standalone-archive";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -254,6 +255,9 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 	const workspaces = useWorkspaceQuery({ includeCloud: false }).data ?? [];
 	const sessions = served(account, workspaces);
 	const count = sessions.length;
+	// Archived sessions still hold the account; they are counted apart from the ones at work.
+	const archived = sessions.filter((id) => { const session = findSession(workspaces, id)?.session; return session ? isArchivedSession(session) : false; }).length;
+	const sessionsHint = [count - archived ? t("providerAccounts.sessionsActive", { count: count - archived }) : "", archived ? t("providerAccounts.sessionsArchived", { count: archived }) : ""].filter(Boolean).join(" · ");
 	// An API key has no limits to report, but the helper still knows its activity.
 	const usage = account.usage?.status === "available" || apiKey ? account.usage : undefined;
 	const known = account.usage; // The plan is shown whenever it is known, even while the limits are not.
@@ -447,7 +451,7 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 										<IconAction name={t("providerAccounts.leaveSessions", { count: offered.length })} icon={X} disabled={page.pending} onClick={() => page.setMoveOffer(null)} />
 									</Row>
 								) : null}
-								<Row title={t("providerAccounts.runningSessions")} hint={count ? t("providerAccounts.sessionsUsing", { count }) : t("providerAccounts.noSessionsUsing")}>
+								<Row title={t("providerAccounts.runningSessions")} hint={sessionsHint || t("providerAccounts.noSessionsUsing")}>
 									<IconAction name={t("providerAccounts.openUsage")} icon={SquareArrowOutUpRight} onClick={() => onTab("usage")} />
 									{count && others.length ? (
 										<AccountMenu accounts={others} onSelect={(target) => void page.moveSessions(sessions, target, t("providerAccounts.sessionsMoved", { count, name: target.displayName }))}>
