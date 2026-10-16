@@ -11,20 +11,16 @@ import (
 )
 
 func identify(ctx context.Context, pid int) Identity {
-	bootID, err := readLinuxBootID(ctx)
-	if err != nil {
-		return Identity{}
-	}
-	ticks := readLinuxStartTicks(ctx, pid)
-	if ticks == "" {
+	startID := currentStartID(ctx, pid)
+	if startID == "" {
 		return Identity{}
 	}
 	startedAt := processStartedAt(ctx, pid)
 	// The slower wall-clock lookup must describe the same process incarnation.
-	if readLinuxStartTicks(ctx, pid) != ticks {
+	if currentStartID(ctx, pid) != startID {
 		return Identity{}
 	}
-	return Identity{StartID: "linux:" + bootID + ":" + ticks, StartedAt: startedAt}
+	return Identity{StartID: startID, StartedAt: startedAt}
 }
 
 // BootStartTime returns boot+<boot id>+<start ticks> without invoking ps. A boot
@@ -80,12 +76,7 @@ func readLinuxStartTicks(ctx context.Context, pid int) string {
 }
 
 func linuxStartTicks(stat string) string {
-	// comm (field 2) can contain spaces and parentheses; field 3 follows its last ).
-	end := strings.LastIndexByte(stat, ')')
-	if end < 0 {
-		return ""
-	}
-	fields := strings.Fields(stat[end+1:])
+	fields := linuxProcessFields(stat)
 	if len(fields) < 20 {
 		return ""
 	}
@@ -94,4 +85,13 @@ func linuxStartTicks(stat string) string {
 		return ""
 	}
 	return strconv.FormatUint(ticks, 10)
+}
+
+func linuxProcessFields(stat string) []string {
+	// comm (field 2) can contain spaces and parentheses; field 3 follows its last ).
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return nil
+	}
+	return strings.Fields(stat[end+1:])
 }

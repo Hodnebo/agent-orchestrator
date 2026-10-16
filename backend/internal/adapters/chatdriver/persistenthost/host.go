@@ -185,15 +185,20 @@ type hostLockOwner struct {
 // A live PID can belong to a replacement process after a reboot. Unknown
 // identity remains live; only a proven different incarnation permits recovery.
 func hostProcessPossiblyAlive(ctx context.Context, pid int, startID string, recordedAt time.Time) bool {
+	if startID != "" {
+		switch processalive.CheckOwnership(ctx, pid, startID) {
+		case processalive.OwnershipGone, processalive.OwnershipReused:
+			return false
+		default:
+			return true
+		}
+	}
 	if !processalive.Alive(pid) {
 		return false
 	}
 	identity := processalive.Identify(ctx, pid)
 	if identity.StartID == "" {
 		return true
-	}
-	if startID != "" {
-		return identity.StartID == startID
 	}
 	// Linux ps start dates move with the wall clock; a live legacy PID without
 	// a saved boot/start-tick identity cannot be conclusively replaced.
