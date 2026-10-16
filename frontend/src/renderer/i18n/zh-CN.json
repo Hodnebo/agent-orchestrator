@@ -2258,6 +2258,8 @@
 	"settings.harness.installMethod": "Installation method",
 	"settings.harness.installFailed": "Installation failed.",
 	"settings.harness.installGuide": "打开安装指南",
+	"settings.harness.showAccounts": "显示 {{agent}} 账号",
+	"settings.harness.hideAccounts": "隐藏 {{agent}} 账号",
 	"settings.harness.installed": "Installed",
 	"settings.harness.installationUnknown": "安装状态未知",
 	"settings.harness.installing": "Installing…",

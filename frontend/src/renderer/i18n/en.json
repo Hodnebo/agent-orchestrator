@@ -1500,6 +1500,8 @@
 	"settings.harness.updateUnsupported": "No supported update method is available.",
 	"settings.harness.retryUpdate": "Retry update",
 	"settings.harness.installGuide": "Open installation guide",
+	"settings.harness.showAccounts": "Show {{agent}} accounts",
+	"settings.harness.hideAccounts": "Hide {{agent}} accounts",
 	"settings.harness.installed": "Installed",
 	"settings.harness.installationUnknown": "Installation status unknown",
 	"settings.harness.installing": "Installing…",

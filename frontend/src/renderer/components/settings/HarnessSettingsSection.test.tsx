@@ -2594,6 +2594,19 @@ describe("HarnessSettingsSection", () => {
 			expect(await within(page).findByRole("heading", { name: "Maple Codex" })).toBeInTheDocument();
 			expect(within(page).queryByRole("button", { name: /^(Login|Log in again|Log out)$/ })).toBeNull();
 		});
+		it("folds its accounts away and remembers it", async () => {
+			managed.accounts = [account("a", "Cedar Codex", true, true)];
+			localStorage.removeItem("ao.settings.harness.foldedAccounts");
+			renderSection();
+			expect(await screen.findByTestId("provider-section-codex")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Hide Codex accounts" }));
+			expect(screen.queryByTestId("provider-section-codex")).toBeNull();
+			expect(screen.getByRole("button", { name: "Show Codex accounts" })).toHaveAttribute("aria-expanded", "false");
+			expect(JSON.parse(localStorage.getItem("ao.settings.harness.foldedAccounts")!)).toEqual(["codex"]);
+			await userEvent.click(screen.getByRole("button", { name: "Show Codex accounts" }));
+			expect(await screen.findByTestId("provider-section-codex")).toBeInTheDocument();
+			expect(JSON.parse(localStorage.getItem("ao.settings.harness.foldedAccounts")!)).toEqual([]);
+		});
 		it("keeps its own login while AO holds no account for it", async () => {
 			const signedOut = catalogWithInstalled("codex");
 			signedOut.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";

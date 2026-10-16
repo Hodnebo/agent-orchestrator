@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
@@ -55,6 +55,8 @@ import { HarnessStatusStrip } from "./HarnessStatusStrip";
 import type { AccountTab } from "../ProviderAccountDetail";
 import { AgentAccountPane, AgentAccountRows, selectedAccount, useAccountsPage } from "../ProviderAccountsSection";
 
+const FOLDED_ACCOUNTS_KEY = "ao.settings.harness.foldedAccounts";
+
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
 // daemon's own readiness retry succeeds seconds later), so a login is re-checked
@@ -104,6 +106,24 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const accountsPage = useAccountsPage();
 	const accountsFor = (agentId: string) => (hostId ? "" : accountProvider(agentId)) as ProviderAccount["provider"] | "";
 	const [accountView, setAccountView] = useState<AccountTab>("account");
+	// Agents whose accounts are folded away in the list, remembered on this computer.
+	const [folded, setFolded] = useState<ReadonlySet<string>>(() => {
+		try {
+			return new Set(JSON.parse(localStorage.getItem(FOLDED_ACCOUNTS_KEY) ?? "[]") as string[]);
+		} catch {
+			return new Set();
+		}
+	});
+	const toggleAccounts = (agentId: string) => setFolded((current) => {
+		const next = new Set(current);
+		if (!next.delete(agentId)) next.add(agentId);
+		try {
+			localStorage.setItem(FOLDED_ACCOUNTS_KEY, JSON.stringify([...next]));
+		} catch {
+			// Kept for this visit only.
+		}
+		return next;
+	});
 	const [detailsSheet, setDetailsSheet] = useState(false);
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
@@ -742,7 +762,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
 							const provider = accountsFor(agentId);
-							return <Fragment key={agentId}><Tooltip><TooltipTrigger asChild><button
+							const accountsShown = provider !== "" && !folded.has(agentId);
+							return <Fragment key={agentId}><div className="relative"><Tooltip><TooltipTrigger asChild><button
 								type="button"
 								aria-label={t("settings.harness.openDetails", { agent: agentLabel(agentId) })}
 								// The status mark is visual only; its words reach screen readers here.
@@ -751,6 +772,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								className={cn(
 									"flex w-full items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
 									split ? "min-h-11 shrink-0 px-3" : "min-h-12 shrink-0 px-3",
+									provider && "pr-11",
 									selected
 										? (split ? "bg-(--color-bg-tertiary) font-medium" : "bg-accent font-medium")
 										: "hover:bg-(--color-interactive-hover)",
@@ -775,7 +797,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</button></TooltipTrigger>{details.statusLabel ? <TooltipContent side="right">{details.statusLabel}</TooltipContent> : null}</Tooltip>
-								{provider ? <AgentAccountRows provider={provider} page={accountsPage} selectedId={selectedAgentId === agentId ? selectedAccount(accountsPage, provider)?.id ?? null : null} onOpen={() => openDetail(agentId)} /> : null}
+								{/* Folds the agent's accounts away without opening the agent. */}
+								{provider ? <button
+									type="button"
+									aria-expanded={accountsShown}
+									aria-label={t(accountsShown ? "settings.harness.hideAccounts" : "settings.harness.showAccounts", { agent: agentLabel(agentId) })}
+									className="absolute right-2 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-settings-muted outline-none hover:bg-(--color-interactive-hover) hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring"
+									onClick={() => toggleAccounts(agentId)}
+								>
+									<ChevronDown aria-hidden="true" className={cn("size-4 transition-transform duration-150", !accountsShown && "-rotate-90")} />
+								</button> : null}</div>
+								{accountsShown ? <AgentAccountRows provider={provider} page={accountsPage} selectedId={selectedAgentId === agentId ? selectedAccount(accountsPage, provider)?.id ?? null : null} onOpen={() => openDetail(agentId)} /> : null}
 							</Fragment>;
 						})}
 						{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}

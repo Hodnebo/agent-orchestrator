@@ -2223,6 +2223,8 @@
 	"settings.harness.installMethod": "Installation method",
 	"settings.harness.installFailed": "Installation failed.",
 	"settings.harness.installGuide": "Abrir guía de instalación",
+	"settings.harness.showAccounts": "Mostrar cuentas de {{agent}}",
+	"settings.harness.hideAccounts": "Ocultar cuentas de {{agent}}",
 	"settings.harness.installed": "Installed",
 	"settings.harness.installationUnknown": "Estado de instalación desconocido",
 	"settings.harness.installing": "Installing…",
