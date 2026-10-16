@@ -1620,10 +1620,12 @@ textarea,
 	overflow: hidden;
 }
 
+/* Every wrapper between the section and the layout (the toolbar wrapper, then
+   the section body) is held to the page height, however deep it nests. */
 .settings-dialog-body:has([data-harness-detail]),
 .settings-dialog-body > div:has([data-harness-detail]),
 [data-section="harness"]:has([data-harness-detail]),
-[data-section="harness"]:has([data-harness-detail]) > div {
+[data-section="harness"] div:has([data-harness-detail]) {
 	min-width: 0;
 	min-height: 0;
 	flex: 1;
@@ -1633,7 +1635,7 @@ textarea,
    the inner wrappers are held to their parent. */
 .settings-dialog-body > div:has([data-harness-detail]),
 [data-section="harness"]:has([data-harness-detail]),
-[data-section="harness"]:has([data-harness-detail]) > div {
+[data-section="harness"] div:has([data-harness-detail]) {
 	max-width: 100%;
 }
 
@@ -1641,7 +1643,8 @@ textarea,
 	padding-bottom: 18px;
 }
 
-[data-section="harness"]:has([data-harness-detail]) > div > :not([data-harness-detail]) {
+/* The layout's siblings (errors, host menu, remote note) keep their height. */
+[data-section="harness"] div:has(> [data-harness-detail]) > :not([data-harness-detail]) {
 	flex-shrink: 0;
 }
 
