@@ -136,6 +136,7 @@ import {
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { DEFAULT_SENTRY_DSN } from "./shared/sentry-config";
@@ -157,6 +158,7 @@ import {
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -965,6 +967,9 @@ async function createWindowInternal(): Promise<void> {
 	);
 
 	browserViewHost = createBrowserViewHost({
+		// Agent tabs: only a connected host's or a cloud session's own
+		// agent-browser viewer may report the remote page a Browser tab shows.
+		isAgentBrowserUrl: (url) => remoteRegistry.isAgentBrowserUrl(url) || cloudAgentProxy.isAgentBrowserUrl(url),
 		mainWindow,
 		shellWebContents,
 		ipcMain,
@@ -987,6 +992,7 @@ async function createWindowInternal(): Promise<void> {
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		clipboard,
+		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
 	browserProfileIpc = registerBrowserProfileIpc({
@@ -2544,6 +2550,8 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 		case "edit.selectAll":
 			return wc.selectAll();
 		case "view.reload":
+			// An agent tab's Reload is the agent's page, not its viewer's.
+			if (browserViewHost?.reloadAgentTab(wc)) return;
 			return wc.reload();
 		case "view.devtools":
 			if (browserViewHost) {
@@ -2783,6 +2791,13 @@ ipcMain.handle("clipboard:writeText", (_event, text: string) => {
 	}
 });
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
+registerChatImageIpc({
+	ipcMain,
+	clipboard,
+	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
+	dialog,
+	downloadsDirectory: () => app.getPath("downloads"),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -3073,8 +3088,14 @@ function cloudDataDir(): string {
 		: path.join(os.homedir(), ".ao");
 }
 
+// Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
+const cloudAgentProxy = createCloudAgentProxy(cloudDataDir);
+
 function notifyRenderersOfCloudSession(account: import("./shared/cloud-account").CloudAccount | null): void {
-	if (!account) void remoteRegistry.disconnectAll();
+	if (!account) {
+		void remoteRegistry.disconnectAll();
+		void cloudAgentProxy.close();
+	}
 	const contents = getShellWebContents();
 	if (!contents || contents.isDestroyed()) return;
 	contents.send("cloud:sessionChanged", account);
@@ -3090,6 +3111,8 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
 installCloudCpProxy(cloudDataDir);
+ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
+	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
 function focusCloudWindow(): void {
 	const window = BaseWindow.getAllWindows()[0];
@@ -3462,6 +3485,7 @@ app.on("before-quit", (event) => {
 			const cleanup = Promise.all([
 				disposeAllBrowserViewHosts(),
 				remoteRegistry.closeAll(),
+				cloudAgentProxy.close(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
 				retireSides(),
 			]);

@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, LoaderCircle, X } from "lucide-react";
-import { type CSSProperties, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type InstallJob } from "../hooks/useHarnessUpdates";
+import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { useWorkspaceTopbarBottom } from "../hooks/useWorkspaceTopbarBottom";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
@@ -87,13 +88,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 
 	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string) => {
 		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return;
-		const latestVersion = advisory.latestVersion!;
 		startedUpdates.current.set(agentId, advisory);
 		startingRef.current.add(agentId);
 		setStarting((current) => new Set([...current, agentId]));
 		setErrors((current) => ({ ...current, [agentId]: undefined }));
 		try {
-			const result = await startHarnessUpdate({ agentId, latestVersion, methodId });
+			const result = await startHarnessUpdate({ agentId, methodId });
+			// The click-time check may have moved the target to a newer release.
+			if (result.advisory) startedUpdates.current.set(agentId, result.advisory);
 			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
 			if (!result.job) return;
 			startedJobs.current.add(agentId);
@@ -228,6 +230,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				// A job this notice started that failed stays explained here.
 				const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
 				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
+				// A start error means this attempt made no job; any retained job is an older one.
+				const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 				const requestAction = () => {
 					if (!needsLogin && method) {
 						void startUpdate(agentId, advisory, method.id);
@@ -252,7 +256,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						</Tooltip>
 						: <Button size="sm" variant="outline" className="h-7 shrink-0 px-2 text-xs" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 					</div>
-					{error && !busy ? <p role="alert" className="mt-1 break-words text-caption text-error">{error}</p> : null}
+					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
+					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
+						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+					</div> : null}
 				</article>;
 			})}
 		</div>
@@ -260,19 +268,59 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	</NoticeFrame>, document.body);
 }
 
+const NOTICE_MAX_WIDTH = 300;
+const NOTICE_EDGE = 16; // right-4
+const NOTICE_GAP = 12; // --space-3
+
 /** The notice's fixed frame, kept below whichever top bar is showing so the
- * stack and its Show less / Update all row never cover New task or Orchestrator. */
+ * stack and its Show less / Update all row never cover New task or Orchestrator.
+ *
+ * The live browser page is a native view: anything drawn over it has to raise
+ * the whole transparent shell above the page, which then swallows every click
+ * and scroll meant for the browser. This notice is non-modal and long-lived, so
+ * it never does that. It moves beside the page instead, and steps aside while
+ * the page leaves no room for it (maximized browser). */
 function NoticeFrame({ label, children }: { label: string; children: ReactNode }) {
 	const topbarBottom = useWorkspaceTopbarBottom();
+	const browserRect = useLiveBrowserViewportRect();
+	const frameRef = useRef<HTMLElement>(null);
+	const [height, setHeight] = useState(0);
+	useLayoutEffect(() => {
+		const element = frameRef.current;
+		if (!element) return;
+		const observer = new ResizeObserver(() => setHeight(element.getBoundingClientRect().height));
+		observer.observe(element);
+		setHeight(element.getBoundingClientRect().height);
+		return () => observer.disconnect();
+	});
 	// Until a bar is laid out, assume the board's: below the toolbar (and Windows' titlebar).
 	const top = topbarBottom === null
 		? isWindowsPlatform() ? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))" : "calc(var(--size-toolbar) + var(--space-3))"
 		: `calc(${topbarBottom}px + var(--space-3))`;
-	return <aside role="region" aria-label={label}
-		className="fixed right-4 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
-		data-browser-native-overlay="true" data-state="open"
+	const placement = noticePlacement(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height);
+	if (placement === "hidden") return null;
+	return <aside ref={frameRef} role="region" aria-label={label}
+		className="fixed isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		// The stack reaches the window's drag region, which would swallow its clicks.
-		style={{ WebkitAppRegion: "no-drag", top } as CSSProperties}>
+		style={{ WebkitAppRegion: "no-drag", top, right: placement.right } as CSSProperties}>
 		{children}
 	</aside>;
+}
+
+/** Where the notice's right edge sits, clear of the live browser page. */
+export function noticePlacement(
+	browser: ViewportRect | null,
+	top: number,
+	height: number,
+	viewportWidth = document.documentElement.clientWidth,
+): { right: number } | "hidden" {
+	const width = Math.min(NOTICE_MAX_WIDTH, viewportWidth - 2 * NOTICE_EDGE);
+	const right = viewportWidth - NOTICE_EDGE;
+	if (!browser) return { right: NOTICE_EDGE };
+	const overlapsX = right - width < browser.right && right > browser.left;
+	const overlapsY = top < browser.bottom && top + Math.max(height, 1) > browser.top;
+	if (!overlapsX || !overlapsY) return { right: NOTICE_EDGE };
+	const besideRight = browser.left - NOTICE_GAP;
+	if (besideRight - width < NOTICE_EDGE) return "hidden";
+	return { right: viewportWidth - besideRight };
 }

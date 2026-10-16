@@ -965,7 +965,7 @@ describe("SessionInspector PR section", () => {
       const toggle = screen.getByRole("switch", { name });
       expect(toggle).toHaveClass("h-4", "w-8", "rounded-full");
       expect(toggle.querySelector("[data-slot='switch-thumb']")).toHaveClass(
-        "size-3",
+        "size-3.5",
         "rounded-full",
       );
     }
