@@ -238,6 +238,11 @@ workspace and the selected provider credential, without project hooks or worker
 control credentials. A timely result can finish while checkout is still running;
 late results cannot rename an already launched session.
 
+The deadline bounds naming, not repository checkout or total startup time.
+Codex OAuth naming receives an isolated copy without refresh authority, so an
+expired access token uses the naming fallback while the real agent retains its
+original refresh token.
+
 The control plane fences each naming request by worker ID and epoch. It reserves
 `<project-prefix>/<slug>/root` under a project lock, while workers check actual
 Git refs and directory collisions with the existing local Git workspace adapter.
