@@ -350,13 +350,12 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 	return row, updated, err
 }
 
-// UpdateProjectConfig reads, merges, and writes a focused project config change
-// under one writer lock and transaction. Dry runs use the same current row.
-func (s *Store) UpdateProjectConfig(ctx context.Context, id string, dryRun bool, merge func(domain.ProjectRecord) (domain.ProjectConfig, bool, error)) (domain.ProjectRecord, bool, error) {
+// UpdateProjectConfig reads, applies, and persists a focused config patch under
+// one writer lock and transaction. Dry runs use the same current row.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, patch domain.ProjectConfigPatch, dryRun bool) (domain.ProjectConfigPatchResult, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	var row domain.ProjectRecord
-	var found bool
+	result := domain.ProjectConfigPatchResult{Changes: []domain.ProjectConfigChange{}}
 	err := s.inTx(ctx, "update project config", func(q *gen.Queries) error {
 		stored, err := q.GetProject(ctx, domain.ProjectID(id))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -365,16 +364,20 @@ func (s *Store) UpdateProjectConfig(ctx context.Context, id string, dryRun bool,
 		if err != nil {
 			return err
 		}
-		row = projectRowFromGen(stored)
+		row := projectRowFromGen(stored)
 		if !row.ArchivedAt.IsZero() {
 			return nil
 		}
-		found = true
-		config, changed, err := merge(row)
+		result.Before = row
+		result.After = row
+		result.Found = true
+		config, changes, err := patch.Apply(row)
 		if err != nil {
 			return err
 		}
-		if dryRun || !changed {
+		result.After.Config = config
+		result.Changes = changes
+		if dryRun || len(changes) == 0 {
 			return nil
 		}
 		serialized, err := marshalProjectConfig(config)
@@ -388,11 +391,11 @@ func (s *Store) UpdateProjectConfig(ctx context.Context, id string, dryRun bool,
 			return err
 		}
 		if rows == 0 {
-			found = false
+			result.Found = false
 			return nil
 		}
-		row.Config = config
+		result.Applied = true
 		return nil
 	})
-	return row, found, err
+	return result, err
 }

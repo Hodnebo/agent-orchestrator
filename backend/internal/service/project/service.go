@@ -724,7 +724,7 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 		return Project{}, apierr.Invalid("DISPLAY_NAME_TOO_LONG", fmt.Sprintf("Display name must be %d characters or fewer", maxDisplayNameLen), nil)
 	}
 	if row.Kind.WithDefault() == domain.ProjectKindScratch {
-		if err := validateScratchProjectConfig(in.Config); err != nil {
+		if err := domain.ValidateScratchProjectConfig(in.Config); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
 	}
@@ -767,7 +767,7 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
 	if row.Kind.WithDefault() == domain.ProjectKindScratch {
-		if err := validateScratchProjectConfig(in.Config); err != nil {
+		if err := domain.ValidateScratchProjectConfig(in.Config); err != nil {
 			return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
 	}
@@ -788,67 +788,31 @@ func (m *Service) UpdateConfig(ctx context.Context, id domain.ProjectID, in Upda
 	if err := validateProjectID(id); err != nil {
 		return UpdateConfigResult{}, err
 	}
-	changes := make([]ConfigChange, 0, 2)
-	row, ok, err := m.store.UpdateProjectConfig(ctx, string(id), in.DryRun, func(current domain.ProjectRecord) (domain.ProjectConfig, bool, error) {
-		updated := current.Config
-		if in.CanonicalRepoURL != nil {
-			from := updated.CanonicalRepoURL
-			updated.CanonicalRepoURL = strings.TrimSpace(*in.CanonicalRepoURL)
-			if from != updated.CanonicalRepoURL {
-				changes = append(changes, ConfigChange{Path: "config.canonicalRepoURL", From: from, To: updated.CanonicalRepoURL})
-			}
-		}
-		if in.DefaultBranch != nil {
-			from := updated.DefaultBranch
-			updated.DefaultBranch = strings.TrimSpace(*in.DefaultBranch)
-			if from != updated.DefaultBranch {
-				changes = append(changes, ConfigChange{Path: "config.defaultBranch", From: from, To: updated.DefaultBranch})
-			}
-		}
-		if err := updated.Validate(); err != nil {
-			return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
-		}
-		if current.Kind.WithDefault() == domain.ProjectKindScratch {
-			if err := validateScratchProjectConfig(updated); err != nil {
-				return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
-			}
-		}
-		if err := updated.ValidateCanonicalRepository(current.RepoOriginURL); err != nil {
-			return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
-		}
-		return updated, len(changes) > 0, nil
-	})
+	patch := domain.ProjectConfigPatch{CanonicalRepoURL: in.CanonicalRepoURL, DefaultBranch: in.DefaultBranch}
+	stored, err := m.store.UpdateProjectConfig(ctx, string(id), patch, in.DryRun)
 	if err != nil {
-		var validation *apierr.Error
+		var validation *domain.ProjectConfigPatchError
 		if errors.As(err, &validation) {
-			return UpdateConfigResult{}, err
+			return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", validation.Error(), nil)
 		}
 		return UpdateConfigResult{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	if !ok {
+	if !stored.Found {
 		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	if !in.DryRun && len(changes) > 0 {
-		m.modelScopeChanged(row.ID)
+	if stored.Applied {
+		m.modelScopeChanged(stored.After.ID)
+	}
+	row := stored.After
+	if in.DryRun {
+		row = stored.Before
+	}
+	changes := make([]ConfigChange, 0, len(stored.Changes))
+	for _, change := range stored.Changes {
+		changes = append(changes, ConfigChange{Path: change.Path, From: change.From, To: change.To})
 	}
 	project := m.projectFromRow(ctx, row)
 	return UpdateConfigResult{Project: &project, Changes: changes, DryRun: in.DryRun}, nil
-}
-
-func validateScratchProjectConfig(cfg domain.ProjectConfig) error {
-	if cfg.CanonicalRepoURL != "" {
-		return errors.New("scratch projects do not support canonicalRepoURL")
-	}
-	if strings.TrimSpace(cfg.DefaultBranch) != "" {
-		return errors.New("scratch projects do not support defaultBranch")
-	}
-	if cfg.TrackerIntake.Enabled {
-		return errors.New("scratch projects do not support tracker intake")
-	}
-	if len(cfg.Reviewers) > 0 {
-		return errors.New("scratch projects do not support reviewers")
-	}
-	return nil
 }
 
 // resolveGitOriginURL returns the project's `origin` remote URL via

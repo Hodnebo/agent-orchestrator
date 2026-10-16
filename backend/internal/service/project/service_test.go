@@ -2,6 +2,7 @@ package project_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -49,16 +50,18 @@ func (s failingProjectUpsertStore) UpsertProject(context.Context, domain.Project
 	return errors.New("forced project upsert failure")
 }
 
-type interleavingProjectConfigStore struct {
+type gatedProjectConfigStore struct {
 	project.Store
-	beforeMerge func()
+	entered chan struct{}
+	release chan struct{}
 }
 
-func (s *interleavingProjectConfigStore) UpdateProjectConfig(ctx context.Context, id string, dryRun bool, merge func(domain.ProjectRecord) (domain.ProjectConfig, bool, error)) (domain.ProjectRecord, bool, error) {
-	if s.beforeMerge != nil {
-		s.beforeMerge()
+func (s *gatedProjectConfigStore) UpdateProjectConfig(ctx context.Context, id string, patch domain.ProjectConfigPatch, dryRun bool) (domain.ProjectConfigPatchResult, error) {
+	if patch.CanonicalRepoURL != nil {
+		close(s.entered)
+		<-s.release
 	}
-	return s.Store.UpdateProjectConfig(ctx, id, dryRun, merge)
+	return s.Store.UpdateProjectConfig(ctx, id, patch, dryRun)
 }
 
 func prepareClone(t *testing.T, m project.Manager, remoteURL string) project.ClonePreparationResult {
@@ -2336,44 +2339,161 @@ func TestManager_UpdateConfigPreservesUnchangedFieldsAndDryRun(t *testing.T) {
 	}
 }
 
-func TestManager_UpdateConfigMergesAgainstLatestStoredConfig(t *testing.T) {
-	ctx := context.Background()
-	store, err := sqlitetest.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+func newGatedProjectConfigManager(t *testing.T) (*project.Service, *gatedProjectConfigStore) {
+	t.Helper()
+	gate := &gatedProjectConfigStore{
+		Store:   sqlitetest.MustOpen(t),
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	interleaved := &interleavingProjectConfigStore{Store: store}
-	m := project.New(interleaved)
+	t.Cleanup(func() {
+		select {
+		case <-gate.release:
+		default:
+			close(gate.release)
+		}
+	})
+	m := project.New(gate)
 	repo := gitRepo(t)
 	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://github.com/Untrivial-ai/agent-orchestrator").CombinedOutput(); err != nil {
 		t.Fatalf("origin: %v %s", err, out)
 	}
-	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
+	if _, err := m.Add(context.Background(), project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
 		t.Fatal(err)
 	}
-	interleaved.beforeMerge = func() {
-		if _, err := m.SetConfig(ctx, "ao", project.SetConfigInput{Config: domain.ProjectConfig{
-			CanonicalRepoURL: "https://github.com/Untrivial-ai/agent-orchestrator",
-			DefaultBranch:    "develop", Env: map[string]string{"CONCURRENT": "preserve"},
-		}}); err != nil {
-			t.Fatal(err)
-		}
+	return m, gate
+}
+
+func waitForConfigPatch(t *testing.T, gate *gatedProjectConfigStore) {
+	t.Helper()
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canonical patch did not reach store gate")
 	}
+}
+
+func TestManager_UpdateConfigOverlappingDisjointPatches(t *testing.T) {
+	ctx := context.Background()
+	m, gate := newGatedProjectConfigManager(t)
 	canonical := "https://github.com/OrchestratorInc/agent-orchestrator"
-	result, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &canonical})
-	if err != nil {
-		t.Fatal(err)
+	type outcome struct {
+		result project.UpdateConfigResult
+		err    error
 	}
-	if len(result.Changes) != 1 || result.Changes[0].From != "https://github.com/Untrivial-ai/agent-orchestrator" || result.Changes[0].To != canonical {
-		t.Fatalf("changes = %#v", result.Changes)
+	first := make(chan outcome, 1)
+	go func() {
+		result, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &canonical})
+		first <- outcome{result: result, err: err}
+	}()
+	waitForConfigPatch(t, gate)
+	branch := "develop"
+	second, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{DefaultBranch: &branch})
+	if err != nil || len(second.Changes) != 1 || second.Changes[0].To != branch {
+		t.Fatalf("branch patch = %#v, err=%v", second, err)
+	}
+	close(gate.release)
+	completed := <-first
+	if completed.err != nil || len(completed.result.Changes) != 1 || completed.result.Changes[0].To != canonical {
+		t.Fatalf("canonical patch = %#v, err=%v", completed.result, completed.err)
 	}
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Project.Config.CanonicalRepoURL != canonical || got.Project.Config.DefaultBranch != "develop" || got.Project.Config.Env["CONCURRENT"] != "preserve" {
-		t.Fatalf("concurrent update was lost: %#v", got.Project.Config)
+	if got.Project.Config.CanonicalRepoURL != canonical || got.Project.Config.DefaultBranch != branch {
+		t.Fatalf("overlapping patch was lost: %#v", got.Project.Config)
+	}
+}
+
+func TestManager_UpdateConfigOverlappingPermissions(t *testing.T) {
+	ctx := context.Background()
+	m, gate := newGatedProjectConfigManager(t)
+	canonical := "https://github.com/OrchestratorInc/agent-orchestrator"
+	first := make(chan error, 1)
+	go func() {
+		_, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &canonical})
+		first <- err
+	}()
+	waitForConfigPatch(t, gate)
+	if _, err := m.SetPermissions(ctx, "ao", project.SetPermissionsInput{Permissions: domain.PermissionModeAuto}); err != nil {
+		t.Fatal(err)
+	}
+	close(gate.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.Get(ctx, "ao")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Project.Config.CanonicalRepoURL != canonical || got.Project.Config.AgentConfig.Permissions != domain.PermissionModeAuto {
+		t.Fatalf("overlapping permissions update was lost: %#v", got.Project.Config)
+	}
+}
+
+func TestManager_UpdateConfigDryRunNoOpAndInvalidDoNotWrite(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store := sqlitetest.MustOpenAt(t, dataDir)
+	notifications := 0
+	m := project.NewWithDeps(project.Deps{
+		Store: store,
+		OnModelScopeChanged: func(string) {
+			notifications++
+		},
+	})
+	repo := gitRepo(t)
+	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://github.com/Untrivial-ai/agent-orchestrator").CombinedOutput(); err != nil {
+		t.Fatalf("origin: %v %s", err, out)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao"), Config: &domain.ProjectConfig{DefaultBranch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	notifications = 0
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx, `CREATE TABLE config_write_audit (project_id TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TRIGGER audit_config_write AFTER UPDATE OF config ON projects BEGIN INSERT INTO config_write_audit (project_id) VALUES (NEW.id); END`); err != nil {
+		t.Fatal(err)
+	}
+	main := "main"
+	noOp, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{DefaultBranch: &main})
+	if err != nil || len(noOp.Changes) != 0 {
+		t.Fatalf("no-op = %#v, err=%v", noOp, err)
+	}
+	develop := "develop"
+	dry, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{DefaultBranch: &develop, DryRun: true})
+	if err != nil || len(dry.Changes) != 1 || dry.Changes[0].From != "main" || dry.Changes[0].To != "develop" || dry.Project.Config.DefaultBranch != "main" {
+		t.Fatalf("dry run = %#v, err=%v", dry, err)
+	}
+	invalid := "http://github.com/OrchestratorInc/agent-orchestrator"
+	_, err = m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &invalid, DefaultBranch: &develop})
+	wantCode(t, err, "INVALID_PROJECT_CONFIG")
+	stored, ok, err := store.GetProject(ctx, "ao")
+	if err != nil || !ok || stored.Config.DefaultBranch != "main" || stored.Config.CanonicalRepoURL != "" {
+		t.Fatalf("rejected or previewed update changed config: %#v, found=%v, err=%v", stored.Config, ok, err)
+	}
+	var writes int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_write_audit`).Scan(&writes); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 0 || notifications != 0 {
+		t.Fatalf("no-op, dry run, and invalid update caused writes=%d notifications=%d", writes, notifications)
+	}
+	if _, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{DefaultBranch: &develop}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_write_audit`).Scan(&writes); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 || notifications != 1 {
+		t.Fatalf("committed update caused writes=%d notifications=%d, want one each", writes, notifications)
 	}
 }
 
