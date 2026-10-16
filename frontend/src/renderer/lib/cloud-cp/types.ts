@@ -242,6 +242,12 @@ export interface CloudCpProjectRepo {
  * object with `repository` (the canonical URL of one of the project's
  * repositories) runs in that repository's folder.
  */
+/**
+ * A stored Setup or Cleanup step: the command, or for a step in another
+ * repository the command wrapped to run from that repository's folder (see
+ * repoScriptCommand). The control plane also accepts {command, repository} and
+ * stores it in the wrapped form.
+ */
 export type CloudCpProjectScriptStep = string | { command: string; repository?: string };
 
 /** Where a project's coding agent starts: its main repository, or the folder holding every repository. */

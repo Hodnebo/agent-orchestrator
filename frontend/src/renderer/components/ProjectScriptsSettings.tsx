@@ -11,7 +11,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
-import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
+import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, repoDirName, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
@@ -87,18 +87,19 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project: CloudCpProject = query.data;
 	// A step can run in any of the project's repositories: the main one (the
-	// default) or one of the additional ones checked out beside it.
-	const additional = projectAdditionalRepos(project.config).map((repo) => repo.url);
-	const repositories = additional.map((url) => ({ url, label: gitHubFullName(url) ?? url }));
+	// default) or one of the additional ones checked out beside it, named by the
+	// folder it checks out into.
+	const repositories = projectAdditionalRepos(project.config).map((repo) => ({ folder: repoDirName(repo.url), label: gitHubFullName(repo.url) ?? repo.url }));
 	const save = async (steps: ScriptSteps) => {
 		// Settings merge objects but replace arrays, so only the two lists are sent;
 		// an empty list clears it. Every other config key stays as stored.
 		const response = await client.updateProjectSettings(project.orgId, project.id, {
-			config: { postCreate: serializeScriptSteps(steps.postCreate, additional), preRemove: serializeScriptSteps(steps.preRemove ?? [], additional) },
+			config: { postCreate: serializeScriptSteps(steps.postCreate), preRemove: serializeScriptSteps(steps.preRemove ?? []) },
 		});
 		queryClient.setQueryData(queryKey, response.project);
 	};
-	return <ScriptsEditor key={`${cloudOrgId}/${projectId}`} scratch={false} postCreate={parseScriptSteps(project.config?.postCreate)} preRemove={parseScriptSteps(project.config?.preRemove)}
+	return <ScriptsEditor key={`${cloudOrgId}/${projectId}`} scratch={false}
+		postCreate={parseScriptSteps(project.config?.postCreate, project.repositoryUrl)} preRemove={parseScriptSteps(project.config?.preRemove, project.repositoryUrl)}
 		repositories={repositories}
 		cloud={{ cleanupRuns: projectSandboxProvider(project.config, offering) === CODER_PROVIDER, readOnly }}
 		save={save} onSaveState={onSaveState} onSaved={() => { void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey }); }} />;
@@ -107,10 +108,10 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 type ScriptSteps = { postCreate: ScriptStepDraft[]; preRemove?: ScriptStepDraft[] };
 
 function localSteps(commands: string[] | undefined): ScriptStepDraft[] | undefined {
-	return commands?.map((command) => ({ command, repository: "" }));
+	return commands?.map((command) => ({ command, folder: "" }));
 }
 
-const emptyStep = (): ScriptStepDraft => ({ command: "", repository: "" });
+const emptyStep = (): ScriptStepDraft => ({ command: "", folder: "" });
 
 /** The variables a Cloud project's Setup and Cleanup steps can use. */
 const cloudScriptVariables = [
@@ -128,8 +129,8 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	scratch: boolean;
 	postCreate?: ScriptStepDraft[];
 	preRemove?: ScriptStepDraft[];
-	/** A Cloud project's additional repositories, which a step may run in instead of the main one. */
-	repositories?: { url: string; label: string }[];
+	/** A Cloud project's additional repositories, by the folder each checks out into, which a step may run in instead of the main one. */
+	repositories?: { folder: string; label: string }[];
 	/** Set for a Cloud project: the hints describe its session workspace, and cleanupRuns says whether Cleanup runs on its provider. */
 	cloud?: { cleanupRuns: boolean; readOnly?: boolean };
 	save: (scripts: ScriptSteps) => Promise<void>;
@@ -143,12 +144,24 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		setup: postCreate?.length ? postCreate.map((step) => ({ ...step })) : [emptyStep()],
 		cleanup: preRemove?.length ? preRemove.map((step) => ({ ...step })) : [emptyStep()],
 	}));
-	// A step whose repository left the project runs in the main one again.
-	const known = (repository: string) => repositories.some((repo) => repo.url === repository) ? repository : "";
+	// A step keeps its folder as stored, even one that is not among the project's
+	// repositories any more (it is listed by folder name), so saving never moves
+	// a step into another repository on its own.
 	const commands: ScriptSteps = {
-		postCreate: drafts.setup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, repository: known(step.repository) })),
-		...(!scratch && { preRemove: drafts.cleanup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, repository: known(step.repository) })) }),
+		postCreate: drafts.setup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder })),
+		...(!scratch && { preRemove: drafts.cleanup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder })) }),
 	};
+	const folderOptions = (current: string) => {
+		const options = [
+			{ value: "", label: t("settings.project.stepMainRepository", { defaultValue: "Main repository" }) },
+			...repositories.map((repo) => ({ value: repo.folder, label: repo.label })),
+		];
+		if (current !== "" && !repositories.some((repo) => repo.folder === current)) {
+			options.push({ value: current, label: t("settings.project.stepUnknownFolder", { defaultValue: "{{folder}} (not a project repository)", folder: current }) });
+		}
+		return options;
+	};
+	const showRepositoryMenu = repositories.length > 0 || [...drafts.setup, ...drafts.cleanup].some((step) => step.folder !== "");
 	const [saved, setSaved] = useState(() => JSON.stringify(commands));
 	const [savedAt, setSavedAt] = useState(false);
 	const dirty = JSON.stringify(commands) !== saved;
@@ -218,23 +231,20 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 							<div className="mb-1 flex items-center justify-between gap-2">
 								<label className="text-sm font-medium text-settings-label" htmlFor={`${kind}-step-${index}`}>{t(`settings.project.${kind}Step`, { number: index + 1 })}</label>
 								<div className="flex min-w-0 items-center gap-1">
-									{repositories.length > 0 ? <SettingsOptionMenu
+									{cloud && showRepositoryMenu ? <SettingsOptionMenu
 										aria-label={t("settings.project.stepRepository", { defaultValue: "Repository for step {{number}}", number: index + 1 })}
 										disabled={locked}
-										value={known(step.repository)}
-										options={[
-											{ value: "", label: t("settings.project.stepMainRepository", { defaultValue: "Main repository" }) },
-											...repositories.map((repo) => ({ value: repo.url, label: repo.label })),
-										]}
+										value={step.folder}
+										options={folderOptions(step.folder)}
 										triggerClassName="w-fit max-w-64"
-										onChange={(repository) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, repository } : item))}
+										onChange={(folder) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, folder } : item))}
 									/> : null}
 									<button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} className="rounded p-1 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" disabled={locked} onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [emptyStep()] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></button>
 								</div>
 							</div>
 							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={locked} id={`${kind}-step-${index}`} spellCheck={false} value={step.command} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, command: event.target.value } : item))} />
 						</div>)}
-						{repositories.length > 0 ? <p className="text-xs text-settings-muted">{t("settings.project.stepRepositoryHint", { defaultValue: "Each step runs in the repository chosen for it, after every repository is checked out." })}</p> : null}
+						{cloud && showRepositoryMenu ? <p className="text-xs text-settings-muted">{t("settings.project.stepRepositoryHint", { defaultValue: "Each step runs in the repository chosen for it, after every repository is checked out." })}</p> : null}
 						<Button className="gap-1.5" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], emptyStep()])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 					</div>
 					{kind === "cleanup" && !cloud && <div className="space-y-2 border-t border-border pt-4">

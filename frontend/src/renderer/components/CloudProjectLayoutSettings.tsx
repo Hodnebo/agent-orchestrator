@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudGitHubAppRepositories } from "../hooks/useCloudGitHubAppRepositories";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -17,8 +18,11 @@ import {
 	projectAdditionalRepos,
 	projectAgentStartsIn,
 	projectConfigText,
+	repoDirName,
 	sameRepository,
+	scriptStepFolders,
 	utf8Bytes,
+	workingDirectoryProblem,
 } from "../lib/cloud-project-repos";
 import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
@@ -99,10 +103,21 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
 	</div>;
 }
 
-/** A path the control plane accepts for a working directory: absolute, ~/ or $HOME/; "" keeps the connection's. */
-function validWorkingDirectory(value: string): boolean {
-	const trimmed = value.trim();
-	return trimmed === "" || trimmed.startsWith("/") || trimmed === "~" || trimmed.startsWith("~/") || trimmed === "$HOME" || trimmed.startsWith("$HOME/");
+
+/** The control plane's reason for each working directory problem (domain.ValidateCoderWorkingDirectory). */
+function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workingDirectoryProblem>): string {
+	switch (problem) {
+		case "length":
+			return t("settings.cloudProject.workingDirectoryTooLong", { defaultValue: "The working folder must be at most 512 characters." });
+		case "characters":
+			return t("settings.cloudProject.workingDirectoryCharacters", { defaultValue: "The working folder contains invalid characters." });
+		case "segments":
+			return t("settings.cloudProject.workingDirectorySegments", { defaultValue: "The working folder must not contain . or .. segments." });
+		case "placeholder":
+			return t("settings.cloudProject.workingDirectoryPlaceholderOnly", { defaultValue: "The working folder may only use {repo} as a placeholder." });
+		default:
+			return t("settings.cloudProject.workingDirectoryInvalid", { defaultValue: "The working folder must be an absolute path or start with ~/ or $HOME/, and name a folder below it." });
+	}
 }
 
 /**
@@ -132,8 +147,16 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	// its own user; show it there, or while a value is stored so it can be cleared.
 	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder).data != null;
 	const showWorkingDirectory = (orgOwnsCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER) || saved.workingDirectory !== "";
-	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined;
-	const workingDirectoryInvalid = !validWorkingDirectory(workingDirectory);
+	// A Setup or Cleanup step runs in its repository's folder, so a repository a
+	// step still uses cannot be removed until that step is moved or deleted (the
+	// control plane refuses it too).
+	const stepFolders = scriptStepFolders(project.config, project.repositoryUrl);
+	const removedInUse = storedRepos
+		.filter((repo) => !filledExtras.some((url) => sameRepository(url, repo.url)) && stepFolders.has(repoDirName(repo.url)))
+		.map((repo) => gitHubFullName(repo.url) ?? repo.url);
+	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined || removedInUse.length > 0;
+	const workingDirectoryError = workingDirectoryProblem(workingDirectory);
+	const workingDirectoryInvalid = workingDirectoryError !== undefined;
 	const locked = readOnly || mutation.isPending;
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
@@ -163,7 +186,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 				<p className="font-mono text-sm text-settings-label">{gitHubFullName(project.repositoryUrl) ?? project.repositoryUrl}</p>
 			</Field>
 			<Field label={t("settings.cloudProject.additionalRepositories", { defaultValue: "Additional repositories" })}
-				hint={t("settings.cloudProject.additionalRepositoriesHint", { defaultValue: "Each new session clones these beside the main repository and checks out its branch in every one, so one task can change them together and open a pull request in each. Running sessions keep what they started with." })}>
+				hint={t("settings.cloudProject.additionalRepositoriesHint", { defaultValue: "Sessions clone these beside the main repository and check out the session branch in every one, so one task can change them together and open a pull request in each. Changes apply to new sessions and to a running session the next time it restarts." })}>
 				<CloudAdditionalReposEditor
 					available={repos.data ?? []}
 					mainUrl={project.repositoryUrl}
@@ -173,11 +196,15 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 					loading={repos.isLoading}
 				/>
 				{repos.isError ? <p role="alert" className="text-xs text-error">{t("createProject.githubReposFailed", { defaultValue: "Failed to load repositories." })}</p> : null}
+				{removedInUse.length > 0 ? <p role="alert" className="text-xs text-error">{t("settings.cloudProject.repositoryUsedByScripts", { defaultValue: "{{repositories}} is still used by a Setup or Cleanup step. Move or delete that step in Scripts first.", repositories: removedInUse.join(", ") })}</p> : null}
 			</Field>
 			<Field label={t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })}
-				hint={startsIn === "parent"
-					? t("settings.cloudProject.agentStartsInParentHint", { defaultValue: "The agent starts in the folder that holds every repository. It reads a repository's own instructions (AGENTS.md, CLAUDE.md) only once it works there, so say which repository to start with in the project's instructions." })
-					: t("settings.cloudProject.agentStartsInRepositoryHint", { defaultValue: "The agent starts in the main repository and reads its instructions, with access to the other repositories beside it." })}>
+				hint={<>
+					<p>{startsIn === "parent"
+						? t("settings.cloudProject.agentStartsInParentHint", { defaultValue: "The agent starts in the folder that holds every repository. This applies when the repositories share their own parent folder, such as a bring-your-own Coder working folder like ~/work/{repo}; otherwise the agent starts in the main repository. It reads a repository's own instructions (AGENTS.md, CLAUDE.md) only once it works there, so say which repository to start with in the project's instructions." })
+						: t("settings.cloudProject.agentStartsInRepositoryHint", { defaultValue: "The agent starts in the main repository and reads its instructions, with access to the other repositories beside it." })}</p>
+					<p>{t("settings.cloudProject.agentStartsInFixedHint", { defaultValue: "Applies to new sessions. A session keeps the folder it started in, so its conversation can always be resumed." })}</p>
+				</>}>
 				<SettingsOptionMenu<CloudCpAgentStartsIn>
 					aria-label={t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })}
 					disabled={locked}
@@ -194,7 +221,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		{showWorkingDirectory ? (
 			<Field label={t("settings.cloudProject.workingDirectory", { defaultValue: "Working folder" })} htmlFor="cloudProjectWorkingDirectory"
 				hint={workingDirectoryInvalid
-					? <span role="alert" className="text-error">{t("settings.cloudProject.workingDirectoryInvalid", { defaultValue: "Use an absolute path, or one starting with ~/ or $HOME/." })}</span>
+					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
 					: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where this project's sessions check out the main repository in your own Coder workspace, for example ~/work/{repo}; the other repositories go beside it. Leave empty to use the folder set for your Coder connection." })}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
 					placeholder={t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"

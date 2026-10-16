@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
 	additionalReposProblem,
 	isStandaloneCloudProject,
+	parseRepoScriptCommand,
 	parseScriptSteps,
 	projectAdditionalRepos,
 	projectAgentStartsIn,
 	repoDirName,
+	repoScriptCommand,
+	scriptStepFolders,
 	serializeScriptSteps,
+	workingDirectoryProblem,
 } from "./cloud-project-repos";
+
+const main = "https://github.com/acme/alice";
 
 describe("cloud project repositories", () => {
 	it("reads config.repos, falling back to the legacy coder extraRepos", () => {
@@ -25,21 +31,42 @@ describe("cloud project repositories", () => {
 	});
 
 	it("finds the first problem with a set of additional repositories", () => {
-		const main = "https://github.com/acme/alice";
 		expect(additionalReposProblem(main, ["https://github.com/acme/11x", ""])).toBeUndefined();
 		expect(additionalReposProblem(main, ["https://github.com/ACME/alice"])?.kind).toBe("main");
 		expect(additionalReposProblem(main, ["https://github.com/acme/11x", "https://github.com/acme/11x"])?.kind).toBe("duplicate");
 		expect(additionalReposProblem(main, ["https://github.com/other/alice"])).toMatchObject({ kind: "folder", folder: "alice" });
 		expect(additionalReposProblem(main, ["https://github.com/acme/repository"])?.kind).toBe("reserved");
+		expect(additionalReposProblem(main, ["https://github.com/acme/.aws"])?.kind).toBe("hidden");
 		expect(additionalReposProblem(main, Array.from({ length: 11 }, (_, i) => `https://github.com/acme/r${i}`))?.kind).toBe("limit");
 	});
 
-	it("round-trips Setup steps, keeping main-repository steps as plain strings", () => {
-		const steps = parseScriptSteps(["npm ci", { command: "make up", repository: "https://github.com/acme/11x" }, 5]);
-		expect(steps).toEqual([{ command: "npm ci", repository: "" }, { command: "make up", repository: "https://github.com/acme/11x" }]);
-		expect(serializeScriptSteps(steps ?? [], ["https://github.com/acme/11x"])).toEqual(["npm ci", { command: "make up", repository: "https://github.com/acme/11x" }]);
-		// A step whose repository left the project runs in the main one.
-		expect(serializeScriptSteps(steps ?? [], [])).toEqual(["npm ci", "make up"]);
+	it("round-trips Setup steps as plain strings, wrapping a step in another repository", () => {
+		const wrapped = "(\ncd -- '../11x' || exit 1\nmake up\n)";
+		expect(repoScriptCommand("11x", "make up")).toBe(wrapped);
+		const steps = parseScriptSteps(["npm ci", wrapped, { command: "make db", repository: "https://github.com/acme/voice-calling-ai.git" }, 5], main);
+		expect(steps).toEqual([
+			{ command: "npm ci", folder: "" },
+			{ command: "make up", folder: "11x" },
+			{ command: "make db", folder: "voice-calling-ai" },
+		]);
+		expect(serializeScriptSteps(steps ?? [])).toEqual(["npm ci", wrapped, "(\ncd -- '../voice-calling-ai' || exit 1\nmake db\n)"]);
+		// A multi-line command survives the round trip, and the main repository's own folder is the main repository.
+		expect(parseRepoScriptCommand(repoScriptCommand("11x", "a\n\nb)\n"))).toEqual({ folder: "11x", command: "a\n\nb)\n" });
+		expect(parseScriptSteps([repoScriptCommand("alice", "ls")], main)).toEqual([{ command: "ls", folder: "" }]);
+		expect(scriptStepFolders({ postCreate: [wrapped], preRemove: ["ls"] }, main)).toEqual(new Set(["11x"]));
+	});
+
+	it("rejects working folders the control plane rejects", () => {
+		for (const ok of ["", "  ", "~/work/{repo}", "$HOME/work", "/srv/work/{repo}"]) expect(workingDirectoryProblem(ok)).toBeUndefined();
+		expect(workingDirectoryProblem("~")).toBe("form");
+		expect(workingDirectoryProblem("$HOME")).toBe("form");
+		expect(workingDirectoryProblem("/")).toBe("form");
+		expect(workingDirectoryProblem("work")).toBe("form");
+		expect(workingDirectoryProblem("~/work/../x")).toBe("segments");
+		expect(workingDirectoryProblem("~/work/{name}")).toBe("placeholder");
+		expect(workingDirectoryProblem("~/work/$USER")).toBe("placeholder");
+		expect(workingDirectoryProblem("~/a\tb")).toBe("characters");
+		expect(workingDirectoryProblem(`/${"a".repeat(512)}`)).toBe("length");
 	});
 
 	it("recognizes standalone projects and where the agent starts", () => {
