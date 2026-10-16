@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -118,7 +119,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
-	progress := m.startProvisionProgress(ctx, id, provisionPlan(in, reusePublishedWorkspace))
+	plan := provisionPlan(in, reusePublishedWorkspace)
+	progress := m.startProvisionProgress(ctx, id, plan)
 	if reusePublishedWorkspace {
 		ws = workspaceInfo(in.record)
 		if in.projectKind == domain.ProjectKindWorkspace {
@@ -170,8 +172,39 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
+	if reusePublishedWorkspace && ws.Branch != "" && slices.Contains(plan, domain.SessionProvisionStepWorktree) {
+		namer, ok := m.workspace.(ports.WorkspaceTaskNamer)
+		if !ok {
+			m.failAsyncChatSpawn(ctx, id, errors.New("workspace cannot repair interrupted task naming"))
+			return
+		}
+		info := ports.WorkspaceProjectInfo{Root: ws}
+		if workspaceProject != nil {
+			info = *workspaceProject
+			for i := range info.Worktrees {
+				info.Worktrees[i].Path = filepath.Join(ws.Path, filepath.FromSlash(info.Worktrees[i].RelativePath))
+			}
+		}
+		info, repairErr := namer.RepairTaskWorkspace(ctx, info)
+		persistErr := m.persistTaskWorkspace(ctx, id, info)
+		ws = info.Root
+		if workspaceProject != nil {
+			workspaceProject = &info
+		}
+		if err := errors.Join(repairErr, persistErr); err != nil {
+			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
+			return
+		}
+	}
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
 	if taskName != nil && !reusePublishedWorkspace {
+		// A saved recovery path is not proof setup finished. Require its checkpoint
+		// before naming publishes that path so retry can resume unfinished stages.
+		if err := m.store.SetSessionProvisionSteps(ctx, id, progress.steps, m.clock()); err != nil {
+			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
+			m.failAsyncChatSpawn(ctx, id, err)
+			return
+		}
 		stageStarted = time.Now()
 		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, in.record, ws, workspaceProject, taskName())
 		if err != nil {
@@ -182,7 +215,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
-	if !reusePublishedWorkspace {
+	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
 		if err := m.provisionWorkspace(ctx, in.project, ws.Path); err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
@@ -276,8 +309,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 
 // provisionProgress publishes a start's checklist. Finishing one stage and
 // starting the next is a single write, so the checklist never shows a gap
-// between them. Writes are best effort: the checklist is display, and a start
-// must not fail because it could not be drawn.
+// between them. Updates are best effort; a missed completion can replay a stage
+// on retry. Naming requires a durable initial checkpoint before publishing a
+// moved workspace path, so a retry never mistakes that path for completed setup.
 type provisionProgress struct {
 	m     *Manager
 	id    domain.SessionID
@@ -337,10 +371,17 @@ func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.Ses
 			plan = append(plan, domain.SessionProvisionStepFetch)
 		}
 		plan = append(plan, domain.SessionProvisionStepWorktree)
-		if slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
+		if in.cfg.NameFromPrompt || slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
 			return strings.TrimSpace(command) != ""
 		}) {
 			plan = append(plan, domain.SessionProvisionStepSetup)
+		}
+	}
+	if reusePublishedWorkspace {
+		for _, step := range in.record.ProvisionSteps {
+			if step.ID != domain.SessionProvisionStepAgent && step.Status != domain.SessionProvisionStepDone {
+				plan = append(plan, step.ID)
+			}
 		}
 	}
 	return append(plan, domain.SessionProvisionStepAgent)

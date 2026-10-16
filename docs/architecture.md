@@ -362,7 +362,9 @@ prompts without usable ASCII words fall back to the session ID. Git tasks use
 on both when the folder or branch namespace is occupied. Generated slugs prefer
 two short words, allow at most three, and are capped at 24 characters. The daemon
 finalizes prepared worktrees and repairs every repository registration before setup or
-agent launch, then records the resulting paths and branches. Session IDs remain
+agent launch, then records the resulting paths and branches. Naming persists its
+provisioning checkpoint before moving the checkout; retry repairs registrations
+and resumes unfinished setup using those durable stages. Session IDs remain
 unchanged. Restore uses the persisted names. Explicit branches, promptless
 sessions, Scratch sessions, and existing sessions keep their naming behavior.
 The desktop hides provisional branches until the worktree step completes and

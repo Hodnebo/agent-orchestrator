@@ -71,6 +71,15 @@ func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceP
 	return namer.NameTaskWorkspace(ctx, info, branch, name)
 }
 
+// RepairTaskWorkspace repairs registrations after interrupted task naming.
+func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return info, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.RepairTaskWorkspace(ctx, info)
+}
+
 // Create delegates session workspace creation to the project-appropriate
 // workspace adapter.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {

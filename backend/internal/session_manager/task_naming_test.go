@@ -3,7 +3,9 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +210,120 @@ func BenchmarkTaskNameParsing(b *testing.B) {
 	fallback := generatedTaskName{Slug: "fix-login-redirect"}
 	for b.Loop() {
 		parseTaskName(`{"title":"Preserve destination after login","slug":"fix-login-redirect"}`, fallback)
+	}
+}
+
+// A failed rename can still have moved the checkout. Retry must finish the
+// durable stages, not treat the recovery path as a setup-complete marker.
+type namingRepairTestWorkspace struct {
+	ports.Workspace
+	namer   ports.WorkspaceTaskNamer
+	repairs int
+}
+
+func (w *namingRepairTestWorkspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
+	info, err := w.namer.NameTaskWorkspace(ctx, info, branch, name)
+	if err == nil {
+		err = errors.New("interrupted after moving checkout")
+	}
+	return info, err
+}
+func (w *namingRepairTestWorkspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	w.repairs++
+	return w.namer.RepairTaskWorkspace(ctx, info)
+}
+func TestTaskNamingRetryFinishesWorkspaceSetup(t *testing.T) {
+	for _, worktreeDone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "repair_and_setup", true: "setup_only"}[worktreeDone], func(t *testing.T) {
+			m, st, _, _ := newGitTaskPreparationManager(t)
+			m.dataDir = t.TempDir()
+			launcher := &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
+			m.chat = launcher
+			ws := &namingRepairTestWorkspace{Workspace: m.workspace, namer: m.workspace.(ports.WorkspaceTaskNamer)}
+			m.workspace = ws
+			project := st.projects["mer"]
+			command := "printf x >> setup-runs"
+			if runtime.GOOS == "windows" {
+				command = "echo x>> setup-runs"
+			}
+			project.Config.PostCreate = []string{command}
+			st.projects["mer"] = project
+			var work []func()
+			m.runBackground = func(fn func()) { work = append(work, fn) }
+			cfg := asyncChatSpawnConfig("Fix login")
+			cfg.NameFromPrompt = true
+			rec, _, _, err := m.Spawn(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.runBackground = func(fn func()) { fn() }
+			work[0]()
+			failed := st.sessions[rec.ID]
+			if failed.ProvisionState != domain.SessionProvisionFailed || len(launcher.started) != 0 {
+				t.Fatalf("first start = %+v", failed)
+			}
+			path, branch := failed.Metadata.WorkspacePath, failed.Metadata.Branch
+			if path == "" || branch != "ao/fix-login/root" {
+				t.Fatalf("missing recovery names: %+v", failed)
+			}
+			if _, err := os.Stat(filepath.Join(path, "setup-runs")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("setup ran before retry: %v", err)
+			}
+			if worktreeDone {
+				for i := range failed.ProvisionSteps {
+					if failed.ProvisionSteps[i].ID == domain.SessionProvisionStepWorktree {
+						failed.ProvisionSteps[i].Status = domain.SessionProvisionStepDone
+					}
+					if failed.ProvisionSteps[i].ID == domain.SessionProvisionStepSetup {
+						failed.ProvisionSteps[i].Status = domain.SessionProvisionStepRunning
+					}
+				}
+				st.sessions[rec.ID] = failed
+			}
+			if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
+				t.Fatal(err)
+			}
+			actual := st.sessions[rec.ID]
+			if actual.ProvisionState != domain.SessionProvisionReady || actual.Metadata.WorkspacePath != path || actual.Metadata.Branch != branch || len(launcher.started) != 1 {
+				t.Fatalf("retry = %+v", actual)
+			}
+			wantRepairs := 1
+			if worktreeDone {
+				wantRepairs = 0
+			}
+			if ws.repairs != wantRepairs {
+				t.Fatalf("repairs=%d, want%d", ws.repairs, wantRepairs)
+			}
+			if body, err := os.ReadFile(filepath.Join(path, "setup-runs")); err != nil || strings.TrimSpace(string(body)) != "x" {
+				t.Fatalf("setup after retry=%q,%v", body, err)
+			}
+		})
+	}
+}
+
+type namingProgressFailureStore struct{ *fakeStore }
+
+func (s namingProgressFailureStore) SetSessionProvisionSteps(context.Context, domain.SessionID, []domain.SessionProvisionStep, time.Time) error {
+	return errors.New("cannot persist naming checkpoint")
+}
+func TestTaskNamingRequiresDurableRecoveryCheckpoint(t *testing.T) {
+	m, st, _, _ := newGitTaskPreparationManager(t)
+	m.dataDir = t.TempDir()
+	m.store = namingProgressFailureStore{st}
+	launcher := &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
+	m.chat = launcher
+	var work []func()
+	m.runBackground = func(fn func()) { work = append(work, fn) }
+	cfg := asyncChatSpawnConfig("Fix login")
+	cfg.NameFromPrompt = true
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.runBackground = func(fn func()) { fn() }
+	work[0]()
+	actual := st.sessions[rec.ID]
+	if actual.ProvisionState != domain.SessionProvisionFailed || actual.Metadata.WorkspacePath != "" || len(launcher.started) != 0 {
+		t.Fatalf("uncheckpointed naming published workspace: %+v", actual)
 	}
 }

@@ -32,6 +32,10 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 	if fallback.Slug == "" {
 		fallback.Slug = taskSlug(string(rec.ID))
 	}
+	runner, ok := m.chat.(chatBackgroundTaskRunner)
+	if !ok {
+		return func() generatedTaskName { return fallback }, func() {}
+	}
 	namingCtx, cancel := context.WithTimeout(ctx, taskNamingTimeout)
 	done := make(chan generatedTaskName, 1)
 	slots := m.taskNamingSlots
@@ -47,7 +51,7 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 		m.runInBackground(func() {
 			defer func() { <-slots }()
 			started := time.Now()
-			raw, err := m.runBackgroundTask(namingCtx, rec, taskNamingSystemPrompt, cfg.Prompt)
+			raw, err := m.runRecordBackgroundTask(namingCtx, rec, taskNamingSystemPrompt, cfg.Prompt, runner.RunBackgroundTask)
 			name := fallback
 			if err == nil {
 				name = parseTaskName(raw, fallback)
@@ -136,19 +140,24 @@ func (m *Manager) nameTaskWorkspace(ctx context.Context, rec domain.SessionRecor
 		info = *project
 	}
 	info, namingErr := namer.NameTaskWorkspace(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), name.Slug, "root"), name.Slug)
-	// Persist the actual result even on a partial Git failure so retries and
-	// cleanup never fall back to a directory the worktree has moved away from.
-	persistCtx, cancel := spawnRollbackContext(ctx)
-	defer cancel()
-	_, persistErr := m.store.SetSessionProvisionedWorkspace(persistCtx, rec.ID, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
-	for _, wt := range info.Worktrees {
-		persistErr = errors.Join(persistErr, m.store.UpsertSessionWorktree(persistCtx, domain.SessionWorktreeRecord{
-			SessionID: rec.ID, RepoName: wt.RepoName, Branch: wt.Branch, BaseSHA: wt.BaseSHA,
-			BaseRef: wt.BaseRef, CreationSHA: wt.CreationSHA, WorktreePath: wt.Path, State: "active",
-		}))
-	}
+	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info)
 	if project != nil {
 		project = &info
 	}
 	return info.Root, project, errors.Join(namingErr, persistErr)
+}
+
+// Persist the actual result even after a partial Git failure. The provision
+// checklist separately records whether registration repair and setup finished.
+func (m *Manager) persistTaskWorkspace(ctx context.Context, id domain.SessionID, info ports.WorkspaceProjectInfo) error {
+	persistCtx, cancel := spawnRollbackContext(ctx)
+	defer cancel()
+	_, persistErr := m.store.SetSessionProvisionedWorkspace(persistCtx, id, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+	for _, wt := range info.Worktrees {
+		persistErr = errors.Join(persistErr, m.store.UpsertSessionWorktree(persistCtx, domain.SessionWorktreeRecord{
+			SessionID: id, RepoName: wt.RepoName, Branch: wt.Branch, BaseSHA: wt.BaseSHA,
+			BaseRef: wt.BaseRef, CreationSHA: wt.CreationSHA, WorktreePath: wt.Path, State: "active",
+		}))
+	}
+	return persistErr
 }

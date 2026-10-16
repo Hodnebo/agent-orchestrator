@@ -109,11 +109,13 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 	// Roll back only before a successful move. After the move, returned paths
 	// must describe reality even if a child registration needs repair.
 	renamed := 0
+	rollbackFailed := false
 	rollback := func(cause error) (ports.WorkspaceProjectInfo, bool, error) {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		for i := renamed - 1; i >= 0; i-- {
 			if _, err := w.run(cleanupCtx, w.binary, "-C", repos[i].Path, "branch", "-m", repos[i].Branch); err != nil {
+				rollbackFailed = true
 				cause = errors.Join(cause, err)
 				if len(info.Worktrees) > i {
 					info.Worktrees[i].Branch = branch
@@ -128,17 +130,21 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 	for _, repo := range repos {
 		renamed++ // include a command that succeeds immediately before cancellation
 		if _, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "-m", branch); err != nil {
-			return rollback(err)
+			result, _, rollbackErr := rollback(err)
+			// Another project can share this repository but have a different gate.
+			// If it claimed the branch after our preflight, retry a suffixed name.
+			if !rollbackFailed && ctx.Err() == nil {
+				if _, probeErr := w.run(ctx, w.binary, "-C", repo.RepoPath, "show-ref", "--verify", "refs/heads/"+branch); probeErr == nil {
+					return result, true, nil
+				}
+			}
+			return result, false, rollbackErr
 		}
 	}
 	if err := moveTaskDirectory(oldPath, path); err != nil {
 		return rollback(err)
 	}
 	info.Root.Path, info.Root.Branch = path, branch
-	// Once moved, finish registration repair even if the request was cancelled.
-	repairCtx, cancelRepair := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancelRepair()
-	_, repairErr := w.run(repairCtx, w.binary, "-C", repos[0].RepoPath, "worktree", "repair", path)
 	for i := range info.Worktrees {
 		wt := &info.Worktrees[i]
 		relative, err := filepath.Rel(oldPath, wt.Path)
@@ -146,10 +152,60 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 			return info, false, err
 		}
 		wt.Path, wt.Branch = filepath.Join(path, relative), branch
-		if i > 0 {
-			_, err := w.run(repairCtx, w.binary, "-C", wt.RepoPath, "worktree", "repair", wt.Path)
-			repairErr = errors.Join(repairErr, err)
+	}
+	// Once moved, finish registration repair even if the request was cancelled.
+	repairCtx, cancelRepair := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancelRepair()
+	info, repairErr := w.RepairTaskWorkspace(repairCtx, info)
+	return info, false, repairErr
+}
+
+// RepairTaskWorkspace retains the existing names and never recreates a checkout.
+func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	root, err := w.validateManagedPath(info.Root.Path)
+	if err != nil {
+		return info, err
+	}
+	if err := validatePathComponent("project id", string(info.Root.ProjectID)); err != nil {
+		return info, err
+	}
+	if filepath.Dir(root) != filepath.Join(w.managedRoot, string(info.Root.ProjectID)) {
+		return info, errors.New("gitworktree: task path is outside its project")
+	}
+	repos := append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
+	if len(repos) == 0 {
+		repo := info.Root.RepoPath
+		if repo == "" {
+			repo, err = w.repoPath(info.Root.ProjectID)
+			if err != nil {
+				return info, err
+			}
+		}
+		repos = []ports.WorkspaceRepoInfo{{RepoPath: repo, Path: root}}
+	}
+	for _, repo := range repos {
+		inside, err := pathWithin(root, repo.Path)
+		if err != nil || !inside {
+			return info, fmt.Errorf("gitworktree: task repository path is outside its workspace: %s", repo.Path)
 		}
 	}
-	return info, false, repairErr
+	var repairErr error
+	for i, repo := range repos {
+		if _, err := w.run(ctx, w.binary, "-C", repo.RepoPath, "worktree", "repair", repo.Path); err != nil {
+			repairErr = errors.Join(repairErr, err)
+			continue
+		}
+		out, err := w.run(ctx, w.binary, "-C", repo.Path, "branch", "--show-current")
+		repairErr = errors.Join(repairErr, err)
+		if err == nil {
+			branch := strings.TrimSpace(string(out))
+			if i == 0 {
+				info.Root.Branch = branch
+			}
+			if len(info.Worktrees) > i {
+				info.Worktrees[i].Branch = branch
+			}
+		}
+	}
+	return info, repairErr
 }

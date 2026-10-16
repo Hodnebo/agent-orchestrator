@@ -525,6 +525,7 @@ var (
 // Even on error, the returned info describes the current paths and branches.
 type WorkspaceTaskNamer interface {
 	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
+	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.

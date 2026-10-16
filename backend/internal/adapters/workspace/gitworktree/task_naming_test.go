@@ -186,3 +186,82 @@ func BenchmarkNameTaskWorkspace(b *testing.B) {
 		})
 	}
 }
+
+func TestNameTaskWorkspaceRetriesConcurrentBranchConflict(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	root, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "proj-1", Branch: "ao/proj-1/root"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualRun := ws.run
+	injected := false
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		if !injected && strings.Contains(strings.Join(args, " "), "branch -m ao/fix-login/root") {
+			injected = true
+			if _, err := actualRun(ctx, binary, "-C", repo, "branch", "ao/fix-login/root"); err != nil {
+				return nil, err
+			}
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	info, err := ws.NameTaskWorkspace(ctx, ports.WorkspaceProjectInfo{Root: root}, "ao/fix-login/root", "fix-login")
+	if err != nil || info.Root.Branch != "ao/fix-login-2/root" || filepath.Base(info.Root.Path) != "fix-login-2" {
+		t.Fatalf("concurrent conflict = %+v,%v", info, err)
+	}
+	if got := gitOutput(t, git, repo, "rev-parse", "ao/fix-login/root"); got != gitOutput(t, git, repo, "rev-parse", "main") {
+		t.Fatal("competing branch changed")
+	}
+}
+
+func TestNameTaskWorkspaceRepairCanResume(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	child := setupOriginClone(t, git, filepath.Join(tmp, "child"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	info, err := ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindWorker, Branch: "ao/proj-1", RootRepoPath: repo, BaseBranch: "main", Repos: []ports.WorkspaceProjectRepoConfig{{Name: "child", RepoPath: child, RelativePath: "packages/child", BaseBranch: "main"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualRun := ws.run
+	injected := false
+	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
+		if !injected && strings.Contains(strings.Join(args, " "), "worktree repair") {
+			injected = true
+			return nil, errors.New("repair interrupted")
+		}
+		return actualRun(ctx, binary, args...)
+	}
+	info, err = ws.NameTaskWorkspace(ctx, info, "ao/fix-login/root", "fix-login")
+	if err == nil || filepath.Base(info.Root.Path) != "fix-login" {
+		t.Fatalf("partial move=%+v,%v", info, err)
+	}
+	for _, wt := range info.Worktrees {
+		if !strings.HasPrefix(wt.Path, info.Root.Path) {
+			t.Fatalf("stale child path: %+v", wt)
+		}
+	}
+	info, err = ws.RepairTaskWorkspace(ctx, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wt := range info.Worktrees {
+		if !strings.Contains(gitOutput(t, git, wt.RepoPath, "worktree", "list", "--porcelain"), wt.Path) {
+			t.Fatalf("registration not repaired: %+v", wt)
+		}
+		if got := gitOutput(t, git, wt.Path, "branch", "--show-current"); got != "ao/fix-login/root" {
+			t.Fatalf("branch=%q", got)
+		}
+	}
+}
