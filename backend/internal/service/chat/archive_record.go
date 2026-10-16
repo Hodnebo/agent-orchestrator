@@ -6,7 +6,8 @@ import (
 )
 
 // dropEmptyArchiveFields removes the entries of a provider-event archive record
-// that hold nothing: nil, a zero string or pointer, an empty slice, a JSON null.
+// that hold nothing: nil, an empty string, slice or map, a nil pointer, a JSON null.
+// A false, a 0 or a zero struct is a value and stays.
 // The record has 26 keys and a streamed delta sets about five of them, so the rest
 // used to be stored as null or "" on every row.
 //
@@ -26,10 +27,22 @@ func dropEmptyArchiveFields(record map[string]any) {
 	}
 }
 
+// emptyArchiveField is true for nil, an empty string, slice or map, a nil pointer or
+// interface, and a JSON null. It deliberately does not use reflect's IsZero: a bool,
+// a number or a struct holding its zero value is a real value, not an empty one.
 func emptyArchiveField(value any) bool {
 	if raw, ok := value.(json.RawMessage); ok {
 		return len(raw) == 0 || string(raw) == "null"
 	}
 	v := reflect.ValueOf(value)
-	return !v.IsValid() || v.IsZero() || (v.Kind() == reflect.Slice && v.Len() == 0)
+	switch v.Kind() {
+	case reflect.Invalid:
+		return true
+	case reflect.String, reflect.Slice, reflect.Map:
+		return v.Len() == 0
+	case reflect.Pointer, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
