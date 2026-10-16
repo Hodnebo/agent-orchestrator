@@ -13,8 +13,8 @@ import (
 )
 
 // conversation_provider_events_branch_insert gives an archive row the conversation's
-// active branch with an UPDATE after the INSERT, but only when the row arrives with
-// branch_id = ''. The archive INSERT sets branch_id itself, so the row is written
+// active branch with an UPDATE after the INSERT, but only when the row arrives with an
+// empty branch_id. The archive INSERT sets branch_id itself, so the row is written
 // once. These tests watch for that UPDATE with an observer trigger.
 
 const observeBranchRewrites = `
@@ -147,8 +147,8 @@ func TestArchiveInsertFollowsTheActiveBranchWithoutARewrite(t *testing.T) {
 	assertTriggerAgrees(t, raw, session.ID, conversation.ID, "on-child")
 }
 
-// A batched write archives several events in one transaction, each through the
-// nested path that reuses the outer transaction.
+// An event archived from inside another event's projection takes the nested path,
+// which reuses the outer transaction. A batched write archives its events that way.
 func TestNestedArchiveInsertsSetTheBranchWithoutARewrite(t *testing.T) {
 	ctx := context.Background()
 	s, raw, session, conversation := archiveBranchFixture(t)
@@ -208,9 +208,9 @@ func TestArchiveInsertSeesTheBranchActivatedEarlierInTheSameTransaction(t *testi
 	assertTriggerAgrees(t, raw, session.ID, conversation.ID, "replayed")
 }
 
-// The archive row used to fail through the trigger when its conversation did not
-// exist. Setting branch_id in the INSERT must not turn that error into a silently
-// ignored row: INSERT OR IGNORE swallows a NOT NULL violation.
+// An archive row for a conversation that does not exist fails on its foreign key.
+// Setting branch_id in the INSERT must not turn that error into a silently ignored
+// row: INSERT OR IGNORE swallows a NOT NULL violation.
 func TestArchiveInsertForAMissingConversationStillFails(t *testing.T) {
 	ctx := context.Background()
 	s, raw, session, _ := archiveBranchFixture(t)

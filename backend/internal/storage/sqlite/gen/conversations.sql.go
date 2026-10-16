@@ -1081,8 +1081,8 @@ type InsertConversationProviderEventParams struct {
 // conversation_provider_events_branch_insert only acts on a row that arrives with
 // an empty branch_id, and would otherwise UPDATE every row it has just written.
 // The COALESCE keeps a conversation that does not exist failing on its foreign key,
-// as it did through the trigger; a NULL here would be a NOT NULL violation, which
-// INSERT OR IGNORE skips without an error.
+// as before; a NULL here would be a NOT NULL violation, which INSERT OR IGNORE skips
+// without an error.
 func (q *Queries) InsertConversationProviderEvent(ctx context.Context, arg InsertConversationProviderEventParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertConversationProviderEvent,
 		arg.ConversationID,

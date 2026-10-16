@@ -17,9 +17,8 @@ import (
 )
 
 // legacyArchiveRow is the archive record projectEvent wrote before empty fields were
-// dropped: 26 keys on every row, "" or null for the ones an event leaves empty. It
-// is frozen here so rows written by an older daemon stay a fixture of what the
-// archive must still be read as.
+// dropped: all 26 keys on every row, "" or null for the ones an event leaves empty.
+// Archives already on disk hold rows of this shape, so it is kept here as a fixture.
 func legacyArchiveRow(t *testing.T, event ports.ChatEvent) string {
 	t.Helper()
 	detail := json.RawMessage("null")
@@ -67,9 +66,9 @@ func legacyArchiveRow(t *testing.T, event ports.ChatEvent) string {
 	return string(encoded)
 }
 
-// archivedEvent decodes an archive row into typed values, so a row compares by what
+// decodedArchiveRow decodes an archive row into typed values, so a row compares by what
 // it says rather than by which empty spelling it used.
-type archivedEvent struct {
+type decodedArchiveRow struct {
 	Kind                   ports.ChatEventKind
 	ProviderEventID        string
 	ProviderTurnID         string
@@ -102,9 +101,9 @@ type archivedEvent struct {
 	Error *string
 }
 
-func decodeArchived(t *testing.T, row string) archivedEvent {
+func decodeArchived(t *testing.T, row string) decodedArchiveRow {
 	t.Helper()
-	var decoded archivedEvent
+	var decoded decodedArchiveRow
 	if err := json.Unmarshal([]byte(row), &decoded); err != nil {
 		t.Fatalf("decode archive row %s: %v", row, err)
 	}
