@@ -62,6 +62,7 @@ var workerCapabilities = []string{
 	"terminal.agent",
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
+	worker.CapabilityMultiRepo,
 }
 
 func main() {
@@ -190,6 +191,11 @@ func run(logger *slog.Logger) error {
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
 	}
+	// The session works in the user's own workspace (a reused template
+	// checkout or a configured working directory): an existing checkout of an
+	// additional repository there is the user's and is adopted, not rewritten.
+	userWorkspace := reuse.Reused || (workingDirectory != "" && hasRepository)
+	bootstrap.Launch.AgentStartsIn = pinAgentStartsIn(logger, dataDir, bootstrap.Launch, workspace)
 	scriptEnvironment := worker.SessionScriptEnvironment{
 		SessionID:     bootstrap.SessionID,
 		SessionKind:   bootstrap.Launch.Kind,
@@ -279,6 +285,7 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
 		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
+		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace)
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -468,7 +475,7 @@ func run(logger *slog.Logger) error {
 		for {
 			err := workingDirectoryErr
 			if err == nil {
-				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse, adoptStandaloneFolder)
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse, adoptStandaloneFolder, userWorkspace)
 			}
 			if err == nil {
 				break
@@ -620,6 +627,7 @@ func prepareWorkspace(
 	workspace, dataDir, publicURL string,
 	reuse worker.ReuseDecision,
 	adoptExistingFolder bool,
+	userWorkspace bool,
 ) error {
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 		if err := worker.PrepareStandaloneWorkspace(ctx, worker.ExecGitRunner{}, workspace, adoptExistingFolder); err != nil {
@@ -663,7 +671,7 @@ func prepareWorkspace(
 		// repo. Extra repos reuse the session's checkout-grant token, so they work
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
-		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch, workspace, dataDir)
+		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, userWorkspace)
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
@@ -733,7 +741,7 @@ func prepareReusedWorkspace(
 			logger.Warn("checkout reuse: could not fast-forward the session branch to the latest base", "error", err)
 		}
 	}
-	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch, workspace, dataDir)
+	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, true)
 	return nil
 }
 
@@ -743,21 +751,59 @@ func prepareReusedWorkspace(
 // failure is logged and skipped so the session always starts on its main
 // repository. The launcher (workerexec) computes the same paths via
 // worker.SessionRepoCheckouts and lists them in the agent's system prompt.
-func cloneExtraRepos(ctx context.Context, logger *slog.Logger, token string, launch worker.LaunchContext, workspace, dataDir string) {
+// sessionRepositories lists the session's GitHub repositories as lower-case
+// owner/name, comma-separated, for the agent CLI (worker.SessionRepositoriesEnv).
+func sessionRepositories(launch worker.LaunchContext, workspace string) string {
+	var names []string
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos) {
+		if checkout.FullName != "" {
+			names = append(names, checkout.FullName)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
+func cloneExtraRepos(
+	ctx context.Context,
+	logger *slog.Logger,
+	token string,
+	bootstrap worker.BootstrapResponse,
+	workspace, dataDir string,
+	userWorkspace bool,
+) {
+	launch := bootstrap.Launch
 	if len(launch.ExtraRepos) == 0 {
 		return
 	}
+	for _, repo := range worker.SkippedExtraRepos(workspace, launch.RepositoryURL, launch.ExtraRepos) {
+		logger.Warn("multi-repo: additional repository skipped; its folder name is reserved or already used by another checkout",
+			"repo", repo.URL, "folder", worker.ExtraRepoDirName(repo.URL))
+	}
+	adoptedAny := false
 	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
-		// The clone uses the main checkout's askpass mechanism: the token stays
-		// in the command's environment and never enters the URL, argv, or the
-		// repo's .git/config, and the repo is wired to the session credential
-		// helper for the agent's own git operations.
+		// A clone uses the main checkout's askpass mechanism: the token stays in
+		// the command's environment and never enters the URL, argv, or the
+		// repo's .git/config. In the user's own workspace an existing checkout
+		// is adopted without writing AO's git configuration into it.
 		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
-		if err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, launch.Branch, token, dataDir); err != nil {
+		adopted, err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, worker.ExtraRepoOptions{
+			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
+			Token: token, DataDir: dataDir, Adopt: userWorkspace,
+		})
+		if err != nil {
 			logger.Warn("multi-repo: additional repository is unavailable (non-fatal)", "repo", checkout.URL, "error", err)
 			continue
 		}
-		logger.Info("multi-repo: additional repository ready", "repo", checkout.URL, "path", checkout.Path)
+		adoptedAny = adoptedAny || adopted
+		logger.Info("multi-repo: additional repository ready", "repo", checkout.URL, "path", checkout.Path, "adopted", adopted)
+	}
+	if adoptedAny {
+		// An adopted checkout carries none of AO's git configuration; scope the
+		// session credential helper and identity to the worker's process tree,
+		// as a reused main checkout does.
+		for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+			_ = os.Setenv(key, value)
+		}
 	}
 }
 
@@ -795,18 +841,16 @@ func startInteractiveAgent(
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
 	runtimeEnv := map[string]string{
-		"AO_CLOUD_WORKER_API_URL":    client.baseURL,
-		"AO_CLOUD_WORKER_TOKEN_FILE": client.tokenFile,
-		"AO_SESSION_ID":              bootstrap.SessionID,
-		"AO_PROJECT_ID":              bootstrap.Launch.ProjectID,
-		"AO_SESSION_KIND":            bootstrap.Launch.Kind,
-		"AO_CHECKPOINT_SOCKET":       checkpointSocketPath,
-		"AO_PULL_REQUEST_SOCKET":     pullRequestSocketPath,
-		"AO_PULL_REQUEST_HELP": "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-			"to push the current branch and open a pull request against the repository's default branch.",
-		"AO_REVIEW_SOCKET": reviewSocketPath,
+		"AO_CLOUD_WORKER_API_URL":     client.baseURL,
+		"AO_CLOUD_WORKER_TOKEN_FILE":  client.tokenFile,
+		"AO_SESSION_ID":               bootstrap.SessionID,
+		"AO_PROJECT_ID":               bootstrap.Launch.ProjectID,
+		"AO_SESSION_KIND":             bootstrap.Launch.Kind,
+		"AO_CHECKPOINT_SOCKET":        checkpointSocketPath,
+		"AO_PULL_REQUEST_SOCKET":      pullRequestSocketPath,
+		"AO_PULL_REQUEST_HELP":        pullRequestHelp(bootstrap.Launch),
+		worker.SessionRepositoriesEnv: sessionRepositories(bootstrap.Launch, workspace),
+		"AO_REVIEW_SOCKET":            reviewSocketPath,
 		"AO_REVIEW_HELP": "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
 			`-d '{"reviewRunId":"<review run id from the prompt>","verdict":"approved|changes_requested","body":"<your findings>"}' ` +

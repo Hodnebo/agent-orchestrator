@@ -551,53 +551,123 @@ func configureExtraRepoGit(ctx context.Context, runner GitRunner, dest, dataDir 
 	return nil
 }
 
+// ExtraRepoOptions configures PrepareExtraRepo.
+type ExtraRepoOptions struct {
+	SessionID string
+	// SessionBranch is the main repository's session branch, checked out in
+	// every additional repository too.
+	SessionBranch string
+	Token         string
+	DataDir       string
+	// Adopt means the session works in the user's own workspace (a reused
+	// template checkout or a configured working directory), so an existing
+	// checkout of the repository belongs to the user: it is adopted like the
+	// main reused checkout, without writing AO's git configuration into it
+	// (the worker's process-level ReusedCheckoutGitEnvironment supplies the
+	// session credential helper and identity) and with any uncommitted
+	// changes stashed before it switches to the session branch.
+	Adopt bool
+}
+
 // PrepareExtraRepo makes one of the project's additional repositories ready
-// beside the main checkout at dest: it clones the repository, or, when a
-// checkout of the same repository is already there (a worker restart or a
-// stopped and started workspace), fetches it instead. It then checks out the
-// session branch, which has the main repository's branch name, unless that
-// branch already exists (the agent's commits on it are kept), and records the
-// checkout's review base. A folder holding anything else is left untouched
-// and reported.
+// beside the main checkout at dest. It clones the repository into a missing
+// or empty folder. A checkout of the same repository already there is either
+// AO's own (a worker restart or a stopped and started workspace), which is
+// fetched, or, with opts.Adopt, the user's, which is fetched and adopted
+// without touching its git configuration. It then puts the checkout on the
+// session branch: an existing local branch is kept (the agent's commits on it
+// survive), a branch already pushed to origin is checked out from there (a
+// restored sandbox), and otherwise the branch starts from the repository's
+// branch. A folder holding anything else is left untouched and reported.
+// adopted reports that an existing user checkout was adopted, so the caller
+// must apply ReusedCheckoutGitEnvironment to the worker's process.
 func PrepareExtraRepo(
 	ctx context.Context,
 	runner GitRunner,
 	dest string,
 	repo RepoRef,
-	sessionBranch, token, dataDir string,
-) error {
+	opts ExtraRepoOptions,
+) (adopted bool, err error) {
 	if runner == nil {
-		return errors.New("git runner is required")
+		return false, errors.New("git runner is required")
 	}
 	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return fmt.Errorf("create the folder for additional repositories: %w", err)
+		return false, fmt.Errorf("create the folder for additional repositories: %w", err)
 	}
 	existing, err := extraRepoCheckoutState(ctx, runner, dest, repo.URL)
 	if err != nil {
-		return err
+		return false, err
+	}
+	branch := strings.TrimSpace(opts.SessionBranch)
+	if existing && opts.Adopt {
+		// Fetch from the repository URL rather than the named remote (the user
+		// may have cloned over SSH) and clear any configured helper for this
+		// one command, so only the grant is used and nothing is persisted.
+		if err := withGitCredential(opts.Token, func(env map[string]string) error {
+			_, fetchErr := runner.Run(ctx, dest, env, "-c", "credential.helper=",
+				"fetch", "--prune", "--no-tags", "--", repo.URL, "+refs/heads/*:refs/remotes/origin/*")
+			return fetchErr
+		}); err != nil {
+			return false, fmt.Errorf("fetch the existing checkout: %w", err)
+		}
+		base := extraRepoBaseBranch(ctx, runner, dest, repo.Branch)
+		if branch != "" {
+			from := base
+			if remoteBranchExists(ctx, runner, dest, branch) {
+				from = branch
+			}
+			if _, err := adoptExistingCheckout(ctx, runner, dest, opts.SessionID, branch, from); err != nil {
+				return false, err
+			}
+		}
+		return true, EnsureWorkspaceReviewBase(ctx, runner, dest, base)
 	}
 	if existing {
-		if err := withGitCredential(token, func(env map[string]string) error {
+		if err := withGitCredential(opts.Token, func(env map[string]string) error {
 			_, fetchErr := runner.Run(ctx, dest, env, "fetch", "--no-tags", "--quiet", "origin")
 			return fetchErr
 		}); err != nil {
-			return fmt.Errorf("fetch the existing checkout: %w", err)
+			return false, fmt.Errorf("fetch the existing checkout: %w", err)
 		}
-		if err := configureExtraRepoGit(ctx, runner, dest, dataDir); err != nil {
-			return err
+		if err := configureExtraRepoGit(ctx, runner, dest, opts.DataDir); err != nil {
+			return false, err
 		}
-	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, token, dataDir); err != nil {
-		return err
+	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, opts.Token, opts.DataDir); err != nil {
+		return false, err
 	}
-	if branch := strings.TrimSpace(sessionBranch); branch != "" {
+	if branch != "" {
 		if _, err := runner.Run(ctx, dest, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
-			if _, err := runner.Run(ctx, dest, nil, "checkout", "-B", branch); err != nil {
-				return fmt.Errorf("check out the session branch: %w", err)
+			args := []string{"checkout", "-B", branch}
+			if remoteBranchExists(ctx, runner, dest, branch) {
+				args = append(args, "--no-track", "refs/remotes/origin/"+branch)
+			}
+			if _, err := runner.Run(ctx, dest, nil, args...); err != nil {
+				return false, fmt.Errorf("check out the session branch: %w", err)
 			}
 		}
 	}
-	return EnsureWorkspaceReviewBase(ctx, runner, dest, repo.Branch)
+	return false, EnsureWorkspaceReviewBase(ctx, runner, dest, extraRepoBaseBranch(ctx, runner, dest, repo.Branch))
+}
+
+// remoteBranchExists reports whether origin has branch as a fetched
+// remote-tracking ref.
+func remoteBranchExists(ctx context.Context, runner GitRunner, dir, branch string) bool {
+	_, err := runner.Run(ctx, dir, nil, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
+	return err == nil
+}
+
+// extraRepoBaseBranch is the branch an additional repository's work is based
+// on: the project's configured branch for it, else origin's default branch.
+func extraRepoBaseBranch(ctx context.Context, runner GitRunner, dir, configured string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	output, err := runner.Run(ctx, dir, nil, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(output), "origin/")
 }
 
 // extraRepoCheckoutState reports whether dest already holds a checkout of

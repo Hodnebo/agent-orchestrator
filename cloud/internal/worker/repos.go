@@ -55,9 +55,19 @@ func SessionRepoCheckouts(workspace, mainURL string, extras []RepoRef) []RepoChe
 	if IsScratchRepositoryURL(mainURL) {
 		return checkouts
 	}
+	seen := map[string]bool{filepath.Clean(workspace): true}
 	for _, repo := range extras {
-		if strings.TrimSpace(repo.URL) == "" {
+		if strings.TrimSpace(repo.URL) == "" || !UsableExtraRepoDir(ExtraRepoDirName(repo.URL)) {
 			continue
+		}
+		// Two repositories, or an additional repository and a main checkout in a
+		// configured working directory, can map onto one folder. Only the first
+		// claims it, so a selector never resolves a repository to another's
+		// checkout.
+		if path := filepath.Clean(ExtraRepoPath(workspace, repo.URL)); seen[path] {
+			continue
+		} else {
+			seen[path] = true
 		}
 		checkout := RepoCheckout{
 			Name: ExtraRepoDirName(repo.URL), Path: ExtraRepoPath(workspace, repo.URL),
@@ -69,6 +79,38 @@ func SessionRepoCheckouts(workspace, mainURL string, extras []RepoRef) []RepoChe
 		checkouts = append(checkouts, checkout)
 	}
 	return checkouts
+}
+
+// SessionRepositoriesEnv names the agent environment variable that lists the
+// session's GitHub repositories as lower-case owner/name, comma-separated, so
+// `ao claim-pr <number>` only turns a number into a URL on one of them.
+const SessionRepositoriesEnv = "AO_SESSION_REPOSITORIES"
+
+// UsableExtraRepoDir reports whether an additional repository may be checked
+// out into the folder name beside the main checkout. A name starting with a
+// dot is refused: with a durable root of $HOME the checkout would land in a
+// dotfile folder such as ~/.aws or ~/.ssh, and .ao is AO's own state.
+func UsableExtraRepoDir(name string) bool {
+	return name != "" && !strings.HasPrefix(name, ".")
+}
+
+// SkippedExtraRepos lists the extras SessionRepoCheckouts leaves out (a dot
+// folder, or a folder another checkout already uses), for the worker's log.
+func SkippedExtraRepos(workspace, mainURL string, extras []RepoRef) []RepoRef {
+	kept := map[string]bool{}
+	for _, checkout := range SessionRepoCheckouts(workspace, mainURL, extras)[1:] {
+		kept[checkout.URL] = true
+	}
+	var skipped []RepoRef
+	if IsScratchRepositoryURL(mainURL) {
+		return nil
+	}
+	for _, repo := range extras {
+		if strings.TrimSpace(repo.URL) != "" && !kept[repo.URL] {
+			skipped = append(skipped, repo)
+		}
+	}
+	return skipped
 }
 
 // ErrUnknownRepository means a repository selector names none of the session's

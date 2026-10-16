@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 func TestPullRequestReferenceUsesTheWorkingDirectoryRepository(t *testing.T) {
@@ -22,6 +24,17 @@ func TestPullRequestReferenceUsesTheWorkingDirectoryRepository(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(previous) })
 	ctx := context.Background()
+	// A worker that does not list the session's repositories, or a checkout
+	// that is not one of them (a fork), sends the number unchanged.
+	t.Setenv(worker.SessionRepositoriesEnv, "")
+	if got := pullRequestReference(ctx, "12"); got != "12" {
+		t.Fatalf("without the session's repositories the number became %q", got)
+	}
+	t.Setenv(worker.SessionRepositoriesEnv, "acme/alice")
+	if got := pullRequestReference(ctx, "12"); got != "12" {
+		t.Fatalf("a checkout outside the session's repositories turned the number into %q", got)
+	}
+	t.Setenv(worker.SessionRepositoriesEnv, "acme/alice,acme/voice-calling-ai")
 	if got := pullRequestReference(ctx, "12"); got != "https://github.com/acme/voice-calling-ai/pull/12" {
 		t.Fatalf("number resolved to %q", got)
 	}
