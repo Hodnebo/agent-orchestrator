@@ -231,7 +231,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "The folder this project's sessions start in, in your own Coder workspace, for example ~/work/scratch. Leave empty to use the default folder." })
 						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where this project's sessions check out the main repository in your own Coder workspace, for example ~/work/{repo}; the other repositories go beside it. Leave empty to use the folder set for your Coder connection." })}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
-					placeholder={standalone ? "~/work/scratch" : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
+					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone", { defaultValue: "~/work/scratch" }) : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}
 					onChange={(event) => { setWorkingDirectory(event.target.value); edited(); }} />
 			</Field>
