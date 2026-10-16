@@ -229,30 +229,8 @@ func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarne
 		return Snapshot{}, fmt.Errorf("%w: disabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxDisabledModels)
 	}
 	value.DisabledModels = disabled
-	value.DefaultModel, value.DefaultEffort = strings.TrimSpace(value.DefaultModel), strings.TrimSpace(value.DefaultEffort)
-	if invalidID(value.DefaultModel, 256) || invalidID(value.DefaultEffort, 64) {
-		return Snapshot{}, fmt.Errorf("%w: default model or effort is malformed", ErrInvalidHarnessDefault)
-	}
-	if value.DefaultModel == "" && value.DefaultEffort != "" {
-		return Snapshot{}, fmt.Errorf("%w: a default effort needs a default model", ErrInvalidHarnessDefault)
-	}
 	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)
-}
-
-func invalidID(id string, limit int) bool {
-	return len(id) > limit || strings.ContainsFunc(id, unicode.IsControl)
-}
-
-// HarnessModelDefault is the model and effort new sessions of the agent run
-// when nothing more specific names one. A read failure means no default.
-func (s *Service) HarnessModelDefault(ctx context.Context, agent domain.AgentHarness) (model, effort string) {
-	snapshot, err := s.store.GetAppSettings(ctx)
-	if err != nil {
-		return "", ""
-	}
-	value := snapshot.HarnessDefaults[string(agent)]
-	return value.DefaultModel, value.DefaultEffort
 }

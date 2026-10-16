@@ -349,10 +349,9 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).queryByText(/Inputs/)).toBeNull();
 		const unreported = within(list).getByText("gpt-5.3-mini").closest("li") as HTMLElement;
 		expect(within(unreported).queryByText(/Context|Inputs|Unknown/)).toBeNull();
-		// New sessions start on the agent's own default until one is picked.
-		expect(within(page).getByText("Default for new Codex sessions")).toBeInTheDocument();
-		expect(within(page).getByRole("button", { name: "Default model" })).toHaveTextContent("Agent default");
-		expect(within(page).queryByRole("button", { name: "Default effort" })).toBeNull();
+		expect(within(page).queryByText("Defaults for new sessions")).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Default model" })).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Save defaults" })).toBeNull();
 		expect(within(list).getByText("Context (tokens): 200,000")).toBeInTheDocument();
 		expect(within(page).queryByRole("button", { name: /Refresh/ })).toBeNull();
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", { params: { path: { agent: "codex" }, query: { projectId: undefined, revalidate: undefined, catalogOnly: true } } });
@@ -510,14 +509,6 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(patch).toHaveBeenCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: ["gpt-b"] } }));
 		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).not.toBeChecked();
 		expect(await within(page).findByText("2 of 3 shown in model pickers")).toBeInTheDocument();
-	});
-
-	it("saves the model new sessions start on", async () => {
-		const patch = mockModelSwitches([]);
-		const page = await openModels();
-		await userEvent.click(within(page).getByRole("button", { name: "Default model" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /GPT B/ }));
-		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: [], defaultModel: "gpt-b", defaultEffort: "" } }));
 	});
 
 	it("ignores saved models the catalog no longer lists, and a list that switches off every model", async () => {

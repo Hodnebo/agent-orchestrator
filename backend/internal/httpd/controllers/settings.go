@@ -163,22 +163,7 @@ func (c *SettingsController) setHarnessDefault(w http.ResponseWriter, r *http.Re
 		return
 	}
 	agent := domain.AgentHarness(chi.URLParam(r, "agent"))
-	value := domain.HarnessDefault{DisabledModels: *req.DisabledModels}
-	if req.DefaultModel == nil || req.DefaultEffort == nil {
-		current, err := c.Svc.Get(r.Context())
-		if err != nil {
-			envelope.WriteError(w, r, err)
-			return
-		}
-		value.DefaultModel, value.DefaultEffort = current.HarnessDefaults[string(agent)].DefaultModel, current.HarnessDefaults[string(agent)].DefaultEffort
-	}
-	if req.DefaultModel != nil {
-		value.DefaultModel = *req.DefaultModel
-	}
-	if req.DefaultEffort != nil {
-		value.DefaultEffort = *req.DefaultEffort
-	}
-	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, value)
+	snapshot, err := c.Svc.SetHarnessDefault(r.Context(), agent, domain.HarnessDefault{DisabledModels: *req.DisabledModels})
 	if errors.Is(err, settingssvc.ErrUnknownHarness) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "HARNESS_NOT_FOUND", err.Error(), nil)
 		return

@@ -13,7 +13,7 @@ import { clientForHost } from "../lib/host-clients";
 import type { SessionMode } from "../types/workspace";
 
 /** `disabledModels` lists the models pickers leave out; empty or unset means every catalog model. */
-export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels" | "defaultModel" | "defaultEffort">;
+export type HarnessDefault = Pick<components["schemas"]["HarnessDefault"], "disabledModels">;
 
 export const settingsQueryKey = ["settings"] as const;
 
@@ -123,10 +123,9 @@ export function useUpdateHarnessDefault(hostId?: string) {
 	const queryClient = useQueryClient();
 	const key = hostId ? ["settings", hostId] : settingsQueryKey;
 	const mutation = useMutation({
-		// Omitted default model and effort keep their saved values.
-		mutationFn: async ({ agentId, ...body }: { agentId: string; disabledModels: string[]; defaultModel?: string; defaultEffort?: string }) => {
+		mutationFn: async ({ agentId, disabledModels }: { agentId: string; disabledModels: string[] }) => {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).PATCH("/api/v1/settings/harness-defaults/{agent}", {
-				params: { path: { agent: agentId } }, body,
+				params: { path: { agent: agentId } }, body: { disabledModels },
 			});
 			if (error) throw error;
 			return data;

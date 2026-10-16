@@ -1553,37 +1553,9 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 	return unvalidated, nil
 }
 
-// HarnessModelDefaults supplies the model and effort Settings picks for new
-// sessions of one agent. The session-mode defaults may also implement it.
-type HarnessModelDefaults interface {
-	HarnessModelDefault(ctx context.Context, harness domain.AgentHarness) (model, effort string)
-}
-
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
-	return m.resolveAgentConfigWith(ctx, cfg, project, true)
-}
-
-func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, useAgentDefault bool) (ports.AgentConfig, error) {
 	base := effectiveAgentConfig(cfg.Harness, cfg.Kind, project)
 	requested := cfg.AgentConfig
-	// The agent's default from Settings fills in only what the request, role and
-	// project leave open. A default the catalogue cannot check, or does not list
-	// (an account on another plan), is dropped rather than refusing the launch.
-	usedAgentDefault := false
-	if defaults, ok := m.defaults.(HarnessModelDefaults); ok && useAgentDefault && base.Model == "" && requested.Model == "" {
-		if model, effort := defaults.HarnessModelDefault(ctx, cfg.Harness); model != "" {
-			base.Model, usedAgentDefault = model, true
-			if base.Effort == "" {
-				base.Effort = effort
-			}
-		}
-	}
-	withoutAgentDefault := func(err error) (ports.AgentConfig, error) {
-		if usedAgentDefault {
-			return m.resolveAgentConfigWith(ctx, cfg, project, false)
-		}
-		return ports.AgentConfig{}, err
-	}
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
@@ -1629,7 +1601,7 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 			resolved.Effort = ""
 		}
 		if validateClaudeModel || resolved.Effort != "" {
-			return withoutAgentDefault(fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err))
+			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
 	}
@@ -1645,7 +1617,7 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil // an account's catalogue names no default model
 	}
 	if catalog.Stale && validateClaudeModel {
-		return withoutAgentDefault(fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID))
+		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	var selected *ports.AgentModelInfo
 	for i := range catalog.Models {
@@ -1653,9 +1625,6 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 			selected = &catalog.Models[i]
 			break
 		}
-	}
-	if usedAgentDefault && selected == nil {
-		return withoutAgentDefault(nil)
 	}
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
@@ -1676,10 +1645,10 @@ func (m *Manager) resolveAgentConfigWith(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if catalog.Stale || selected == nil {
-		return withoutAgentDefault(fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID))
+		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
 	}
 	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
-		return withoutAgentDefault(fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID))
+		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
 }

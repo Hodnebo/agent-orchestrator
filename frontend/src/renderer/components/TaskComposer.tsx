@@ -509,13 +509,9 @@ export function TaskComposer({
 		);
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
-	// The agent's default from Settings, when this catalogue (an account's, say) can run it.
-	const agentDefault = isCloudProject ? undefined : settings?.harnessDefaults?.[selectedAgent];
-	const agentDefaultModel = !catalogUsesModes && catalogModels.some((item) => item.id === agentDefault?.defaultModel) ? agentDefault!.defaultModel! : "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
-		agentDefaultModel ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
@@ -559,7 +555,7 @@ export function TaskComposer({
 	const effortOptions = effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
-	const implicitEffort = inheritedEffort || (agentDefaultModel && selectedModel === agentDefaultModel ? agentDefault?.defaultEffort : "") || effortModel?.defaultEffort || "";
+	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = agentCatalog?.agents.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	const requiresTuiFallback =
 		selectedAgent !== "" &&
