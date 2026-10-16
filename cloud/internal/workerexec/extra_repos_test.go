@@ -218,6 +218,51 @@ func TestClaudeChatGetsAccessToSiblings(t *testing.T) {
 	}
 }
 
+// Claude loads a sibling repository's CLAUDE.md only for a folder opened with
+// --add-dir (terminal) or ACP additionalDirectories (Chat), with
+// CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD set; settings access alone
+// lets it work there without reading the repository's instructions.
+func TestClaudeLoadsSiblingInstructions(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	workspace, launch := multiRepoWorkspace(t)
+	root := filepath.Dir(workspace)
+	siblings := []string{filepath.Join(root, "voice-calling-ai"), filepath.Join(root, "julian")}
+	credential := worker.CredentialResponse{Provider: "claude-code", CredentialType: "api_key", Secret: "secret"}
+	terminal, err := HarnessBuilder{DataDir: t.TempDir(), Launch: launch}.BuildInteractive(launch, credential, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sibling := range siblings {
+		if !slices.Contains(terminal.Args, "--add-dir="+sibling) {
+			t.Fatalf("terminal args lack --add-dir=%s: %v", sibling, terminal.Args)
+		}
+	}
+	if terminal.Env[claudeAdditionalDirectoriesInstructionsEnv] != "1" {
+		t.Fatalf("terminal env lacks %s", claudeAdditionalDirectoriesInstructionsEnv)
+	}
+	chat, err := HarnessBuilder{DataDir: t.TempDir(), Launch: launch}.Build(context.Background(),
+		worker.Turn{Harness: "claude-code", Mode: "trusted", Prompt: "hi"}, credential, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(chat.AdditionalDirectories, siblings) || chat.Env[claudeAdditionalDirectoriesInstructionsEnv] != "1" {
+		t.Fatalf("chat additional directories = %v env = %q", chat.AdditionalDirectories, chat.Env[claudeAdditionalDirectoriesInstructionsEnv])
+	}
+	single := worker.LaunchContext{SessionID: "s", Kind: "worker", Harness: "claude-code", Mode: "trusted", RepositoryURL: "https://github.com/acme/alice"}
+	plain, err := HarnessBuilder{DataDir: t.TempDir(), Launch: single}.BuildInteractive(single, credential, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range plain.Args {
+		if strings.HasPrefix(arg, "--add-dir") {
+			t.Fatalf("a single-repo terminal got %s", arg)
+		}
+	}
+	if _, ok := plain.Env[claudeAdditionalDirectoriesInstructionsEnv]; ok {
+		t.Fatal("a single-repo terminal set the additional-directories env")
+	}
+}
+
 func roundTrip(t *testing.T, settings map[string]any) {
 	t.Helper()
 	encoded, err := json.Marshal(settings)

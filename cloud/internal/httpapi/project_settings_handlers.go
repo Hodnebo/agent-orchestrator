@@ -81,7 +81,10 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	project, err := store.UpdateProjectSettings(r.Context(), principalFrom(r), orgID, projectID, patch)
 	if errors.Is(err, postgres.ErrInvalid) {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
+		// The store wraps the reason as "invalid: <reason>"; show the reason
+		// alone, as the create endpoints do.
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error",
+			strings.TrimPrefix(err.Error(), postgres.ErrInvalid.Error()+": "))
 		return
 	}
 	if err != nil {

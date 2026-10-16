@@ -31,6 +31,10 @@ type Command struct {
 	// SecretFileGuard is the PreToolUse hook command a Codex Chat turn
 	// registers and trusts in its app-server (see trustCodexSecretFileGuard).
 	SecretFileGuard string
+	// AdditionalDirectories are checkouts outside Dir that a Claude Chat
+	// session opens alongside it (ACP additionalDirectories), so Claude reads
+	// and loads their CLAUDE.md as it does with --add-dir in a terminal.
+	AdditionalDirectories []string
 	// WritableRoots are checkouts outside Dir that a Codex Chat turn's
 	// workspace-write sandbox must also let it write (additionalDirectories).
 	WritableRoots []string
@@ -119,6 +123,8 @@ func (b HarnessBuilder) BuildInteractive(
 			// The shared checkout contains the worker's AO hooks. A separate
 			// CLAUDE_CONFIG_DIR alone does not exclude project/local settings.
 			providerArgs = []string{"--setting-sources", "user"}
+		} else {
+			providerArgs = claudeAddDirArgs(extraDirs)
 		}
 	case "codex":
 		if launch.Kind != "reviewer" {
@@ -203,6 +209,9 @@ func (b HarnessBuilder) BuildInteractive(
 		return Command{}, err
 	}
 	if launch.Harness == "claude-code" {
+		if launch.Kind != "reviewer" {
+			setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+		}
 		if err := b.prepareClaudeCloudExperience(&command, agentDir, extraDirs, permission); err != nil {
 			if command.Cleanup != nil {
 				command.Cleanup()
@@ -372,6 +381,8 @@ func (b HarnessBuilder) Build(
 		}
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
+		command.AdditionalDirectories = extraDirs
+		setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
 		// A session can start in Chat before any terminal wrote the settings;
 		// the ACP adapter and the CLI both load them as user settings.
 		if err := b.writeClaudeChatSettings(configDir, extraDirs); err != nil {

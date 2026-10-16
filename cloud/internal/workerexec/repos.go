@@ -196,3 +196,34 @@ func codexWritableRootsArgs(dirs []string) []string {
 	}
 	return []string{"-c", "sandbox_workspace_write.writable_roots=[" + strings.Join(quoted, ",") + "]"}
 }
+
+// claudeAdditionalDirectoriesInstructionsEnv makes Claude Code load the
+// CLAUDE.md of each --add-dir (or ACP additionalDirectories) folder at start,
+// the way it loads the starting folder's. Without it Claude can work in a
+// sibling repository but never reads that repository's own instructions.
+const claudeAdditionalDirectoriesInstructionsEnv = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"
+
+// claudeAddDirArgs opens each sibling checkout in a Claude terminal. The
+// settings' permissions.additionalDirectories grants access too, but only
+// --add-dir makes Claude load the folder's CLAUDE.md. Each folder is its own
+// --add-dir=<dir> so the variadic flag never consumes a later argument.
+func claudeAddDirArgs(dirs []string) []string {
+	args := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		args = append(args, "--add-dir="+dir)
+	}
+	return args
+}
+
+// setClaudeAdditionalDirectoriesInstructions sets
+// claudeAdditionalDirectoriesInstructionsEnv when Claude opens sibling
+// checkouts.
+func setClaudeAdditionalDirectoriesInstructions(command *Command, dirs []string) {
+	if len(dirs) == 0 {
+		return
+	}
+	if command.Env == nil {
+		command.Env = map[string]string{}
+	}
+	command.Env[claudeAdditionalDirectoriesInstructionsEnv] = "1"
+}
