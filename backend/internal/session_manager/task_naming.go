@@ -57,6 +57,9 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 				name = parseTaskName(raw, fallback)
 			}
 			m.logger.Info("task naming", "sessionID", rec.ID, "durationMs", time.Since(started).Milliseconds(), "generated", name.Title != "", "error", err)
+			if cfg.KeepDisplayName {
+				name.Title = ""
+			}
 			done <- name
 		})
 	default:

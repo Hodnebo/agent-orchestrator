@@ -352,3 +352,40 @@ func TestKillCancelsBackgroundTitle(t *testing.T) {
 }
 
 func runInline(work func()) { work() }
+
+// ao spawn, including orchestrator-owned workers, uses generic Spawn rather than
+// the desktop's DelegateTask route. Both must enable the same naming pipeline.
+func TestSpawnNamesImplicitWorkerBranchesFromEveryEntryPoint(t *testing.T) {
+	for _, tt := range []struct {
+		name                    string
+		kind                    domain.ProjectKind
+		cfg                     ports.SpawnConfig
+		wantName, wantKeepTitle bool
+	}{
+		{name: "CLI worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Fix login redirect"}, wantName: true},
+		{name: "orchestrator Chat worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, ParentSessionID: "ao-orch", RequestedMode: domain.SessionModeChat, DisplayName: "Review: login", Prompt: "Review login redirect"}, wantName: true, wantKeepTitle: true},
+		{name: "orchestrator TUI worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, ParentSessionID: "ao-orch", RequestedMode: domain.SessionModeTUI, Prompt: "Review login redirect"}, wantName: true},
+		{name: "workspace project", kind: domain.ProjectKindWorkspace, cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Fix login redirect"}, wantName: true},
+		{name: "explicit branch", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Branch: "review/login", Prompt: "Review login"}},
+		{name: "no prompt", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: " \n "}},
+		{name: "orchestrator", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindOrchestrator, Prompt: "Coordinate reviews"}},
+		{name: "scratch", kind: domain.ProjectKindScratch, cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Review login"}},
+		{name: "standalone", cfg: ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex, Prompt: "Review login"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: tt.kind}
+			cmd := &fakeCommander{spawnRecord: domain.SessionRecord{ID: "ao-1", ProjectID: tt.cfg.ProjectID, Kind: tt.cfg.Kind, Harness: domain.HarnessCodex}}
+			_, _, _, err := (&Service{store: st, manager: cmd}).Spawn(t.Context(), tt.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.spawnedCfg.NameFromPrompt != tt.wantName || cmd.spawnedCfg.KeepDisplayName != tt.wantKeepTitle {
+				t.Fatalf("naming=%v keepTitle=%v; want %v/%v", cmd.spawnedCfg.NameFromPrompt, cmd.spawnedCfg.KeepDisplayName, tt.wantName, tt.wantKeepTitle)
+			}
+			if cmd.spawnedCfg.ParentSessionID != tt.cfg.ParentSessionID || cmd.spawnedCfg.Branch != tt.cfg.Branch || cmd.spawnedCfg.DisplayName != tt.cfg.DisplayName {
+				t.Fatal("spawn ownership or explicit names changed")
+			}
+		})
+	}
+}

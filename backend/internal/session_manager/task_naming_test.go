@@ -155,10 +155,13 @@ func TestTaskNamingBeforeAgentLaunch(t *testing.T) {
 
 func TestTaskNamingFallbackAndManualTitle(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		result string
-		err    error
+		name      string
+		result    string
+		err       error
+		slug      string
+		keepTitle bool
 	}{
+		{name: "generated slug keeps explicit title", result: `{"title":"Replace this title","slug":"login-redirect"}`, slug: "login-redirect", keepTitle: true},
 		{name: "provider error", err: errors.New("offline")},
 		{name: "malformed response", result: "Here is a title"},
 		{name: "unusable response", result: `{"title":"...","slug":"你好"}`},
@@ -169,11 +172,16 @@ func TestTaskNamingFallbackAndManualTitle(t *testing.T) {
 			m.chat = &taskNamingLauncher{result: tt.result, err: tt.err}
 			cfg := asyncChatSpawnConfig("Fix login redirect")
 			cfg.NameFromPrompt, cfg.Async, cfg.DisplayName = true, false, "My manual title"
+			cfg.KeepDisplayName = tt.keepTitle
 			rec, _, _, err := m.Spawn(context.Background(), cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/fix-login-redirect/root" || actual.DisplayName != "My manual title" {
+			slug := tt.slug
+			if slug == "" {
+				slug = "fix-login-redirect"
+			}
+			if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/"+slug+"/root" || actual.DisplayName != "My manual title" {
 				t.Fatalf("fallback = %+v", actual)
 			}
 		})

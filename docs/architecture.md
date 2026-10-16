@@ -353,7 +353,8 @@ flowchart TD
 
 ```
 
-Desktop tasks with an initial prompt generate a title and task slug together
+New Git worker sessions from the desktop, CLI, or orchestrator with an initial
+prompt generate a title and task slug together
 through the selected agent's background-task driver during provisioning. This
 call overlaps worktree preparation and has a twenty-second deadline. Failure,
 invalid output, or a full four-call naming limit uses a local prompt slug;
@@ -369,7 +370,8 @@ Git identities, finishes registration repair, and saves root and child paths
 before acknowledging the journal. Recovery refuses occupied destinations and
 sessions with a runtime or provider conversation identity. Retry resumes
 unfinished setup using the durable stages. Session IDs remain
-unchanged. Restore uses the persisted names. Explicit branches, promptless
+unchanged. Explicit CLI/API session titles are preserved while their workspaces
+receive task names. Restore uses the persisted names. Explicit branches, promptless
 sessions, Scratch sessions, and existing sessions keep their naming behavior.
 The desktop hides provisional branches until the worktree step completes and
 shows a text shimmer with a randomly selected naming label while provisioning
