@@ -234,18 +234,6 @@ func (c *countingConn) QueryContext(ctx context.Context, query string, args []dr
 	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 }
 
-func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
-}
-
-func (c *countingConn) Ping(ctx context.Context) error { return c.Conn.(driver.Pinger).Ping(ctx) }
-
-func (c *countingConn) ResetSession(ctx context.Context) error {
-	return c.Conn.(driver.SessionResetter).ResetSession(ctx)
-}
-
-func (c *countingConn) IsValid() bool { return c.Conn.(driver.Validator).IsValid() }
-
 func (c *countingConn) CheckNamedValue(nv *driver.NamedValue) error {
 	if checker, ok := c.Conn.(driver.NamedValueChecker); ok {
 		return checker.CheckNamedValue(nv)
@@ -296,10 +284,11 @@ func listFingerprint(t *testing.T, sess domain.Session) string {
 	out, err := json.Marshal(struct {
 		domain.Session
 		Metadata      domain.SessionMetadata
+		ArtifactDir   string
 		ArtifactFiles []domain.SessionArtifactFile
 		PRs           []domain.PRFacts
 		AgentSwitch   *domain.AgentSwitch
-	}{sess, sess.Metadata, sess.ArtifactFiles, sess.PRs, sess.ActiveAgentSwitch})
+	}{sess, sess.Metadata, sess.Metadata.ArtifactDir, sess.ArtifactFiles, sess.PRs, sess.ActiveAgentSwitch})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +367,9 @@ func TestListMatchesGetForEverySessionShape(t *testing.T) {
 	}
 	if got := byName["archived with unreconciled artifacts"]; got.OutputType != domain.SessionOutputArtifact || len(got.ArtifactFiles) != 1 {
 		t.Errorf("unreconciled archived session: type %q, files %v, want artifact with late.html", got.OutputType, got.ArtifactFiles)
+	}
+	if got := byName["live with legacy artifact dir"]; got.Metadata.ArtifactDir != sessionartifacts.Dir(dataDir, got.ID) || got.OutputType != domain.SessionOutputArtifact {
+		t.Errorf("legacy session: artifact dir %q, type %q, want the derived dir and artifact", got.Metadata.ArtifactDir, got.OutputType)
 	}
 	if got := byName["live with artifacts gone"]; got.OutputType.HasArtifact() || len(got.ArtifactFiles) != 0 {
 		t.Errorf("session whose artifacts are gone: type %q, files %v, want none", got.OutputType, got.ArtifactFiles)
