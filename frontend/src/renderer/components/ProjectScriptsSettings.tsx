@@ -11,6 +11,8 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
+import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
@@ -35,7 +37,12 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project = query.data;
 	const scratch = project.kind === "scratch";
-	const save = async (scripts: ScriptCommands) => {
+	const save = async (steps: ScriptSteps) => {
+		// A local step always runs in the project's own workspace.
+		const scripts = {
+			postCreate: steps.postCreate.map((step) => step.command),
+			...(steps.preRemove && { preRemove: steps.preRemove.map((step) => step.command) }),
+		};
 		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
 		if (current.error) throw new Error(apiErrorMessage(current.error));
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
@@ -46,7 +53,7 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		});
 		if (error) throw new Error(apiErrorMessage(error));
 	};
-	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={project.config?.postCreate} preRemove={project.config?.preRemove}
+	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
 		save={save} onSaveState={onSaveState} onSaved={() => {
 			void client.invalidateQueries({ queryKey: ["project", projectId] });
 			void client.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -79,21 +86,31 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
 	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
 	const project: CloudCpProject = query.data;
-	const commandsOf = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
-	const save = async (scripts: ScriptCommands) => {
+	// A step can run in any of the project's repositories: the main one (the
+	// default) or one of the additional ones checked out beside it.
+	const additional = projectAdditionalRepos(project.config).map((repo) => repo.url);
+	const repositories = additional.map((url) => ({ url, label: gitHubFullName(url) ?? url }));
+	const save = async (steps: ScriptSteps) => {
 		// Settings merge objects but replace arrays, so only the two lists are sent;
 		// an empty list clears it. Every other config key stays as stored.
 		const response = await client.updateProjectSettings(project.orgId, project.id, {
-			config: { postCreate: scripts.postCreate, preRemove: scripts.preRemove ?? [] },
+			config: { postCreate: serializeScriptSteps(steps.postCreate, additional), preRemove: serializeScriptSteps(steps.preRemove ?? [], additional) },
 		});
 		queryClient.setQueryData(queryKey, response.project);
 	};
-	return <ScriptsEditor key={`${cloudOrgId}/${projectId}`} scratch={false} postCreate={commandsOf(project.config?.postCreate)} preRemove={commandsOf(project.config?.preRemove)}
+	return <ScriptsEditor key={`${cloudOrgId}/${projectId}`} scratch={false} postCreate={parseScriptSteps(project.config?.postCreate)} preRemove={parseScriptSteps(project.config?.preRemove)}
+		repositories={repositories}
 		cloud={{ cleanupRuns: projectSandboxProvider(project.config, offering) === CODER_PROVIDER, readOnly }}
 		save={save} onSaveState={onSaveState} onSaved={() => { void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey }); }} />;
 }
 
-type ScriptCommands = { postCreate: string[]; preRemove?: string[] };
+type ScriptSteps = { postCreate: ScriptStepDraft[]; preRemove?: ScriptStepDraft[] };
+
+function localSteps(commands: string[] | undefined): ScriptStepDraft[] | undefined {
+	return commands?.map((command) => ({ command, repository: "" }));
+}
+
+const emptyStep = (): ScriptStepDraft => ({ command: "", repository: "" });
 
 /** The variables a Cloud project's Setup and Cleanup steps can use. */
 const cloudScriptVariables = [
@@ -105,34 +122,38 @@ const cloudScriptVariables = [
 	["AO_REPOSITORY_URL", "settings.project.cloudVarRepository"],
 ] as const;
 
-function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save, onSaveState, onSaved }: {
+function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
 	scratch: boolean;
-	postCreate?: string[];
-	preRemove?: string[];
+	postCreate?: ScriptStepDraft[];
+	preRemove?: ScriptStepDraft[];
+	/** A Cloud project's additional repositories, which a step may run in instead of the main one. */
+	repositories?: { url: string; label: string }[];
 	/** Set for a Cloud project: the hints describe its session workspace, and cleanupRuns says whether Cleanup runs on its provider. */
 	cloud?: { cleanupRuns: boolean; readOnly?: boolean };
-	save: (scripts: ScriptCommands) => Promise<void>;
+	save: (scripts: ScriptSteps) => Promise<void>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	onSaved: () => void;
 }) {
 	const { t } = useTranslation();
 	const client = useQueryClient();
 	const [activeTab, setActiveTab] = useState<ScriptKind>("setup");
-	const [drafts, setDrafts] = useState<Record<ScriptKind, string[]>>(() => ({
-		setup: postCreate?.length ? [...postCreate] : [""],
-		cleanup: preRemove?.length ? [...preRemove] : [""],
+	const [drafts, setDrafts] = useState<Record<ScriptKind, ScriptStepDraft[]>>(() => ({
+		setup: postCreate?.length ? postCreate.map((step) => ({ ...step })) : [emptyStep()],
+		cleanup: preRemove?.length ? preRemove.map((step) => ({ ...step })) : [emptyStep()],
 	}));
-	const commands: ScriptCommands = {
-		postCreate: drafts.setup.filter((step) => step.trim()),
-		...(!scratch && { preRemove: drafts.cleanup.filter((step) => step.trim()) }),
+	// A step whose repository left the project runs in the main one again.
+	const known = (repository: string) => repositories.some((repo) => repo.url === repository) ? repository : "";
+	const commands: ScriptSteps = {
+		postCreate: drafts.setup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, repository: known(step.repository) })),
+		...(!scratch && { preRemove: drafts.cleanup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, repository: known(step.repository) })) }),
 	};
 	const [saved, setSaved] = useState(() => JSON.stringify(commands));
 	const [savedAt, setSavedAt] = useState(false);
 	const dirty = JSON.stringify(commands) !== saved;
 	const mutation = useMutation({
-		mutationFn: async (scripts: ScriptCommands) => {
+		mutationFn: async (scripts: ScriptSteps) => {
 			await save(scripts);
 			return scripts;
 		},
@@ -161,7 +182,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
 	const locked = mutation.isPending || retry.isPending || cloud?.readOnly === true;
-	const updateSteps = (kind: ScriptKind, steps: string[]) => {
+	const updateSteps = (kind: ScriptKind, steps: ScriptStepDraft[]) => {
 		setDrafts((current) => ({ ...current, [kind]: steps }));
 		setSavedAt(false);
 	};
@@ -194,13 +215,27 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, cloud, save,
 					</details>}
 					<div className="space-y-4">
 						{drafts[kind].map((step, index) => <div key={index}>
-							<div className="mb-1 flex items-center justify-between">
+							<div className="mb-1 flex items-center justify-between gap-2">
 								<label className="text-sm font-medium text-settings-label" htmlFor={`${kind}-step-${index}`}>{t(`settings.project.${kind}Step`, { number: index + 1 })}</label>
-								<button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} className="rounded p-1 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" disabled={locked} onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [""] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></button>
+								<div className="flex min-w-0 items-center gap-1">
+									{repositories.length > 0 ? <SettingsOptionMenu
+										aria-label={t("settings.project.stepRepository", { defaultValue: "Repository for step {{number}}", number: index + 1 })}
+										disabled={locked}
+										value={known(step.repository)}
+										options={[
+											{ value: "", label: t("settings.project.stepMainRepository", { defaultValue: "Main repository" }) },
+											...repositories.map((repo) => ({ value: repo.url, label: repo.label })),
+										]}
+										triggerClassName="w-fit max-w-64"
+										onChange={(repository) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, repository } : item))}
+									/> : null}
+									<button aria-label={t(kind === "setup" ? "settings.project.removeSetupStep" : "settings.project.removeCleanupStep", { number: index + 1 })} className="rounded p-1 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" disabled={locked} onClick={() => updateSteps(kind, drafts[kind].length === 1 ? [emptyStep()] : drafts[kind].filter((_, i) => i !== index))} type="button"><Trash2 aria-hidden="true" size={16} /></button>
+								</div>
 							</div>
-							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={locked} id={`${kind}-step-${index}`} spellCheck={false} value={step} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? event.target.value : item))} />
+							<textarea className="settings-field-control min-h-24 w-full px-4 py-3 font-mono text-xs" disabled={locked} id={`${kind}-step-${index}`} spellCheck={false} value={step.command} onChange={(event) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, command: event.target.value } : item))} />
 						</div>)}
-						<Button className="gap-1.5" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], ""])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
+						{repositories.length > 0 ? <p className="text-xs text-settings-muted">{t("settings.project.stepRepositoryHint", { defaultValue: "Each step runs in the repository chosen for it, after every repository is checked out." })}</p> : null}
+						<Button className="gap-1.5" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], emptyStep()])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
 					</div>
 					{kind === "cleanup" && !cloud && <div className="space-y-2 border-t border-border pt-4">
 						<p className="text-xs text-settings-muted">{t("settings.project.cleanupRetryHint")}</p>
