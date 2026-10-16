@@ -603,7 +603,9 @@ export function TaskComposer({
 	// the user on this computer: its daemon lets the task start and the agent
 	// renews the token as it launches. A remote host may run an older daemon
 	// that still rejects the spawn for a stale catalog, so keep the notice there.
-	const modelWarning = (modelAuthIssue === "expired" && !hostId) || (modelAuthIssue && cloudHarnessReady) ? undefined : modelAuthIssue ? (
+	const loginRenewsItself = modelAuthIssue === "expired" && !hostId;
+	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself && !cloudHarnessReady;
+	const modelWarning = showModelNotice ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
 			detail={modelWarningText}
@@ -611,7 +613,7 @@ export function TaskComposer({
 			onLogin={startAgentLogin}
 			onRetry={refreshSelectedModels}
 		/>
-	) : modelWarningText;
+	) : modelAuthIssue ? undefined : modelWarningText;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
