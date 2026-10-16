@@ -2,7 +2,10 @@ import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, LoaderCircle, User } from "lucide-react";
 import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
+import { GithubAvatar } from "@aoagents/product-ui";
+import { useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
+import { getGitHubStatus } from "../lib/github-daemon";
 import { cn } from "../lib/utils";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { Button } from "./ui/button";
@@ -34,6 +37,7 @@ export function formatVersionTime(isoDate: string, now: Date = new Date()): stri
 function VersionItem({
 	current,
 	fallbackHarness,
+	login,
 	onSelect,
 	restoredNote,
 	selected,
@@ -42,6 +46,8 @@ function VersionItem({
 	current: boolean;
 	/** The session's agent, for a version recorded before its own was kept. */
 	fallbackHarness: string;
+	/** The user's GitHub username, once known; a version they saved shows their avatar. */
+	login?: string;
 	onSelect: () => void;
 	/** "Restored from …", for a version that came from a restore. */
 	restoredNote?: string;
@@ -59,12 +65,16 @@ function VersionItem({
 				</span>
 				{restoredNote ? <span className="truncate text-caption text-passive">{restoredNote}</span> : null}
 			</span>
-			{/* Who wrote it: the agent's logo, or a user mark for a save made in the app. One fixed box keeps both the same size and centre. */}
-			<span className="ml-auto flex size-icon-lg shrink-0 items-center justify-center" title={version.source === "user" ? t("artifacts.history.you") : undefined}>
+			{/* Who wrote it: the agent's logo, or the user's avatar for a save made in the app. One fixed box keeps both the same size and centre. */}
+			<span className="ml-auto flex size-icon-lg shrink-0 items-center justify-center" title={version.source === "user" ? login || t("artifacts.history.you") : undefined}>
 				{version.source === "user" ? (
-					<span aria-hidden="true" className="flex size-full items-center justify-center rounded-full bg-muted text-muted-foreground">
-						<User className="size-3" />
-					</span>
+					login ? (
+						<GithubAvatar className="size-full" login={login} />
+					) : (
+						<span aria-hidden="true" className="flex size-full items-center justify-center rounded-full bg-muted text-muted-foreground">
+							<User className="size-3" />
+						</span>
+					)
 				) : (
 					<AgentAvatar className="size-full" provider={harness} />
 				)}
@@ -76,8 +86,8 @@ function VersionItem({
 /**
  * The History menu in the viewer's header: every kept version in one list,
  * newest first, the first marked current. Choosing one previews it in the
- * viewer; the current version returns to the live file. The list loads when
- * the viewer opens, so the menu is ready to read, and
+ * viewer; the current version returns to the live file. The list and the
+ * user's avatar load when the viewer opens, so the menu is ready to read, and
  * opening it records any edit the observer has not picked up yet.
  */
 export function ArtifactHistoryMenu({
@@ -104,6 +114,9 @@ export function ArtifactHistoryMenu({
 	const closedAtRef = useRef(0);
 	const versions = useArtifactVersions({ enabled: true, hostId, path, sessionId });
 	const syncVersions = useSyncArtifactVersions({ hostId, path, sessionId });
+	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
+	const { data: github } = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000 });
+	const login = github?.login;
 	const list = versions.data ?? [];
 	const shown = showAll ? list : list.slice(0, VERSIONS_SHOWN);
 	const currentVersion = list[0]?.version;
@@ -157,6 +170,7 @@ export function ArtifactHistoryMenu({
 								current={isCurrent}
 								fallbackHarness={fallbackHarness}
 								key={version.version}
+								login={login}
 								onSelect={() => onSelect(isCurrent ? null : version.version)}
 								restoredNote={restoredNoteOf(version)}
 								selected={isCurrent ? selectedVersion === null : selectedVersion === version.version}

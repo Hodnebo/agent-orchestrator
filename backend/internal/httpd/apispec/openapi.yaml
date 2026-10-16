@@ -2011,9 +2011,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties:
-                  type: boolean
-                type: object
+                $ref: '#/components/schemas/GitHubStatusResponse'
           description: OK
         "500":
           content:
@@ -2021,7 +2019,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Check whether a GitHub personal access token is stored locally
+      summary: Report whether a GitHub token is stored and the GitHub username AO
+        is signed in as
       tags:
       - github
   /api/v1/identity:
@@ -14430,6 +14429,17 @@ components:
           type:
           - "null"
           - boolean
+      type: object
+    GitHubStatusResponse:
+      properties:
+        connected:
+          type: boolean
+        login:
+          description: GitHub username AO is signed in as, from a stored token or
+            the gh CLI; absent when it could not be resolved.
+          type: string
+      required:
+      - connected
       type: object
     GitPreparationEvent:
       properties:
