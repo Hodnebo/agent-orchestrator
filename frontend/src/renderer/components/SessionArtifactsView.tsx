@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
@@ -374,6 +374,12 @@ export function SessionArtifactsView({
 	}, [request]);
 
 	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	// Versions are read back as text, so a binary file such as an image gets no
+	// History. This shares the viewer's cached read of the file.
+	const selectedFile = useQuery({
+		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact")),
+		enabled: Boolean(selected) && !session.cloud,
+	});
 	useEffect(() => {
 		if (!selected) setFullscreen(false);
 	}, [selected]);
@@ -395,7 +401,7 @@ export function SessionArtifactsView({
 					</Button>
 					<ArtifactMenu artifact={selected} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
-					{session.cloud ? null : (
+					{session.cloud || selectedFile.data?.binary ? null : (
 						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 					)}
 					<Tooltip>

@@ -1678,6 +1678,7 @@
 	"artifacts.history.restore": "Restaurar esta versión",
 	"artifacts.history.restoring": "Restaurando",
 	"artifacts.history.backToCurrent": "Volver a la versión actual",
+	"artifacts.history.truncated": "Se muestra el comienzo de esta versión. Al restaurarla se escribe el archivo completo.",
 	"shell.archiving": "Archivando...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",

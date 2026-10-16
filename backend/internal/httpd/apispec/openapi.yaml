@@ -4980,6 +4980,57 @@ paths:
       summary: Restore an artifact file to an earlier saved version
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-versions/sync:
+    post:
+      operationId: syncSessionArtifactVersions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncArtifactVersionsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListArtifactVersionsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record an artifact file's unrecorded edit, then list its saved versions
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/attachments:
     post:
       operationId: stageSessionAttachments
@@ -11673,7 +11724,8 @@ components:
     ArtifactVersionResponse:
       properties:
         content:
-          description: The version's UTF-8 text content.
+          description: The version's UTF-8 text content, cut short when truncated
+            is set.
           type: string
         createdAt:
           format: date-time
@@ -11682,8 +11734,9 @@ components:
           description: Hex SHA-256 of the version's content.
           type: string
         harness:
-          description: The agent that was running the session when the version was
-            recorded; absent for older versions.
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
           type: string
         path:
           type: string
@@ -11701,6 +11754,10 @@ components:
           - agent
           - user
           type: string
+        truncated:
+          description: The content is only the first 256 KiB of the version. A restore
+            still writes the whole version.
+          type: boolean
         version:
           format: int64
           type: integer
@@ -11722,8 +11779,9 @@ components:
           description: Hex SHA-256 of the version's content.
           type: string
         harness:
-          description: The agent that was running the session when the version was
-            recorded; absent for older versions.
+          description: 'Best effort: the agent that was running the session when the
+            version was recorded, which after an agent switch can differ from the
+            agent that wrote it. Absent for older versions.'
           type: string
         restoredFrom:
           description: The version this one restored, when it is a restore.
@@ -18120,6 +18178,15 @@ components:
           type: string
       required:
       - targetHarness
+      type: object
+    SyncArtifactVersionsRequest:
+      properties:
+        path:
+          description: Artifact-directory-relative file path, as listed in the session's
+            artifactFiles.
+          type: string
+      required:
+      - path
       type: object
     SystemMemoryResponse:
       properties:

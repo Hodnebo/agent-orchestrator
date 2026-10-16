@@ -1633,6 +1633,7 @@
 	"artifacts.history.restore": "恢复此版本",
 	"artifacts.history.restoring": "正在恢复",
 	"artifacts.history.backToCurrent": "返回当前版本",
+	"artifacts.history.truncated": "仅显示此版本的开头部分。恢复时会写入完整文件。",
 	"shell.archiving": "正在归档...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",

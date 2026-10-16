@@ -1649,6 +1649,7 @@
 	"artifacts.history.restore": "このバージョンを復元",
 	"artifacts.history.restoring": "復元中",
 	"artifacts.history.backToCurrent": "現在のバージョンに戻る",
+	"artifacts.history.truncated": "このバージョンの先頭部分を表示しています。復元するとファイル全体が書き込まれます。",
 	"shell.archiving": "アーカイブ中...",
 	"shell.workspaceCleanupPending": "Cleanup pending: {{title}}",
 	"shell.workspaceCleanupFailed": "Workspace cleanup failed. Retry cleanup in project Scripts settings.",

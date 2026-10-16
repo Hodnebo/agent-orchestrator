@@ -1,18 +1,20 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
@@ -24,7 +26,13 @@ const (
 	artifactVersionsPath       = "/api/v1/sessions/{sessionId}/artifact-versions"
 	artifactVersionPath        = "/api/v1/sessions/{sessionId}/artifact-versions/{version}"
 	artifactVersionRestorePath = "/api/v1/sessions/{sessionId}/artifact-versions/restore"
+	artifactVersionSyncPath    = "/api/v1/sessions/{sessionId}/artifact-versions/sync"
 )
+
+// maxArtifactVersionPreviewBytes caps the content a version read returns. A
+// longer version is cut short and marked truncated; a restore still writes it
+// whole.
+const maxArtifactVersionPreviewBytes = 256 << 10
 
 // ArtifactVersionService is the version history of session artifact files.
 type ArtifactVersionService interface {
@@ -33,7 +41,9 @@ type ArtifactVersionService interface {
 	RecordSave(ctx context.Context, sess domain.SessionRecord, relPath string) error
 	RecordRestore(ctx context.Context, sess domain.SessionRecord, relPath string, from int64) error
 	Sync(ctx context.Context, sess domain.SessionRecord, relPath string) error
-	Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) error
+	// Snapshot keeps the file's current content as a version and returns its
+	// sha256, failing when it cannot be kept.
+	Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) (string, error)
 }
 
 func artifactVersionSummary(v domain.SessionArtifactVersion) ArtifactVersionSummary {
@@ -69,7 +79,7 @@ func writeArtifactVersionNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 // listArtifactVersions returns the kept versions of one listed artifact file,
-// newest first.
+// newest first. It only reads; syncArtifactVersions records an edit first.
 func (c *SessionsController) listArtifactVersions(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil || c.ArtifactVersions == nil {
 		apispec.NotImplemented(w, r, http.MethodGet, artifactVersionsPath)
@@ -79,11 +89,34 @@ func (c *SessionsController) listArtifactVersions(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	// An edit the observer has not yet noticed is recorded now, so the list is
-	// current. A failure only leaves the edit for the observer.
+	c.writeArtifactVersionList(w, r, sess, clean)
+}
+
+// syncArtifactVersions records an edit of one listed artifact file that the
+// observer has not noticed yet, then returns the file's versions like
+// listArtifactVersions. The history menu calls it when it opens. A failure only
+// leaves the edit for the observer.
+func (c *SessionsController) syncArtifactVersions(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil || c.ArtifactVersions == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, artifactVersionSyncPath)
+		return
+	}
+	var in SyncArtifactVersionsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	sess, clean, ok := c.listedArtifactPath(w, r, in.Path)
+	if !ok {
+		return
+	}
 	if err := c.ArtifactVersions.Sync(r.Context(), sess.SessionRecord, clean); err != nil {
 		slog.Default().Debug("artifact versions: sync failed", "session", sess.ID, "path", clean, "err", err)
 	}
+	c.writeArtifactVersionList(w, r, sess, clean)
+}
+
+func (c *SessionsController) writeArtifactVersionList(w http.ResponseWriter, r *http.Request, sess domain.Session, clean string) {
 	rows, err := c.ArtifactVersions.List(r.Context(), sess.ID, clean)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -112,20 +145,33 @@ func (c *SessionsController) findArtifactVersion(w http.ResponseWriter, r *http.
 }
 
 // readArtifactVersionText reads a version's content, which must be UTF-8 text.
-func (c *SessionsController) readArtifactVersionText(w http.ResponseWriter, r *http.Request, sess domain.Session, v domain.SessionArtifactVersion) (string, bool) {
+func (c *SessionsController) readArtifactVersionText(w http.ResponseWriter, r *http.Request, sess domain.Session, v domain.SessionArtifactVersion) ([]byte, bool) {
 	data, err := c.ArtifactVersions.ReadVersion(sess.SessionRecord, v)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		writeArtifactVersionNotFound(w, r)
-		return "", false
+		return nil, false
 	case err != nil:
 		envelope.WriteError(w, r, err)
-		return "", false
-	case !utf8.Valid(data) || strings.ContainsRune(string(data), 0):
+		return nil, false
+	case !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0:
 		envelope.WriteError(w, r, apierr.Invalid("ARTIFACT_FILE_BINARY", "Only UTF-8 text versions can be shown", nil))
-		return "", false
+		return nil, false
 	}
-	return string(data), true
+	return data, true
+}
+
+// truncateText cuts valid UTF-8 text to at most limit bytes without splitting
+// a character, reporting whether it cut anything.
+func truncateText(data []byte, limit int) ([]byte, bool) {
+	if len(data) <= limit {
+		return data, false
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(data[cut]) {
+		cut--
+	}
+	return data[:cut], true
 }
 
 // getArtifactVersion returns one version of a listed artifact file with its
@@ -152,7 +198,8 @@ func (c *SessionsController) getArtifactVersion(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ArtifactVersionResponse{ArtifactVersionSummary: artifactVersionSummary(v), Path: clean, Content: content})
+	shown, truncated := truncateText(content, maxArtifactVersionPreviewBytes)
+	envelope.WriteJSON(w, http.StatusOK, ArtifactVersionResponse{ArtifactVersionSummary: artifactVersionSummary(v), Path: clean, Content: string(shown), Truncated: truncated})
 }
 
 // restoreArtifactVersion rewrites a listed artifact file with an earlier
@@ -180,9 +227,7 @@ func (c *SessionsController) restoreArtifactVersion(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	// No fingerprint check: the user chose the content to write, and the content
-	// it replaces is recorded as a version first, so nothing is lost.
-	if err := c.writeArtifactSnapshotted(r.Context(), sess.SessionRecord, clean, "", []byte(content)); err != nil {
+	if err := c.restoreArtifactContent(r.Context(), sess.SessionRecord, clean, content, in.Version); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			writeArtifactFileNotFound(w, r)
 			return
@@ -190,33 +235,57 @@ func (c *SessionsController) restoreArtifactVersion(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
-	c.recordArtifactSave(r.Context(), sess.SessionRecord, clean, in.Version)
 	envelope.WriteJSON(w, http.StatusOK, ArtifactFileResponse{
 		Path:            clean,
 		Size:            int64(len(content)),
-		FileFingerprint: artifactFingerprint([]byte(content)),
+		FileFingerprint: artifactFingerprint(content),
 	})
 }
 
-// writeArtifactSnapshotted replaces a listed artifact file the way a save does.
-// Under the edit lock it first records any content the observer has not
-// versioned yet, so the write never destroys the only copy of an agent edit,
-// and it releases the lock before the caller records the save. An empty
-// expected skips the fingerprint check and records the current content without
-// waiting for it to settle, which is what a restore wants.
-func (c *SessionsController) writeArtifactSnapshotted(ctx context.Context, sess domain.SessionRecord, relPath, expected string, content []byte) error {
+// saveArtifactContent replaces a listed artifact file the way a save does: only
+// while it still hashes to expected, the content the edit started from. Under
+// the edit lock it first records any settled content the observer has not
+// versioned yet, and afterwards records the save as a user version, so no other
+// write lands between the save and its version.
+func (c *SessionsController) saveArtifactContent(ctx context.Context, sess domain.SessionRecord, relPath, expected string, content []byte) error {
 	artifactEditMu.Lock()
 	defer artifactEditMu.Unlock()
 	if c.ArtifactVersions != nil {
-		keep := c.ArtifactVersions.Sync
-		if expected == "" {
-			keep = c.ArtifactVersions.Snapshot
-		}
-		if err := keep(ctx, sess, relPath); err != nil {
-			slog.Default().Debug("artifact versions: keeping the current content before a write failed", "session", sess.ID, "path", relPath, "err", err)
+		if err := c.ArtifactVersions.Sync(ctx, sess, relPath); err != nil {
+			slog.Default().Debug("artifact versions: keeping the current content before a save failed", "session", sess.ID, "path", relPath, "err", err)
 		}
 	}
-	return writeArtifactFile(sess.Metadata.ArtifactDir, relPath, expected, content)
+	if err := writeArtifactFile(sess.Metadata.ArtifactDir, relPath, expected, content); err != nil {
+		return err
+	}
+	c.recordArtifactSave(ctx, sess, relPath, 0)
+	return nil
+}
+
+// restoreArtifactContent rewrites a listed artifact file with the content of
+// version from. Under the edit lock it keeps the file's current content as a
+// version and writes only while the file still holds what was kept, so a
+// restore never destroys the only copy of an agent edit: when the content
+// cannot be kept, or the agent writes in between, nothing is written.
+func (c *SessionsController) restoreArtifactContent(ctx context.Context, sess domain.SessionRecord, relPath string, content []byte, from int64) error {
+	artifactEditMu.Lock()
+	defer artifactEditMu.Unlock()
+	kept, err := c.ArtifactVersions.Snapshot(ctx, sess, relPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return err
+	case errors.Is(err, artifactversions.ErrUnsettled):
+		return apierr.Conflict("ARTIFACT_FILE_STALE", "The file is being written; try again in a moment", nil)
+	case errors.Is(err, artifactversions.ErrTooLarge):
+		return apierr.Invalid("ARTIFACT_FILE_TOO_LARGE", "The current file is too large to keep a copy of, so it cannot be replaced", map[string]any{"limitBytes": artifactversions.MaxFileBytes})
+	case err != nil:
+		return fmt.Errorf("keep the current content before restoring: %w", err)
+	}
+	if err := writeArtifactFile(sess.Metadata.ArtifactDir, relPath, kept, content); err != nil {
+		return err
+	}
+	c.recordArtifactSave(ctx, sess, relPath, from)
+	return nil
 }
 
 // recordArtifactSave notes a save as a user version, or a restore of version

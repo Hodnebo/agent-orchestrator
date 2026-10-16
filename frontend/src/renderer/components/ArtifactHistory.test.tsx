@@ -6,11 +6,12 @@ import type { ArtifactVersionSummary } from "../hooks/useArtifactVersions";
 import { ArtifactHistoryMenu, ArtifactVersionPreview, formatVersionTime } from "./ArtifactHistory";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { versionsMock, versionMock, statusMock } = vi.hoisted(() => ({ versionsMock: vi.fn(), versionMock: vi.fn(), statusMock: vi.fn() }));
+const { versionsMock, versionMock, statusMock, syncMock } = vi.hoisted(() => ({ versionsMock: vi.fn(), versionMock: vi.fn(), statusMock: vi.fn(), syncMock: vi.fn() }));
 vi.mock("../lib/github-daemon", () => ({ getGitHubStatus: statusMock }));
 vi.mock("../hooks/useArtifactVersions", () => ({
 	useArtifactVersions: versionsMock,
 	useArtifactVersion: versionMock,
+	useSyncArtifactVersions: () => ({ mutate: syncMock }),
 }));
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 15, 12, minute)).toISOString();
@@ -30,8 +31,8 @@ function renderMenu(data: ArtifactVersionSummary[] | null, extra: { isError?: bo
 		isPending: data === null && !extra.isError,
 		isError: Boolean(extra.isError),
 		isSuccess: data !== null,
-		refetch: vi.fn().mockResolvedValue({}),
 	});
+	syncMock.mockClear();
 	const onSelect = vi.fn();
 	render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -59,6 +60,13 @@ describe("ArtifactHistoryMenu", () => {
 
 		await userEvent.click(items[2]!);
 		expect(onSelect).toHaveBeenCalledWith(2);
+	});
+
+	it("records any unnoticed edit each time it opens", async () => {
+		renderMenu([v(1, "agent", 0)]);
+		expect(syncMock).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Version history" }));
+		expect(syncMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows eight versions, then the rest after Show more", async () => {
@@ -114,8 +122,8 @@ describe("formatVersionTime", () => {
 });
 
 describe("ArtifactVersionPreview", () => {
-	function renderPreview(props: Partial<React.ComponentProps<typeof ArtifactVersionPreview>> = {}) {
-		versionMock.mockReturnValue({ data: { content: "the older text", createdAt: at(0) }, isPending: false, isError: false, dataUpdatedAt: 1 });
+	function renderPreview(props: Partial<React.ComponentProps<typeof ArtifactVersionPreview>> = {}, data: { truncated?: boolean } = {}) {
+		versionMock.mockReturnValue({ data: { content: "the older text", createdAt: at(0), ...data }, isPending: false, isError: false, dataUpdatedAt: 1 });
 		const onRestore = vi.fn();
 		const onBack = vi.fn();
 		render(<ArtifactVersionPreview onBack={onBack} onRestore={onRestore} path="notes.txt" restoring={false} sessionId="s1" version={2} {...props} />);
@@ -129,6 +137,11 @@ describe("ArtifactVersionPreview", () => {
 		expect(onRestore).toHaveBeenCalledTimes(1);
 		await userEvent.click(screen.getByRole("button", { name: "Back to current" }));
 		expect(onBack).toHaveBeenCalledTimes(1);
+	});
+
+	it("says when only the start of a long version is shown", () => {
+		renderPreview({}, { truncated: true });
+		expect(screen.getByText("Showing the start of this version. Restoring it writes the whole file.")).toBeTruthy();
 	});
 
 	it("says Restoring while a restore runs, and shows a refused one", () => {

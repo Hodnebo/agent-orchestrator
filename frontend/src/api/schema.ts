@@ -1775,6 +1775,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/artifact-versions/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an artifact file's unrecorded edit, then list its saved versions */
+        post: operations["syncSessionArtifactVersions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/attachments": {
         parameters: {
             query?: never;
@@ -3895,13 +3912,13 @@ export interface components {
             size: number;
         };
         ArtifactVersionResponse: {
-            /** @description The version's UTF-8 text content. */
+            /** @description The version's UTF-8 text content, cut short when truncated is set. */
             content: string;
             /** Format: date-time */
             createdAt: string;
             /** @description Hex SHA-256 of the version's content. */
             fileFingerprint: string;
-            /** @description The agent that was running the session when the version was recorded; absent for older versions. */
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
             harness?: string;
             path: string;
             /**
@@ -3916,6 +3933,8 @@ export interface components {
              * @enum {string}
              */
             source: "agent" | "user";
+            /** @description The content is only the first 256 KiB of the version. A restore still writes the whole version. */
+            truncated?: boolean;
             /** Format: int64 */
             version: number;
         };
@@ -3924,7 +3943,7 @@ export interface components {
             createdAt: string;
             /** @description Hex SHA-256 of the version's content. */
             fileFingerprint: string;
-            /** @description The agent that was running the session when the version was recorded; absent for older versions. */
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
             harness?: string;
             /**
              * Format: int64
@@ -6381,6 +6400,10 @@ export interface components {
              * @enum {string}
              */
             targetHarness: "claude-code" | "codex" | "fx";
+        };
+        SyncArtifactVersionsRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
         };
         SystemMemoryResponse: {
             /** @description What the kernel would hand out without swapping (MemAvailable). */
@@ -13095,6 +13118,69 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    syncSessionArtifactVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncArtifactVersionsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListArtifactVersionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

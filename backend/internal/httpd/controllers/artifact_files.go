@@ -184,7 +184,8 @@ func removeArtifactFile(dir, relPath string) error {
 }
 
 // artifactEditMu serialises artifact writes so two saves cannot both pass the
-// fingerprint check against the same content. writeArtifactSnapshotted holds it.
+// fingerprint check against the same content. saveArtifactContent and
+// restoreArtifactContent hold it.
 var artifactEditMu sync.Mutex
 
 // updateArtifactFile replaces the content of one listed artifact file when
@@ -222,7 +223,7 @@ func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.R
 		writeArtifactFileNotFound(w, r)
 		return
 	}
-	if err := c.writeArtifactSnapshotted(r.Context(), sess.SessionRecord, clean, expected, []byte(in.Content)); err != nil {
+	if err := c.saveArtifactContent(r.Context(), sess.SessionRecord, clean, expected, []byte(in.Content)); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			writeArtifactFileNotFound(w, r)
 			return
@@ -230,7 +231,6 @@ func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.R
 		envelope.WriteError(w, r, err)
 		return
 	}
-	c.recordArtifactSave(r.Context(), sess.SessionRecord, clean, 0)
 	envelope.WriteJSON(w, http.StatusOK, ArtifactFileResponse{
 		Path:            clean,
 		Size:            int64(len(in.Content)),
@@ -270,7 +270,7 @@ func writeArtifactFile(dir, relPath, expected string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("read artifact file: %w", err)
 	}
-	if expected != "" && artifactFingerprint(current) != expected {
+	if artifactFingerprint(current) != expected {
 		return apierr.Conflict("ARTIFACT_FILE_STALE", "File changed while it was being edited", map[string]any{"fileFingerprint": artifactFingerprint(current)})
 	}
 	if bytes.Equal(current, content) {

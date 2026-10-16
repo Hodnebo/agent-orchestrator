@@ -36,8 +36,8 @@ const (
 	MaxBytesPerSession = 64 << 20
 )
 
-// errUnsettled reports a file that changed while it was being captured.
-var errUnsettled = errors.New("artifact file changed during capture")
+// ErrUnsettled reports a file that changed while it was being captured.
+var ErrUnsettled = errors.New("artifact file changed during capture")
 
 type versionStore interface {
 	ListLatestSessionArtifactVersions(ctx context.Context, id domain.SessionID) ([]domain.SessionArtifactVersion, error)
@@ -50,7 +50,9 @@ type versionStore interface {
 // writer says who a captured version is attributed to.
 type writer struct {
 	source domain.ArtifactVersionSource
-	// harness is the agent running the session when the version was recorded.
+	// harness is the agent running the session when the version was recorded,
+	// not necessarily the one that wrote it: an edit made before an agent switch
+	// but recorded after it carries the new agent. It is a best-effort label.
 	harness domain.AgentHarness
 	// restoredFrom is the version a restore wrote back; zero otherwise.
 	restoredFrom int64
@@ -155,10 +157,10 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 			continue
 		}
 		spent += obs.size
-		captured, err := c.capture(ctx, sess.ID, dir, blobs, f.Path, obs, last, hasLast, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness})
+		_, captured, err := c.capture(ctx, sess.ID, dir, blobs, f.Path, obs, last, hasLast, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness})
 		switch {
 		case err != nil:
-			if !errors.Is(err, errUnsettled) {
+			if !errors.Is(err, ErrUnsettled) {
 				c.logger.Debug("artifact versions: capture failed", "session", sess.ID, "path", f.Path, "err", err)
 			}
 			next[f.Path] = obs
@@ -175,31 +177,32 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 	return nil
 }
 
-// capture snapshots one file. It reports false when the content equals the
-// latest version, which records nothing.
-func (c *Capturer) capture(ctx context.Context, id domain.SessionID, dir string, blobs blobStore, relPath string, obs observation, last domain.SessionArtifactVersion, hasLast bool, w writer) (bool, error) {
+// capture snapshots one file and returns the sha256 of the content it read. It
+// reports false when the content equals the latest version, which records
+// nothing.
+func (c *Capturer) capture(ctx context.Context, id domain.SessionID, dir string, blobs blobStore, relPath string, obs observation, last domain.SessionArtifactVersion, hasLast bool, w writer) (string, bool, error) {
 	file, info, _, err := previewutil.OpenWorkspaceFile(dir, relPath)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer func() { _ = file.Close() }()
 	if info.Size() != obs.size || info.ModTime().UnixNano() != obs.mtime {
-		return false, errUnsettled
+		return "", false, ErrUnsettled
 	}
 	staged, err := blobs.stage(file, MaxFileBytes)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if after, err := file.Stat(); err != nil || after.Size() != obs.size || after.ModTime().UnixNano() != obs.mtime {
 		blobs.discard(staged)
-		return false, errUnsettled
+		return "", false, ErrUnsettled
 	}
 	if hasLast && last.SHA256 == staged.sum {
 		blobs.discard(staged)
-		return false, nil
+		return staged.sum, false, nil
 	}
 	if err := blobs.commit(staged); err != nil {
-		return false, err
+		return "", false, err
 	}
 	_, pruned, err := c.store.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
 		SessionID:    id,
@@ -215,12 +218,12 @@ func (c *Capturer) capture(ctx context.Context, id domain.SessionID, dir string,
 	}, MaxVersionsPerFile)
 	if err != nil {
 		c.removeUnreferenced(ctx, id, blobs, staged.sum)
-		return false, fmt.Errorf("record version: %w", err)
+		return "", false, fmt.Errorf("record version: %w", err)
 	}
 	for _, sum := range pruned {
 		c.removeUnreferenced(ctx, id, blobs, sum)
 	}
-	return true, nil
+	return staged.sum, true, nil
 }
 
 // removeUnreferenced deletes the blob named by sum when no version row of the
@@ -244,14 +247,16 @@ func contentType(relPath string) string {
 // to the latest version records nothing. It holds the capture lock, so it
 // cannot interleave with a capture of the same file.
 func (c *Capturer) RecordSave(ctx context.Context, sess domain.SessionRecord, relPath string) error {
-	return c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceUser, harness: sess.Harness}, 0)
+	_, err := c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceUser, harness: sess.Harness}, 0)
+	return err
 }
 
 // RecordRestore records the current content of one artifact file as a user
 // version that restored version from, so the history can say where it came
 // from. Otherwise it behaves like RecordSave.
 func (c *Capturer) RecordRestore(ctx context.Context, sess domain.SessionRecord, relPath string, from int64) error {
-	return c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceUser, harness: sess.Harness, restoredFrom: from}, 0)
+	_, err := c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceUser, harness: sess.Harness, restoredFrom: from}, 0)
+	return err
 }
 
 // SettleWindow is how long a file must have gone unmodified before Sync
@@ -263,31 +268,35 @@ const SettleWindow = 2 * time.Second
 // SettleWindow. The observer needs two ticks to notice a change; Sync lets a
 // reader of the history see an edit as soon as it settles.
 func (c *Capturer) Sync(ctx context.Context, sess domain.SessionRecord, relPath string) error {
-	return c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness}, SettleWindow)
+	_, err := c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness}, SettleWindow)
+	return err
 }
 
-// Snapshot records the current content of one artifact file as an agent version
-// when it differs from the latest version, with no settle window. A restore
-// calls it just before overwriting the file, so the content it replaces is
-// always kept.
-func (c *Capturer) Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) error {
+// Snapshot makes sure the current content of one artifact file is kept as a
+// version, recording it as an agent version when it differs from the latest,
+// with no settle window, and returns its sha256. A restore calls it just before
+// overwriting the file and writes only while the file still hashes to that
+// sum, so the content it replaces is always kept. A file that changes during
+// the copy fails with ErrUnsettled, and one over MaxFileBytes with ErrTooLarge.
+func (c *Capturer) Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) (string, error) {
 	return c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness}, 0)
 }
 
-// recordNow snapshots one file under the capture lock. A file modified within
-// settle is left for a later call.
-func (c *Capturer) recordNow(ctx context.Context, sess domain.SessionRecord, relPath string, w writer, settle time.Duration) error {
+// recordNow snapshots one file under the capture lock and returns the sha256
+// of the content now kept as its latest version. A file modified within settle
+// is left for a later call, which returns no sum.
+func (c *Capturer) recordNow(ctx context.Context, sess domain.SessionRecord, relPath string, w writer, settle time.Duration) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	dir := cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID))
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = root.Close() }()
 	rows, err := c.store.ListSessionArtifactVersions(ctx, sess.ID, relPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var last domain.SessionArtifactVersion
 	if len(rows) > 0 {
@@ -295,21 +304,22 @@ func (c *Capturer) recordNow(ctx context.Context, sess domain.SessionRecord, rel
 	}
 	info, err := root.Stat(filepath.FromSlash(relPath))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(rows) > 0 && last.Size == info.Size() && last.ModTime.UnixNano() == info.ModTime().UnixNano() {
 		// Unchanged since its latest version: nothing to record, and no need to read it.
-		return nil
+		return last.SHA256, nil
 	}
 	if settle > 0 && c.now().Sub(info.ModTime()) < settle {
-		return nil
+		return "", nil
 	}
 	obs := observation{size: info.Size(), mtime: info.ModTime().UnixNano()}
-	if _, err := c.capture(ctx, sess.ID, dir, blobStore{root: root}, relPath, obs, last, len(rows) > 0, w); err != nil {
-		return err
+	sum, _, err := c.capture(ctx, sess.ID, dir, blobStore{root: root}, relPath, obs, last, len(rows) > 0, w)
+	if err != nil {
+		return "", err
 	}
 	delete(c.observed[sess.ID], relPath)
-	return nil
+	return sum, nil
 }
 
 // List returns every kept version of one artifact path, newest first.

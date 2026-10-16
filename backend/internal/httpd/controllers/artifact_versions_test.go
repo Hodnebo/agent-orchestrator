@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -12,9 +13,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
@@ -26,6 +30,9 @@ type fakeArtifactVersions struct {
 	dir      string
 	versions []domain.SessionArtifactVersion // oldest first
 	blobs    map[string]string               // sha256 -> content
+	// snapshotErr fails Snapshot; afterSnapshot runs once it kept the content.
+	snapshotErr   error
+	afterSnapshot func()
 }
 
 func (f *fakeArtifactVersions) add(content string, source domain.ArtifactVersionSource) {
@@ -66,8 +73,17 @@ func (f *fakeArtifactVersions) Sync(_ context.Context, _ domain.SessionRecord, r
 	return nil
 }
 
-func (f *fakeArtifactVersions) Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) error {
-	return f.Sync(ctx, sess, relPath)
+func (f *fakeArtifactVersions) Snapshot(ctx context.Context, sess domain.SessionRecord, relPath string) (string, error) {
+	if f.snapshotErr != nil {
+		return "", f.snapshotErr
+	}
+	if err := f.Sync(ctx, sess, relPath); err != nil {
+		return "", err
+	}
+	if f.afterSnapshot != nil {
+		f.afterSnapshot()
+	}
+	return f.versions[len(f.versions)-1].SHA256, nil
 }
 
 func (f *fakeArtifactVersions) RecordRestore(ctx context.Context, sess domain.SessionRecord, relPath string, from int64) error {
@@ -176,8 +192,8 @@ func TestArtifactVersionRestoreWritesTheFileAndRecordsAUserVersion(t *testing.T)
 	srv, fake, dir := artifactVersionServer(t)
 	restore := srv.URL + "/api/v1/sessions/ao-1/artifact-versions/restore"
 
-	// The file moved on since the viewer last read it. A restore does not care,
-	// and keeps what it replaces as a version.
+	// The file moved on since the viewer last read it. A restore does not need
+	// the viewer's fingerprint: it keeps what it replaces as a version first.
 	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("edited meanwhile"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +216,104 @@ func TestArtifactVersionRestoreWritesTheFileAndRecordsAUserVersion(t *testing.T)
 	status, _ = artifactVersionCall(t, http.MethodPost, restore, map[string]any{"path": "plan.md", "version": 7})
 	if status != http.StatusNotFound {
 		t.Fatalf("unknown version: status = %d, want 404", status)
+	}
+}
+
+func TestArtifactVersionRestoreWritesNothingWhenTheCurrentContentCannotBeKept(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		"agent still writing": {artifactversions.ErrUnsettled, http.StatusConflict, "ARTIFACT_FILE_STALE"},
+		"file too large":      {artifactversions.ErrTooLarge, http.StatusBadRequest, "ARTIFACT_FILE_TOO_LARGE"},
+		"blob store failure":  {errors.New("disk full"), http.StatusInternalServerError, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, fake, dir := artifactVersionServer(t)
+			fake.snapshotErr = tc.err
+			status, body := artifactVersionCall(t, http.MethodPost, srv.URL+"/api/v1/sessions/ao-1/artifact-versions/restore", map[string]any{"path": "plan.md", "version": 1})
+			if status != tc.wantStatus || (tc.wantCode != "" && artifactErrorCode(t, body) != tc.wantCode) {
+				t.Fatalf("restore: status=%d body=%s, want %d %s", status, body, tc.wantStatus, tc.wantCode)
+			}
+			if data, _ := os.ReadFile(filepath.Join(dir, "plan.md")); string(data) != "v2 agent" {
+				t.Fatalf("file after refused restore = %q, want unchanged", data)
+			}
+			if len(fake.versions) != 2 {
+				t.Fatalf("versions = %+v, want none added", fake.versions)
+			}
+		})
+	}
+}
+
+func TestArtifactVersionRestoreRefusesAnAgentWriteThatRacedTheSnapshot(t *testing.T) {
+	srv, fake, dir := artifactVersionServer(t)
+	// The agent writes after the current content was kept but before the restore
+	// writes. That edit has no copy yet, so the restore must not replace it.
+	fake.afterSnapshot = func() {
+		if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("agent raced"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, body := artifactVersionCall(t, http.MethodPost, srv.URL+"/api/v1/sessions/ao-1/artifact-versions/restore", map[string]any{"path": "plan.md", "version": 1})
+	if status != http.StatusConflict || artifactErrorCode(t, body) != "ARTIFACT_FILE_STALE" {
+		t.Fatalf("restore: status=%d body=%s, want 409 ARTIFACT_FILE_STALE", status, body)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "plan.md")); string(data) != "agent raced" {
+		t.Fatalf("file after raced restore = %q, want the agent's edit kept", data)
+	}
+	if last := fake.versions[len(fake.versions)-1]; last.Source != domain.ArtifactVersionSourceAgent || last.RestoredFrom != 0 {
+		t.Fatalf("versions = %+v, want no restore recorded", fake.versions)
+	}
+}
+
+func TestArtifactVersionListOnlyReadsAndSyncRecordsTheEdit(t *testing.T) {
+	srv, fake, dir := artifactVersionServer(t)
+	base := srv.URL + "/api/v1/sessions/ao-1/artifact-versions"
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("v3 agent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if status, body := artifactVersionCall(t, http.MethodGet, base+"?path=plan.md", nil); status != http.StatusOK {
+		t.Fatalf("list: status=%d body=%s", status, body)
+	}
+	if len(fake.versions) != 2 {
+		t.Fatalf("versions after a list = %d, want 2: a GET must not record", len(fake.versions))
+	}
+
+	status, body := artifactVersionCall(t, http.MethodPost, base+"/sync", map[string]any{"path": "plan.md"})
+	var list struct {
+		Versions []struct {
+			Version int64 `json:"version"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil || status != http.StatusOK {
+		t.Fatalf("sync: status=%d body=%s err=%v", status, body, err)
+	}
+	if len(fake.versions) != 3 || len(list.Versions) != 3 || list.Versions[0].Version != 3 {
+		t.Fatalf("sync listed %+v, want the new edit recorded and listed first", list.Versions)
+	}
+	if status, _ := artifactVersionCall(t, http.MethodPost, base+"/sync", map[string]any{"path": "other.md"}); status != http.StatusNotFound {
+		t.Fatalf("sync of an unlisted file: status = %d, want 404", status)
+	}
+}
+
+func TestArtifactVersionReadTruncatesALongVersion(t *testing.T) {
+	srv, fake, _ := artifactVersionServer(t)
+	long := strings.Repeat("é", 200<<10)              // 400 KiB of two-byte characters
+	fake.add(long, domain.ArtifactVersionSourceAgent) // version 3
+
+	status, body := artifactVersionCall(t, http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/artifact-versions/3?path=plan.md", nil)
+	var one struct {
+		Content   string `json:"content"`
+		Truncated bool   `json:"truncated"`
+		Size      int64  `json:"size"`
+	}
+	if err := json.Unmarshal(body, &one); err != nil || status != http.StatusOK {
+		t.Fatalf("read: status=%d err=%v", status, err)
+	}
+	if !one.Truncated || len(one.Content) != 256<<10 || !utf8.ValidString(one.Content) || one.Size != int64(len(long)) {
+		t.Fatalf("read: truncated=%v len=%d size=%d, want the first 256 KiB on a character boundary", one.Truncated, len(one.Content), one.Size)
 	}
 }
 

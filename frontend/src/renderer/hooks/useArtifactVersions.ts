@@ -27,6 +27,25 @@ export function useArtifactVersions({ enabled, hostId, path, sessionId }: { enab
 	});
 }
 
+/**
+ * Records an edit of the file the observer has not noticed yet, then refreshes
+ * the cached list with the result. The history menu runs it when it opens.
+ */
+export function useSyncArtifactVersions({ hostId, path, sessionId }: { hostId?: string; path: string; sessionId: string }) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/artifact-versions/sync", {
+				params: { path: { sessionId } },
+				body: { path },
+			});
+			if (error) throw new Error(apiErrorMessage(error, "Unable to load version history"));
+			return data?.versions ?? [];
+		},
+		onSuccess: (versions) => queryClient.setQueryData(versionsKey(sessionId, path, hostId), versions),
+	});
+}
+
 /** One version's text content. A saved version never changes, so it is cached for good. */
 export function useArtifactVersion({ hostId, path, sessionId, version }: { hostId?: string; path: string; sessionId: string; version: number | null }) {
 	return useQuery({

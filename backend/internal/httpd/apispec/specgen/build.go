@@ -332,6 +332,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListArtifactVersionsResponse":             "ListArtifactVersionsResponse",
 	"ControllersArtifactVersionResponse":                  "ArtifactVersionResponse",
 	"ControllersRestoreArtifactVersionRequest":            "RestoreArtifactVersionRequest",
+	"ControllersSyncArtifactVersionsRequest":              "SyncArtifactVersionsRequest",
 	"ControllersPRFileQuery":                              "PRFileQuery",
 	"ControllersPRFileRevisionQuery":                      "PRFileRevisionQuery",
 	"ControllersUpdateWorkspaceFileRequest":               "UpdateWorkspaceFileRequest",
@@ -2698,6 +2699,19 @@ func sessionOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}, controllers.ArtifactVersionParam{}, controllers.ArtifactVersionQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ArtifactVersionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/artifact-versions/sync", id: "syncSessionArtifactVersions", tag: "sessions",
+			summary:    "Record an artifact file's unrecorded edit, then list its saved versions",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.SyncArtifactVersionsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListArtifactVersionsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

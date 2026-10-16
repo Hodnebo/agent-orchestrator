@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, LoaderCircle, User } from "lucide-react";
-import { useArtifactVersion, useArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
+import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
 import { GithubAvatar } from "@aoagents/product-ui";
 import { useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
@@ -87,7 +87,8 @@ function VersionItem({
  * The History menu in the viewer's header: every kept version in one list,
  * newest first, the first marked current. Choosing one previews it in the
  * viewer; the current version returns to the live file. The list and the
- * user's avatar load when the viewer opens, so the menu is ready to read.
+ * user's avatar load when the viewer opens, so the menu is ready to read, and
+ * opening it records any edit the observer has not picked up yet.
  */
 export function ArtifactHistoryMenu({
 	fallbackHarness,
@@ -112,11 +113,7 @@ export function ArtifactHistoryMenu({
 	const [showAll, setShowAll] = useState(false);
 	const closedAtRef = useRef(0);
 	const versions = useArtifactVersions({ enabled: true, hostId, path, sessionId });
-	const refetchVersions = versions.refetch;
-	// Opening the menu shows what is cached at once and refreshes it behind the scenes.
-	useEffect(() => {
-		if (menuOpen) void refetchVersions();
-	}, [menuOpen, refetchVersions]);
+	const syncVersions = useSyncArtifactVersions({ hostId, path, sessionId });
 	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
 	const { data: github } = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000 });
 	const login = github?.login;
@@ -133,7 +130,9 @@ export function ArtifactHistoryMenu({
 		<DropdownMenu
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (!open) closedAtRef.current = Date.now();
+				// Opening shows what is cached at once and refreshes it behind the scenes.
+				if (open) syncVersions.mutate();
+				else closedAtRef.current = Date.now();
 			}}
 			open={menuOpen}
 		>
@@ -199,7 +198,9 @@ export function ArtifactHistoryMenu({
 
 /**
  * A saved version shown read-only in place of the live file, with the actions
- * that leave it: restore it, or go back to the current file.
+ * that leave it: restore it, or go back to the current file. Markdown renders;
+ * anything else, HTML included for now, shows as source. A long version shows
+ * only its start, and a restore still writes all of it.
  */
 export function ArtifactVersionPreview({
 	artifactOrigin,
@@ -247,10 +248,17 @@ export function ArtifactVersionPreview({
 					</PanelMessage>
 				) : query.isError ? (
 					<PanelMessage>{query.error.message}</PanelMessage>
-				) : markdown ? (
-					<MarkdownFileView artifactOrigin={artifactOrigin} content={query.data.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={false} version={query.dataUpdatedAt} />
 				) : (
-					<pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-foreground">{query.data.content}</pre>
+					<>
+						{query.data.truncated ? (
+							<div className="border-b border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">{t("artifacts.history.truncated")}</div>
+						) : null}
+						{markdown ? (
+							<MarkdownFileView artifactOrigin={artifactOrigin} content={query.data.content} filePath={path} hostId={hostId} sessionId={sessionId} truncated={false} version={query.dataUpdatedAt} />
+						) : (
+							<pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-foreground">{query.data.content}</pre>
+						)}
+					</>
 				)}
 			</div>
 		</div>
