@@ -524,11 +524,17 @@ func CloneExtraRepo(
 	}); err != nil {
 		return err
 	}
+	return configureExtraRepoGit(ctx, runner, dest, dataDir)
+}
+
+// configureExtraRepoGit points an additional repository at the session's
+// credential helper and commit identity, as ConfigureWorkerGit does for the
+// main checkout. Without a session helper (no main checkout was configured)
+// the repository is left as it is: its origin is uncredentialed, so the
+// agent's network operations fail rather than leak a token.
+func configureExtraRepoGit(ctx context.Context, runner GitRunner, dest, dataDir string) error {
 	helperPath := GitCredentialHelperPath(dataDir)
 	if _, statErr := os.Stat(helperPath); statErr != nil {
-		// No session helper (e.g. scratch/no-primary paths). The clone succeeded
-		// with an uncredentialed origin; agent network ops will simply prompt-fail
-		// rather than leak a token. Leave the repo as-is.
 		return nil
 	}
 	for _, command := range [][]string{
@@ -543,6 +549,94 @@ func CloneExtraRepo(
 		}
 	}
 	return nil
+}
+
+// PrepareExtraRepo makes one of the project's additional repositories ready
+// beside the main checkout at dest: it clones the repository, or, when a
+// checkout of the same repository is already there (a worker restart or a
+// stopped and started workspace), fetches it instead. It then checks out the
+// session branch, which has the main repository's branch name, unless that
+// branch already exists (the agent's commits on it are kept), and records the
+// checkout's review base. A folder holding anything else is left untouched
+// and reported.
+func PrepareExtraRepo(
+	ctx context.Context,
+	runner GitRunner,
+	dest string,
+	repo RepoRef,
+	sessionBranch, token, dataDir string,
+) error {
+	if runner == nil {
+		return errors.New("git runner is required")
+	}
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create the folder for additional repositories: %w", err)
+	}
+	existing, err := extraRepoCheckoutState(ctx, runner, dest, repo.URL)
+	if err != nil {
+		return err
+	}
+	if existing {
+		if err := withGitCredential(token, func(env map[string]string) error {
+			_, fetchErr := runner.Run(ctx, dest, env, "fetch", "--no-tags", "--quiet", "origin")
+			return fetchErr
+		}); err != nil {
+			return fmt.Errorf("fetch the existing checkout: %w", err)
+		}
+		if err := configureExtraRepoGit(ctx, runner, dest, dataDir); err != nil {
+			return err
+		}
+	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, token, dataDir); err != nil {
+		return err
+	}
+	if branch := strings.TrimSpace(sessionBranch); branch != "" {
+		if _, err := runner.Run(ctx, dest, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+			if _, err := runner.Run(ctx, dest, nil, "checkout", "-B", branch); err != nil {
+				return fmt.Errorf("check out the session branch: %w", err)
+			}
+		}
+	}
+	return EnsureWorkspaceReviewBase(ctx, runner, dest, repo.Branch)
+}
+
+// extraRepoCheckoutState reports whether dest already holds a checkout of
+// repoURL. A missing or empty folder is not a checkout (the clone creates or
+// fills it); a folder holding anything else is an error, so nothing the
+// workspace template or the user put there is overwritten.
+func extraRepoCheckoutState(ctx context.Context, runner GitRunner, dest, repoURL string) (bool, error) {
+	entries, err := os.ReadDir(dest)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && len(entries) == 0) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect %s: %w", dest, err)
+	}
+	if info, statErr := os.Stat(filepath.Join(dest, ".git")); statErr != nil || !info.IsDir() {
+		return false, fmt.Errorf("%s already exists and is not a Git checkout", dest)
+	}
+	output, err := runner.Run(ctx, dest, nil, "remote", "get-url", "origin")
+	if err != nil {
+		return false, fmt.Errorf("%s has no origin remote: %w", dest, err)
+	}
+	if !sameRepository(strings.TrimSpace(output), repoURL) {
+		return false, fmt.Errorf("%s is a checkout of a different repository", dest)
+	}
+	return true, nil
+}
+
+// sameRepository compares two repository URLs: by GitHub owner/name when both
+// are GitHub URLs, otherwise as written without a trailing .git or slash.
+func sameRepository(left, right string) bool {
+	leftIdentity, leftErr := githubRepositoryIdentity(left)
+	rightIdentity, rightErr := githubRepositoryIdentity(right)
+	if leftErr == nil && rightErr == nil {
+		return leftIdentity == rightIdentity
+	}
+	normalize := func(value string) string {
+		return strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(value), "/"), ".git")
+	}
+	return normalize(left) == normalize(right)
 }
 
 func shellQuote(value string) string {
@@ -640,6 +734,20 @@ func PrepareScratchWorkspace(
 		return fmt.Errorf("initialize scratch workspace: %w", err)
 	}
 	return nil
+}
+
+// PrepareStandaloneWorkspace prepares a standalone session's folder. An empty
+// or missing folder becomes a fresh Git repository, as PrepareScratchWorkspace
+// makes it. With adoptExisting, a folder that already holds files (a working
+// directory the workspace template filled, such as ~/work with its own
+// checkouts) is used exactly as it is: nothing is initialized or changed.
+func PrepareStandaloneWorkspace(ctx context.Context, runner GitRunner, workspace string, adoptExisting bool) error {
+	if adoptExisting {
+		if entries, err := os.ReadDir(workspace); err == nil && len(entries) > 0 {
+			return nil
+		}
+	}
+	return PrepareScratchWorkspace(ctx, runner, workspace)
 }
 
 // ProjectSnapshotMarker, inside .git, marks a pristine checkout baked into a

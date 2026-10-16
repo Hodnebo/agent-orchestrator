@@ -344,7 +344,7 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	turnParams := map[string]any{
 		"threadId": threadID, "input": []map[string]any{{"type": "text", "text": turn.Prompt}},
 		"approvalPolicy": policy, "approvalsReviewer": reviewer,
-		"sandboxPolicy": codexTurnSandbox(sandbox),
+		"sandboxPolicy": codexTurnSandbox(sandbox, command.WritableRoots),
 	}
 	if turn.Model != "" {
 		turnParams["model"] = turn.Model
@@ -428,14 +428,21 @@ func codexApprovalSettings(turn worker.Turn) (policy, sandbox, reviewer string) 
 	}
 }
 
-func codexTurnSandbox(sandbox string) map[string]string {
+// codexTurnSandbox is a turn's sandbox policy. A workspace-write sandbox also
+// lets the turn write writableRoots, the session's checkouts outside its
+// working directory.
+func codexTurnSandbox(sandbox string, writableRoots []string) map[string]any {
 	switch sandbox {
 	case "read-only":
-		return map[string]string{"type": "readOnly"}
+		return map[string]any{"type": "readOnly"}
 	case "workspace-write":
-		return map[string]string{"type": "workspaceWrite"}
+		policy := map[string]any{"type": "workspaceWrite"}
+		if len(writableRoots) > 0 {
+			policy["writableRoots"] = writableRoots
+		}
+		return policy
 	default:
-		return map[string]string{"type": "dangerFullAccess"}
+		return map[string]any{"type": "dangerFullAccess"}
 	}
 }
 

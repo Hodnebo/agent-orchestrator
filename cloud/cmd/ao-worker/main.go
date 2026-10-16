@@ -168,10 +168,24 @@ func run(logger *slog.Logger) error {
 	var workingDirectoryErr error
 	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
 		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
+	adoptStandaloneFolder := false
 	switch {
 	case workingDirectory != "" && hasRepository:
 		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
 		workspace = reuse.Workspace
+	case workingDirectory != "" && worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL):
+		// A standalone project (no repository) on a workspace with a
+		// configured working directory works in that folder as the template
+		// left it, for example ~/work holding the repositories the template
+		// cloned itself.
+		if dir, err := worker.ExpandWorkingDirectory(workingDirectory, os.Getenv("HOME"), ""); err != nil {
+			logger.Warn("working directory: a standalone session cannot use the configured directory; using the default",
+				"working_directory", workingDirectory, "error", err)
+		} else {
+			workspace, adoptStandaloneFolder = dir, true
+			reuse.Workspace = dir
+			_ = os.Setenv("AO_WORKSPACE_DIR", dir)
+		}
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
@@ -264,10 +278,7 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
 		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
-		b.Env["AO_PULL_REQUEST_HELP"] = "curl --unix-socket $AO_PULL_REQUEST_SOCKET " +
-			`-X POST http://localhost/pull-request -H 'Content-Type: application/json' ` +
-			`-d '{"branch":"<pushed branch name>","title":"<PR title>","body":"<PR body>"}' ` +
-			"to push the current branch and open a pull request against the project's configured default branch."
+		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -330,7 +341,8 @@ func run(logger *slog.Logger) error {
 		compareBase = "origin/" + defaultBranch
 	}
 	transportSupervisor := workertransport.Supervisor{
-		Control: client, Workspace: workspace, DataDir: dataDir, Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		Control: client, Workspace: workspace, DataDir: dataDir,
+		Repositories: worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)[1:], Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
 		AgentCommandFactory: agentCommandFactory,
 		Started:             started, ChatRunner: chatRunner,
 		ChatWorkspaceReady: chatWorkspaceReady,
@@ -403,7 +415,7 @@ func run(logger *slog.Logger) error {
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
-		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch.DefaultBranch, logger)
+		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch, logger)
 	}()
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
@@ -456,7 +468,7 @@ func run(logger *slog.Logger) error {
 		for {
 			err := workingDirectoryErr
 			if err == nil {
-				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse, adoptStandaloneFolder)
 			}
 			if err == nil {
 				break
@@ -607,9 +619,10 @@ func prepareWorkspace(
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
 	reuse worker.ReuseDecision,
+	adoptExistingFolder bool,
 ) error {
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
-		if err := worker.PrepareScratchWorkspace(ctx, worker.ExecGitRunner{}, workspace); err != nil {
+		if err := worker.PrepareStandaloneWorkspace(ctx, worker.ExecGitRunner{}, workspace, adoptExistingFolder); err != nil {
 			return fmt.Errorf("prepare scratch workspace: %w", err)
 		}
 		logger.Info("initialized scratch workspace")
@@ -650,7 +663,7 @@ func prepareWorkspace(
 		// repo. Extra repos reuse the session's checkout-grant token, so they work
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
-		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch, workspace, dataDir)
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
@@ -720,36 +733,31 @@ func prepareReusedWorkspace(
 			logger.Warn("checkout reuse: could not fast-forward the session branch to the latest base", "error", err)
 		}
 	}
-	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)
+	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch, workspace, dataDir)
 	return nil
 }
 
-// cloneExtraRepos clones each additional dev-kit repository as a sibling of the
-// primary checkout, so the agent (whose working directory is the primary repo)
-// can reach it at ../<name>. It is best-effort: every failure is logged and
-// skipped so the session always starts on its primary repo. The launcher
-// (workerexec) computes the same paths via worker.ExtraRepoPath and lists them
-// in the agent's system prompt.
-func cloneExtraRepos(ctx context.Context, logger *slog.Logger, token string, repos []worker.RepoRef, workspace, dataDir string) {
-	if len(repos) == 0 {
+// cloneExtraRepos prepares each of the project's additional repositories as a
+// sibling of the main checkout, so the agent reaches it at ../<name>, on the
+// session branch (see worker.PrepareExtraRepo). It is best-effort: every
+// failure is logged and skipped so the session always starts on its main
+// repository. The launcher (workerexec) computes the same paths via
+// worker.SessionRepoCheckouts and lists them in the agent's system prompt.
+func cloneExtraRepos(ctx context.Context, logger *slog.Logger, token string, launch worker.LaunchContext, workspace, dataDir string) {
+	if len(launch.ExtraRepos) == 0 {
 		return
 	}
-	parent := filepath.Dir(workspace)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		logger.Warn("multi-repo: cannot create extra-repos directory", "error", err)
-		return
-	}
-	for _, repo := range repos {
-		dest := worker.ExtraRepoPath(workspace, repo.URL)
-		// Clone via worker.CloneExtraRepo, which uses the primary checkout's
-		// askpass mechanism: the token stays in the command's environment and
-		// never enters the URL, argv, or the repo's .git/config, and the repo is
-		// wired to the session credential helper for the agent's own git ops.
-		if err := worker.CloneExtraRepo(ctx, worker.ExecGitRunner{}, parent, dest, repo.URL, repo.Branch, token, dataDir); err != nil {
-			logger.Warn("multi-repo: extra repo clone failed (non-fatal)", "repo", repo.URL, "error", err)
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+		// The clone uses the main checkout's askpass mechanism: the token stays
+		// in the command's environment and never enters the URL, argv, or the
+		// repo's .git/config, and the repo is wired to the session credential
+		// helper for the agent's own git operations.
+		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
+		if err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, launch.Branch, token, dataDir); err != nil {
+			logger.Warn("multi-repo: additional repository is unavailable (non-fatal)", "repo", checkout.URL, "error", err)
 			continue
 		}
-		logger.Info("multi-repo: cloned extra repo", "repo", repo.URL, "path", dest)
+		logger.Info("multi-repo: additional repository ready", "repo", checkout.URL, "path", checkout.Path)
 	}
 }
 
