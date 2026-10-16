@@ -112,6 +112,8 @@ export type OnboardingFinishRequest = {
 	clonePreparationId?: string;
 	defaultBranch?: string;
 	asWorkspace?: boolean;
+	/** No project: onboarding ends by opening a Scratchpad agent with `orchestratorAgent`. */
+	standalone?: boolean;
 	nonce: number;
 };
 
