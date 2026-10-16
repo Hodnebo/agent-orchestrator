@@ -70,11 +70,10 @@ func (j *taskNameJob) wait() tasknaming.Name {
 	return tasknaming.Wait(j.ctx, j.done, j.fallback)
 }
 
-func startWorkerTaskName(ctx context.Context, c *client, launch worker.LaunchContext, dataDir string, loggers ...*slog.Logger) *taskNameJob {
+func startWorkerTaskName(ctx context.Context, c *client, launch worker.LaunchContext, dataDir string, logger *slog.Logger) *taskNameJob {
 	fallback := tasknaming.Fallback(launch.Prompt, launch.SessionID)
-	logger := slog.Default()
-	if len(loggers) > 0 && loggers[0] != nil {
-		logger = loggers[0]
+	if logger == nil {
+		logger = slog.Default()
 	}
 	return startTaskNameCall(ctx, tasknaming.Timeout, fallback, func(ctx context.Context) (raw string, err error) {
 		started := time.Now()
@@ -579,15 +578,7 @@ func freshTaskPreparationBranch(ctx context.Context, repository, sessionID strin
 		if n > 1 {
 			namespace += fmt.Sprintf("-%d", n)
 		}
-		taken := false
-		for _, ref := range occupied {
-			ref = taskRefBranch(ref)
-			if ref == namespace || strings.HasPrefix(ref, namespace+"/") || strings.HasPrefix(namespace, ref+"/") {
-				taken = true
-				break
-			}
-		}
-		if !taken {
+		if !taskBranchOccupied(namespace+"/root", occupied, "") {
 			return namespace + "/root", nil
 		}
 	}

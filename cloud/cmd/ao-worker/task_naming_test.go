@@ -163,7 +163,7 @@ func TestWorkerTaskNameRequiresControlPlaneCapacityBeforeCredentials(t *testing.
 		_ = json.NewEncoder(w).Encode(domain.TaskNameResult{Generate: false})
 	}))
 	defer server.Close()
-	job := startWorkerTaskName(context.Background(), &client{baseURL: server.URL, http: server.Client()}, worker.LaunchContext{SessionID: "session", Harness: "codex", Prompt: "fix login redirect"}, t.TempDir())
+	job := startWorkerTaskName(context.Background(), &client{baseURL: server.URL, http: server.Client()}, worker.LaunchContext{SessionID: "session", Harness: "codex", Prompt: "fix login redirect"}, t.TempDir(), nil)
 	if got := job.wait(); got.Slug != "fix-login-redirect" {
 		t.Fatalf("name = %+v", got)
 	}

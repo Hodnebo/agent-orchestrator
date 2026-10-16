@@ -275,7 +275,7 @@ func TestRuntimeCommandOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("AO_CLAUDE_ACP_COMMAND", executable)
-	launch, err := resolveRuntime(context.Background())
+	launch, err := resolveRuntime(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("resolveRuntime: %v", err)
 	}
