@@ -183,7 +183,7 @@ func TestTaskNameNamespaceValidation(t *testing.T) {
 	}{
 		{"refs/heads/ao/login/root", true}, {"refs/remotes/upstream/ao/login/root", true},
 		{"ao/login", true}, {"refs/heads/ao", true}, {"login", true}, {"/worktrees/login", true},
-		{"refs/heads/login", false}, {"refs/heads/ao/login-2/root", false}, {"ao/logins/root", false},
+		{"ao", false}, {"refs/heads/login", false}, {"refs/heads/ao/login-2/root", false}, {"ao/logins/root", false},
 	} {
 		if got := taskNameOccupied("ao", "login", []string{tc.value}); got != tc.occupied {
 			t.Errorf("occupied(%q) = %v", tc.value, got)
@@ -220,6 +220,12 @@ func TestNameWorkerTaskReservationAndCompletion(t *testing.T) {
 	if reserved.State != "reserved" || reserved.Title != "Fix login" || reserved.Slug != "login-redirect-3" || reserved.Branch != "ao/login-redirect-3/root" {
 		t.Fatalf("reserved = %+v", reserved)
 	}
+	if claim, err := name(domain.TaskNameRequest{Claim: true}); err != nil || claim.Generate {
+		t.Fatalf("reserved generation = %+v %v", claim, err)
+	}
+	if _, err := name(domain.TaskNameRequest{Skip: true}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("reserved legacy skip = %v", err)
+	}
 	if replay, err := name(domain.TaskNameRequest{Title: "Replace", Slug: "different"}); err != nil || replay != reserved {
 		t.Fatalf("replay = %+v, %v", replay, err)
 	}
@@ -253,5 +259,141 @@ func TestNameWorkerTaskReservationAndCompletion(t *testing.T) {
 	}
 	if _, err := store.NameWorkerTask(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch-1, domain.TaskNameRequest{}); !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("stale done replay error = %v", err)
+	}
+}
+
+func TestNameWorkerTaskGenerationAdmissionAndExpiry(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	project, err := store.CreateProject(ctx, principal, fixture.orgID, uuid.NewString(), domain.CreateProject{DisplayName: "Other project", RepositoryURL: "https://example.test/" + uuid.NewString(), DefaultBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessions []domain.Session
+	for i := range 6 {
+		projectID := fixture.projectID
+		if i%2 == 0 {
+			projectID = project.ID
+		}
+		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{ProjectID: projectID, Kind: "worker", Harness: "codex", DisplayName: "Task", Prompt: "Fix login", Provider: "docker"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RegisterWorkerBootstrap(ctx, fixture.orgID, session.ID, "worker-"+session.ID, "test", 1, nil); err != nil {
+			t.Fatal(err)
+		}
+		sessions = append(sessions, session)
+	}
+	claim := func(session domain.Session) (domain.TaskNameResult, error) {
+		return store.NameWorkerTask(ctx, fixture.orgID, session.ID, "worker-"+session.ID, 1, domain.TaskNameRequest{Claim: true})
+	}
+	results := make([]domain.TaskNameResult, len(sessions))
+	errs := make([]error, len(sessions))
+	var wg sync.WaitGroup
+	for i, session := range sessions {
+		wg.Go(func() { results[i], errs[i] = claim(session) })
+	}
+	wg.Wait()
+	var granted, denied []int
+	for i, result := range results {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+		if result.State != domain.TaskNamingPending {
+			t.Fatalf("claim reserved a name: %+v", result)
+		}
+		if result.Generate {
+			granted = append(granted, i)
+		} else {
+			denied = append(denied, i)
+		}
+	}
+	if len(granted) != 4 || len(denied) != 2 {
+		t.Fatalf("generation admission = %d granted/%d denied", len(granted), len(denied))
+	}
+	if again, err := claim(sessions[granted[0]]); err != nil || again.Generate {
+		t.Fatalf("repeated admission: %+v %v", again, err)
+	}
+	if _, err := store.NameWorkerTask(ctx, fixture.orgID, sessions[granted[0]].ID, "worker-"+sessions[granted[0]].ID, 1, domain.TaskNameRequest{Slug: "login"}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := claim(sessions[denied[0]]); err != nil || !result.Generate {
+		t.Fatalf("released admission: %+v %v", result, err)
+	}
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_name_generation_at=now()-interval '21 seconds' WHERE org_id=$1 AND id=$2`, fixture.orgID, sessions[granted[1]].ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := claim(sessions[denied[1]]); err != nil || !result.Generate {
+		t.Fatalf("expired admission: %+v %v", result, err)
+	}
+	if _, err := store.NameWorkerTask(ctx, fixture.orgID, sessions[denied[1]].ID, "stale-worker", 1, domain.TaskNameRequest{Claim: true}); !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("unfenced admission = %v", err)
+	}
+}
+
+func TestNameWorkerTaskLegacySkipAndValidation(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_naming_state='pending', prompt='Fix login', task_name_generation_at=now() WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.sessionID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	name := func(input domain.TaskNameRequest) (domain.TaskNameResult, error) {
+		return store.NameWorkerTask(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, input)
+	}
+	for _, input := range []domain.TaskNameRequest{{Claim: true, Skip: true}, {Claim: true, Complete: true}, {Skip: true, Retry: true}, {Complete: true, Retry: true}} {
+		if _, err := name(input); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("invalid flags %+v = %v", input, err)
+		}
+	}
+	if _, err := store.NameWorkerTask(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch-1, domain.TaskNameRequest{Skip: true}); !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("unfenced skip = %v", err)
+	}
+	result, err := name(domain.TaskNameRequest{Skip: true})
+	if err != nil || result.State != domain.TaskNamingDone || result.Branch != "main" || result.Slug != "" || result.Title != "Session" {
+		t.Fatalf("skip = %+v %v", result, err)
+	}
+	var leaseCleared bool
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT task_name_generation_at IS NULL FROM ao_sessions WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.sessionID).Scan(&leaseCleared)
+	}); err != nil || !leaseCleared {
+		t.Fatalf("lease cleared = %v %v", leaseCleared, err)
+	}
+	if replay, err := name(domain.TaskNameRequest{Claim: true}); err != nil || replay.Generate {
+		t.Fatalf("done claim = %+v %v", replay, err)
+	}
+}
+
+func TestNameWorkerTaskReservesExtraRepositoryDirectories(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE ao_projects SET config=$3 WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.projectID, `{"coder":{"extraRepos":[{"url":"https://example.test/owner/api"},{"url":"https://example.test/owner/api-2"},{"url":"https://example.test/owner/api-3-2"}]}}`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_naming_state='pending',prompt='Fix API' WHERE org_id=$1 AND id=$2`, fixture.orgID, fixture.sessionID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	name := func(input domain.TaskNameRequest) (domain.TaskNameResult, error) {
+		return store.NameWorkerTask(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, input)
+	}
+	reserved, err := name(domain.TaskNameRequest{Slug: "api"})
+	if err != nil || reserved.Slug != "api-3" {
+		t.Fatalf("extra repository reservation = %+v %v", reserved, err)
+	}
+	if _, err := name(domain.TaskNameRequest{Complete: true, Branch: "ao/api-3-2/root"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("adapter suffix collided with extra repo: %v", err)
+	}
+	completed, err := name(domain.TaskNameRequest{Complete: true, Branch: "ao/api-3/root"})
+	if err != nil || completed.State != "done" {
+		t.Fatalf("safe completion = %+v %v", completed, err)
 	}
 }

@@ -160,6 +160,7 @@ const (
 // completes with the branch the workspace adapter actually selected.
 type TaskNameRequest struct {
 	Claim    bool     `json:"claim,omitempty"`
+	Skip     bool     `json:"skip,omitempty"`
 	Title    string   `json:"title,omitempty"`
 	Slug     string   `json:"slug,omitempty"`
 	Branch   string   `json:"branch,omitempty"`

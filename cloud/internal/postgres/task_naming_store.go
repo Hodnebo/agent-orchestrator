@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/tasknaming"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -22,8 +23,23 @@ func (s *Store) NameWorkerTask(
 	epoch int64,
 	input domain.TaskNameRequest,
 ) (domain.TaskNameResult, error) {
+	flags := 0
+	for _, flag := range []bool{input.Claim, input.Skip, input.Complete, input.Retry} {
+		if flag {
+			flags++
+		}
+	}
+	if flags > 1 {
+		return domain.TaskNameResult{}, ErrInvalid
+	}
 	var result domain.TaskNameResult
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		// Serialize generation admission across projects in this organization.
+		if input.Claim {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "ao-task-generation:"+orgID); err != nil {
+				return err
+			}
+		}
 		var projectID string
 		if err := tx.QueryRow(ctx, `SELECT project_id FROM ao_sessions WHERE org_id=$1 AND id=$2`, orgID, sessionID).Scan(&projectID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -73,8 +89,37 @@ func (s *Store) NameWorkerTask(
 		if agentSessionID != "" {
 			return ErrConflict
 		}
-		if input.Complete && input.Retry {
-			return ErrInvalid
+		if input.Skip {
+			if result.State != domain.TaskNamingPending {
+				return ErrConflict
+			}
+			result.State, result.Slug = domain.TaskNamingDone, ""
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_naming_state='done', task_name_slug='', task_name_generation_at=NULL, updated_at=now() WHERE org_id=$1 AND id=$2`, orgID, sessionID); err != nil {
+				return err
+			}
+			return appendTypedEvent(ctx, tx, orgID, sessionID, "workspace.changed", result)
+		}
+		if input.Claim {
+			if result.State != domain.TaskNamingPending {
+				return nil
+			}
+			var alreadyClaimed bool
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(task_name_generation_at > clock_timestamp()-make_interval(secs => $3), false) FROM ao_sessions WHERE org_id=$1 AND id=$2`, orgID, sessionID, tasknaming.Timeout.Seconds()).Scan(&alreadyClaimed); err != nil {
+				return err
+			}
+			if alreadyClaimed {
+				return nil
+			}
+			var count int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM ao_sessions WHERE org_id=$1 AND task_naming_state='pending' AND NOT is_terminated AND agent_session_id='' AND task_name_generation_at > clock_timestamp()-make_interval(secs => $2)`, orgID, tasknaming.Timeout.Seconds()).Scan(&count); err != nil {
+				return err
+			}
+			if count >= tasknaming.MaxConcurrent {
+				return nil
+			}
+			_, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_name_generation_at=clock_timestamp() WHERE org_id=$1 AND id=$2`, orgID, sessionID)
+			result.Generate = err == nil
+			return err
 		}
 		prefix, err := domain.ProjectSessionPrefix(config)
 		if err != nil {
@@ -92,6 +137,13 @@ func (s *Store) NameWorkerTask(
 		if err != nil {
 			return err
 		}
+		// Extra repositories are cloned beside the primary task worktree.
+		// Reserve their existing directory names before choosing the primary.
+		if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
+			for _, repo := range cfg.ExtraRepos {
+				occupied = append(occupied, worker.ExtraRepoDirName(repo.URL))
+			}
+		}
 		if input.Complete {
 			if result.State != domain.TaskNamingReserved {
 				return ErrConflict
@@ -104,7 +156,7 @@ func (s *Store) NameWorkerTask(
 				return ErrConflict
 			}
 			result.State, result.Branch, result.Slug = domain.TaskNamingDone, input.Branch, actualSlug
-			if _, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_naming_state=$3, branch=$4, task_name_slug=$5, updated_at=now()
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions SET task_naming_state=$3, branch=$4, task_name_slug=$5, task_name_generation_at=NULL, updated_at=now()
 				WHERE org_id=$1 AND id=$2`, orgID, sessionID, result.State, result.Branch, result.Slug); err != nil {
 				return err
 			}
@@ -145,7 +197,7 @@ func (s *Store) NameWorkerTask(
 		}
 		result.State, result.Slug, result.Branch = domain.TaskNamingReserved, candidate, prefix+"/"+candidate+"/root"
 		if err := tx.QueryRow(ctx, `UPDATE ao_sessions
-			SET task_naming_state=$3, task_name_slug=$4, branch=$5,
+			SET task_naming_state=$3, task_name_slug=$4, branch=$5, task_name_generation_at=NULL,
 				display_name=CASE WHEN task_name_initial_title IS NOT NULL AND display_name=task_name_initial_title AND $6<>'' THEN $6 ELSE display_name END,
 				updated_at=now()
 			WHERE org_id=$1 AND id=$2 RETURNING display_name`, orgID, sessionID, result.State, result.Slug, result.Branch, name.Title).Scan(&result.Title); err != nil {
@@ -211,7 +263,7 @@ func taskNameOccupied(prefix, slug string, occupied []string) bool {
 		// Workers can report either refs or sibling workspace directory names.
 		if !isRef && (value == slug || path.IsAbs(value) && path.Base(value) == slug) ||
 			value == namespace || strings.HasPrefix(value, namespace+"/") ||
-			value != "" && strings.HasPrefix(namespace, value+"/") {
+			(isRef || strings.Contains(value, "/")) && value != "" && strings.HasPrefix(namespace, value+"/") {
 			return true
 		}
 	}

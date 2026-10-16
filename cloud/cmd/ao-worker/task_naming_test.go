@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -282,11 +283,11 @@ func TestTaskWorkspaceRetriesCloudCollisionAfterFilesystemSuffix(t *testing.T) {
 		} else if !request.Complete {
 			refs, folder := false, false
 			for _, ref := range request.Occupied {
-				refs = refs || ref == "refs/remotes/origin/ao/login-redirect-2/root"
+				refs = refs || ref == "login-redirect-2"
 				folder = folder || ref == "login-redirect"
 			}
 			if !refs || !folder {
-				t.Errorf("missing occupied refs/folders: %v", request.Occupied)
+				t.Errorf("missing compacted occupied candidates: %v", request.Occupied)
 			}
 		}
 		if request.Complete {
@@ -523,5 +524,27 @@ func TestTaskNamingFailureKeepsChatDiagnosticTransportAliveUntilReopen(t *testin
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("diagnostic transport did not stop")
+	}
+}
+
+func TestTaskNameOccupiedMetadataIsBounded(t *testing.T) {
+	occupied := make([]string, 0, 10000)
+	for i := range 10000 {
+		occupied = append(occupied, fmt.Sprintf("refs/heads/unrelated-%d", i))
+	}
+	occupied = append(occupied, "refs/remotes/upstream/custom/prefix/login/root", "login-2", "refs/heads/custom/prefix/login-3/child", "refs/heads/custom/prefix/login-4", "custom")
+	got := taskNameOccupiedCandidates("custom/prefix/1234abcd", "", "login", occupied)
+	if strings.Join(got, ",") != "login,login-2,login-3,login-4" {
+		t.Fatalf("occupied candidates = %v", got)
+	}
+	if got := taskNameOccupiedCandidates("custom/prefix/login-5/root", "login-5", "ignored", append(occupied, "refs/heads/custom/prefix")); len(got) != 100 {
+		t.Fatalf("ancestor blocks %d candidates, want 100", len(got))
+	}
+	payload, err := json.Marshal(domain.TaskNameRequest{Slug: "login", Occupied: got})
+	if err != nil || len(payload) > 8192 {
+		t.Fatalf("bounded payload = %d bytes %v", len(payload), err)
+	}
+	if !taskBranchOccupied("custom/prefix/login/root", occupied, "") {
+		t.Fatal("compacting metadata mutated the local inventory")
 	}
 }

@@ -199,6 +199,50 @@ func taskWorkspaceOccupied(ctx context.Context, repository, managedParent string
 	return occupied, nil
 }
 
+// taskNameOccupiedCandidates compresses arbitrarily large ref inventories to
+// the bounded candidate family the control plane can select. The Git adapter
+// still checks the complete local inventory when it performs the rename.
+func taskNameOccupiedCandidates(branch, reservedSlug, slug string, occupied []string) []string {
+	prefix := ""
+	if reservedSlug != "" {
+		prefix, _ = strings.CutSuffix(branch, "/"+reservedSlug+"/root")
+	} else {
+		branch = strings.TrimSuffix(branch, "/root")
+		if i := strings.LastIndex(branch, "/"); i >= 0 {
+			prefix = branch[:i]
+		}
+	}
+	if reservedSlug != "" {
+		slug = reservedSlug
+	}
+	var refs []string
+	for _, value := range occupied {
+		if strings.HasPrefix(value, "refs/") {
+			refs = append(refs, value)
+		}
+	}
+	var result []string
+	for suffix := 1; suffix <= 100; suffix++ {
+		candidate := slug
+		if suffix > 1 {
+			candidate = fmt.Sprintf("%s-%d", slug, suffix)
+		}
+		used := prefix != "" && taskBranchOccupied(prefix+"/"+candidate+"/root", refs, "")
+		if !used {
+			for _, value := range occupied {
+				if !strings.HasPrefix(value, "refs/") && value == candidate {
+					used = true
+					break
+				}
+			}
+		}
+		if used {
+			result = append(result, candidate)
+		}
+	}
+	return result
+}
+
 func taskBranchMatches(branch string, reservation domain.TaskNameResult) bool {
 	if branch == reservation.Branch {
 		return true
@@ -332,11 +376,14 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 		}
 		return record.Info.Path, nil
 	}
+	if name.Slug == "" {
+		name.Slug = tasknaming.Fallback(launch.Prompt, launch.SessionID).Slug
+	}
 	occupied, err := taskWorkspaceOccupied(ctx, canonical, managedParent)
 	if err != nil {
 		return canonical, err
 	}
-	reservation, err := c.nameTask(ctx, domain.TaskNameRequest{Title: name.Title, Slug: name.Slug, Occupied: occupied})
+	reservation, err := c.nameTask(ctx, domain.TaskNameRequest{Title: name.Title, Slug: name.Slug, Occupied: taskNameOccupiedCandidates(launch.Branch, launch.TaskNameSlug, name.Slug, occupied)})
 	if err != nil {
 		return canonical, err
 	}
@@ -345,7 +392,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 		if err != nil {
 			return domain.TaskNameResult{}, err
 		}
-		reservation, err := c.nameTask(ctx, domain.TaskNameRequest{Retry: true, Occupied: occupied})
+		reservation, err := c.nameTask(ctx, domain.TaskNameRequest{Retry: true, Occupied: taskNameOccupiedCandidates(reservation.Branch, reservation.Slug, reservation.Slug, occupied)})
 		if err != nil {
 			return reservation, err
 		}
