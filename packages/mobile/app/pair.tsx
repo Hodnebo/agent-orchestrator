@@ -197,9 +197,9 @@ export default function PairScreen() {
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
 		await finish();
-		// A deliberate scan is the moment to ask for notifications: the OS prompt
-		// shows once, and a granted device registers with this machine straight
-		// away instead of waiting for the user to find the Settings switch.
+		// A successful scan counts as a deliberate trigger for the one-shot OS
+		// prompt (see `ask` on registerForPushNow in lib/push.ts): a granted device
+		// registers with this machine now instead of waiting on the Settings switch.
 		void registerForPush(result.config, { ask: true }).catch((e) => console.warn("[push] registration failed", e));
 	}
 
