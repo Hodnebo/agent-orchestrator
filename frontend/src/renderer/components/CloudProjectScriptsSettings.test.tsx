@@ -107,3 +107,30 @@ it("shows a member the scripts read-only", async () => {
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 	expect(screen.getByText("Only organization owners and admins can change these scripts.")).toBeInTheDocument();
 });
+
+it("runs a step in one of the project's additional repositories and stores it as an object", async () => {
+	const multi = {
+		...stored,
+		repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }],
+		postCreate: ["npm ci", { command: "make dev-up", repository: "https://github.com/acme/11x" }],
+	};
+	mocks.get.mockResolvedValue({ project: project(multi) });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 2")).toHaveValue("make dev-up");
+	expect(screen.getByRole("button", { name: "Repository for step 1" })).toHaveTextContent("Main repository");
+	expect(screen.getByRole("button", { name: "Repository for step 2" })).toHaveTextContent("acme/11x");
+	await userEvent.click(screen.getByRole("button", { name: "Repository for step 1" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name: "acme/voice-calling-ai" }));
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual([
+		{ command: "npm ci", repository: "https://github.com/acme/voice-calling-ai" },
+		{ command: "make dev-up", repository: "https://github.com/acme/11x" },
+	]);
+});
+
+it("offers no repository choice to a single-repository project", async () => {
+	renderScripts();
+	await screen.findByLabelText("Step 1");
+	expect(screen.queryByRole("button", { name: "Repository for step 1" })).toBeNull();
+});

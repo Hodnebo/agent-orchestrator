@@ -30,6 +30,9 @@ import { CoderTemplatePicker } from "./CoderTemplatePicker";
 import { CoderTemplateOptions } from "./CoderTemplateOptions";
 import { useCoderTemplates } from "../hooks/useCoderTemplates";
 import { SearchablePicker } from "./SearchablePicker";
+import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
+import { useCloudGitHubAppRepositories } from "../hooks/useCloudGitHubAppRepositories";
+import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../lib/cloud-project-repos";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -45,7 +48,6 @@ import { CloudCpError } from "../lib/cloud-cp";
 import { CODER_PROVIDER } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
-import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp/types";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 import { useShellMaybe } from "../lib/shell-context";
@@ -73,6 +75,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 export type CreateProjectInput = {
 	path: string;
@@ -1395,8 +1398,22 @@ function CloudProjectCard({
 	// prefix appear only when that provider is coder.
 	const offering = useCloudOffering();
 	const offersSandboxChoice = offering.offersProviderChoice;
-	const effectiveSandboxProvider = offering.defaultProvider;
+	// With more than one provider the project may pick its own; it starts on
+	// the org default.
+	const [chosenProvider, setChosenProvider] = useState("");
+	const effectiveSandboxProvider =
+		offersSandboxChoice && offering.providers.includes(chosenProvider) ? chosenProvider : offering.defaultProvider;
 	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
+	// A project is either made from repositories (one main repository plus any
+	// additional ones every session clones beside it) or standalone: no
+	// repository at all, so its sessions start in an empty folder (the cloud
+	// counterpart of a local standalone agent).
+	const [projectSource, setProjectSource] = useState<"repositories" | "standalone">("repositories");
+	const standalone = projectSource === "standalone";
+	const [standaloneName, setStandaloneName] = useState("");
+	const standaloneNameTrimmed = standaloneName.trim();
+	const standaloneNameInvalid = standalone && (standaloneNameTrimmed === "" || [...standaloneNameTrimmed].length > 120);
+	const [extraRepoUrls, setExtraRepoUrls] = useState<string[]>([]);
 	// A coder project must pick a concrete template before it is created. With no
 	// template, session start fails later with a 422 (coder_template_required) —
 	// there is no implicit org-default for a bring-your-own-Coder deployment. So
@@ -1474,28 +1491,29 @@ function CloudProjectCard({
 		.sort()
 		.join(":");
 
-	const githubAppRepos = useQuery({
-		queryKey: ["cloud-github-app-repos", baseUrl, org?.id],
-		enabled: appRepositoriesReady && org !== undefined,
-		staleTime: 30_000,
-		queryFn: async ({ signal }) => {
-			if (!org) return [];
-			const repositories: CloudCpGitHubAppRepository[] = [];
-			let cursor: string | undefined;
-			for (;;) {
-				const response = await client.listGitHubRepositories(org.id, { limit: 100, cursor }, { signal });
-				repositories.push(...response.items.filter((repo) => repo.revokedAt === undefined && !repo.isArchived));
-				if (!response.page.hasMore) return repositories;
-				if (!response.page.nextCursor || response.page.nextCursor === cursor) throw new Error("GitHub repository pagination stopped unexpectedly");
-				cursor = response.page.nextCursor;
-			}
-		},
-	});
+	const githubAppRepos = useCloudGitHubAppRepositories(org?.id, appRepositoriesReady);
 	useEffect(() => {
 		if (readyInstallationKey === "") return;
 		void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org?.id] });
 	}, [baseUrl, org?.id, queryClient, readyInstallationKey]);
 	const selectedRepo = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === selectedRepoId);
+	const mainRepoUrl = selectedRepo ? canonicalGitHubUrl(selectedRepo.fullName) : undefined;
+	const extraReposInvalid = !standalone && additionalReposProblem(mainRepoUrl, extraRepoUrls) !== undefined;
+	const selectMainRepo = (nextId: string) => {
+		setSelectedRepoId(nextId);
+		setSubmitError(null);
+		// The new main repository is no longer an additional one.
+		const next = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === nextId);
+		if (next) setExtraRepoUrls((current) => current.filter((url) => !sameRepository(url, canonicalGitHubUrl(next.fullName))));
+	};
+	// "Make main" swaps an additional repository with the main one.
+	const makeMainRepo = (url: string) => {
+		const next = githubAppRepos.data?.find((repo) => sameRepository(canonicalGitHubUrl(repo.fullName), url));
+		if (!next) return;
+		setExtraRepoUrls((current) => current.map((item) => (sameRepository(item, url) ? mainRepoUrl ?? "" : item)).filter((item) => item !== ""));
+		setSelectedRepoId(next.githubRepositoryId);
+		setSubmitError(null);
+	};
 	// GitHub is connected but grants no repositories yet: same next step as a
 	// fresh start, so show the same "Connect repository" card.
 	const noRepositoriesShared = appConnected && allActiveInstallationsReady && githubAppRepos.isSuccess && githubAppRepos.data.length === 0;
@@ -1613,7 +1631,7 @@ function CloudProjectCard({
 	};
 
 	const createProject = async (selection: { workerAgent: string; orchestratorAgent: string }) => {
-		if (isCreating || org === undefined || selectedRepo === undefined) return;
+		if (isCreating || org === undefined || (!standalone && selectedRepo === undefined)) return;
 		setSubmitError(null);
 		setIsCreating(true);
 		try {
@@ -1626,24 +1644,31 @@ function CloudProjectCard({
 				setIsCreating(false);
 				return;
 			}
-			// The field shows its own error; create stays blocked until it is valid.
-			if (coderWorkspaceNamePrefixInvalid) {
+			// The fields show their own errors; create stays blocked until they are valid.
+			if (coderWorkspaceNamePrefixInvalid || extraReposInvalid || standaloneNameInvalid) {
 				setIsCreating(false);
 				return;
 			}
+			const additionalRepos = standalone ? [] : extraRepoUrls.filter((url) => url !== "");
+			const config = {
+				worker: { agent: selection.workerAgent },
+				orchestrator: { agent: selection.orchestratorAgent },
+				...(coder ? { coder } : {}),
+				...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
+				// Every session clones these beside the main repository.
+				...(additionalRepos.length > 0 ? { repos: additionalRepos.map((url) => ({ url })) } : {}),
+			};
 			// The App path authorizes by repository id and derives the default
 			// branch server-side. Coder config nests under `config.coder`, which
-			// the control plane reads for the dev-kit template and extra repos.
-			const { project } = await client.createGitHubProject(org.id, {
-				githubRepositoryId: selectedRepo.githubRepositoryId,
-				displayName: selectedRepo.name,
-				config: {
-					worker: { agent: selection.workerAgent },
-					orchestrator: { agent: selection.orchestratorAgent },
-					...(coder ? { coder } : {}),
-					...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
-				},
-			});
+			// the control plane reads for the dev-kit template. A standalone
+			// project has no repository to authorize.
+			const { project } = standalone || selectedRepo === undefined
+				? await client.createStandaloneProject(org.id, { displayName: standaloneNameTrimmed, config })
+				: await client.createGitHubProject(org.id, {
+					githubRepositoryId: selectedRepo.githubRepositoryId,
+					displayName: selectedRepo.name,
+					config,
+				});
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 			onCreated(project.id);
 		} catch (err) {
@@ -1656,6 +1681,7 @@ function CloudProjectCard({
 			if (
 				err instanceof CloudCpError &&
 				err.code === "project_repository_exists" &&
+				!standalone &&
 				org !== undefined &&
 				selectedRepo !== undefined
 			) {
@@ -1718,10 +1744,75 @@ function CloudProjectCard({
 			) : null}
 
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
-				{/* Repository: the project is created from, and named after, it. */}
+				{/* What the project is made from: repositories, or none at all. */}
+				<Tabs
+					value={projectSource}
+					onValueChange={(value) => {
+						setProjectSource(value === "standalone" ? "standalone" : "repositories");
+						setSubmitError(null);
+					}}
+				>
+					<TabsList aria-label={t("createProject.cloudSource", { defaultValue: "Project source" })} className="self-start">
+						<TabsTrigger value="repositories" disabled={isCreating}>
+							{t("createProject.cloudFromRepositories", { defaultValue: "From repositories" })}
+						</TabsTrigger>
+						<TabsTrigger value="standalone" disabled={isCreating}>
+							{t("createProject.cloudStandalone", { defaultValue: "Without a repository" })}
+						</TabsTrigger>
+					</TabsList>
+				</Tabs>
+
+				{/* Where the project's sessions run, when the org has a choice. */}
+				{offersSandboxChoice ? (
+					<div className="space-y-2">
+						<Label className={onboardingFormLabelClass}>
+							{t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
+						</Label>
+						<SearchablePicker
+							ariaLabel={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
+							placeholder={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
+							searchPlaceholder={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
+							disabled={isCreating}
+							value={effectiveSandboxProvider}
+							options={offering.providers.map((provider) => ({
+								value: provider,
+								label: t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider }),
+							}))}
+							onChange={(provider) => {
+								setChosenProvider(provider);
+								setSubmitError(null);
+							}}
+						/>
+					</div>
+				) : null}
+
+				{standalone ? (
+					<div className="flex flex-col gap-2 text-sm">
+						<Label htmlFor="cloudStandaloneName" className={onboardingFormLabelClass}>
+							{t("createProject.projectName", { defaultValue: "Project name" })}
+						</Label>
+						<Input
+							id="cloudStandaloneName"
+							value={standaloneName}
+							onChange={(event) => {
+								setStandaloneName(event.target.value);
+								setSubmitError(null);
+							}}
+							maxLength={120}
+							disabled={isCreating}
+							autoComplete="off"
+							aria-describedby="cloudStandaloneNameHint"
+						/>
+						<p id="cloudStandaloneNameHint" className={onboardingFieldHintClass}>
+							{t("createProject.cloudStandaloneHint", {
+								defaultValue: "Sessions start in an empty folder with no repository to clone. Use a sandbox template that sets up its own code, or add Setup scripts in the project's settings.",
+							})}
+						</p>
+					</div>
+				) : (
 				<div className="space-y-2">
 					<Label className={onboardingFormLabelClass}>
-						{t("createProject.cloudRepository", { defaultValue: "Repository" })}
+						{t("createProject.cloudMainRepository", { defaultValue: "Main repository" })}
 					</Label>
 
 					{!appConnected || noRepositoriesShared ? (
@@ -1761,10 +1852,7 @@ function CloudProjectCard({
 							disabled={isCreating || !appRepositoriesReady || githubAppRepos.isLoading}
 							value={selectedRepoId}
 							options={(githubAppRepos.data ?? []).map((repo) => ({ value: repo.githubRepositoryId, label: repo.fullName, private: repo.isPrivate }))}
-							onChange={(nextId) => {
-								setSelectedRepoId(nextId);
-								setSubmitError(null);
-							}}
+							onChange={selectMainRepo}
 							action={{
 								label: t("createProject.connectMoreRepositories", { defaultValue: "Connect more repositories" }),
 								disabled: isCreating || githubOAuthBusy,
@@ -1834,10 +1922,37 @@ function CloudProjectCard({
 					{githubOAuthError ? (
 						<p className="text-[12px] leading-5 text-destructive" role="alert">{githubOAuthError}</p>
 					) : null}
+
+					{/* More repositories every session clones beside the main one. */}
+					{selectedRepo !== undefined ? (
+						<div className="space-y-2 pt-2">
+							<Label className={onboardingFormLabelClass}>
+								{t("createProject.cloudAdditionalRepositories", { defaultValue: "Additional repositories" })}
+							</Label>
+							<p className={onboardingFieldHintClass}>
+								{t("createProject.cloudAdditionalRepositoriesHint", {
+									defaultValue: "Each session clones these beside the main repository, on the same branch, so one task can change them together. The agent starts in the main repository.",
+								})}
+							</p>
+							<CloudAdditionalReposEditor
+								available={githubAppRepos.data ?? []}
+								mainUrl={mainRepoUrl}
+								value={extraRepoUrls}
+								onChange={(next) => {
+									setExtraRepoUrls(next);
+									setSubmitError(null);
+								}}
+								onMakeMain={makeMainRepo}
+								disabled={isCreating}
+								loading={githubAppRepos.isLoading}
+							/>
+						</div>
+					) : null}
 				</div>
+				)}
 
 				{/* Coder template and size are inherited by every session. */}
-				{usesCoder && selectedRepo !== undefined ? (
+				{usesCoder && (standalone || selectedRepo !== undefined) ? (
 					<div className="space-y-4">
 						<CoderTemplatePicker orgId={org?.id} />
 						{coderTemplateId.trim() !== "" ? (
@@ -1857,7 +1972,7 @@ function CloudProjectCard({
 								id="coderWorkspaceNamePrefix"
 								value={coderWorkspaceNamePrefix}
 								onChange={(event) => setCoderWorkspaceNamePrefix(event.target.value)}
-								placeholder={coderWorkspaceNamePrefixFor(selectedRepo?.name ?? "")}
+								placeholder={coderWorkspaceNamePrefixFor(standalone ? standaloneNameTrimmed : selectedRepo?.name ?? "")}
 								maxLength={20}
 								spellCheck={false}
 								autoCapitalize="off"
@@ -1877,20 +1992,20 @@ function CloudProjectCard({
 					</div>
 				) : null}
 
-				{/* Agents, once a repository is chosen. */}
-				{selectedRepo !== undefined && org !== undefined ? (
+				{/* Agents, once a repository is chosen (a standalone project needs none). */}
+				{(standalone || selectedRepo !== undefined) && org !== undefined ? (
 					<CloudAgentSetupStep
 						onBack={onBack}
 						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
 						createError={submitError}
 						templateMissing={coderTemplateMissing}
-						createBlocked={coderWorkspaceNamePrefixInvalid}
+						createBlocked={coderWorkspaceNamePrefixInvalid || extraReposInvalid || standaloneNameInvalid}
 					/>
 				) : null}
 
 				{/* The agent step carries its own Back; show one here until it appears. */}
-				{selectedRepo === undefined ? (
+				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
 						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
