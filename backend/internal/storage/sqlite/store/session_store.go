@@ -166,6 +166,20 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
+// SetSessionNamedWorkspace publishes naming facts before an agent can launch.
+func (s *Store) SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionNamedWorkspace(ctx, gen.SetSessionNamedWorkspaceParams{
+		ID: id, ExpectedPath: expectedPath, Branch: branch, WorkspacePath: workspacePath,
+		WorkspaceRepoPath: workspaceRepoPath, UpdatedAt: now,
+	})
+	if err != nil {
+		return false, fmt.Errorf("record named workspace for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
 func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
 	s.writeMu.Lock()

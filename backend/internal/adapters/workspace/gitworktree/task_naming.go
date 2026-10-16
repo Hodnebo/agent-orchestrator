@@ -14,7 +14,7 @@ import (
 
 // NameTaskWorkspace finalizes names before setup or agent processes can use the
 // checkout. The caller holds its project workspace gate. Git never force-renames
-// branches or overwrites destinations; the reservation also coordinates daemons.
+// branches or overwrites destinations, including when another daemon claims them.
 func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
 	if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || strings.HasPrefix(name, "-") || len(name) > 50 {
 		return info, fmt.Errorf("gitworktree: invalid task name %q", name)
@@ -63,7 +63,7 @@ func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceP
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return info, err
 		}
-		result, retry, renameErr := w.nameReservedTask(ctx, info, repos, candidateNamespace, path)
+		result, retry, renameErr := w.nameTaskCandidate(ctx, info, repos, candidateNamespace, path)
 		if retry {
 			continue
 		}
@@ -72,7 +72,7 @@ func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceP
 	return info, fmt.Errorf("gitworktree: no unused task name for %q", name)
 }
 
-func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspaceProjectInfo, repos []ports.WorkspaceRepoInfo, namespace, path string) (ports.WorkspaceProjectInfo, bool, error) {
+func (w *Workspace) nameTaskCandidate(ctx context.Context, info ports.WorkspaceProjectInfo, repos []ports.WorkspaceRepoInfo, namespace, path string) (ports.WorkspaceProjectInfo, bool, error) {
 	branch := namespace + "/root"
 	for _, repo := range repos {
 		relative, err := filepath.Rel(info.Root.Path, repo.Path)
@@ -101,11 +101,33 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 			}
 		}
 	}
-	if err := os.Mkdir(path, 0o700); err != nil {
-		return info, errors.Is(err, os.ErrExist), err
-	}
-	defer func() { _ = os.Remove(path) }() // removes only our empty reservation on failure
 	oldPath := info.Root.Path
+	target := info
+	target.Worktrees = append([]ports.WorkspaceRepoInfo(nil), info.Worktrees...)
+	target.Root.Path, target.Root.Branch = path, branch
+	for i := range target.Worktrees {
+		relative, err := filepath.Rel(oldPath, target.Worktrees[i].Path)
+		if err != nil {
+			return info, false, err
+		}
+		target.Worktrees[i].Path, target.Worktrees[i].Branch = filepath.Join(path, relative), branch
+	}
+	info.Root.RepoPath, target.Root.RepoPath = repos[0].RepoPath, repos[0].RepoPath
+	move := taskNamingMove{Original: info, Target: target}
+	for _, repo := range repos {
+		gitDir, err := checkoutGitDir(repo.Path)
+		if err != nil {
+			return info, false, err
+		}
+		move.GitDirs = append(move.GitDirs, gitDir)
+	}
+	journal, err := w.taskNamingJournal(info.Root.ProjectID, info.Root.SessionID)
+	if err != nil {
+		return info, false, err
+	}
+	if err := writeTaskNamingMove(ctx, journal, move); err != nil {
+		return info, false, err
+	}
 	// Roll back only before a successful move. After the move, returned paths
 	// must describe reality even if a child registration needs repair.
 	renamed := 0
@@ -124,6 +146,9 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 					info.Root.Branch = branch
 				}
 			}
+		}
+		if !rollbackFailed {
+			cause = errors.Join(cause, os.Remove(journal))
 		}
 		return info, false, cause
 	}
@@ -144,15 +169,7 @@ func (w *Workspace) nameReservedTask(ctx context.Context, info ports.WorkspacePr
 	if err := moveTaskDirectory(oldPath, path); err != nil {
 		return rollback(err)
 	}
-	info.Root.Path, info.Root.Branch = path, branch
-	for i := range info.Worktrees {
-		wt := &info.Worktrees[i]
-		relative, err := filepath.Rel(oldPath, wt.Path)
-		if err != nil {
-			return info, false, err
-		}
-		wt.Path, wt.Branch = filepath.Join(path, relative), branch
-	}
+	info = target
 	// Once moved, finish registration repair even if the request was cancelled.
 	repairCtx, cancelRepair := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancelRepair()

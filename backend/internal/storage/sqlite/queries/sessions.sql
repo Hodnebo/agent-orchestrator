@@ -380,6 +380,18 @@ WHERE id = sqlc.arg(id)
   AND ((provision_state = 'provisioning' AND is_terminated = 0)
     OR (provision_state = 'failed' AND (workspace_path = '' OR workspace_path = sqlc.arg(workspace_path))));
 
+-- name: SetSessionNamedWorkspace :execrows
+-- Naming and recovery may update an unlaunched Chat or TUI checkout, but cannot
+-- replace another path adopted since the caller read the session.
+UPDATE sessions SET
+    branch = sqlc.arg(branch),
+    workspace_path = sqlc.arg(workspace_path),
+    workspace_repo_path = sqlc.arg(workspace_repo_path),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND runtime_handle_id = '' AND provider_conversation_id = ''
+  AND is_terminated = 0 AND is_task_preparation = 0
+  AND (workspace_path = '' OR workspace_path = sqlc.arg(expected_path) OR workspace_path = sqlc.arg(workspace_path));
+
 -- name: SetTaskPreparationBase :execrows
 -- Only the still-hidden reservation may receive its immutable branch base.
 -- The preparation worker can finish after promotion, so a full row update

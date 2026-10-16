@@ -1,10 +1,9 @@
-//go:build !windows
+//go:build !windows && !darwin && !linux
 
 package gitworktree
 
-import "syscall"
+import "errors"
 
-func moveTaskDirectory(source, reserved string) error {
-	// reserved is the empty directory we exclusively created, never a user path.
-	return syscall.Rename(source, reserved)
+func moveTaskDirectory(source, target string) error {
+	return errors.New("gitworktree: atomic task naming is unsupported on this platform")
 }

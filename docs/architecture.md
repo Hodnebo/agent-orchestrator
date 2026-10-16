@@ -363,8 +363,12 @@ on both when the folder or branch namespace is occupied. Generated slugs prefer
 two short words, allow at most three, and are capped at 24 characters. The daemon
 finalizes prepared worktrees and repairs every repository registration before setup or
 agent launch, then records the resulting paths and branches. Naming persists its
-provisioning checkpoint before moving the checkout; retry repairs registrations
-and resumes unfinished setup using those durable stages. Session IDs remain
+provisioning checkpoint and a synced move journal before changing Git names.
+After an interrupted move, background reconciliation or retry verifies linked
+Git identities, finishes registration repair, and saves root and child paths
+before acknowledging the journal. Recovery refuses occupied destinations and
+sessions with a runtime or provider conversation identity. Retry resumes
+unfinished setup using the durable stages. Session IDs remain
 unchanged. Restore uses the persisted names. Explicit branches, promptless
 sessions, Scratch sessions, and existing sessions keep their naming behavior.
 The desktop hides provisional branches until the worktree step completes and

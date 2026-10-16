@@ -1476,6 +1476,43 @@ func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibern
 	return result.RowsAffected()
 }
 
+const setSessionNamedWorkspace = `-- name: SetSessionNamedWorkspace :execrows
+UPDATE sessions SET
+    branch = ?1,
+    workspace_path = ?2,
+    workspace_repo_path = ?3,
+    updated_at = ?4
+WHERE id = ?5 AND runtime_handle_id = '' AND provider_conversation_id = ''
+  AND is_terminated = 0 AND is_task_preparation = 0
+  AND (workspace_path = '' OR workspace_path = ?6 OR workspace_path = ?2)
+`
+
+type SetSessionNamedWorkspaceParams struct {
+	Branch            string
+	WorkspacePath     string
+	WorkspaceRepoPath string
+	UpdatedAt         time.Time
+	ID                domain.SessionID
+	ExpectedPath      string
+}
+
+// Naming and recovery may update an unlaunched Chat or TUI checkout, but cannot
+// replace another path adopted since the caller read the session.
+func (q *Queries) SetSessionNamedWorkspace(ctx context.Context, arg SetSessionNamedWorkspaceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionNamedWorkspace,
+		arg.Branch,
+		arg.WorkspacePath,
+		arg.WorkspaceRepoPath,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.ExpectedPath,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setSessionPinned = `-- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?
 `

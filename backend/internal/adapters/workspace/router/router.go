@@ -80,6 +80,22 @@ func (w *Workspace) RepairTaskWorkspace(ctx context.Context, info ports.Workspac
 	return namer.RepairTaskWorkspace(ctx, info)
 }
 
+// RecoverTaskWorkspace resumes a Git naming journal when the adapter supports it.
+func (w *Workspace) RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (ports.WorkspaceProjectInfo, bool, error) {
+	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
+		return recovery.RecoverTaskWorkspace(ctx, projectID, id)
+	}
+	return ports.WorkspaceProjectInfo{}, false, nil
+}
+
+// CompleteTaskWorkspaceNaming acknowledges a saved or destroyed Git workspace.
+func (w *Workspace) CompleteTaskWorkspaceNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
+	if recovery, ok := w.git.(ports.WorkspaceTaskNamingRecovery); ok {
+		return recovery.CompleteTaskWorkspaceNaming(ctx, info)
+	}
+	return nil
+}
+
 // Create delegates session workspace creation to the project-appropriate
 // workspace adapter.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {

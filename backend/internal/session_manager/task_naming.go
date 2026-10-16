@@ -140,19 +140,50 @@ func (m *Manager) nameTaskWorkspace(ctx context.Context, rec domain.SessionRecor
 		info = *project
 	}
 	info, namingErr := namer.NameTaskWorkspace(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), name.Slug, "root"), name.Slug)
-	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info)
+	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath)
+	if namingErr == nil && persistErr == nil {
+		persistErr = m.completeTaskNaming(ctx, info)
+	}
 	if project != nil {
 		project = &info
 	}
 	return info.Root, project, errors.Join(namingErr, persistErr)
 }
 
+func (m *Manager) completeTaskNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
+	if recovery, ok := m.workspace.(ports.WorkspaceTaskNamingRecovery); ok {
+		return recovery.CompleteTaskWorkspaceNaming(ctx, info)
+	}
+	return nil
+}
+
+func (m *Manager) recoverTaskNaming(ctx context.Context, rec domain.SessionRecord) (ports.WorkspaceProjectInfo, bool, error) {
+	recovery, ok := m.workspace.(ports.WorkspaceTaskNamingRecovery)
+	if !ok || rec.ProjectID == "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
+		return ports.WorkspaceProjectInfo{}, false, nil
+	}
+	info, found, err := recovery.RecoverTaskWorkspace(ctx, rec.ProjectID, rec.ID)
+	if !found || err != nil {
+		return info, found, err
+	}
+	if err := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath); err != nil {
+		return info, true, err
+	}
+	return info, true, recovery.CompleteTaskWorkspaceNaming(ctx, info)
+}
+
 // Persist the actual result even after a partial Git failure. The provision
 // checklist separately records whether registration repair and setup finished.
-func (m *Manager) persistTaskWorkspace(ctx context.Context, id domain.SessionID, info ports.WorkspaceProjectInfo) error {
+func (m *Manager) persistTaskWorkspace(ctx context.Context, id domain.SessionID, info ports.WorkspaceProjectInfo, expectedPath string) error {
 	persistCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
-	_, persistErr := m.store.SetSessionProvisionedWorkspace(persistCtx, id, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+	updated, persistErr := m.store.SetSessionNamedWorkspace(persistCtx, id, expectedPath, info.Root.Branch, info.Root.Path, info.Root.RepoPath, m.clock())
+	if persistErr == nil && !updated {
+		persistErr = errors.New("task naming session no longer accepts this workspace")
+	}
+	if persistErr != nil {
+		return persistErr
+	}
 	for _, wt := range info.Worktrees {
 		persistErr = errors.Join(persistErr, m.store.UpsertSessionWorktree(persistCtx, domain.SessionWorktreeRecord{
 			SessionID: id, RepoName: wt.RepoName, Branch: wt.Branch, BaseSHA: wt.BaseSHA,

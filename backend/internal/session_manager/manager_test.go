@@ -220,6 +220,17 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionNamedWorkspace(_ context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" || rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != expectedPath && rec.Metadata.WorkspacePath != workspacePath {
+		return false, nil
+	}
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = branch, workspacePath, workspaceRepoPath
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) SetTaskPreparationBase(_ context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
 	rec, ok := f.sessions[id]
 	if !ok || !rec.IsTaskPreparation || rec.IsTerminated || rec.ProvisionState != domain.SessionProvisionProvisioning {

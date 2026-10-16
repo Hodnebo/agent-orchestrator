@@ -1,23 +1,18 @@
 package gitworktree
 
 import (
-	"os"
-
 	"golang.org/x/sys/windows"
 )
 
-func moveTaskDirectory(source, reserved string) error {
-	if err := os.Remove(reserved); err != nil {
-		return err
-	}
+func moveTaskDirectory(source, target string) error {
 	from, err := windows.UTF16PtrFromString(source)
 	if err != nil {
 		return err
 	}
-	to, err := windows.UTF16PtrFromString(reserved)
+	to, err := windows.UTF16PtrFromString(target)
 	if err != nil {
 		return err
 	}
-	// MoveFile refuses an occupied destination, including the race after Remove.
+	// MoveFile atomically refuses every occupied destination.
 	return windows.MoveFile(from, to)
 }

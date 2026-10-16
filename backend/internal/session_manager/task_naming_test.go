@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -19,6 +21,74 @@ type taskNamingLauncher struct {
 	result string
 	err    error
 	wait   bool
+}
+
+func TestTaskNamingAllShippedAgents(t *testing.T) {
+	drivers := chatregistry.Build(nil, nil)
+	for _, agent := range agentregistry.Harnessed() {
+		t.Run(string(agent.Harness), func(t *testing.T) {
+			launcher := &taskNamingLauncher{result: `{"title":"Fix login redirect","slug":"login-redirect"}`}
+			want := "login-redirect"
+			if !drivers.SupportsChat(agent.Harness) {
+				launcher.err = ports.ErrChatUnsupported
+				want = "fix-login-redirect"
+			}
+			m, st, _ := newChatManager(launcher)
+			m.dataDir = t.TempDir()
+			m.runBackground = func(work func()) { work() }
+			cfg := asyncChatSpawnConfig("Fix login redirect")
+			cfg.Harness, cfg.NameFromPrompt, cfg.AgentConfigResolved = agent.Harness, true, true
+			cfg.AgentConfig.Model = "selected-model"
+			wait, stop := m.startTaskNaming(t.Context(), cfg, domain.SessionRecord{ID: "mer-1", Harness: agent.Harness}, st.projects["mer"].Config)
+			defer stop()
+			if got := wait(); got.Slug != want {
+				t.Fatalf("name = %+v, want %q", got, want)
+			}
+			if len(launcher.backgroundHarnesses) != 1 || launcher.backgroundHarnesses[0] != agent.Harness || launcher.background[0].Model != "selected-model" {
+				t.Fatalf("selected agent/model not preserved: %v, %+v", launcher.backgroundHarnesses, launcher.background)
+			}
+		})
+	}
+}
+
+type taskNamingSaveFailureStore struct{ *fakeStore }
+
+func (s taskNamingSaveFailureStore) SetSessionNamedWorkspace(context.Context, domain.SessionID, string, string, string, string, time.Time) (bool, error) {
+	return false, errors.New("simulated database interruption")
+}
+
+func TestTaskNamingRestartRecoversBeforeDatabaseSave(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			m, st, ws, _ := newGitTaskPreparationManager(t)
+			launcher := &taskNamingLauncher{}
+			m.chat = launcher
+			rec, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: mode, ProvisionState: domain.SessionProvisionProvisioning})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := ws.Create(t.Context(), ports.WorkspaceConfig{ProjectID: "mer", SessionID: rec.ID, Branch: "ao/mer-1/root", BaseBranch: "main"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.store = taskNamingSaveFailureStore{st}
+			moved, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"})
+			if err == nil || moved.Path == root.Path || st.sessions[rec.ID].Metadata.WorkspacePath != "" {
+				t.Fatalf("missing simulated interruption: %+v, %v", moved, err)
+			}
+			m.store = st
+			if err := m.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			actual := st.sessions[rec.ID]
+			if actual.Metadata.WorkspacePath != moved.Path || actual.Metadata.Branch != "ao/login-redirect/root" || len(launcher.started) != 0 {
+				t.Fatalf("startup recovery = %+v", actual)
+			}
+			if _, found, err := ws.RecoverTaskWorkspace(t.Context(), "mer", rec.ID); found || err != nil {
+				t.Fatalf("saved recovery was not acknowledged: %v, %v", found, err)
+			}
+		})
+	}
 }
 
 func (l *taskNamingLauncher) RunBackgroundTask(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
@@ -232,9 +302,16 @@ func (w *namingRepairTestWorkspace) RepairTaskWorkspace(ctx context.Context, inf
 	w.repairs++
 	return w.namer.RepairTaskWorkspace(ctx, info)
 }
+func (w *namingRepairTestWorkspace) RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (ports.WorkspaceProjectInfo, bool, error) {
+	return w.Workspace.(ports.WorkspaceTaskNamingRecovery).RecoverTaskWorkspace(ctx, projectID, id)
+}
+func (w *namingRepairTestWorkspace) CompleteTaskWorkspaceNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
+	return w.Workspace.(ports.WorkspaceTaskNamingRecovery).CompleteTaskWorkspaceNaming(ctx, info)
+}
 func TestTaskNamingRetryFinishesWorkspaceSetup(t *testing.T) {
-	for _, worktreeDone := range []bool{false, true} {
-		t.Run(map[bool]string{false: "repair_and_setup", true: "setup_only"}[worktreeDone], func(t *testing.T) {
+	for _, scenario := range []string{"repair_and_setup", "setup_only", "unsaved_path"} {
+		t.Run(scenario, func(t *testing.T) {
+			worktreeDone := scenario == "setup_only"
 			m, st, _, _ := newGitTaskPreparationManager(t)
 			m.dataDir = t.TempDir()
 			launcher := &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
@@ -280,6 +357,10 @@ func TestTaskNamingRetryFinishesWorkspaceSetup(t *testing.T) {
 				}
 				st.sessions[rec.ID] = failed
 			}
+			if scenario == "unsaved_path" {
+				failed.Metadata.WorkspacePath, failed.Metadata.Branch = "", ""
+				st.sessions[rec.ID] = failed
+			}
 			if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
 				t.Fatal(err)
 			}
@@ -293,6 +374,11 @@ func TestTaskNamingRetryFinishesWorkspaceSetup(t *testing.T) {
 			}
 			if ws.repairs != wantRepairs {
 				t.Fatalf("repairs=%d, want%d", ws.repairs, wantRepairs)
+			}
+			for _, step := range actual.ProvisionSteps {
+				if step.Status != domain.SessionProvisionStepDone {
+					t.Fatalf("unfinished retry stage: %+v", step)
+				}
 			}
 			if body, err := os.ReadFile(filepath.Join(path, "setup-runs")); err != nil || strings.TrimSpace(string(body)) != "x" {
 				t.Fatalf("setup after retry=%q,%v", body, err)
@@ -325,5 +411,55 @@ func TestTaskNamingRequiresDurableRecoveryCheckpoint(t *testing.T) {
 	actual := st.sessions[rec.ID]
 	if actual.ProvisionState != domain.SessionProvisionFailed || actual.Metadata.WorkspacePath != "" || len(launcher.started) != 0 {
 		t.Fatalf("uncheckpointed naming published workspace: %+v", actual)
+	}
+}
+
+func TestTaskNamingRecoverySkipsLaunchedAgent(t *testing.T) {
+	for _, identity := range []string{"runtime", "provider", "resume"} {
+		t.Run(identity, func(t *testing.T) {
+			m, st, ws, _ := newGitTaskPreparationManager(t)
+			rec, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, ProvisionState: domain.SessionProvisionFailed})
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := ws.Create(t.Context(), ports.WorkspaceConfig{ProjectID: "mer", SessionID: rec.ID, Branch: "ao/mer-1/root", BaseBranch: "main"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.store = taskNamingSaveFailureStore{st}
+			if _, _, err := m.nameTaskWorkspace(t.Context(), rec, root, nil, generatedTaskName{Slug: "login-redirect"}); err == nil {
+				t.Fatal("expected unsaved journal")
+			}
+			m.store = st
+			switch identity {
+			case "runtime":
+				rec.Metadata.RuntimeHandleID = "active-runtime"
+			case "provider":
+				rec.Metadata.ProviderConversationID = "active-conversation"
+			case "resume":
+				if err := m.beginAgentResume(t.Context(), rec.ID); err != nil {
+					t.Fatal(err)
+				}
+				defer m.endAgentResume(rec.ID)
+			}
+			st.sessions[rec.ID] = rec
+			if err := m.ReconcileBackground(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if st.sessions[rec.ID].Metadata.WorkspacePath != "" {
+				t.Fatal("recovered checkout in use by agent")
+			}
+			if _, found, err := ws.RecoverTaskWorkspace(t.Context(), "mer", rec.ID); !found || err != nil {
+				t.Fatalf("recovery intent lost: %v, %v", found, err)
+			}
+		})
+	}
+}
+
+func TestTaskNamingRetryPlanRetainsCheckpointOnce(t *testing.T) {
+	in := asyncChatSpawn{retry: true, cfg: ports.SpawnConfig{NameFromPrompt: true}, record: domain.SessionRecord{ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepFetch, Status: domain.SessionProvisionStepDone}, {ID: domain.SessionProvisionStepWorktree}, {ID: domain.SessionProvisionStepSetup}, {ID: domain.SessionProvisionStepAgent}}}}
+	plan := provisionPlan(in, false)
+	if len(plan) != 3 || plan[0] != domain.SessionProvisionStepWorktree || plan[1] != domain.SessionProvisionStepSetup || plan[2] != domain.SessionProvisionStepAgent {
+		t.Fatalf("retry plan = %v", plan)
 	}
 }

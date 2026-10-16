@@ -150,6 +150,20 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(in.cfg.ProjectID))
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
+	if in.retry {
+		info, recovered, recoveryErr := m.recoverTaskNaming(ctx, in.record)
+		if recoveryErr != nil {
+			m.failAsyncChatSpawn(ctx, id, recoveryErr)
+			return
+		}
+		if recovered {
+			ws = info.Root
+			reusePublishedWorkspace = true
+			if in.projectKind == domain.ProjectKindWorkspace {
+				workspaceProject = &info
+			}
+		}
+	}
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
@@ -186,7 +200,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 			}
 		}
 		info, repairErr := namer.RepairTaskWorkspace(ctx, info)
-		persistErr := m.persistTaskWorkspace(ctx, id, info)
+		persistErr := m.persistTaskWorkspace(ctx, id, info, in.record.Metadata.WorkspacePath)
 		ws = info.Root
 		if workspaceProject != nil {
 			workspaceProject = &info
@@ -366,7 +380,7 @@ func (p *provisionProgress) publish(ctx context.Context) {
 // provisionPlan lists the stages completeAsyncChatSpawn will run, in order.
 func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.SessionProvisionStepID {
 	var plan []domain.SessionProvisionStepID
-	if !reusePublishedWorkspace {
+	if !reusePublishedWorkspace && (!in.retry || len(in.record.ProvisionSteps) == 0) {
 		if in.preparation == nil {
 			plan = append(plan, domain.SessionProvisionStepFetch)
 		}
@@ -377,7 +391,7 @@ func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.Ses
 			plan = append(plan, domain.SessionProvisionStepSetup)
 		}
 	}
-	if reusePublishedWorkspace {
+	if in.retry && len(in.record.ProvisionSteps) > 0 {
 		for _, step := range in.record.ProvisionSteps {
 			if step.ID != domain.SessionProvisionStepAgent && step.Status != domain.SessionProvisionStepDone {
 				plan = append(plan, step.ID)

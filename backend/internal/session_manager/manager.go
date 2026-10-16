@@ -387,6 +387,7 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -2072,6 +2073,9 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		return false
 	}
 	_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
+	if err := m.completeTaskNaming(ctx, ports.WorkspaceProjectInfo{Root: ws}); err != nil {
+		m.logger.Warn("spawn rollback: clear task naming journal", "sessionID", ws.SessionID, "error", err)
+	}
 	return true
 }
 
@@ -3968,6 +3972,29 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile: list sessions: %w", err)
+	}
+	for i, rec := range recs {
+		if rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
+			continue
+		}
+		// Fence controller launches before taking the project gate, matching resume.
+		if err := m.beginAgentResume(ctx, rec.ID); err != nil {
+			continue
+		}
+		release := m.acquireWorkspaceGate(rec.ProjectID)
+		current, ok, readErr := m.store.GetSession(ctx, rec.ID)
+		if readErr == nil && ok && current.CreatedAt.Equal(rec.CreatedAt) {
+			_, recovered, recoveryErr := m.recoverTaskNaming(ctx, current)
+			if recoveryErr != nil {
+				m.logger.Warn("reconcile: task naming recovery failed", "sessionID", rec.ID, "error", recoveryErr)
+			} else if recovered {
+				if updated, ok, err := m.store.GetSession(ctx, rec.ID); err == nil && ok {
+					recs[i] = updated
+				}
+			}
+		}
+		release()
+		m.endAgentResume(rec.ID)
 	}
 	m.reconcileLivePass(ctx, recs)
 	for _, rec := range recs {

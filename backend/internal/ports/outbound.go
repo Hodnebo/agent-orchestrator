@@ -528,6 +528,13 @@ type WorkspaceTaskNamer interface {
 	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
+// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
+// the caller acknowledges that the resulting paths are durably stored.
+type WorkspaceTaskNamingRecovery interface {
+	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
+	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+}
+
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
 	ProjectID domain.ProjectID
