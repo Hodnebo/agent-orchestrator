@@ -140,6 +140,16 @@ func (f *fakeStore) CommitClientRequestSession(_ context.Context, id domain.Sess
 	f.sessions[id] = rec
 	return nil
 }
+func (f *fakeStore) RenameSessionIfDisplayName(_ context.Context, id domain.SessionID, current, name string, at time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.DisplayName != current {
+		return false, nil
+	}
+	rec.DisplayName, rec.UpdatedAt = name, at
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) error {
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr

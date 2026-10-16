@@ -1,4 +1,9 @@
 {
+	"session.generatingBranchName": "브랜치 이름 생성 중",
+	"session.preparingBranch": "브랜치 준비 중",
+	"session.initializingBranch": "브랜치 초기화 중",
+	"session.resolvingBranchName": "브랜치 이름 결정 중",
+	"session.namingBranch": "브랜치 이름 생성 중",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 시작 중. 메시지는 순서대로 전송됩니다",

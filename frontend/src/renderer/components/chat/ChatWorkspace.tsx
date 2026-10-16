@@ -48,6 +48,7 @@ import {
 	useVirtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
+import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
@@ -739,7 +740,7 @@ function ChatWorkspaceContent({
 		? snapshot.turns[0]?.id
 		: undefined;
 	const provisionError = session?.provisionError;
-	const sessionBranch = session?.branch;
+	const { branch: sessionBranch, naming: namingBranch } = sessionBranchPresentation(session);
 	const startup = useMemo(
 		() =>
 			hasStartup
@@ -749,6 +750,7 @@ function ChatWorkspaceContent({
 						error: provisionError,
 						agentName: agentLabel(snapshot.harness),
 						branch: sessionBranch,
+						namingBranch,
 						openingTurnId,
 						onRetry: newWorkDisabled ? undefined : onResumeAgent,
 						retrying: resumingAgent,
@@ -757,6 +759,7 @@ function ChatWorkspaceContent({
 				: undefined,
 		[
 			hasStartup,
+			namingBranch,
 			newWorkDisabled,
 			onResumeAgent,
 			openingTurnId,

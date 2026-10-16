@@ -16,6 +16,8 @@ import {
 import { Archive, Check, Copy, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
+import { sessionBranchPresentation } from "../lib/session-branch";
+import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { formatEstimatedCost } from "../lib/format-cost";
 import { formatTokenCount } from "../lib/format-token-count";
@@ -67,7 +69,7 @@ export function toBoardSessionPresentation(
 			: undefined;
 	return {
 		activity: session.activity,
-		branch: session.branch,
+		branch: sessionBranchPresentation(session).branch,
 		id: session.id,
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
@@ -144,7 +146,7 @@ export function ArchivedSessionCardAdapter({
 	session: WorkspaceSession;
 	usage?: SessionUsageSummary;
 }) {
-	const branch = session.branch ?? "";
+	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
 			hideTerminatedStatus={hideTerminatedStatus}
@@ -258,6 +260,7 @@ function DesktopSessionCard({
 		<SessionCardView
 			action={action}
 			branchAction={branchAction}
+			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}

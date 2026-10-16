@@ -1,4 +1,9 @@
 {
+	"session.generatingBranchName": "正在生成分支名称",
+	"session.preparingBranch": "正在准备分支",
+	"session.initializingBranch": "正在初始化分支",
+	"session.resolvingBranchName": "正在确定分支名称",
+	"session.namingBranch": "正在命名分支",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 正在启动. 消息将按顺序发送",

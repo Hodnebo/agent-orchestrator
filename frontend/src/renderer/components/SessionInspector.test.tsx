@@ -4930,6 +4930,48 @@ describe("SessionInspector branch summary", () => {
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
 
+  it("shimmers while naming and reveals the final branch when its worktree is ready", () => {
+    mockGitState({});
+    const starting = session([], {
+      branch: "ao/sess-1/root",
+      provisionState: "provisioning",
+      provisionSteps: [],
+    });
+    const view = renderWithQuery(<SessionInspector session={starting} />);
+    const namingLabel = branch().getByRole("status");
+    const namingText = namingLabel.textContent;
+    expect(namingLabel).toHaveClass("chat-working-shimmer");
+    expect(namingLabel).toHaveTextContent(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/);
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, provisionSteps: [{ id: "worktree", status: "running" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByRole("status").textContent).toBe(namingText);
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider><SessionInspector session={{ ...starting, provisionState: "failed" }} /></TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, branch: "ao/fix-login/root", provisionSteps: [{ id: "worktree", status: "done" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByText("ao/fix-login/root")).toBeInTheDocument();
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     useSessionGitActionStore.setState({ pending: {} });
   });

@@ -32,7 +32,7 @@ func TestDelegateTaskSpawnsWorkerAndRefinesTitleThroughBackgroundHarness(t *test
 				effort = &tt.effort
 			}
 			st := newFakeStore()
-			st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+			st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 			cmd := &fakeCommander{backgroundResult: "Fix renderer"}
 			cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
 				rec := domain.SessionRecord{
@@ -110,6 +110,19 @@ func TestDelegateTaskClientRequestReplaysAndConflictsBeforeSpawn(t *testing.T) {
 	}
 }
 
+func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix login redirect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cmd.spawnedCfg.NameFromPrompt || len(cmd.backgroundCalls) != 0 {
+		t.Fatal("Git task must use one provisioning-time naming call")
+	}
+}
+
 func TestDelegatedTaskTitles(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -148,7 +161,7 @@ func TestDelegatedTaskTitles(t *testing.T) {
 
 func TestDelegateTaskStartsPromptlessWorkerWithoutGeneratingTitle(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{}
 
 	out, err := (&Service{store: st, manager: cmd, runBackground: runInline}).DelegateTask(
@@ -170,7 +183,7 @@ func TestDelegateTaskStartsPromptlessWorkerWithoutGeneratingTitle(t *testing.T) 
 
 func TestGeneratedTaskTitleDoesNotOverwriteManualRename(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{backgroundResult: "Generated title"}
 	cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
 		rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, DisplayName: "Mine now"}
@@ -190,7 +203,7 @@ func TestGeneratedTaskTitleDoesNotOverwriteManualRename(t *testing.T) {
 
 func TestDelegateTaskKeepsSpawnSuccessWhenBackgroundTitleFails(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{backgroundErr: errors.New("provider unavailable")}
 
 	out, err := (&Service{store: st, manager: cmd, runBackground: runInline}).DelegateTask(
@@ -203,7 +216,7 @@ func TestDelegateTaskKeepsSpawnSuccessWhenBackgroundTitleFails(t *testing.T) {
 
 func TestDelegateTaskReturnsBeforeBackgroundTitleCompletes(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
@@ -241,7 +254,7 @@ func TestDelegateTaskReturnsBeforeBackgroundTitleCompletes(t *testing.T) {
 
 func TestDelegateTaskSkipsTitleWhenCapacityIsFull(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{}
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
@@ -256,7 +269,7 @@ func TestDelegateTaskSkipsTitleWhenCapacityIsFull(t *testing.T) {
 
 func TestKillCancelsBackgroundTitle(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	started := make(chan struct{})
 	finished := make(chan struct{})
 	cmd := &fakeCommander{backgroundFunc: func(call backgroundTaskCall) (string, error) {

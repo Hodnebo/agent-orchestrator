@@ -1,4 +1,9 @@
 {
+	"session.generatingBranchName": "Generating branch name",
+	"session.preparingBranch": "Preparing branch",
+	"session.initializingBranch": "Initializing branch",
+	"session.resolvingBranchName": "Resolving branch name",
+	"session.namingBranch": "Naming branch",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} is starting. Messages send in order",

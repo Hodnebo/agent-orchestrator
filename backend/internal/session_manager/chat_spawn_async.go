@@ -110,6 +110,8 @@ const asyncChatSpawnBudget = 10 * time.Minute
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
 	totalStarted := time.Now()
+	taskName, cancelNaming := m.startTaskNaming(ctx, in.cfg, in.record, in.project.Config)
+	defer cancelNaming()
 	stageStarted := totalStarted
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
@@ -168,6 +170,15 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
+	if taskName != nil && !reusePublishedWorkspace {
+		stageStarted = time.Now()
+		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, in.record, ws, workspaceProject, taskName())
+		if err != nil {
+			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
+			return
+		}
+		m.logAsyncChatSpawnStage(id, "workspace_name", stageStarted)
+	}
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace {

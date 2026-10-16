@@ -802,6 +802,8 @@ describe("SessionsBoard", () => {
 						title: "spawning-card-task",
 						status: "working",
 						provisionState: "provisioning",
+						branch: "ao/s-spawning/root",
+						provisionSteps: [{ id: "worktree", status: "running" }],
 						activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" },
 					}),
 				]),
@@ -813,6 +815,8 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("spawning-card-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
+		expect(within(card).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card).queryByText("ao/s-spawning/root")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});

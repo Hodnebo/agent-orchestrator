@@ -521,6 +521,12 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
+// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
+// Even on error, the returned info describes the current paths and branches.
+type WorkspaceTaskNamer interface {
+	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
+}
+
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.
 type WorkspaceConfig struct {
 	ProjectID domain.ProjectID

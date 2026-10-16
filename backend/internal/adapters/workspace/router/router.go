@@ -62,6 +62,15 @@ func (w *Workspace) FetchDefaultBranch(ctx context.Context, repoPath string, tar
 	return w.git.FetchDefaultBranch(ctx, repoPath, target)
 }
 
+// NameTaskWorkspace delegates task naming to the Git adapter.
+func (w *Workspace) NameTaskWorkspace(ctx context.Context, info ports.WorkspaceProjectInfo, branch, name string) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return info, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.NameTaskWorkspace(ctx, info, branch, name)
+}
+
 // Create delegates session workspace creation to the project-appropriate
 // workspace adapter.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {

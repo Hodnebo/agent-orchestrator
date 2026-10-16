@@ -77,8 +77,7 @@ func (m *Manager) RunBackgroundTask(
 	id domain.SessionID,
 	systemPrompt, prompt string,
 ) (string, error) {
-	runner, ok := m.chat.(chatBackgroundTaskRunner)
-	if !ok {
+	if _, ok := m.chat.(chatBackgroundTaskRunner); !ok {
 		return "", ports.ErrChatUnsupported
 	}
 	rec, err := m.getRecord(ctx, id)
@@ -87,6 +86,14 @@ func (m *Manager) RunBackgroundTask(
 	}
 	if rec.IsTerminated {
 		return "", fmt.Errorf("session %s is terminated", id)
+	}
+	return m.runBackgroundTask(ctx, rec, systemPrompt, prompt)
+}
+
+func (m *Manager) runBackgroundTask(ctx context.Context, rec domain.SessionRecord, systemPrompt, prompt string) (string, error) {
+	runner, ok := m.chat.(chatBackgroundTaskRunner)
+	if !ok {
+		return "", ports.ErrChatUnsupported
 	}
 	releaseHarness, err := m.beginHarnessUse(rec.Harness)
 	if err != nil {

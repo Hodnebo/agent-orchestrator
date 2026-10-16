@@ -1,4 +1,9 @@
 {
+	"session.generatingBranchName": "ブランチ名を生成中",
+	"session.preparingBranch": "ブランチを準備中",
+	"session.initializingBranch": "ブランチを初期化中",
+	"session.resolvingBranchName": "ブランチ名を決定中",
+	"session.namingBranch": "ブランチ名を生成中",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",

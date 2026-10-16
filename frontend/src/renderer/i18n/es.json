@@ -1,4 +1,9 @@
 {
+	"session.generatingBranchName": "Generando nombre de rama",
+	"session.preparingBranch": "Preparando rama",
+	"session.initializingBranch": "Inicializando rama",
+	"session.resolvingBranchName": "Resolviendo nombre de rama",
+	"session.namingBranch": "Asignando nombre a la rama",
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} se está iniciando. Los mensajes se envían en orden",
