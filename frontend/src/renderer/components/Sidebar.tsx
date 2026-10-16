@@ -21,6 +21,7 @@ import {
 	CalendarClock,
 	ChevronRight,
 	Download,
+	FileText,
 	Folder,
 	FolderOpen,
 	LogIn,
@@ -58,6 +59,7 @@ import {
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { UpdateStatus } from "../../main/update-settings";
+import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
 import { parseNightlyVersion } from "../lib/build-channel";
 import {
 	hasConfiguredOrchestratorAgent,
@@ -86,6 +88,7 @@ import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
+import { useLatestCallback, useStableArray } from "../hooks/useStable";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
@@ -132,7 +135,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { applyOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
@@ -206,16 +209,19 @@ if (EMPTY_DRAG_IMAGE) EMPTY_DRAG_IMAGE.src = "data:image/gif;base64,R0lGODlhAQAB
 /** Stable drag-context id per project's session list. */
 export const sessionDndId = (projectId: string) => `sidebar-sessions-${projectId}`;
 
+// Module constants: useSensor memoizes on the options object, and new sensors
+// change dnd-kit's context, which re-renders every sortable row in the list.
+const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE } };
+// Space-only start so Enter keeps opening the row.
+const KEYBOARD_SENSOR_OPTIONS = {
+	coordinateGetter: sortableKeyboardCoordinates,
+	keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
+};
+
 function useReorderSensors() {
 	return useSensors(
-		useSensor(PointerSensor, {
-			activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE },
-		}),
-		// Space-only start so Enter keeps opening the row.
-		useSensor(KeyboardSensor, {
-			coordinateGetter: sortableKeyboardCoordinates,
-			keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
-		}),
+		useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+		useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
 	);
 }
 
@@ -522,6 +528,7 @@ function useSelection() {
 	});
 	const goHome = useCallback(() => void navigate({ to: "/" }), [navigate]);
 	const goAutomations = useCallback(() => void navigate({ to: "/automations" }), [navigate]);
+	const goArtifacts = useCallback(() => void navigate({ to: "/artifacts" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile"), [openGlobalSettings]);
@@ -546,6 +553,7 @@ function useSelection() {
 	return useMemo(() => ({
 		isHome: pathname === "/",
 		isAutomations: pathname === "/automations",
+		isArtifacts: pathname === "/artifacts",
 		activeRemoteHostId: params.hostId,
 		activeRemoteProjectId: params.hostId ? params.projectId : undefined,
 		activeRemoteSessionId: params.hostId ? params.sessionId : undefined,
@@ -553,6 +561,7 @@ function useSelection() {
 		activeSessionId: params.hostId ? undefined : params.sessionId,
 		goHome,
 		goAutomations,
+		goArtifacts,
 		goStandaloneBoard,
 		// Settings is a modal — open it in place so the current page (session
 		// terminal, board, etc.) stays underneath.
@@ -561,7 +570,7 @@ function useSelection() {
 		goSettings,
 		goProject,
 		goSession,
-	}), [goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
+	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
 // Colour tracks the session's board section, preserving SCM state while the
@@ -635,6 +644,7 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
+	const artifactTotal = useMemo(() => artifactCount(groupArtifactsByProject(workspaces)), [workspaces]);
 	const existingProjectPaths = useMemo(
 		() => workspaces
 			.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND)
@@ -904,6 +914,11 @@ export function Sidebar({
 		[workspaces, remoteWorkspaces],
 	);
 
+	const openPinnedSession = useLatestCallback((target: WorkspaceSession) => {
+		if (target.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
+		if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
+		else selection.goSession(target.workspaceId, target.id);
+	});
 	const handlePinnedSessionKilled = useCallback(
 		(killedSession: WorkspaceSession) => {
 			if (killedSession.hostId) {
@@ -1018,6 +1033,16 @@ export function Sidebar({
 							tooltip={isCollapsed ? t("automations.title") : undefined}
 						/>
 					</SidebarMenuItem>
+					<SidebarMenuItem>
+						<SidebarTopNavRow
+							active={selection.isArtifacts}
+							icon={<FileText aria-hidden="true" />}
+							label={t("artifacts.title")}
+							onClick={selection.goArtifacts}
+							tooltip={isCollapsed ? t("artifacts.title") : undefined}
+							trailing={artifactTotal > 0 ? String(artifactTotal) : undefined}
+						/>
+					</SidebarMenuItem>
 				</SidebarMenu>
 
 				{/* Pinned — collapsible; hidden when empty. */}
@@ -1043,11 +1068,7 @@ export function Sidebar({
 											: selection.activeSessionId === session.id}
 										hostLabel={session.hostId ? remoteHosts.find((host) => host.hostId === session.hostId)?.label ?? session.hostId : undefined}
 										onKilled={handlePinnedSessionKilled}
-										onOpenSession={(target) => {
-											if (session.kind === "worker") recordManualWorkerOpen(target.id, target.hostId);
-											if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
-											else selection.goSession(target.workspaceId, target.id);
-										}}
+										onOpenSession={openPinnedSession}
 									/>
 								))}
 							</SidebarMenuSub>
@@ -1377,6 +1398,30 @@ type ProjectItemProps = {
 	onProjectDrop: (event: ReactDragEvent<HTMLElement>) => void;
 };
 
+// The part of the route selection one project row renders from. A switch
+// between two other projects' sessions leaves it unchanged. The active project
+// keys on the raw session id: a just-opened session may not be listed yet.
+function projectSelectionKey(workspace: WorkspaceSummary, selection: Selection): string {
+	const sessionId = selection.activeSessionId ?? "";
+	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}`;
+	return workspace.sessions.some((session) => session.id === sessionId) ? sessionId : "";
+}
+
+// Session switches replace the shared selection object. Re-render a project
+// only when its own slice of the selection (or any other prop) changed, so a
+// switch does not re-render every project's rows, menus, and dialogs.
+function projectItemPropsEqual(previous: ProjectItemProps, next: ProjectItemProps): boolean {
+	const keys = Object.keys(next) as (keyof ProjectItemProps)[];
+	if (keys.length !== Object.keys(previous).length) return false;
+	for (const key of keys) {
+		if (key !== "selection" && !Object.is(previous[key], next[key])) return false;
+	}
+	const a = previous.selection;
+	const b = next.selection;
+	return a.goSession === b.goSession && a.goProject === b.goProject && a.goHome === b.goHome &&
+		a.goSettings === b.goSettings && projectSelectionKey(previous.workspace, a) === projectSelectionKey(next.workspace, b);
+}
+
 const ProjectItem = memo(function ProjectItem({
 	workspace,
 	hostLabel,
@@ -1451,7 +1496,8 @@ const ProjectItem = memo(function ProjectItem({
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
 	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
-	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
+	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
+	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -1462,24 +1508,23 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[sessions],
 	);
-	const openSession = useCallback((sessionId: string) => {
+	// Stable row handlers: selection changes on every session switch, and a new
+	// handler would re-render every row (with its menus, tooltips, and dialogs).
+	const openSession = useLatestCallback((sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
 		selection.goSession(workspace.id, sessionId);
-	}, [selection, workspace.id]);
-	const handleSessionKilled = useCallback(
-		(killedSession: WorkspaceSession) => {
-			if (selection.activeSessionId !== killedSession.id) return;
-			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
-			if (nextRoute.target === "session") {
-				selection.goSession(workspace.id, nextRoute.sessionId);
-			} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
-				selection.goHome();
-			} else {
-				selection.goProject(workspace.id);
-			}
-		},
-		[selection, sessions, workspace],
-	);
+	});
+	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
+		if (selection.activeSessionId !== killedSession.id) return;
+		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
+		if (nextRoute.target === "session") {
+			selection.goSession(workspace.id, nextRoute.sessionId);
+		} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
+			selection.goHome();
+		} else {
+			selection.goProject(workspace.id);
+		}
+	});
 	// The project's live orchestrator (if any) backs the hover Orchestrator
 	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
@@ -1935,7 +1980,7 @@ const ProjectItem = memo(function ProjectItem({
 			</ContextMenuContent>
 		</ContextMenu>
 	);
-});
+}, projectItemPropsEqual);
 
 /** Projectless ("ad hoc") agents. Their own section under Projects — same
  *  header chrome, own capped scroller, own Show more — instead of a project row
@@ -1979,7 +2024,8 @@ function ScratchpadSection({
 		showAll,
 		toggleShowAll,
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
-	const listedSessionIds = useMemo(() => listedSessions.map((session) => session.id), [listedSessions]);
+	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
+	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -1990,26 +2036,20 @@ function ScratchpadSection({
 		},
 		[sessions],
 	);
-	const openSession = useCallback(
-		(sessionId: string) => {
-			recordManualWorkerOpen(sessionId);
-			selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
-		},
-		[selection],
-	);
-	const handleSessionKilled = useCallback(
-		(killedSession: WorkspaceSession) => {
-			if (selection.activeSessionId !== killedSession.id) return;
-			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
-			// An ad hoc agent has no project board to fall back to.
-			if (nextRoute.target === "session") {
-				selection.goSession(STANDALONE_WORKSPACE_ID, nextRoute.sessionId);
-			} else {
-				selection.goHome();
-			}
-		},
-		[selection, sessions, workspace],
-	);
+	const openSession = useLatestCallback((sessionId: string) => {
+		recordManualWorkerOpen(sessionId);
+		selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
+	});
+	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
+		if (selection.activeSessionId !== killedSession.id) return;
+		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
+		// An ad hoc agent has no project board to fall back to.
+		if (nextRoute.target === "session") {
+			selection.goSession(STANDALONE_WORKSPACE_ID, nextRoute.sessionId);
+		} else {
+			selection.goHome();
+		}
+	});
 
 	return (
 		<div
@@ -2144,26 +2184,25 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	const { isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
 		id: session.id,
 	});
+	// dnd-kit's context changes on unrelated list renders and re-renders this
+	// wrapper. Keep the row's props stable so the heavy SessionRow skips it.
+	const open = useCallback(() => {
+		if (!consumeDragClick(session.id)) onOpen(session.id);
+	}, [consumeDragClick, onOpen, session.id]);
+	const reorder = useMemo(
+		() => ({ isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition, dropTransitionDisabled }),
+		[isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition, dropTransitionDisabled],
+	);
 	return (
 		<SessionRow
 			session={session}
 			active={active}
 			indented={indented}
 			onKilled={onKilled}
-			onOpen={() => {
-				if (!consumeDragClick(session.id)) onOpen(session.id);
-			}}
+			onOpen={open}
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
-			reorder={{
-				isDragging,
-				listeners,
-				setActivatorNodeRef,
-				setNodeRef,
-				transform,
-				transition,
-				dropTransitionDisabled,
-			}}
+			reorder={reorder}
 		/>
 	);
 });
@@ -2296,7 +2335,7 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 // One worker-session row. Reads as a link by default; double-click/double-tap
 // on the name or F2 flips the label into an inline input (Enter/blur saves,
 // Escape cancels) that persists through the daemon rename endpoint.
-function SessionRow({
+const SessionRow = memo(function SessionRow({
 	session,
 	active,
 	hostLabel,
@@ -2523,7 +2562,7 @@ function SessionRow({
 			</ContextMenuContent>
 		</ContextMenu>
 	);
-}
+});
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
@@ -2572,9 +2611,9 @@ const SessionActions = memo(function SessionActions({
 		setConfirmOpen(true);
 	};
 
-	const confirmArchive = () => {
+	const confirmArchive = ({ deleteArtifacts }: SessionArchiveChoice) => {
 		setConfirmOpen(false);
-		terminateSession(session);
+		terminateSession({ ...session, deleteArtifacts });
 	};
 
 	return (

@@ -266,6 +266,10 @@ func (c *conversation) historyReplayActive() bool {
 }
 
 func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMessageChunk) {
+	text := historicalUserContent(chunk.Content)
+	if c.historyNotice != nil && c.historyNotice(text) {
+		return
+	}
 	messageID := ""
 	if chunk.MessageId != nil {
 		messageID = strings.TrimSpace(*chunk.MessageId)
@@ -280,10 +284,12 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 	if messageID == "" {
 		if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
-		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" {
+		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
 			// An absent message id cannot describe a reliable boundary. Keep
 			// contiguous chunks together; conforming agents (including Claude) send
-			// stable UUIDs, so this is only a compatibility fallback.
+			// stable UUIDs, so this is only a compatibility fallback. Once the agent
+			// has answered, the next user chunk is a new prompt: merging id-less
+			// turns broke every checkpoint match on a Terminal to Chat switch.
 			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++
@@ -302,7 +308,6 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		c.startHistoryTurn(messageID)
 	}
 
-	text := historicalUserContent(chunk.Content)
 	c.historyMu.Lock()
 	if c.history != nil {
 		c.history.pendingUserID = messageID

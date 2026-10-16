@@ -18,7 +18,7 @@ import { appI18n } from "../../i18n";
 import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
 	getChatInlineEditMutation,
@@ -207,6 +207,33 @@ beforeEach(() => {
 	window.localStorage.clear();
 	setApiBaseUrl("http://127.0.0.1:3001");
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
+});
+
+describe("ChatWorkspace prompt suggestions", () => {
+	it("inserts a contextual suggestion into the normal draft on Tab without sending it", async () => {
+		const onSend = vi.fn();
+		const promptSuggestion = { id: "context-1", text: "Explain the fix." };
+		const snapshot = { ...chatFixtureSettled, sessionId: "suggestion-workspace" };
+		render(<ChatWorkspace snapshot={snapshot} promptSuggestion={promptSuggestion} onSend={onSend} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(promptSuggestion.text);
+		const editor = screen.getByRole("combobox", { name: "Message the agent" });
+		await userEvent.click(editor);
+		fireEvent.keyDown(editor, { key: "Tab", code: "Tab" });
+		await waitFor(() => expect(editor).toHaveTextContent(promptSuggestion.text));
+		expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(promptSuggestion.text);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("withholds suggestions while the normal entry is locked", () => {
+		const props = {
+			snapshot: { ...chatFixtureSettled, sessionId: "suggestion-workspace-locked" },
+			promptSuggestion: { id: "context-1", text: "Explain the fix." },
+		};
+		const view = render(<ChatWorkspace {...props} newWorkDisabled />);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(props.promptSuggestion.text);
+	});
 });
 
 afterEach(async () => {
@@ -1527,6 +1554,40 @@ describe("ChatWorkspace timeline", () => {
 		expect(onDecide).toHaveBeenCalledWith("opaque-request", "option-a");
 	});
 
+	it("keeps each answer's own wording when a question offers several options of one kind", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi.fn();
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items.push({
+			kind: "activity",
+			id: "approval-question",
+			sequence: 102,
+			revision: 1,
+			turnId: "turn-2",
+			activityKind: "approval",
+			status: "pending",
+			summary: "What topic or content would you like the 10 lines written about?",
+			requestId: "question-request",
+			decisions: [
+				{ id: "1", label: "A 10-line bio for your portfolio", kind: "allow_once" },
+				{ id: "2", label: "10 lines of code", kind: "allow_once" },
+				{ id: "3", label: "A general 10-line poem", kind: "allow_once" },
+			],
+			detail: { subjectKind: "mcp_tool" },
+			createdAt: "2026-08-08T00:00:00Z",
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onDecide={onDecide} onInterrupt={vi.fn()} />);
+
+		const approval = screen.getByRole("group", { name: "Approval request question-request" });
+		expect(within(approval).queryByRole("button", { name: /Allow once/ })).not.toBeInTheDocument();
+		for (const label of [/A 10-line bio for your portfolio/, /10 lines of code/, /A general 10-line poem/]) {
+			expect(within(approval).getByRole("button", { name: label })).toBeInTheDocument();
+		}
+		await user.click(within(approval).getByRole("button", { name: /A general 10-line poem/ }));
+		expect(onDecide).toHaveBeenCalledWith("question-request", "3");
+	});
+
 	it("requires an explicit click for decisions without a semantic kind", () => {
 		const onDecide = vi.fn();
 		const snapshot = structuredClone(chatFixture);
@@ -1937,6 +1998,56 @@ describe("ChatWorkspace timeline", () => {
 	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
 		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
 		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
+	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, workspaceId: STANDALONE_WORKSPACE_ID, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Write a one-page plan for a new feature",
+			"Build an HTML page comparing three options side by side",
+			"Turn my rough notes into a polished Markdown document",
+		]);
+
+		await user.click(prompts[1]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Build an HTML page comparing three options side by side"));
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument());
+	});
+
+	it("offers ordinary sample requests in an empty non-artifact chat and fills the composer with one", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Review my recent changes for bugs",
+			"Add tests for the code I am working on",
+			"Walk me through how a request flows through this code",
+		]);
+
+		await user.click(prompts[0]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Review my recent changes for bugs"));
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
+	});
+
+	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByRole("list", { name: "Sample artifact requests" })).toBeInTheDocument();
+	});
+
+	it("drops the sample requests once the conversation has messages", () => {
+		render(<ChatWorkspace snapshot={chatFixture} session={chatSession} />);
+
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
 	});
 
 	it("waits for provider settings before showing composer dropdowns", () => {

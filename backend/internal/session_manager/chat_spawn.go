@@ -80,6 +80,23 @@ func (m *Manager) RunBackgroundTask(
 	if _, ok := m.chat.(chatBackgroundTaskRunner); !ok {
 		return "", ports.ErrChatUnsupported
 	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, runner.RunBackgroundTask)
+}
+
+// RunPromptSuggestionTask preserves the requested turn's native context when available.
+func (m *Manager) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+	runner, ok := m.chat.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
+	})
+	if !ok {
+		return m.RunBackgroundTask(ctx, id, systemPrompt, prompt)
+	}
+	return m.runBackgroundTask(ctx, id, systemPrompt, prompt, func(ctx context.Context, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (string, error) {
+		return runner.RunPromptSuggestionTask(ctx, id, turnID, harness, cfg, prompt)
+	})
+}
+
+func (m *Manager) runBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string, run func(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)) (string, error) {
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return "", err
@@ -117,7 +134,7 @@ func (m *Manager) runBackgroundTask(ctx context.Context, rec domain.SessionRecor
 	defer func() { _ = os.RemoveAll(workspace) }()
 
 	config := ports.AgentConfig{
-		Model: rec.Metadata.Model, Effort: rec.Metadata.Effort, Permissions: backgroundTaskPermissions(rec.Harness),
+		Model: rec.Metadata.Model, Permissions: backgroundTaskPermissions(rec.Harness),
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
 	if m.agents != nil {
@@ -130,7 +147,7 @@ func (m *Manager) runBackgroundTask(ctx context.Context, rec domain.SessionRecor
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
-	return runner.RunBackgroundTask(ctx, rec.Harness, ports.ChatStartConfig{
+	return run(ctx, rec.Harness, ports.ChatStartConfig{
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,
@@ -177,6 +194,7 @@ type chatSpawn struct {
 	workspaceProject *ports.WorkspaceProjectInfo
 	prompt           string
 	systemPrompt     string
+	systemPromptFile string
 	// promptQueued means the opening prompt is already a durable queued turn
 	// (asynchronous spawn). The controller drains it; sending it again here
 	// would deliver the user's brief twice.
@@ -212,6 +230,15 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 	env := m.runtimeEnv(id, in.record.ProjectID, in.record.IssueID, in.project.Config.Env)
 	if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
+		// Chat launches go through the same workspace preparation as terminal
+		// launches: without the adapter's hooks (e.g. Command Code's
+		// SessionStart hook, which injects the standing instructions from the
+		// prompt file) a fresh chat session would start with no AO role or
+		// coordination context.
+		if err := m.prepareWorkspace(ctx, agent, id, in.workspace.Path, in.systemPrompt, in.systemPromptFile, agentConfig, env); err != nil {
+			m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
+		}
 	}
 
 	var (
@@ -450,7 +477,7 @@ func (m *Manager) resumeChatController(
 
 	// Recomputed rather than persisted, matching the terminal path: a restored
 	// session keeps its standing instructions across the relaunch.
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, true)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}

@@ -30,6 +30,8 @@ type spawnOptions struct {
 	issue           string
 	name            string
 	model           string
+	output          string
+	effort          string
 	claimPR         string
 	noTakeover      bool
 	skipAgentCheck  bool
@@ -49,6 +51,8 @@ type spawnRequest struct {
 	Branch          string `json:"branch,omitempty"`
 	Prompt          string `json:"prompt,omitempty"`
 	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 	DisplayName     string `json:"displayName"`
 }
 
@@ -93,6 +97,12 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
 				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
+			}
+			if opts.output != "" && opts.output != "artifact" {
+				return usageError{fmt.Errorf(`--output must be "artifact"`)}
+			}
+			if opts.output != "" && opts.kind == "orchestrator" {
+				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 			if opts.standalone {
 				if opts.kind == "orchestrator" {
@@ -164,6 +174,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Branch:          opts.branch,
 				Prompt:          opts.prompt,
 				Model:           strings.TrimSpace(opts.model),
+				Effort:          strings.TrimSpace(opts.effort),
+				RequestedOutput: opts.output,
 				DisplayName:     name,
 			}
 			var res spawnResult
@@ -225,6 +237,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.prompt, "prompt", "", "Initial prompt for the agent")
 	f.StringVar(&opts.model, "model", "", "Agent model override for this session only (e.g. sonnet, gpt-5.6-sol); overrides project/role config without changing it")
+	f.StringVar(&opts.output, "output", "", "Deliverable for the session: artifact asks the agent to write a file in its artifact directory instead of opening a PR (default: ordinary task)")
+	f.StringVar(&opts.effort, "effort", "", "Reasoning effort override for this session only (e.g. low, medium, high); empty defers to the agent/model default")
 	f.StringVar(&opts.issue, "issue", "", "Issue id to associate with the session")
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "github", "Issue tracker provider: github or gitlab (default: github)")
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")

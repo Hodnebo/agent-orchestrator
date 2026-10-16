@@ -28,7 +28,10 @@ import (
 // sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
 // the id alphabet the daemon issues. Validating the externally-set env value
 // before it reaches the loopback URL keeps it from steering the request.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// Project ids may contain single dots (e.g. "acme.dev"), and session ids
+// inherit them ("acme.dev-2"); dot runs and leading dots stay rejected so the
+// id can never be "." or ".." in a request or file path.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 
 const (
 	// hooksLogName is the file under AO_DATA_DIR where hook delivery failures
@@ -64,6 +67,7 @@ type setActivityAPIRequest struct {
 	SubmissionID                 string                              `json:"submissionId,omitempty"`
 	TranscriptPath               string                              `json:"transcriptPath,omitempty"`
 	LaunchID                     string                              `json:"launchId,omitempty"`
+	Entrypoint                   string                              `json:"entrypoint,omitempty"`
 	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
 }
 
@@ -666,6 +670,14 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 	if hasActivity {
 		req.State = string(state)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode {
+		// Claude exports its process kind to hook children. It lets the daemon
+		// tell AO's interactive runtime from a side `claude -p` in the same
+		// worktree, which inherits this session's env and launch id (#6454).
+		if entrypoint := strings.TrimSpace(os.Getenv("CLAUDE_CODE_ENTRYPOINT")); len(entrypoint) <= maxActivityMetaLen {
+			req.Entrypoint = entrypoint
+		}
 	}
 	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "user-prompt-submit" &&
 		launchID != "" && agentSessionID != "" && conversation.CheckpointOrigin != domain.ConversationCheckpointOriginUnknown {

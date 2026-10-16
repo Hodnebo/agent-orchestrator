@@ -20,6 +20,12 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 	},
 }));
 
+// The real section reads the cloud gate and /me; here it only marks where the
+// General page places it.
+vi.mock("./settings/DefaultCloudSandboxRow", () => ({
+	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
+}));
+
 const {
 	getUpdate,
 	setUpdate,
@@ -96,6 +102,12 @@ vi.mock("../lib/bridge", () => ({
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
+		cliLink: {
+			setEnabled: vi.fn(async () => undefined),
+			inspect: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			link: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			unlink: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+		},
 		updateSettings: {
 			get: getUpdate,
 			set: setUpdate,
@@ -257,6 +269,14 @@ describe("GlobalSettingsForm", () => {
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
 		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
+	});
+
+	// Admins pick the org's cloud sandbox without turning on Developer Mode or
+	// the preview Cloud toggle, which builds that force cloud leave off.
+	it("shows the default cloud sandbox outside Developer mode", async () => {
+		renderForm("general");
+		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
 	});
 
 	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {

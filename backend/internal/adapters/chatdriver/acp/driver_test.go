@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,10 @@ func TestPersistentACPProviderHelper(t *testing.T) {
 				continue
 			}
 			time.Sleep(200 * time.Millisecond)
+			frames, _ := strconv.Atoi(os.Getenv("AO_TEST_PERSISTENT_ACP_REPLAY_FRAMES"))
+			for range frames {
+				_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"persistent-provider-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"x"}}}}`)
+			}
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", request.ID)
 		default:
 			if len(request.ID) > 0 {
@@ -134,11 +139,15 @@ func TestPersistentACPDriverSurvivesRealProcessDetach(t *testing.T) {
 		domain.HarnessDroid, domain.HarnessKimi, domain.HarnessKimchi,
 		domain.HarnessPi, domain.HarnessOMP,
 	} {
-		t.Run(string(harness), func(t *testing.T) { testACPProcessDetach(t, harness) })
+		t.Run(string(harness), func(t *testing.T) { testACPProcessDetach(t, harness, 0) })
 	}
 }
 
-func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
+func TestPersistentACPLargeReplaySurvivesRestarts(t *testing.T) {
+	testACPProcessDetach(t, domain.HarnessOpenCode, 6375)
+}
+
+func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrames int) {
 	dataDir := t.TempDir()
 	workdir := t.TempDir()
 	callsPath := filepath.Join(t.TempDir(), "calls.log")
@@ -156,9 +165,10 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 			return Launch{
 				Command: os.Args[0], Args: []string{"-test.run=TestPersistentACPProviderHelper"},
 				Env: map[string]string{
-					"AO_TEST_PERSISTENT_ACP_PROVIDER":  "1",
-					"AO_TEST_PERSISTENT_ACP_NO_RESUME": "1",
-					"AO_TEST_PERSISTENT_ACP_CALLS":     callsPath,
+					"AO_TEST_PERSISTENT_ACP_PROVIDER":      "1",
+					"AO_TEST_PERSISTENT_ACP_NO_RESUME":     "1",
+					"AO_TEST_PERSISTENT_ACP_CALLS":         callsPath,
+					"AO_TEST_PERSISTENT_ACP_REPLAY_FRAMES": strconv.Itoa(replayFrames),
 				},
 			}, nil
 		},
@@ -219,13 +229,26 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 	}
 
 	_ = nextEvent(t, second.Events()) // controller.ready reconstructed from cached setup
+	if replayFrames > 0 {
+		// Hold projection during the burst, just as a restarting daemon can be
+		// behind the detached host. Neither connection nor history may be lost.
+		time.Sleep(300 * time.Millisecond)
+	}
 	var replayedDelta, completed ports.ChatEvent
-	deadline := time.After(5 * time.Second)
+	deltas := 0
+	replayTimeout := 5 * time.Second
+	if replayFrames > 0 {
+		replayTimeout = 30 * time.Second
+	}
+	deadline := time.After(replayTimeout)
 	for completed.Kind != ports.ChatEventTurnCompleted {
 		select {
 		case event := <-second.Events():
 			if event.Kind == ports.ChatEventMessageDelta {
-				replayedDelta = event
+				deltas++
+				if event.ProviderEventID == firstDelta.ProviderEventID {
+					replayedDelta = event
+				}
 			}
 			if event.Kind == ports.ChatEventTurnCompleted {
 				completed = event
@@ -233,6 +256,9 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness) {
 		case <-deadline:
 			t.Fatal("timed out waiting for detached prompt completion")
 		}
+	}
+	if deltas != replayFrames+1 {
+		t.Fatalf("replayed %d deltas, want %d", deltas, replayFrames+1)
 	}
 	if replayedDelta.Delta != firstDelta.Delta || completed.ProviderTurnID != ref.ProviderTurnID ||
 		completed.TurnState != domain.TurnStateCompleted || completed.ProviderEventID == "" {
@@ -750,11 +776,18 @@ type fakeAgent struct {
 
 	mu                  sync.Mutex
 	initParams          acpsdk.InitializeRequest
+	authMethods         []string
 	capabilities        *acpsdk.AgentCapabilities
 	initErr             error
 	newParams           acpsdk.NewSessionRequest
 	loadParams          acpsdk.LoadSessionRequest
 	resumeParams        acpsdk.ResumeSessionRequest
+	forkParams          acpsdk.UnstableForkSessionRequest
+	forkID              string
+	forkErr             error
+	forkCalls           int
+	onFork              func(context.Context) error
+	deletedForks        []string
 	loadUpdates         []acpsdk.SessionUpdate
 	loadUpdateBatches   [][]acpsdk.SessionUpdate
 	blockLoadCall       int
@@ -923,7 +956,10 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 
 var _ acpsdk.Agent = (*fakeAgent)(nil)
 
-func (a *fakeAgent) Authenticate(context.Context, acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
+func (a *fakeAgent) Authenticate(_ context.Context, params acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
+	a.mu.Lock()
+	a.authMethods = append(a.authMethods, params.MethodId)
+	a.mu.Unlock()
 	return acpsdk.AuthenticateResponse{}, nil
 }
 func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
@@ -1022,6 +1058,24 @@ func (a *fakeAgent) ResumeSession(_ context.Context, params acpsdk.ResumeSession
 	a.resumeCalls++
 	a.mu.Unlock()
 	return acpsdk.ResumeSessionResponse{}, nil
+}
+func (a *fakeAgent) UnstableForkSession(ctx context.Context, params acpsdk.UnstableForkSessionRequest) (acpsdk.UnstableForkSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.forkParams = params
+	a.forkCalls++
+	if a.onFork != nil {
+		if err := a.onFork(ctx); err != nil {
+			return acpsdk.UnstableForkSessionResponse{}, err
+		}
+	}
+	return acpsdk.UnstableForkSessionResponse{SessionId: acpsdk.SessionId(a.forkID)}, a.forkErr
+}
+func (a *fakeAgent) UnstableDeleteSession(_ context.Context, params acpsdk.UnstableDeleteSessionRequest) (acpsdk.UnstableDeleteSessionResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deletedForks = append(a.deletedForks, string(params.SessionId))
+	return acpsdk.UnstableDeleteSessionResponse{}, nil
 }
 func (a *fakeAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
 	a.mu.Lock()
@@ -1313,6 +1367,70 @@ func TestACPDriverValidatesHandshakeIdentityBeforeOpeningSession(t *testing.T) {
 	agent.mu.Unlock()
 	if opened {
 		t.Fatal("session/new ran before the handshake identity was admitted")
+	}
+}
+
+func TestACPDriverRunsAfterInitializeBeforeOpeningSession(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		AfterInitialize: func(ctx context.Context, conn *acpsdk.ClientSideConnection, _ acpsdk.InitializeResponse, launchCfg LaunchConfig) error {
+			if launchCfg.Env["GEMINI_HOME"] != "/session/gemini" {
+				t.Errorf("AfterInitialize environment = %v", launchCfg.Env)
+			}
+			agent.mu.Lock()
+			opened := agent.newParams.Cwd != ""
+			agent.mu.Unlock()
+			if opened {
+				t.Error("session/new ran before AfterInitialize")
+			}
+			_, err := conn.Authenticate(ctx, acpsdk.AuthenticateRequest{MethodId: "oauth-personal"})
+			return err
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_HOME": "/session/gemini"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conversation.Close() }()
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.authMethods) != 1 || agent.authMethods[0] != "oauth-personal" {
+		t.Fatalf("authenticate calls = %v, want [oauth-personal]", agent.authMethods)
+	}
+	if agent.newParams.Cwd == "" {
+		t.Fatal("session/new did not run after AfterInitialize succeeded")
+	}
+}
+
+func TestACPDriverAfterInitializeFailureStopsStart(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		AfterInitialize: func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, LaunchConfig) error {
+			return &acpsdk.RequestError{Code: -32000, Message: "Authentication required"}
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("Start error = %v, want ErrChatAuthRequired", err)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.newParams.Cwd != "" {
+		t.Fatal("session/new ran after AfterInitialize failed")
 	}
 }
 
@@ -1636,6 +1754,229 @@ func TestACPDriverReappliesLaunchContextWhenResuming(t *testing.T) {
 	if _, ok := conv.(ports.ChatHistoryRefresher); ok {
 		t.Fatal("resume-only ACP conversation advertised refreshable history")
 	}
+}
+
+// standingInstructions is the fixed preamble text used by the preamble tests.
+const standingInstructions = "AO standing instructions for this session"
+
+// runOneTurn sends a single text turn and returns the prompt the provider saw.
+// The caller must already have drained the controller.ready event emitted at
+// session setup.
+func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, text string) []acpsdk.ContentBlock {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+		Text: text, ClientMessageID: "ao-client-message-preamble",
+	})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	for {
+		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventTurnCompleted {
+			break
+		}
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	return append([]acpsdk.ContentBlock(nil), agent.promptParams.Prompt...)
+}
+
+// preambleText reads AO's standing instructions back out of a native prompt the
+// way the agent does: the resource block is what reaches the model.
+func preambleText(prompt []acpsdk.ContentBlock) string {
+	if len(prompt) == 0 || prompt[0].Resource == nil {
+		return ""
+	}
+	contents := prompt[0].Resource.Resource.TextResourceContents
+	if contents == nil {
+		return ""
+	}
+	return contents.Text
+}
+
+// preambleConfig is the binding shape under test: an agent with no
+// system-prompt launch flag that ignores session/new _meta and receives AO's
+// standing context only as an embedded resource on the first prompt.
+func preambleConfig() Config {
+	return Config{
+		Harness:      domain.HarnessCommandCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionPreamble: func(cfg LaunchConfig) []acpsdk.ContentBlock {
+			return []acpsdk.ContentBlock{acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				TextResourceContents: &acpsdk.TextResourceContents{
+					Uri:  "ao://agent-orchestrator/standing-instructions",
+					Text: cfg.SystemPrompt,
+				},
+			})}
+		},
+	}
+}
+
+// TestACPDriverDeliversSessionPreambleOnStartAndResume covers the channel AO
+// uses for agents that accept no system-prompt launch flag and ignore
+// session/new _meta: an embedded resource leading the first prompt. Standing
+// context is process input rather than transcript history, so a resumed session
+// must receive the recomputed instructions again.
+func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
+	newDriver := func(agent *fakeAgent) *Driver {
+		driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		return driver
+	}
+
+	t.Run("start", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv, err := newDriver(agent).Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		prompt := runOneTurn(t, agent, conv, "do the task")
+		if got := preambleText(prompt); got != standingInstructions {
+			t.Fatalf("first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
+		}
+		if len(prompt) < 2 || prompt[1].Text == nil || prompt[1].Text.Text != "do the task" {
+			t.Fatalf("standing context did not lead the user text: %#v", prompt)
+		}
+	})
+
+	t.Run("resume", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv, err := newDriver(agent).Resume(context.Background(), ports.ChatResumeConfig{
+			SessionID:              "worker-1",
+			ProviderConversationID: "provider-session-1",
+			WorkspacePath:          t.TempDir(),
+			SystemPrompt:           standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		prompt := runOneTurn(t, agent, conv, "continue the task")
+		if got := preambleText(prompt); got != standingInstructions {
+			t.Fatalf("resumed first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
+		}
+	})
+}
+
+// Standing context is process input, so it is delivered once per session rather
+// than repeated on every turn, which would grow the transcript and re-state the
+// same rules mid-conversation.
+func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	if got := preambleText(runOneTurn(t, agent, conv, "first")); got != standingInstructions {
+		t.Fatalf("first prompt standing context = %q", got)
+	}
+	agent.mu.Lock()
+	agent.promptParams = acpsdk.PromptRequest{}
+	agent.mu.Unlock()
+	if got := preambleText(runOneTurn(t, agent, conv, "second")); got != "" {
+		t.Fatalf("second prompt repeated standing context %q; want it delivered once per session", got)
+	}
+}
+
+// A first turn that never reaches the provider must not spend the standing
+// context. Both paths here fail in SendTurn, after the prompt is built but
+// before any session/prompt is sent: spending the preamble in SendTurn would
+// silently drop AO's instructions from the session's first real turn, which is
+// the failure these cases exist to prevent.
+func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T) {
+	newConversation := func(t *testing.T, agent *fakeAgent) ports.ChatConversation {
+		t.Helper()
+		driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		t.Cleanup(func() { conv.Close() })
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		return conv
+	}
+
+	t.Run("rejected first-turn settings", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		// Reject the first turn's settings, which fails SendTurn before the
+		// prompt is ever sent to the provider. Session setup is unaffected.
+		reject := false
+		driverConfig := preambleConfig()
+		driverConfig.ValidateTurnSettings = func(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
+			if reject && settings.Model == "rejected-model" {
+				return errors.New("settings rejected")
+			}
+			return nil
+		}
+		driver := New(driverConfig, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+			WorkspacePath: t.TempDir(), SystemPrompt: standingInstructions,
+		})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		defer conv.Close()
+		_ = nextEvent(t, conv.Events()) // controller.ready
+
+		reject = true
+		if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+			Text:     "do the task",
+			Settings: ports.ChatTurnSettings{Model: "rejected-model"},
+		}); err == nil {
+			t.Fatal("SendTurn with rejected settings succeeded; want an error")
+		}
+		if agent.promptParams.Prompt != nil {
+			t.Fatal("a turn whose settings were rejected still reached the provider")
+		}
+
+		// The retried turn must carry the standing context AO never delivered.
+		reject = false
+		if got := preambleText(runOneTurn(t, agent, conv, "retry the task")); got != standingInstructions {
+			t.Fatalf("retry standing context = %q, want %q; a rejected turn must not spend it", got, standingInstructions)
+		}
+	})
+
+	t.Run("discarded prepared turn", func(t *testing.T) {
+		agent := &fakeAgent{promptNoPermission: true}
+		conv := newConversation(t, agent)
+
+		// A prepared turn the controller drops before starting, as it does when
+		// durable binding fails.
+		ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+			Text: "abandoned task", ClientMessageID: "ao-client-message-discarded",
+		})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		conv.(ports.ChatDeferredTurnStarter).DiscardDeferredTurn(ref.ProviderTurnID)
+		if agent.promptParams.Prompt != nil {
+			t.Fatal("a discarded turn still reached the provider")
+		}
+
+		if got := preambleText(runOneTurn(t, agent, conv, "the real task")); got != standingInstructions {
+			t.Fatalf("next prompt standing context = %q, want %q; a discarded turn must not spend it", got, standingInstructions)
+		}
+	})
 }
 
 func TestACPDriverRefreshesHistoryWithAnotherSessionLoad(t *testing.T) {
@@ -2719,6 +3060,60 @@ func TestRawCommandFromInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := rawCommandFromInput(tt.raw); got != tt.want {
 				t.Fatalf("rawCommandFromInput(%v) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolEventPreservesCommandExitCode(t *testing.T) {
+	intPtr := func(value int) *int { return &value }
+	for _, tt := range []struct {
+		name         string
+		raw          string
+		kind         acpsdk.ToolKind
+		status       acpsdk.ToolCallStatus
+		terminalExit *int
+		wantExit     *int
+		wantStatus   domain.ActivityStatus
+	}{
+		{"nonzero shell exit", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, intPtr(7), domain.ActivityStatusFailed},
+		{"successful shell exit", `{"output":"command output\n","metadata":{"exit":0}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, intPtr(0), domain.ActivityStatusCompleted},
+		{"missing exit", `{"output":"command output\n","metadata":{}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"null exit", `{"output":"command output\n","metadata":{"exit":null}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"string exit", `{"output":"command output\n","metadata":{"exit":"7"}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"fractional exit", `{"output":"command output\n","metadata":{"exit":1.5}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"non-command metadata", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindRead, acpsdk.ToolCallStatusCompleted, nil, nil, domain.ActivityStatusCompleted},
+		{"provider failure stays failed", `{"output":"command output\n","metadata":{"exit":0}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusFailed, nil, intPtr(0), domain.ActivityStatusFailed},
+		{"terminal exit takes precedence", `{"output":"command output\n","metadata":{"exit":7}}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, intPtr(0), intPtr(0), domain.ActivityStatusCompleted},
+		{"terminal nonzero exit", `{"output":"command output\n"}`, acpsdk.ToolKindExecute, acpsdk.ToolCallStatusCompleted, intPtr(7), intPtr(7), domain.ActivityStatusFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw any
+			if err := json.Unmarshal([]byte(tt.raw), &raw); err != nil {
+				t.Fatal(err)
+			}
+			tool := &toolState{id: "command-1", kind: tt.kind, status: tt.status, rawOutput: raw, rawInput: map[string]any{"command": "printf test; exit 7"}}
+			if tt.terminalExit != nil {
+				tool.meta = map[string]any{"terminal_exit": map[string]any{"exit_code": *tt.terminalExit}}
+			}
+			conv := &conversation{}
+			event := conv.toolEvent("turn-1", tool, true)
+			if event.Kind != ports.ChatEventActivityCompleted || event.ActivityStatus != tt.wantStatus {
+				t.Fatalf("event kind/status = %s/%s, want completed/%s", event.Kind, event.ActivityStatus, tt.wantStatus)
+			}
+			var detail map[string]any
+			if err := json.Unmarshal(event.Detail, &detail); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantExit == nil {
+				if _, exists := detail["exitCode"]; exists {
+					t.Fatalf("unexpected exitCode: %#v", detail["exitCode"])
+				}
+			} else if detail["exitCode"] != float64(*tt.wantExit) {
+				t.Fatalf("exitCode = %#v, want %d", detail["exitCode"], *tt.wantExit)
+			}
+			if detail["output"] != "command output\n" {
+				t.Fatalf("output changed: %#v", detail["output"])
 			}
 		})
 	}

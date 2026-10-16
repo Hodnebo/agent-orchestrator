@@ -240,7 +240,7 @@ describe("useBrowserView", () => {
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		// Simulate the real IPC flow: after ensure, a navigate call sends a nav
 		// state with a URL so the positioning effect considers the view visible.
 		act(() =>
@@ -656,10 +656,9 @@ describe("useBrowserView", () => {
 		expect(result.current.tabNotice).toBe("Couldn't reopen that tab");
 	});
 
-	// Regression: closeTab/selectTab are invoked fire-and-forget (`void
-	// onCloseTab(...)`) from the tabs rail, so a rejection used to become a
-	// silent unhandled rejection with zero user feedback.
-	it("surfaces a notice instead of throwing when closing or selecting a tab fails", async () => {
+	// Closing from the tab strip is fire-and-forget, so a rejected close
+	// must be handled without becoming an unhandled rejection.
+	it("surfaces a notice instead of throwing when closing a tab fails", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 		await waitFor(() => expect(result.current.tabs.map((tab) => tab.id)).toEqual(["t1"]));
@@ -667,10 +666,27 @@ describe("useBrowserView", () => {
 		bridge.closeTab.mockRejectedValueOnce(new Error("boom"));
 		await expect(act(() => result.current.closeTab("t1"))).resolves.toBeUndefined();
 		expect(result.current.tabNotice).toBe("Couldn't close that tab");
+	});
 
-		bridge.selectTab.mockRejectedValueOnce(new Error("boom"));
+	it("resyncs a failed tab selection without showing a switch-failure notice", async () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.activeTabId).toBe("t1"));
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("automation sync failed"));
+		bridge.getTabs.mockResolvedValueOnce({
+			viewId: "42:sess-1",
+			activeTabId: "t2",
+			tabs: [{ id: "t2", url: "https://example.test/", title: "Selected", active: true }],
+		});
+		await expect(act(() => result.current.selectTab("t2"))).resolves.toBeUndefined();
+		expect(result.current.activeTabId).toBe("t2");
+		expect(result.current.tabNotice).toBe("");
+
+		bridge.selectTab.mockRejectedValueOnce(new Error("tab unavailable"));
+		bridge.getTabs.mockRejectedValueOnce(new Error("view unavailable"));
 		await expect(act(() => result.current.selectTab("t1"))).resolves.toBeUndefined();
-		expect(result.current.tabNotice).toBe("Couldn't switch to that tab");
+		expect(result.current.tabNotice).toBe("");
 	});
 
 	// Regression: the main process can mutate its own tab state (e.g. the
@@ -1028,7 +1044,7 @@ describe("useBrowserView", () => {
 		document.body.appendChild(column);
 
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1153,7 +1169,7 @@ describe("useBrowserView", () => {
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1195,7 +1211,7 @@ describe("useBrowserView", () => {
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1231,7 +1247,7 @@ describe("useBrowserView", () => {
 		const bridge = setupBridge();
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1261,7 +1277,7 @@ describe("useBrowserView", () => {
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1305,7 +1321,7 @@ describe("useBrowserView", () => {
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1344,7 +1360,7 @@ describe("useBrowserView", () => {
 	it("does not raise the browser overlay during sidebar resize", async () => {
 		const bridge = setupBridge();
 		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		bridge.setOverlayOpen.mockClear();
 
 		await act(async () => {
@@ -1363,7 +1379,7 @@ describe("useBrowserView", () => {
 	it("does not scan the document for unrelated data-state mutations", async () => {
 		const bridge = setupBridge();
 		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		const querySelector = vi.spyOn(document, "querySelector");
 
 		const unrelated = document.createElement("button");
@@ -1436,7 +1452,7 @@ describe("useBrowserView", () => {
 		const { rerender } = renderHook(({ sessionId }) => useProbe(sessionId), {
 			initialProps: { sessionId: "sess-1" },
 		});
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1450,7 +1466,7 @@ describe("useBrowserView", () => {
 
 		observedUrls.length = 0;
 		rerender({ sessionId: "sess-2" });
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-2"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-2", false));
 
 		expect(observedUrls).not.toContain("http://localhost:3000/");
 	});
@@ -1736,7 +1752,7 @@ describe("useBrowserView", () => {
 		);
 
 		rerender({ sessionId: "sess-2", previewUrl: "http://127.0.0.1:5173/" });
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-2"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-2", false));
 		await waitFor(() =>
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-2",
@@ -1924,7 +1940,7 @@ describe("useBrowserView", () => {
 		host.appendChild(slot);
 
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
-		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1"));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",

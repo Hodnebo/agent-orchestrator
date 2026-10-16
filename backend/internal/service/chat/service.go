@@ -87,6 +87,9 @@ type Service struct {
 	wakeRuns           map[domain.SessionID]*wakeRun
 	backgroundWakes    map[domain.SessionID]bool
 
+	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
+	promptSuggestionSlots chan struct{}
+
 	mu               sync.RWMutex
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
@@ -203,6 +206,7 @@ func New(opts Options) *Service {
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
+		promptSuggestionSlots:  make(chan struct{}, 2),
 	}
 	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
 	return svc
@@ -500,6 +504,21 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	// One read of the session serves every first-controller decision below. A
+	// provisioning retry is not necessarily the first controller: only durable
+	// controller ownership or provider history proves work was dispatched.
+	var sessionRecord domain.SessionRecord
+	sessionFound := false
+	if s.sessions != nil {
+		var readErr error
+		sessionRecord, sessionFound, readErr = s.sessions.GetSession(ctx, cfg.SessionID)
+		if readErr != nil {
+			return nil, fmt.Errorf("read chat session before start: %w", readErr)
+		}
+	}
+	firstController := sessionFound && sessionRecord.ProvisionState.IsProvisioning() &&
+		sessionRecord.Metadata.ControllerGeneration == "" && sessionRecord.Metadata.ProviderConversationID == ""
+
 	scope := domain.ConversationScopeSession
 	if cfg.Kind == domain.KindOrchestrator {
 		scope = domain.ConversationScopeProject
@@ -540,6 +559,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			conversation.ActiveBranchID != handoff.PreviousBranchID || conversation.LatestSequence != handoff.PreviousSequence) {
 			err = errors.New("native Chat handoff conversation changed")
 		}
+	} else if freshProjectContext && firstController {
+		// What the user typed while this orchestrator provisioned waits in a
+		// session-scoped row. It moves to the project conversation with the rebind
+		// (#6523); a later controller must not replay it.
+		conversation, err = s.store.CreateProjectConversationAdoptingQueue(
+			ctx, conversationID, cfg.ProjectID, cfg.SessionID, resetBoundary, now)
 	} else if freshProjectContext {
 		conversation, err = s.store.CreateProjectConversationWithContextReset(
 			ctx, conversationID, cfg.ProjectID, cfg.SessionID, resetBoundary, now)
@@ -588,28 +613,20 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		providerScopeID = cfg.ProviderScopeID
 		providerHandleOwnedByActiveBranch = providerScopeID == activeBranch.ProviderScopeID
 	}
-	// A provisioning retry is not necessarily the first controller. Only durable
-	// controller ownership (or a running provider turn) proves work was dispatched;
-	// queued-only intake must survive a failed first drain.
+	// A running provider turn also proves dispatch; queued-only intake must
+	// survive a failed first drain.
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
 	waking := s.isWaking(cfg.SessionID)
 	hadProviderHistory := false
-	if s.sessions != nil {
-		record, found, readErr := s.sessions.GetSession(ctx, cfg.SessionID)
-		if readErr != nil {
-			return nil, fmt.Errorf("read chat session before start: %w", readErr)
+	if sessionFound && (sessionRecord.ProvisionState.IsProvisioning() || waking) {
+		hadProviderHistory = sessionRecord.Metadata.ProviderConversationID != ""
+		running, listErr := s.store.ListVisibleRunningTurnProviderIDs(ctx, conversation.ID)
+		if listErr != nil {
+			return nil, fmt.Errorf("read running chat turns before start: %w", listErr)
 		}
-		if found && (record.ProvisionState.IsProvisioning() || waking) {
-			hadProviderHistory = record.Metadata.ProviderConversationID != ""
-			running, listErr := s.store.ListVisibleRunningTurnProviderIDs(ctx, conversation.ID)
-			if listErr != nil {
-				return nil, fmt.Errorf("read running chat turns before start: %w", listErr)
-			}
-			queuedBeforeFirstController = record.ProvisionState.IsProvisioning() && record.Metadata.ControllerGeneration == "" &&
-				record.Metadata.ProviderConversationID == "" && len(running) == 0
-			preserveUndispatchedQueue = len(running) == 0 && (record.ProvisionState.IsProvisioning() || waking)
-		}
+		queuedBeforeFirstController = firstController && len(running) == 0
+		preserveUndispatchedQueue = len(running) == 0 && (sessionRecord.ProvisionState.IsProvisioning() || waking)
 	}
 	providerBoundaryID := ""
 	if !providerHandleOwnedByActiveBranch {
@@ -675,6 +692,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
+			HasPriorTurns:          conversation.LatestSequence > 0,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -869,7 +887,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -1357,11 +1375,7 @@ func truncateExcerptContext(text string) string {
 	if len(text) <= maxExcerptPairedTextBytes {
 		return text
 	}
-	cut := maxExcerptPairedTextBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n[truncated]"
+	return truncateUTF8Head(text, maxExcerptPairedTextBytes) + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.
@@ -2475,6 +2489,19 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
+		if harness == domain.HarnessCommandCode && out[i].ID == "mode" {
+			choices := out[i].Choices[:0]
+			for _, choice := range out[i].Choices {
+				mode, ok := commandCodeApprovalMode(choice.Value)
+				if !ok {
+					continue
+				}
+				choice.PermissionMode = mode
+				choices = append(choices, choice)
+			}
+			out[i].Choices = choices
+			continue
+		}
 		for j := range out[i].Choices {
 			choice := &out[i].Choices[j]
 			choice.PermissionMode = ""
@@ -2502,10 +2529,46 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 					choice.PermissionMode = mode
 					choice.Name = label
 				}
+			case domain.HarnessAgy:
+				// Antigravity's modes are approval tiers, relabelled into AO's
+				// vocabulary so the composer reads as the usual approval control.
+				if mode, label, ok := agyApprovalTier(choice.Value); ok {
+					choice.PermissionMode = mode
+					choice.Name = label
+				}
 			}
 		}
 	}
 	return out
+}
+
+func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, true
+	case "auto-accept":
+		return domain.PermissionModeAuto, true
+	case "bypass":
+		return domain.PermissionModeBypassPermissions, true
+	default:
+		return "", false
+	}
+}
+
+// agyApprovalTier maps Antigravity's ACP modes onto AO's approval tiers. AO's
+// auto and bypass both select yolo, Antigravity's only run-without-asking mode,
+// which the menu presents as AO's auto.
+func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, "Use agent permissions", true
+	case "auto_edit":
+		return domain.PermissionModeAcceptEdits, "Accept edits", true
+	case "yolo":
+		return domain.PermissionModeAuto, "Auto-approve", true
+	default:
+		return "", "", false
+	}
 }
 
 func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
@@ -2521,4 +2584,15 @@ func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func truncateUTF8Head(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }
