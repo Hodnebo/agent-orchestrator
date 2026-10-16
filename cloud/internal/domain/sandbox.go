@@ -159,6 +159,7 @@ const (
 // TaskNameRequest reserves a worker's name before its workspace is moved, then
 // completes with the branch the workspace adapter actually selected.
 type TaskNameRequest struct {
+	Claim    bool     `json:"claim,omitempty"`
 	Title    string   `json:"title,omitempty"`
 	Slug     string   `json:"slug,omitempty"`
 	Branch   string   `json:"branch,omitempty"`
@@ -168,8 +169,9 @@ type TaskNameRequest struct {
 }
 
 type TaskNameResult struct {
-	State  string `json:"state"`
-	Title  string `json:"title"`
-	Branch string `json:"branch"`
-	Slug   string `json:"slug"`
+	Generate bool   `json:"generate,omitempty"`
+	State    string `json:"state"`
+	Title    string `json:"title"`
+	Branch   string `json:"branch"`
+	Slug     string `json:"slug"`
 }

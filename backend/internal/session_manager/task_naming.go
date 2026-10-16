@@ -40,7 +40,7 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 			started := time.Now()
 			raw, err := m.runRecordBackgroundTask(namingCtx, rec, tasknaming.SystemPrompt, cfg.Prompt, runner.RunBackgroundTask)
 			name := fallback
-			if err == nil {
+			if err == nil && namingCtx.Err() == nil {
 				name = tasknaming.Parse(raw, fallback)
 			}
 			m.logger.Info("task naming", "sessionID", rec.ID, "durationMs", time.Since(started).Milliseconds(), "generated", name.Title != "", "error", err)
@@ -54,12 +54,7 @@ func (m *Manager) startTaskNaming(ctx context.Context, cfg ports.SpawnConfig, re
 		done <- fallback
 	}
 	return func() tasknaming.Name {
-		select {
-		case name := <-done:
-			return name
-		case <-namingCtx.Done():
-			return fallback
-		}
+		return tasknaming.Wait(namingCtx, done, fallback)
 	}, cancel
 }
 

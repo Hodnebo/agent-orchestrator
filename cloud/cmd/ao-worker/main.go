@@ -65,6 +65,7 @@ var workerCapabilities = []string{
 	"terminal.agent",
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
+	worker.CapabilityTaskNaming,
 }
 
 func main() {
@@ -160,6 +161,29 @@ func run(logger *slog.Logger) error {
 		"harness", bootstrap.Launch.Harness,
 		"repository_url", bootstrap.Launch.RepositoryURL,
 	)
+	if bootstrap.Launch.SessionID == "" {
+		bootstrap.Launch.SessionID = bootstrap.SessionID
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Naming and checkout run before any transport or agent factory captures a
+	// workspace path. Keep credentials and liveness warm during this early gate.
+	client.startStartupPrefetch(runCtx, bootstrap.Launch)
+	results := make(chan error, 6)
+	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
+	go func() {
+		if renewed, err := client.heartbeat(runCtx); err != nil {
+			logger.Warn("first heartbeat failed", "error", err)
+		} else if err := client.setToken(renewed); err != nil {
+			logger.Warn("persist renewed worker token", "error", err)
+		}
+	}()
+	taskWorkspace := usesTaskWorkspace(bootstrap.Launch)
+	var namingJob *taskNameJob
+	if taskWorkspace && bootstrap.Launch.TaskNamingState == "pending" {
+		namingJob = startWorkerTaskName(runCtx, client, bootstrap.Launch, dataDir, logger)
+		defer namingJob.cancel()
+	}
 
 	// A Coder template that already cloned the repository (and runs its dev
 	// stack there) can ask the session to work in that checkout instead of a
@@ -174,16 +198,32 @@ func run(logger *slog.Logger) error {
 	}
 	reuse := worker.ReuseDecision{Workspace: workspace}
 	var workingDirectoryErr error
+	resolutionBootstrap := bootstrap
+	if taskWorkspace {
+		resolutionBootstrap.Launch, workingDirectoryErr = taskAdoptionLaunch(runCtx, bootstrap.Launch, workspace, dataDir, workingDirectory)
+	}
 	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
 		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
 	switch {
+	case workingDirectoryErr != nil:
+		// Keep the diagnostic workspace transport available below.
 	case workingDirectory != "" && hasRepository:
-		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
+		reuse, workingDirectoryErr = resolveConfiguredWorkspace(runCtx, logger, resolutionBootstrap, workingDirectory, workspace, dataDir)
 		workspace = reuse.Workspace
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
-		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
+		reuse = resolveReusedWorkspace(runCtx, logger, resolutionBootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
 	}
+	workspacePrepared := false
+	if taskWorkspace && workingDirectoryErr == nil {
+		fixed := workingDirectory != "" || reuse.Reused
+		workspace, workingDirectoryErr = prepareNamedWorkspace(runCtx, logger, client, &bootstrap, workspace, dataDir, publicURL, reuse, fixed, namingJob)
+		workspacePrepared = workingDirectoryErr == nil
+	}
+	if namingJob != nil {
+		namingJob.cancel()
+	}
+	pathResolutionFailed := taskWorkspace && workingDirectoryErr != nil
 	scriptEnvironment := worker.SessionScriptEnvironment{
 		SessionID:     bootstrap.SessionID,
 		SessionKind:   bootstrap.Launch.Kind,
@@ -209,6 +249,7 @@ func run(logger *slog.Logger) error {
 		"AO_CLOUD_PUBLIC_URL":   publicURL,
 		"AO_SESSION_ID":         bootstrap.SessionID,
 		"AO_SESSION_BRANCH":     bootstrap.Launch.Branch,
+		"AO_WORKSPACE_DIR":      workspace,
 		"AO_DATA_DIR":           dataDir,
 		"AO_CLOUD_WORKER_EPOCH": strconv.FormatInt(bootstrap.Epoch, 10),
 	} {
@@ -227,18 +268,6 @@ func run(logger *slog.Logger) error {
 			return fmt.Errorf("activate worker tooling: %w", err)
 		}
 	}
-	// Heartbeat before waiting out the first interval. Bootstrap registration is
-	// not a check-in, so a repaired worker can otherwise be replaced again
-	// before the control plane ever observes it. It runs beside the rest of
-	// startup: worker tokens are signed and a renewal does not revoke the one in
-	// use, so nothing below has to wait a control-plane round trip for it.
-	go func() {
-		if renewed, err := client.heartbeat(ctx); err != nil {
-			logger.Warn("first heartbeat failed", "error", err)
-		} else if err := client.setToken(renewed); err != nil {
-			logger.Warn("persist renewed worker token", "error", err)
-		}
-	}()
 	// The agent's browser, which the person watches and uses in AO's Browser
 	// panel. Its profile and files stay beside the worker's, out of the checkout.
 	browser, err := agentbrowser.New(filepath.Join(dataDir, "agent-browser"), filepath.Join(dataDir, "ao-browser.sock"), logger)
@@ -254,7 +283,10 @@ func run(logger *slog.Logger) error {
 		committedInterface = workertransport.InterfaceTUI
 	}
 	var chatRunner workertransport.ChatRunner
-	if _, supported := workerexec.SupportedHarness(bootstrap.Launch.Harness); !supported {
+	if pathResolutionFailed {
+		logger.Warn("task workspace unresolved; continuing with diagnostic workspace transport", "error", workingDirectoryErr)
+		chatRunner = workspaceFailureChatRunner(client, workspace, workingDirectoryErr, logger)
+	} else if _, supported := workerexec.SupportedHarness(bootstrap.Launch.Harness); !supported {
 		// Workspace files and shell terminals use the same worker transport as the
 		// coding agent. Keep that transport alive when the selected harness is
 		// unknown instead of making the whole sandbox unreachable.
@@ -275,6 +307,8 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_CLOUD_WORKER_API_URL"] = client.baseURL
 		b.Env["AO_CLOUD_WORKER_TOKEN_FILE"] = client.tokenFile
 		b.Env["AO_SESSION_ID"] = bootstrap.SessionID
+		b.Env["AO_SESSION_BRANCH"] = bootstrap.Launch.Branch
+		b.Env["AO_WORKSPACE_DIR"] = workspace
 		b.Env["AO_PROJECT_ID"] = bootstrap.Launch.ProjectID
 		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
@@ -334,10 +368,6 @@ func run(logger *slog.Logger) error {
 		workerexec.WarmClaudeCode()
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	// Before any goroutine below can read the prefetch fields.
-	client.startStartupPrefetch(runCtx, bootstrap.Launch)
 	started := make(chan error, 1)
 	chatWorkspaceReady := make(chan struct{})
 	checkoutRequested := make(chan struct{}, 1)
@@ -375,6 +405,9 @@ func run(logger *slog.Logger) error {
 	busyProbe := transportSupervisor.Busy
 	client.busy.Store(&busyProbe)
 	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
+		if pathResolutionFailed {
+			return workerexec.Command{}, workingDirectoryErr
+		}
 		launch, err := reviewerLaunch(bootstrap.Launch, input)
 		if err != nil {
 			return workerexec.Command{}, err
@@ -415,9 +448,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 6)
 	backgroundWorkers := 4
-	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
 		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch.DefaultBranch, logger)
@@ -482,7 +513,7 @@ func run(logger *slog.Logger) error {
 		reopened := false
 		for {
 			err := workingDirectoryErr
-			if err == nil {
+			if err == nil && !workspacePrepared {
 				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
 			}
 			if err == nil {

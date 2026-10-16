@@ -1,9 +1,28 @@
 package tasknaming
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
+
+func TestWaitKeepsTimelyAnswerAfterPreparationOutlastsDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Name, 1)
+	done <- Name{Slug: "generated-name"}
+	cancel()
+	if got := Wait(ctx, done, Name{Slug: "fallback"}); got.Slug != "generated-name" {
+		t.Fatalf("name = %+v", got)
+	}
+}
+
+func TestWaitDoesNotBlockOnLateProvider(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := Wait(ctx, make(chan Name), Name{Slug: "fallback"}); got.Slug != "fallback" {
+		t.Fatalf("name = %+v", got)
+	}
+}
 
 func TestParseTaskName(t *testing.T) {
 	fallback := Name{Slug: "fallback"}

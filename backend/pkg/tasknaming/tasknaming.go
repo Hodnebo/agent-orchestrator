@@ -2,6 +2,7 @@
 package tasknaming
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -26,6 +27,23 @@ const SystemPrompt = `Name the task described by the user's prompt. Return only 
 type Name struct {
 	Title string `json:"title"`
 	Slug  string `json:"slug"`
+}
+
+// Wait accepts a buffered answer before observing the deadline, so a timely
+// name survives a slower checkout. Producers must publish fallback for results
+// received after their naming context ends.
+func Wait(ctx context.Context, done <-chan Name, fallback Name) Name {
+	select {
+	case name := <-done:
+		return name
+	default:
+	}
+	select {
+	case name := <-done:
+		return name
+	case <-ctx.Done():
+		return fallback
+	}
 }
 
 // Fallback derives a slug from the prompt, or the task ID when the prompt has no ASCII words.
