@@ -533,11 +533,12 @@ func TestRemoveOwnTunnelPIDFileLeavesAReplacementAlone(t *testing.T) {
 
 func TestRemoveOwnTunnelPIDFileClearsItsOwnRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tunnel.pid")
-	if err := WriteTunnelPID(path, 1111); err != nil {
+	identity := tunnelPIDIdentity{PID: 1111, ProcessStartID: "owned-start"}
+	if err := writeTunnelPIDIdentity(path, identity); err != nil {
 		t.Fatalf("seed pid: %v", err)
 	}
 
-	if err := RemoveOwnTunnelPIDFile(path, 1111, ""); err != nil {
+	if err := RemoveOwnTunnelPIDFile(path, identity.PID, identity.ProcessStartID); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 
