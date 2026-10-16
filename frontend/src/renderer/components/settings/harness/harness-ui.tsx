@@ -17,7 +17,10 @@ export function useWideLayout(ref: { current: HTMLElement | null }): boolean {
 	useLayoutEffect(() => {
 		const element = ref.current;
 		if (!element) return;
-		setWide(element.clientWidth >= SPLIT_LAYOUT_MIN_WIDTH);
+		// The content box, as the observer reports it: clientWidth less the padding.
+		const style = getComputedStyle(element);
+		const content = element.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+		setWide(content >= SPLIT_LAYOUT_MIN_WIDTH);
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(([entry]) => setWide((entry?.contentRect.width ?? 0) >= SPLIT_LAYOUT_MIN_WIDTH));
 		observer.observe(element);

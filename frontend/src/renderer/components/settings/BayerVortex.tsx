@@ -63,7 +63,7 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 
 		const cell = Math.max(1, 14 - clamp(pixel, 1, 20) * 0.55);
 		const armCount = Math.round(1 + clamp(arms, 1, 20) * 0.6);
-		const rate = clamp(speed, 0, 20) * 0.18;
+		let rate = clamp(speed, 0, 20) * 0.18;
 		let width = 0;
 		let height = 0;
 		let image: ImageData | null = null;
@@ -86,6 +86,16 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 		};
 
 		const draw = () => {
+			try {
+				paint();
+			} catch {
+				// No usable 2d canvas: stop animating and leave the surface plain.
+				cancelAnimationFrame(frame);
+				rate = 0;
+			}
+		};
+
+		const paint = () => {
 			if (!image || width <= 0) return;
 			const lit = parseHex(colorRef.current);
 			const bw = buffer.width;
@@ -118,6 +128,7 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 		};
 
 		const loop = () => {
+			if (rate <= 0) return;
 			frame = requestAnimationFrame(loop);
 			const now = performance.now();
 			time += Math.min(0.05, Math.max(0, (now - last) / 1000));
@@ -125,18 +136,33 @@ export function BayerVortex({ color, pixel = 14, arms = 12, speed = 4, center = 
 			draw();
 		};
 
-		resize();
-		draw();
-		// A still frame needs no animation loop.
-		if (rate > 0) loop();
-		const observer = new ResizeObserver(() => {
+		// Everything that can throw runs before the loop starts, and any failure
+		// removes the canvas: a decorative effect leaves the surface plain.
+		let observer: ResizeObserver | null = null;
+		try {
 			resize();
 			draw();
-		});
-		observer.observe(container);
+			observer = new ResizeObserver(() => {
+				try {
+					resize();
+				} catch {
+					cancelAnimationFrame(frame);
+					rate = 0;
+					return;
+				}
+				draw();
+			});
+			observer.observe(container);
+		} catch {
+			observer?.disconnect();
+			canvas.remove();
+			return;
+		}
+		// A still frame needs no animation loop.
+		if (rate > 0) loop();
 		return () => {
 			cancelAnimationFrame(frame);
-			observer.disconnect();
+			observer?.disconnect();
 			canvas.remove();
 		};
 		// The color is read per frame through a ref. Key the component on it so a

@@ -77,9 +77,11 @@ export function SettingsSection({
 			) : showTitle ? (
 				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">{title}</h2>
 			) : null}
-			{toolbar ? (
-				// A search-first page (no visible title) tucks up under the page heading.
-				<div className={cn("flex w-full flex-col", !showTitle && "-mt-6")}>
+			{toolbar !== undefined ? (
+				// The wrapper stays whenever the prop is passed, even as null, so a toolbar
+				// that comes and goes does not remount the body. A search-first page (no
+				// visible title) tucks up under the page heading.
+				<div className={cn("flex w-full flex-col", toolbar && !showTitle && "-mt-6")}>
 					{toolbar}
 					{body}
 				</div>

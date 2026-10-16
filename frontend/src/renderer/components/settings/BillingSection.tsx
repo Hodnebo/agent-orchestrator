@@ -32,13 +32,13 @@ const ENTERPRISE_BOOKING_URL = "https://cal.com/agentwrapper/ao-design-partner?o
  * plan, and the actions an admin takes on it. Payment happens on Stripe's pages
  * in the system browser, which return to the app afterwards.
  */
-export function BillingSection() {
+export function BillingSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
-	return <BillingSectionInner />;
+	return <BillingSectionInner titleHidden={titleHidden} />;
 }
 
-function BillingSectionInner() {
+function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const { status } = useCloudSession();
 	const { client } = useCloudCp();
@@ -51,6 +51,11 @@ function BillingSectionInner() {
 	// control plane refuses them for anyone else.
 	const manage = offering.canManageBilling;
 	const [pending, setPending] = useState<string | null>(null);
+	// Which plan card opened the billing portal, so only that card shows the spinner.
+	const [portalFor, setPortalFor] = useState("");
+	useEffect(() => {
+		if (pending === null) setPortalFor("");
+	}, [pending]);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [confirmReset, setConfirmReset] = useState(false);
 	// The Upgrade page is the paywall's landing: count each visit once mounted.
@@ -60,16 +65,16 @@ function BillingSectionInner() {
 
 	const title = t("settings.billing.title");
 	if (status !== "authenticated") {
-		return <Notice title={title} text={t("settings.billing.signIn")} />;
+		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.signIn")} />;
 	}
 	// Plans exist only for self-serve orgs. A contract org is billed outside the
 	// app, and a deployment without Stripe has nothing to buy.
 	if (offering.loaded && !offering.selfServeBilling) {
-		return <Notice title={title} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
+		return <Notice title={title} titleHidden={titleHidden} text={offering.billingMode === "contract" ? t("settings.billing.contract") : t("settings.billing.disabled")} />;
 	}
 	if (!offering.isError && (!offering.loaded || billing.isPending)) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden grouped>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
 				<p className="settings-row-bar justify-start gap-2 text-sm text-settings-muted">
 					<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
 					{t("settings.billing.loading")}
@@ -79,7 +84,7 @@ function BillingSectionInner() {
 	}
 	if (billing.isError || !billing.data) {
 		return (
-			<SettingsSection title={title} sectionId="billing" titleHidden grouped>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
 				<div className="settings-row-bar">
 					<p className="text-xs text-error">{t("settings.billing.loadFailed")}</p>
 					<Button variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => void billing.refetch()}>{t("settings.billing.retry")}</Button>
@@ -89,7 +94,7 @@ function BillingSectionInner() {
 	}
 	const summary = billing.data;
 	if (!summary.enabled || (summary.billingMode !== undefined && summary.billingMode !== "self_serve")) {
-		return <Notice title={title} text={t("settings.billing.disabled")} />;
+		return <Notice title={title} titleHidden={titleHidden} text={t("settings.billing.disabled")} />;
 	}
 
 	const runAction = async (name: string, action: () => Promise<void>) => {
@@ -132,7 +137,7 @@ function BillingSectionInner() {
 
 	return (
 		<>
-			<SettingsSection title={title} sectionId="billing" titleHidden>
+			<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden}>
 				{summary.exempt ? <p className="settings-row-bar text-sm text-settings-muted">{t("settings.billing.exempt")}</p> : null}
 				{endsAt ? (
 					<div className="settings-row-bar">
@@ -158,6 +163,7 @@ function BillingSectionInner() {
 				) : null}
 				<div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
 					<PlanCard
+						plan="free"
 						name={t("settings.billing.planFree")}
 						amount="$0"
 						interval={t("settings.billing.intervalMonth")}
@@ -170,9 +176,7 @@ function BillingSectionInner() {
 						]}
 						current={currentPlan === "free"}
 						action={endsAt ? (
-							<Button size="sm" variant="secondary" className="w-full" disabled>
-								{t("settings.billing.freeStarts", { date: endsAt })}
-							</Button>
+							<span className="text-control text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
 						) : subscribed && manage ? (
 							<Button size="sm" variant="secondary" className="w-full" disabled={pending !== null} onClick={() => void openCancel()}>
 								{pending === "portal:cancel" ? spinner : null}
@@ -183,26 +187,32 @@ function BillingSectionInner() {
 					/>
 					{offers.map((offer) => {
 						const isCurrent = currentPlan === offer.name;
-						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && subscribed);
+						const recommended = !subscribed && offer.name === RECOMMENDED_PLAN;
+						const busy = pending === `checkout:${offer.name}` || (pending === "portal" && portalFor === offer.name);
+						const openPlanPortal = () => {
+							setPortalFor(offer.name);
+							void openPortal();
+						};
 						let label = t("settings.billing.upgrade");
-						let onClick = () => void openCheckout(offer.name);
+						let onClick: () => void = () => void openCheckout(offer.name);
 						if (isCurrent) {
 							label = t("settings.billing.manage");
-							onClick = () => void openPortal();
+							onClick = openPlanPortal;
 						} else if (subscribed) {
 							label = t("settings.billing.switchPlan");
-							onClick = () => void openPortal();
+							onClick = openPlanPortal;
 						}
 						return (
 							<PlanCard
 								key={offer.name}
+								plan={offer.name}
 								name={planName(offer.name)}
 								{...offerPrice(offer, t)}
 								{...(offer.limits ? planFeatures(offer.name, offer.limits, t) : { features: [] })}
 								current={isCurrent}
-								recommended={!subscribed && offer.name === RECOMMENDED_PLAN}
+								recommended={recommended}
 								action={manage ? (
-									<Button size="sm" variant={offer.name === RECOMMENDED_PLAN && !isCurrent ? "primary" : "secondary"}
+									<Button size="sm" variant={recommended ? "primary" : "secondary"}
 										className="w-full" disabled={pending !== null} onClick={onClick}>
 										{busy ? spinner : isCurrent ? <ExternalLink className="size-icon-sm" aria-hidden="true" /> : null}
 										{label}
@@ -213,6 +223,7 @@ function BillingSectionInner() {
 						);
 					})}
 					<PlanCard
+						plan="enterprise"
 						name={t("settings.billing.planEnterprise")}
 						amount={t("settings.billing.enterprisePrice")}
 						features={[
@@ -234,48 +245,46 @@ function BillingSectionInner() {
 					/>
 				</div>
 				{manage ? null : <p className="px-1 text-xs text-muted-foreground">{t("settings.billing.adminOnly")}</p>}
-				{actionError ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
+				{actionError && !confirmReset ? <p role="alert" className="px-1 text-xs text-destructive">{actionError}</p> : null}
 			</SettingsSection>
 			{subscribed && limits && usage ? (
-				<>
-				<SettingsSection title={t("settings.billing.usage")} grouped>
-					<UsageRow
-						label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
-						used={usage.windowUsedMinutes}
-						limit={usage.windowLimitMinutes}
-						resetsAt={usage.windowResetsAt}
-						t={t}
-					/>
-					<UsageRow
-						label={t("settings.billing.weeklyUsage")}
-						used={usage.weeklyUsedMinutes}
-						limit={usage.weeklyLimitMinutes}
-						resetsAt={usage.weeklyResetsAt}
-						absoluteReset
-						t={t}
-					/>
-					<SettingsRow label={t("settings.billing.runningSessions")} description={t("settings.billing.runningDetail", {
-						orchestrators: usage.runningOrchestrators, orchestratorSlots: limits.orchestratorSlots,
-						workers: usage.runningWorkers, workerSlots: runningSlots(limits) - limits.orchestratorSlots,
-					})}>
-						<Count used={usage.runningOrchestrators + usage.runningWorkers} limit={runningSlots(limits)} />
-					</SettingsRow>
-					<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
-						<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
-					</SettingsRow>
-					{manage ? <SettingsRow
-						label={t("settings.billing.reset")}
-						description={resetsLeft > 0
-							? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
-							: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
-					>
-						<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
-							{t("settings.billing.resetNow")}
-						</Button>
-					</SettingsRow> : null}
-					<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("settings.billing.usageNote")}</p>
-				</SettingsSection>
-				</>
+					<SettingsSection title={t("settings.billing.usage")} grouped>
+						<UsageRow
+							label={t("settings.billing.windowUsage", { hours: usage.windowHours })}
+							used={usage.windowUsedMinutes}
+							limit={usage.windowLimitMinutes}
+							resetsAt={usage.windowResetsAt}
+							t={t}
+						/>
+						<UsageRow
+							label={t("settings.billing.weeklyUsage")}
+							used={usage.weeklyUsedMinutes}
+							limit={usage.weeklyLimitMinutes}
+							resetsAt={usage.weeklyResetsAt}
+							absoluteReset
+							t={t}
+						/>
+						<SettingsRow label={t("settings.billing.runningSessions")} description={t("settings.billing.runningDetail", {
+							orchestrators: usage.runningOrchestrators, orchestratorSlots: limits.orchestratorSlots,
+							workers: usage.runningWorkers, workerSlots: runningSlots(limits) - limits.orchestratorSlots,
+						})}>
+							<Count used={usage.runningOrchestrators + usage.runningWorkers} limit={runningSlots(limits)} />
+						</SettingsRow>
+						<SettingsRow label={t("settings.billing.totalSessions")} description={t("settings.billing.totalDetail")}>
+							<Count used={usage.activeOrchestrators + usage.activeWorkers} limit={limits.maxActiveSandboxes} />
+						</SettingsRow>
+						{manage ? <SettingsRow
+							label={t("settings.billing.reset")}
+							description={resetsLeft > 0
+								? t("settings.billing.resetDetail", { left: resetsLeft, allowed: usage.manualResetsAllowed })
+								: t("settings.billing.resetNoneLeft", { date: formatDate(usage.manualResetsRenewAt) })}
+						>
+							<Button size="sm" variant="ghost" className={ghostAction} disabled={resetsLeft === 0 || pending !== null} onClick={() => setConfirmReset(true)}>
+								{t("settings.billing.resetNow")}
+							</Button>
+						</SettingsRow> : null}
+						<p className="settings-content-row text-pretty text-control leading-4 text-settings-muted">{t("settings.billing.usageNote")}</p>
+					</SettingsSection>
 			) : null}
 			<Dialog open={confirmReset} onOpenChange={(open) => { if (pending !== "reset") setConfirmReset(open); }}>
 				<DialogContent>
@@ -297,9 +306,9 @@ function BillingSectionInner() {
 	);
 }
 
-function Notice({ title, text }: { title: string; text: string }) {
+function Notice({ title, titleHidden, text }: { title: string; titleHidden?: boolean; text: string }) {
 	return (
-		<SettingsSection title={title} sectionId="billing" titleHidden grouped>
+		<SettingsSection title={title} sectionId="billing" titleHidden={titleHidden} grouped>
 			<p className="settings-row-bar text-sm text-settings-muted">{text}</p>
 		</SettingsSection>
 	);
@@ -310,20 +319,30 @@ const ghostAction = "text-settings-muted hover:text-settings-label";
 
 /** A theme token as a hex string, resolved from the live document so every theme style is followed. */
 function tokenHex(name: string): string | null {
-	const probe = document.createElement("span");
-	probe.style.color = `var(${name})`;
-	document.body.appendChild(probe);
-	const computed = getComputedStyle(probe).color;
-	probe.remove();
-	const canvas = document.createElement("canvas");
-	canvas.width = 1;
-	canvas.height = 1;
-	const ctx = canvas.getContext("2d", { willReadFrequently: true });
-	if (!ctx || !computed) return null;
-	ctx.fillStyle = computed;
-	ctx.fillRect(0, 0, 1, 1);
-	const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-	return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+	try {
+		const probe = document.createElement("span");
+		probe.style.color = `var(${name})`;
+		document.body.appendChild(probe);
+		const computed = getComputedStyle(probe).color;
+		probe.remove();
+		if (!computed) return null;
+		const channels = (rgb: number[]) => `#${rgb.map((channel) => Math.round(channel).toString(16).padStart(2, "0")).join("")}`;
+		// Computed colors are rgb() for sRGB tokens; anything else (color-mix, oklch) goes through a canvas.
+		const direct = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(computed);
+		if (direct) return channels([Number(direct[1]), Number(direct[2]), Number(direct[3])]);
+		const canvas = document.createElement("canvas");
+		canvas.width = 1;
+		canvas.height = 1;
+		const ctx = canvas.getContext("2d", { willReadFrequently: true });
+		if (!ctx) return null;
+		ctx.fillStyle = computed;
+		ctx.fillRect(0, 0, 1, 1);
+		const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+		return channels([r, g, b]);
+	} catch {
+		// A decorative effect must never break the page: no color, no glow.
+		return null;
+	}
 }
 
 /** The brand logo blue with its hue kept and its saturation raised: the logo token is a muted tone meant for text. */
@@ -334,7 +353,7 @@ function saturatedBrand(): string | null {
 	const max = Math.max(r, g, b);
 	const min = Math.min(r, g, b);
 	const d = max - min;
-	let h = 0;
+	let h = 210;
 	if (d > 0) {
 		if (max === r) h = ((g - b) / d) % 6;
 		else if (max === g) h = (b - r) / d + 2;
@@ -351,6 +370,18 @@ function saturatedBrand(): string | null {
 	return `#${[r1, g1, b1].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
 }
 
+
+function usePrefersReducedMotion(): boolean {
+	const [reduced, setReduced] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
+		const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const onChange = () => setReduced(query.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	return reduced;
+}
 
 /**
  * The recommended plan's highlight: a slow dithered vortex across the top half
@@ -370,8 +401,8 @@ function PlanGlow() {
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [resolvedTheme, themeStyle]);
+	const reducedMotion = usePrefersReducedMotion();
 	if (!color) return null;
-	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	return (
 		<div
 			aria-hidden="true"
@@ -387,7 +418,9 @@ function PlanGlow() {
  * what it adds over the plan below it. The current or recommended plan sits on
  * the raised surface; the rest stay on the quiet one, with no outlines.
  */
-function PlanCard({ name, amount, interval, intro, features, current, recommended, action, t }: {
+function PlanCard({ plan, name, amount, interval, intro, features, current, recommended, action, t }: {
+	/** Stable id (not the translated name) for tests and hooks. */
+	plan: string;
 	name: string;
 	amount: string;
 	interval?: string;
@@ -401,7 +434,7 @@ function PlanCard({ name, amount, interval, intro, features, current, recommende
 	return (
 		<div
 			data-testid="plan-card"
-			data-plan={name.toLowerCase()}
+			data-plan={plan}
 			aria-current={current ? "true" : undefined}
 			className={cn(
 				"flex flex-col gap-4 rounded-lg p-4",
@@ -414,7 +447,7 @@ function PlanCard({ name, amount, interval, intro, features, current, recommende
 			{/* Fixed-height slots above the list keep the divider and the first
 			    feature on one line across every column, whatever a plan omits. */}
 			<div className="flex h-5 items-center justify-between gap-2">
-				<span className="text-control font-medium text-settings-label">{name}</span>
+				<h3 className="text-control font-medium text-settings-label">{name}</h3>
 				{current || recommended ? (
 					<span className="text-xs font-medium text-settings-label">
 						{t(current ? "settings.billing.current" : "settings.billing.recommended")}
@@ -494,11 +527,14 @@ function planName(plan: string): string {
  * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
  * builds on Starter), then the limits from its Stripe product.
  */
-function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro: string; features: string[] } {
+function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[] } {
 	const starter = plan === RECOMMENDED_PLAN;
+	const pro = plan === "pro";
 	const included = starter
 		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"), t("settings.billing.starterHosts")]
-		: [t("settings.billing.proHosts")];
+		: pro
+			? [t("settings.billing.proHosts")]
+			: [];
 	const features = [
 		...included,
 		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
@@ -509,13 +545,13 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
 	];
 	return {
-		intro: starter ? t("settings.billing.everythingInFree") : t("settings.billing.everythingInStarter"),
+		intro: starter ? t("settings.billing.everythingInFree") : pro ? t("settings.billing.everythingInStarter") : undefined,
 		features,
 	};
 }
 
 function offerPrice(offer: CloudCpPlanOffer, t: TFunction): { amount: string; interval: string } {
-	if (offer.unitAmount === undefined || !offer.currency) return { amount: "", interval: "" };
+	if (offer.unitAmount === undefined || !offer.currency) return { amount: "—", interval: "" };
 	return {
 		amount: formatMoney(offer.unitAmount, offer.currency),
 		interval: offer.interval === "year" ? t("settings.billing.intervalYear") : t("settings.billing.intervalMonth"),

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
+import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -107,7 +108,8 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const saveAllowed = loaded?.editable !== false;
 	const canSave = !busy && !readOnly && saveAllowed && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
 		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
-	const canRemove = loaded != null && !readOnly && orgId !== "" && !busy;
+	const hasConnection = loaded != null && !readOnly && orgId !== "";
+	const canRemove = hasConnection && !busy;
 	const save = async () => {
 		if (!canSave) return;
 		setBusy(true);
@@ -202,28 +204,6 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							onChange={(event) => setToken(event.target.value)}
 						/>
 					</div>
-
-					{error ? <p className={onboardingFieldErrorClass} role="alert">{error}</p> : null}
-
-					<div className="flex items-center justify-end gap-2">
-						{canRemove ? (
-							<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
-								{t("settings.coder.removeConnection")}
-							</Button>
-						) : null}
-						{saveAllowed ? (
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="text-settings-muted hover:text-settings-label"
-								disabled={!canSave}
-								onClick={() => void save()}
-							>
-								{busy ? t("settings.coder.saving") : t("settings.coder.save")}
-							</Button>
-						) : null}
-					</div>
 				</div>
 				{saveAllowed ? (
 				<SettingsRow
@@ -231,7 +211,7 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					description={
 						<>
 							<ol className="list-decimal space-y-1 pl-4">
-								<li>{t("settings.coder.tokenStep1", { defaultValue: "Open your Coder token page below. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
+								<li>{t("settings.coder.tokenStep1", { defaultValue: "Use the button to open your Coder token page. If you are not signed in to Coder, you will be asked to log in first, then land on the token page." })}</li>
 								<li>{t("settings.coder.tokenStep2", { defaultValue: "Give the token a name (for example \"AO\"), set a lifetime, and create it." })}</li>
 								<li>{t("settings.coder.tokenStep3", { defaultValue: "Copy the token, paste it in the field above, then Save and fetch templates." })}</li>
 							</ol>
@@ -337,6 +317,28 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 					)}
 				</SettingsSection>
 			) : null}
+			<div className="flex flex-col items-end gap-2 px-(--settings-row-inset)">
+				{error ? <p className={cn(onboardingFieldErrorClass, "self-stretch")} role="alert">{error}</p> : null}
+				<div className="flex items-center gap-2">
+					{hasConnection ? (
+						<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" disabled={!canRemove} onClick={() => { setRemoveError(null); setConfirmingRemove(true); }}>
+							{t("settings.coder.removeConnection")}
+						</Button>
+					) : null}
+					{saveAllowed ? (
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="text-settings-muted hover:text-settings-label"
+							disabled={!canSave}
+							onClick={() => void save()}
+						>
+							{busy ? t("settings.coder.saving") : t("settings.coder.save")}
+						</Button>
+					) : null}
+				</div>
+			</div>
 			<ConfirmDialog
 				open={confirmingRemove}
 				title={t("settings.coder.removeTitle")}

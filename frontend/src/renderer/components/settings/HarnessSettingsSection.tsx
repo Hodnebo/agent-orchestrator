@@ -44,8 +44,12 @@ export function HarnessSettingsSection({
 	// An open harness page replaces the list, so its search and filters step aside.
 	const [detailOpen, setDetailOpen] = useState(false);
 	const showToolbar = cloudView || !detailOpen;
-	return <SettingsSection title={t("settings.harness")} titleHidden={titleHidden} sectionId="harness">
-		{showToolbar ? <div className="sticky top-toolbar z-10 -mt-6 flex items-center gap-2 bg-(--color-bg-primary) pb-2">
+	return <SettingsSection
+		title={t("settings.harness")}
+		titleHidden={titleHidden}
+		sectionId="harness"
+		// The search sits under the page heading, pulled up by SettingsSection when that heading is hidden.
+		toolbar={showToolbar ? (<div className="sticky top-toolbar z-10 flex items-center gap-2 bg-(--color-bg-primary) pb-2">
 			<label className="flex h-9! min-w-0 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3">
 				<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
 				<span className="sr-only">{t("settings.harness.search")}</span>
@@ -55,7 +59,8 @@ export function HarnessSettingsSection({
 				<RadioGroup.Item value="local" className="settings-segment-item rounded-md">{t("settings.harness.viewLocal")}</RadioGroup.Item>
 				<RadioGroup.Item value="cloud" className="settings-segment-item rounded-md">{t("settings.harness.viewCloud")}</RadioGroup.Item>
 			</RadioGroup.Root> : null}
-		</div> : null}
+		</div>) : null}
+	>
 		{showToolbar && !cloudView && (connected.length > 0 || remoteOffline) ? <SettingsOptionMenu
 				aria-label={t("remote.host")}
 				value={selectedHostId}

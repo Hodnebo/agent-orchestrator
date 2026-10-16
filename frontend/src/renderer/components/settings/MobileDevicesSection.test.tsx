@@ -45,10 +45,12 @@ describe("MobileDevicesSection", () => {
 
 		expect(await screen.findByText("iPhone")).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Connected devices" })).toBeInTheDocument();
-		// Devices are rows of one grouped settings card; the card draws the dividers.
+		// Devices are rows of one grouped settings card, in a list for screen readers.
 		const iphoneRow = screen.getByText("iPhone").closest(".settings-row-bar");
 		expect(iphoneRow).not.toBeNull();
-		expect(iphoneRow?.parentElement).toHaveClass("settings-grouped-rows");
+		expect(iphoneRow).toHaveAttribute("role", "listitem");
+		expect(iphoneRow?.parentElement).toHaveAttribute("role", "list");
+		expect(iphoneRow?.closest(".settings-grouped-rows")).not.toBeNull();
 		expect(iphoneRow).not.toHaveClass("rounded-lg", "border", "bg-[var(--color-bg-settings-input)]");
 		expect(screen.getByText("M31s")).toBeInTheDocument();
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();

@@ -1313,8 +1313,10 @@ button.settings-row-bar {
 		color: var(--color-text-settings-title);
 	}
 
+	/* Radix radio items take focus with the arrow keys; the checked fill alone
+	   does not show where focus is, so keyboard focus gets the shared ring. */
 	&:focus-visible {
-		box-shadow: none;
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-ring) 55%, transparent);
 	}
 
 	&[data-state="checked"] {

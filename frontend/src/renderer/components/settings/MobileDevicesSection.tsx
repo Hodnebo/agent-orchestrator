@@ -225,12 +225,14 @@ export function MobileDevicesSection() {
 			) : (
 				<>
 					{queryError && <div className="settings-row-bar text-caption text-error">{queryError.message}</div>}
+					<div role="list" className="divide-y divide-border">
 					{sortedDevices.map((device) => {
 						const name = device.deviceName || t("mobile.devices.unnamed");
 						if (pendingRemovals.has(device.installId)) {
 							return (
 								<SettingsRow
 									key={device.installId}
+									role="listitem"
 									className="relative"
 									icon={Smartphone}
 									label={
@@ -263,7 +265,7 @@ export function MobileDevicesSection() {
 							? t("mobile.devices.notificationsOffOnPhone", { name })
 							: t("mobile.devices.notificationsFor", { name });
 						return (
-							<SettingsRow key={device.installId} icon={Smartphone} label={name}>
+							<SettingsRow key={device.installId} role="listitem" icon={Smartphone} label={name}>
 								<div className="flex items-center gap-2" title={notificationsTitle}>
 									<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
 									<Switch
@@ -292,6 +294,7 @@ export function MobileDevicesSection() {
 							</SettingsRow>
 						);
 					})}
+					</div>
 				</>
 			)}
 

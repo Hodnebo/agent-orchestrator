@@ -83,7 +83,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: CreditCard,
 		label: (t) => t("settings.billing.navLabel"),
 		visible: ({ cloudEnabled, selfServeBilling }) => cloudEnabled && selfServeBilling,
-		render: () => <BillingSection />,
+		render: (_t, titleHidden, { singlePage }) => <BillingSection titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "browserProfiles",

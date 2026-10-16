@@ -253,7 +253,6 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		cueBusy,
 		close: closeSettingsDialog,
 		title: activeLabel,
-		rootLabel: t("settings.title"),
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
