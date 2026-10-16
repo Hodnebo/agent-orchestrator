@@ -27,13 +27,13 @@ describe("textSelectionColors", () => {
 		const colors = textSelectionColors(t);
 		// An opaque highlight in the text's own color hides the selected characters.
 		expect(alpha(String(colors.selectionColor))).toBeLessThan(0.5);
-		expect(colors.cursorColor).toBe(t.accent);
-		expect(colors.selectionHandleColor).toBe(t.accent);
+		expect(colors.cursorColor).toBe(t.highlight);
+		expect(colors.selectionHandleColor).toBe(t.highlight);
 	});
 
-	it("keeps the solid accent on iOS, which tints the highlight itself", () => {
+	it("keeps the solid highlight on iOS, which tints the selection itself", () => {
 		platformOS = "ios";
-		expect(textSelectionColors(darkTheme)).toEqual({ selectionColor: darkTheme.accent });
+		expect(textSelectionColors(darkTheme)).toEqual({ selectionColor: darkTheme.highlight });
 	});
 });
 
