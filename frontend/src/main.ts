@@ -977,6 +977,7 @@ async function createWindowInternal(): Promise<void> {
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		clipboard,
+		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
 	browserProfileIpc = registerBrowserProfileIpc({
