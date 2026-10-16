@@ -1,60 +1,52 @@
-import { act, fireEvent, render } from "@testing-library/react";
-import { useEffect } from "react";
+import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PairingQr, QR_FADE_MS, QR_SETTLE_FALLBACK_MS } from "./PairingQr";
+import { PairingQr, QR_FADE_MS } from "./PairingQr";
 
-// jsdom cannot draw qr-code-styling's SVG, so stand in a code that reports
-// itself drawn as soon as it mounts — the moment the real one resolves its
-// drawing promise.
-// A code listed in `slowCodes` reports itself drawn only when the test calls
-// `finishDrawing`, standing in for a logo that is still loading.
-const qr = vi.hoisted(() => ({
-	slowCodes: new Set<string>(),
-	pending: new Map<string, () => void>(),
-	forgetSecretCodes: vi.fn(),
-}));
-
-vi.mock("./StyledQRCode", () => ({
+// jsdom has no canvas, so stand in a code that exposes the value it was given:
+// the crossfade is what is under test, not the drawing.
+vi.mock("./QrCanvas", () => ({
 	PAIRING_QR_VERSION: 17,
-	forgetSecretCodes: qr.forgetSecretCodes,
-	StyledQRCode: ({ value, onReady, ...rest }: { value: string; onReady?: () => void; "data-qr-value"?: string }) => {
-		useEffect(() => {
-			if (qr.slowCodes.has(value)) qr.pending.set(value, () => onReady?.());
-			else onReady?.();
-		}, [value]);
-		return <div data-code={value} data-qr-value={rest["data-qr-value"]} />;
-	},
+	QrCanvas: ({ value, ...rest }: { value: string | null; "data-qr-value"?: string }) => (
+		<canvas data-code={value} data-qr-value={rest["data-qr-value"]} />
+	),
 }));
-
-async function finishDrawing(code: string) {
-	await act(async () => {
-		qr.pending.get(code)?.();
-		vi.advanceTimersByTime(40);
-	});
-}
 
 const A = "aomobile://pair#a";
 const B = "aomobile://pair#b";
+const C = "aomobile://pair#c";
 
-function layerFor(container: HTMLElement, code: string) {
+/** The slot (opacity wrapper) holding `code`, or null once it is gone. */
+function slotFor(container: HTMLElement, code: string) {
 	return container.querySelector(`[data-code="${code}"]`)?.parentElement ?? null;
 }
 
+/** Two animation frames: what it takes for a hidden code to start fading in. */
 async function flushFrames() {
 	await act(async () => {
 		vi.advanceTimersByTime(40);
 	});
 }
 
+async function advance(ms: number) {
+	await act(async () => {
+		vi.advanceTimersByTime(ms);
+	});
+}
+
+const RETIRED = QR_FADE_MS + 60;
+
+function mockReducedMotion(reduced: boolean) {
+	vi.stubGlobal("matchMedia", (query: string) => ({ matches: reduced && query.includes("reduce"), addEventListener() {}, removeEventListener() {} }));
+}
+
 beforeEach(() => {
 	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"] });
+	mockReducedMotion(false);
 });
 
 afterEach(() => {
 	vi.useRealTimers();
-	qr.slowCodes.clear();
-	qr.pending.clear();
-	qr.forgetSecretCodes.mockClear();
+	vi.unstubAllGlobals();
 });
 
 describe("PairingQr", () => {
@@ -63,130 +55,127 @@ describe("PairingQr", () => {
 	// here then fail from every other network.
 	it("exposes no scannable code before one exists", () => {
 		const { container } = render(<PairingQr value={null} size={240} />);
+		expect(container.querySelector("canvas")).toBeNull();
 		expect(container.querySelector("[data-qr-value]")).toBeNull();
-	});
-
-	it("renders the real code once it arrives", async () => {
-		const { container } = render(<PairingQr value={A} size={240} />);
-		await flushFrames();
-		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", A);
-		expect(layerFor(container, A)).toHaveClass("opacity-100");
-	});
-
-	// The glitch this replaces: the old code was unmounted the moment the value
-	// changed, leaving a blank card until the new one drew. Now the old code
-	// stays fully visible underneath until the new one has faded in over it.
-	it("keeps the previous code on screen until the next one has faded in", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={240} />);
-		await flushFrames();
-
-		rerender(<PairingQr value={B} size={240} animate />);
-		// Both mounted; only the new one is the scannable value.
-		expect(layerFor(container, A)).toHaveClass("opacity-100");
-		expect(layerFor(container, B)).toHaveClass("opacity-0");
-		expect(container.querySelectorAll("[data-qr-value]")).toHaveLength(1);
-		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", B);
-
-		await flushFrames();
-		expect(layerFor(container, B)).toHaveClass("opacity-100");
-		expect(layerFor(container, A)).toHaveClass("opacity-100");
-
-		// Not on a timer racing the fade: the old code goes only once the new
-		// one has finished fading in.
-		await act(async () => {
-			vi.advanceTimersByTime(QR_FADE_MS);
-		});
-		expect(layerFor(container, A)).not.toBeNull();
-
-		fireEvent.transitionEnd(layerFor(container, B)!);
-		expect(layerFor(container, A)).toBeNull();
-		expect(layerFor(container, B)).toHaveClass("opacity-100");
-	});
-
-	// Reduced motion and hidden tabs fire no transitionend.
-	it("still drops the covered code when no transition runs", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={240} />);
-		await flushFrames();
-		rerender(<PairingQr value={B} size={240} animate />);
-		await flushFrames();
-
-		await act(async () => {
-			vi.advanceTimersByTime(QR_SETTLE_FALLBACK_MS);
-		});
-		expect(layerFor(container, A)).toBeNull();
-		expect(layerFor(container, B)).toHaveClass("opacity-100");
-	});
-
-	it("fades the code out when it is withdrawn, then drops it", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={240} />);
-		await flushFrames();
-
-		rerender(<PairingQr value={null} size={240} animate />);
-		expect(container.querySelector("[data-qr-value]")).toBeNull();
-		expect(layerFor(container, A)).toHaveClass("opacity-0");
-
-		fireEvent.transitionEnd(layerFor(container, A)!);
-		expect(layerFor(container, A)).toBeNull();
-	});
-
-	// Turning pairing off while a fresh code is still drawing must not leave
-	// that code scannable once it finishes.
-	it("never shows a code withdrawn while it was still drawing", async () => {
-		const { container, rerender } = render(<PairingQr value={A} size={240} />);
-		await flushFrames();
-		qr.slowCodes.add(B);
-		rerender(<PairingQr value={B} size={240} animate />);
-		rerender(<PairingQr value={null} size={240} animate />);
-
-		await finishDrawing(B);
-		expect(container.querySelector("[data-qr-value]")).toBeNull();
-		expect(container.querySelector(".opacity-100")).toBeNull();
-	});
-
-	it("drops the cached pairing code once it is withdrawn", async () => {
-		const { rerender } = render(<PairingQr value={null} size={240} />);
-		expect(qr.forgetSecretCodes).not.toHaveBeenCalled();
-		rerender(<PairingQr value={A} size={240} />);
-		await flushFrames();
-		rerender(<PairingQr value={null} size={240} />);
-		expect(qr.forgetSecretCodes).toHaveBeenCalledTimes(1);
 	});
 
 	// Opening the page (or coming back to it) is not a change: a code that
-	// already exists is on screen in the first frame, with no blur or fade.
+	// already exists is on screen in the first frame, with no fade.
 	it("shows a code that exists at mount at once, without a transition", () => {
 		const { container, unmount } = render(<PairingQr value={A} size={240} />);
-		const layer = layerFor(container, A);
-		expect(layer).toHaveClass("opacity-100", "transition-none");
-		expect(layer).not.toHaveClass("blur-[4px]");
+		expect(slotFor(container, A)).toHaveClass("opacity-100", "transition-none");
 		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", A);
 
 		unmount();
 		const again = render(<PairingQr value={A} size={240} />);
-		expect(layerFor(again.container, A)).toHaveClass("opacity-100", "transition-none");
+		expect(slotFor(again.container, A)).toHaveClass("opacity-100", "transition-none");
 	});
 
-	// A code that arrives after mount without the user asking (the status
-	// landing, a poll picking up the tunnel) swaps in without a fade.
+	// A code that arrives or changes without the user asking (the status
+	// landing, a poll picking up the tunnel) swaps in at once.
 	it("swaps a change the user did not trigger without a fade", async () => {
 		const { container, rerender } = render(<PairingQr value={null} size={240} />);
 		rerender(<PairingQr value={A} size={240} />);
-		await flushFrames();
-		expect(layerFor(container, A)).toHaveClass("opacity-100", "transition-none");
+		expect(slotFor(container, A)).toHaveClass("opacity-100", "transition-none");
 
 		rerender(<PairingQr value={B} size={240} />);
-		await flushFrames();
-		expect(layerFor(container, A)).toBeNull();
-		expect(layerFor(container, B)).toHaveClass("opacity-100", "transition-none");
-		expect(layerFor(container, B)).not.toHaveClass("blur-[4px]");
+		expect(slotFor(container, A)).toBeNull();
+		expect(slotFor(container, B)).toHaveClass("opacity-100", "transition-none");
+		expect(container.querySelectorAll("canvas")).toHaveLength(1);
 	});
 
-	// Generate / Regenerate arm the fade: the new code starts blurred and hidden.
-	it("blurs a code in once the user has triggered it", async () => {
-		const { container, rerender } = render(<PairingQr value={null} size={240} />);
-		rerender(<PairingQr value={A} size={240} animate />);
-		expect(layerFor(container, A)).toHaveClass("opacity-0", "blur-[4px]", "transition-[opacity,filter]");
+	it("keeps the previous code on screen until the next one has faded in over it", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+
+		rerender(<PairingQr value={B} size={240} animate />);
+		// Both are drawn; the new one waits hidden, and only it is the scannable value.
+		expect(slotFor(container, A)).toHaveClass("opacity-100");
+		expect(slotFor(container, B)).toHaveClass("opacity-0", "transition-none");
+		expect(container.querySelectorAll("[data-qr-value]")).toHaveLength(1);
+		expect(container.querySelector("[data-qr-value]")).toHaveAttribute("data-qr-value", B);
+
+		// Fading in on top, the old one still fully opaque beneath: the
+		// placeholder never shows through a half-faded code.
 		await flushFrames();
-		expect(layerFor(container, A)).toHaveClass("opacity-100", "blur-[0px]", "transition-[opacity,filter]");
+		expect(slotFor(container, B)).toHaveClass("opacity-100", "transition-opacity");
+		expect(slotFor(container, A)).toHaveClass("opacity-100");
+
+		await advance(QR_FADE_MS);
+		expect(slotFor(container, A)).not.toBeNull();
+
+		await advance(RETIRED);
+		expect(slotFor(container, A)).toBeNull();
+		expect(slotFor(container, B)).toHaveClass("opacity-100", "transition-none");
+	});
+
+	it("stacks the newest code above the older one", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={B} size={240} animate />);
+		expect(slotFor(container, B)).toHaveClass("z-10");
+		expect(slotFor(container, A)).toHaveClass("z-0");
+	});
+
+	// A second change while the first is still fading must not leave the first
+	// half-transparent over a placeholder: it is settled, then covered in turn.
+	it("settles a fade in flight when another change arrives", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={B} size={240} animate />);
+		await flushFrames();
+
+		rerender(<PairingQr value={C} size={240} animate />);
+		expect(slotFor(container, A)).toBeNull();
+		expect(slotFor(container, B)).toHaveClass("opacity-100", "transition-none");
+		expect(slotFor(container, C)).toHaveClass("opacity-0");
+
+		await flushFrames();
+		expect(slotFor(container, C)).toHaveClass("opacity-100", "transition-opacity");
+		await advance(RETIRED);
+		expect(slotFor(container, B)).toBeNull();
+		expect(slotFor(container, C)).toHaveClass("opacity-100");
+	});
+
+	it("fades the code out when it is withdrawn, then clears it", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+
+		rerender(<PairingQr value={null} size={240} animate />);
+		expect(container.querySelector("[data-qr-value]")).toBeNull();
+		expect(slotFor(container, A)).toHaveClass("opacity-0", "transition-opacity");
+
+		await advance(RETIRED);
+		expect(container.querySelector("canvas")).toBeNull();
+	});
+
+	// Revoking pairing must not leave the credential drawn anywhere.
+	it("clears the code at once when it is withdrawn without a fade", () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={null} size={240} />);
+		expect(container.querySelector("canvas")).toBeNull();
+	});
+
+	// Turning pairing off while a fresh code is still fading in must not leave
+	// that code scannable once the fade would have finished.
+	it("never shows a code withdrawn while it was still hidden", async () => {
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={B} size={240} animate />);
+		rerender(<PairingQr value={null} size={240} animate />);
+
+		await advance(RETIRED);
+		expect(container.querySelector("[data-qr-value]")).toBeNull();
+		expect(container.querySelector("canvas")).toBeNull();
+	});
+
+	it("swaps without a fade for reduced motion, even when asked to animate", () => {
+		mockReducedMotion(true);
+		const { container, rerender } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={B} size={240} animate />);
+		expect(slotFor(container, A)).toBeNull();
+		expect(slotFor(container, B)).toHaveClass("opacity-100", "transition-none");
+	});
+
+	it("clears pending timers on unmount", async () => {
+		const { rerender, unmount } = render(<PairingQr value={A} size={240} />);
+		rerender(<PairingQr value={B} size={240} animate />);
+		unmount();
+		await expect(advance(RETIRED)).resolves.toBeUndefined();
 	});
 });

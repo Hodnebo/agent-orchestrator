@@ -330,7 +330,7 @@ test("shows a QR-only App Store tooltip", async () => {
 
 	const tooltip = await screen.findByTestId("ios-store-qr");
 	expect(tooltip).not.toHaveTextContent("App Store");
-	expect(tooltip.querySelector("svg")).toBeInTheDocument();
+	expect(tooltip.querySelector("canvas")).toBeInTheDocument();
 });
 
 // v1 encoded one chosen address, so switching mode had to re-encode the code.
@@ -924,19 +924,19 @@ test("renders cached state on first paint, with no transition on the code", asyn
 	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
 	expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100", "transition-none");
 
-	// Regenerating is the user's doing, so that change does blur in.
+	// Regenerating is the user's doing, so that change crossfades in: the new
+	// code ends up fully shown on its own, and the old one is cleared.
+	const before = qrPayload();
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.password = "regenerated-password";
 		return { data: {}, error: undefined } as never;
 	});
 	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
-	await waitFor(() =>
-		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass(
-			"opacity-0",
-			"blur-[4px]",
-			"transition-[opacity,filter]",
-		),
-	);
+	await waitFor(() => expect(qrPayload()).not.toBe(before));
+	await waitFor(() => {
+		expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100");
+		expect(document.querySelectorAll("[data-qr-value]")).toHaveLength(1);
+	});
 });
 
 // A cold open (nothing cached yet) keeps the row in its last-known state,

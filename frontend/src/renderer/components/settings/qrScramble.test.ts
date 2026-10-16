@@ -18,7 +18,7 @@ describe("scramble payloads for the pairing placeholder", () => {
 	});
 
 	// The whole point: the placeholder has to encode a payload of the same
-	// shape and length as a real offer, so qr-code-styling picks the same QR
+	// shape and length as a real offer, so the encoder picks the same QR
 	// version. A different version means a different module count, and the
 	// resolve would visibly jump from a coarse grid to a fine one. Lengths
 	// are compared at the real offer's field sizes, so one byte of base64

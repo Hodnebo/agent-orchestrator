@@ -9,9 +9,9 @@ import { buildPairingOffer, pairingCodeUrl } from "../../lib/pairing-payload";
  * corner markers and no logo, so the moment the real QR arrived one image was
  * swapped for a visibly different one.
  *
- * Encoding a payload of the same *shape and length* as a genuine offer makes
- * qr-code-styling choose the same QR version, so the placeholder and the real
- * code share a module count, a dot size, corner markers and a logo cutout.
+ * Encoding a payload of the same *shape and length* as a genuine offer gives
+ * the same QR version, so the placeholder and the real code share a module
+ * count, a dot size, corner markers and a logo cutout.
  * They differ only in which modules are dark, which is exactly what lets one
  * dissolve into the other.
  *

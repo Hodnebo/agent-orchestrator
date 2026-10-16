@@ -1,49 +1,58 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/utils";
-import { forgetSecretCodes, PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
+import { PAIRING_QR_VERSION, QrCanvas } from "./QrCanvas";
 
 /** Crossfade between codes: long enough to read as one code becoming the
  *  next, short enough that a fresh code is scannable at once. Matches the
- *  `duration-200` on each layer below. */
+ *  `duration-200` on each slot below. */
 export const QR_FADE_MS = 200;
 
-/** A finished fade is detected by its transitionend. This is only the backstop
- *  for when none fires (reduced motion, a hidden tab), so it sits well past
- *  the fade: dropping the old code early would show the placeholder through
- *  the new one while it is still fading in. */
-export const QR_SETTLE_FALLBACK_MS = QR_FADE_MS * 5;
+/** Slack after a fade before the code beneath it is dropped, so it never goes
+ *  while the new one is still partly transparent. */
+const QR_RETIRE_SLACK_MS = 50;
 
 function prefersReducedMotion(): boolean {
 	return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
-interface Layer {
-	value: string;
-	key: number;
-	shown: boolean;
-	/** Swapped in without a fade: it is revealed the moment it is drawn and
-	 *  everything beneath it is dropped at once. */
-	instant: boolean;
+/** One of the two canvases. `fade` animates the next change of `visible`. */
+interface Slot {
+	value: string | null;
+	visible: boolean;
+	fade: boolean;
+}
+
+interface Model {
+	slots: [Slot, Slot];
+	/** The slot holding the newest code: it draws above the other. */
+	front: 0 | 1;
+}
+
+const EMPTY: Slot = { value: null, visible: false, fade: false };
+const EMPTY_MODEL: Model = { slots: [EMPTY, EMPTY], front: 0 };
+
+function modelWith(front: 0 | 1, slot: Slot): Model {
+	return { slots: front === 0 ? [slot, EMPTY] : [EMPTY, slot], front };
 }
 
 /**
  * The pairing code, crossfaded whenever it changes.
  *
- * Each code is its own opaque layer. A new code mounts hidden on top of the
- * current one and is revealed only once qr-code-styling has finished drawing
- * it, so the old code stays on screen underneath until the new one fully
- * covers it: no blank card between the two, and no half-drawn frame. Layers
- * beneath the newest shown one are dropped once its fade has finished
- * (transitionend), never on a timer racing the fade.
+ * Two canvases, one per code. A new code is drawn hidden into the free canvas
+ * (drawing is synchronous), then faded in over the current one, which stays
+ * fully opaque beneath until the fade has finished and is only then cleared:
+ * no blank card between the two, and the placeholder never shows through a
+ * half-faded code. Only the opacity animates, so a change costs the compositor
+ * one layer fade and no repaint.
  *
- * `value` null fades every code out, revealing whatever the caller has placed
- * behind this component (the blurred placeholder).
+ * `value` null fades the code out, revealing whatever the caller has placed
+ * behind this component (the blurred placeholder), and clears the canvases.
  *
  * Fading is opt-in through `animate`, which the caller sets only once the user
  * has generated or regenerated a code. A code that already exists when the page
- * opens is on screen in the first frame, with no blur, fade or placeholder, and
- * a change nobody asked for swaps without a fade once the new code is drawn.
- * Reduced motion makes every change such a swap.
+ * opens is on screen in the first frame, with no fade or placeholder, and a
+ * change nobody asked for swaps at once. Reduced motion makes every change such
+ * a swap.
  *
  * Fills its parent, which owns the fixed square size, so a code change can
  * never shift the layout.
@@ -63,112 +72,99 @@ export const PairingQr = memo(function PairingQr({
 	className?: string;
 }) {
 	// A code present at mount is shown at once: it is not a change.
-	const [layers, setLayers] = useState<Layer[]>(() =>
-		value ? [{ value, key: 0, shown: true, instant: true }] : [],
-	);
-	const nextKey = useRef(0);
+	const [model, setModel] = useState<Model>(() => (value ? modelWith(0, { value, visible: true, fade: false }) : EMPTY_MODEL));
+	const modelRef = useRef(model);
+	modelRef.current = model;
 	const animateRef = useRef(animate);
 	animateRef.current = animate;
-	const valueRef = useRef(value);
-	const hadValue = useRef(value !== null);
+	const pending = useRef<{ frame?: number; timer?: ReturnType<typeof setTimeout> }>({});
 
 	useEffect(() => {
-		valueRef.current = value;
-		// The code was revoked (turned off, or dropped by the status poll): it
-		// must not be repainted from the redraw cache later.
-		if (!value && hadValue.current) forgetSecretCodes();
-		hadValue.current = value !== null;
+		const cancel = () => {
+			if (pending.current.frame !== undefined) cancelAnimationFrame(pending.current.frame);
+			if (pending.current.timer !== undefined) clearTimeout(pending.current.timer);
+			pending.current = {};
+		};
+		cancel();
+
+		// Settle whatever an earlier change left in flight: the newest code is
+		// fully shown, the one beneath it gone.
+		const settled = modelRef.current;
+		const current = settled.slots[settled.front];
+		const base: Model = current.value ? modelWith(settled.front, { value: current.value, visible: true, fade: false }) : EMPTY_MODEL;
 		const instant = !animateRef.current || prefersReducedMotion();
-		setLayers((prev) => {
-			if (!value) {
-				if (instant) return prev.length > 0 ? [] : prev;
-				// Fade out what is on screen; a code still drawing never shows.
-				return prev.length > 0 ? prev.filter((l) => l.shown).map((l) => ({ ...l, shown: false })) : prev;
+
+		if (value === null) {
+			if (!current.value) return cancel;
+			if (instant) {
+				setModel(EMPTY_MODEL);
+				return cancel;
 			}
-			const top = prev[prev.length - 1];
-			if (top?.value === value) return top.shown ? prev : prev.map((l) => (l === top ? { ...l, shown: true } : l));
-			nextKey.current += 1;
-			return [...prev, { value, key: nextKey.current, shown: false, instant }];
-		});
-	}, [value]);
-
-	// Two frames, so the hidden state is painted before the transition starts;
-	// flipping it in the frame the layer mounted in would skip the fade. An
-	// instant layer replaces everything beneath it as soon as it is drawn. A
-	// layer whose code stopped being current while it drew is never revealed.
-	const reveal = useCallback((key: number, instant: boolean) => {
-		if (instant) {
-			setLayers((prev) => {
-				const index = prev.findIndex((l) => l.key === key);
-				if (index < 0 || prev[index].value !== valueRef.current || (index === 0 && prev[0].shown)) return prev;
-				return [{ ...prev[index], shown: true }, ...prev.slice(index + 1)];
-			});
-			return;
+			setModel({ ...base, slots: base.slots.map((slot) => (slot.value ? { ...slot, visible: false, fade: true } : slot)) as [Slot, Slot] });
+			pending.current.timer = setTimeout(() => setModel(EMPTY_MODEL), QR_FADE_MS + QR_RETIRE_SLACK_MS);
+			return cancel;
 		}
-		requestAnimationFrame(() =>
-			requestAnimationFrame(() =>
-				setLayers((prev) =>
-					prev.map((l) => (l.key === key && l.value === valueRef.current ? { ...l, shown: true } : l)),
-				),
-			),
-		);
-	}, []);
 
-	// A shown layer has finished fading in: everything beneath it is covered.
-	// A hidden one has finished fading out: it can go.
-	const settle = useCallback((key: number) => {
-		setLayers((prev) => {
-			const index = prev.findIndex((l) => l.key === key);
-			if (index < 0) return prev;
-			if (prev[index].shown) return index > 0 ? prev.slice(index) : prev;
-			return prev.filter((l) => l.key !== key || l.value === value);
+		if (current.value === value) {
+			// Already the newest code: only an unfinished change needs settling.
+			const other = settled.slots[1 - settled.front];
+			if (other.value !== null || !current.visible || current.fade) setModel(base);
+			return cancel;
+		}
+
+		const next = (current.value ? 1 - settled.front : settled.front) as 0 | 1;
+		if (instant) {
+			setModel(modelWith(next, { value, visible: true, fade: false }));
+			return cancel;
+		}
+		// Drawn hidden above the current code, which stays where it is.
+		const slots: [Slot, Slot] = [EMPTY, EMPTY];
+		slots[settled.front] = base.slots[settled.front];
+		slots[next] = { value, visible: false, fade: false };
+		setModel({ slots, front: next });
+		// Two frames, so the hidden state is painted before the fade starts;
+		// flipping it in the frame the canvas mounted in would skip the fade.
+		pending.current.frame = requestAnimationFrame(() => {
+			pending.current.frame = requestAnimationFrame(() => {
+				setModel((prev) => ({
+					...prev,
+					slots: prev.slots.map((slot, index) => (index === next && slot.value === value ? { ...slot, visible: true, fade: true } : slot)) as [Slot, Slot],
+				}));
+				pending.current.timer = setTimeout(
+					() => setModel((prev) => ({ ...prev, slots: prev.slots.map((slot, index) => (index === next ? { ...slot, fade: false } : EMPTY)) as [Slot, Slot] })),
+					QR_FADE_MS + QR_RETIRE_SLACK_MS,
+				);
+			});
 		});
+		return cancel;
 	}, [value]);
-
-	useEffect(() => {
-		let lastShown = -1;
-		layers.forEach((l, i) => {
-			if (l.shown) lastShown = i;
-		});
-		const pending = lastShown > 0 || (!value && layers.length > 0 && lastShown < 0);
-		if (!pending) return undefined;
-		const timer = setTimeout(
-			() => (lastShown >= 0 ? settle(layers[lastShown].key) : setLayers((prev) => prev.filter((l) => l.shown))),
-			prefersReducedMotion() ? 0 : QR_SETTLE_FALLBACK_MS,
-		);
-		return () => clearTimeout(timer);
-	}, [layers, value, settle]);
 
 	return (
 		<div className={cn("absolute inset-0", className)}>
-			{layers.map((layer) => (
-				<div
-					key={layer.key}
-					aria-hidden={layer.value !== value}
-					onTransitionEnd={(event) => {
-						if (event.target === event.currentTarget) settle(layer.key);
-					}}
-					className={cn(
-						// Opaque, so a layer that has finished fading in hides the one
-						// beneath it completely.
-						"absolute inset-0 bg-white",
-						layer.instant
-							? "transition-none"
-							: "transition-[opacity,filter] duration-200 motion-reduce:transition-none",
-						layer.shown ? "opacity-100 blur-[0px] ease-out" : layer.instant ? "opacity-0" : "opacity-0 blur-[4px] ease-in",
-					)}
-				>
-					<StyledQRCode
-						value={layer.value}
-						data-qr-value={layer.value === value ? layer.value : undefined}
-						size={size}
-						version={PAIRING_QR_VERSION}
-						secret
-						onReady={() => reveal(layer.key, layer.instant)}
-						className="block size-full [&_svg]:size-full"
-					/>
-				</div>
-			))}
+			{model.slots.map((slot, index) =>
+				slot.value === null ? null : (
+					<div
+						key={index}
+						aria-hidden={slot.value !== value}
+						className={cn(
+							// Opaque, so a canvas that has finished fading in hides the one
+							// beneath it completely.
+							"absolute inset-0 bg-white",
+							index === model.front ? "z-10" : "z-0",
+							slot.fade ? "transition-opacity duration-200 ease-out motion-reduce:transition-none" : "transition-none",
+							slot.visible ? "opacity-100" : "opacity-0",
+						)}
+					>
+						<QrCanvas
+							value={slot.value}
+							data-qr-value={slot.value === value ? slot.value : undefined}
+							size={size}
+							version={PAIRING_QR_VERSION}
+							className="block"
+						/>
+					</div>
+				),
+			)}
 		</div>
 	);
 });

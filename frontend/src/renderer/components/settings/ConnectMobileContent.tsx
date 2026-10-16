@@ -7,7 +7,7 @@ import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
 import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
-import { PAIRING_QR_VERSION, StyledQRCode } from "./StyledQRCode";
+import { PAIRING_QR_VERSION, QrCanvas } from "./QrCanvas";
 import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
@@ -881,7 +881,7 @@ function ScanIntro() {
 						</TooltipTrigger>
 						<TooltipContent side="bottom" className="p-2" data-testid={testId}>
 							<div className="rounded-md bg-(--color-bg-settings-input) p-2">
-								<StyledQRCode value={url} size={STORE_QR_SIZE} showLogo={false} className="block" />
+								<QrCanvas value={url} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
 							</div>
 						</TooltipContent>
 					</Tooltip>
@@ -900,12 +900,7 @@ function QrPlaceholder({ value, children }: { value: string; children?: ReactNod
 	return (
 		<div className="relative size-60 shrink-0 self-start overflow-hidden rounded-md bg-white">
 			<div className="absolute inset-0 opacity-60 blur-[6px]" aria-hidden="true">
-				<StyledQRCode
-					value={value}
-					size={QR_CODE_SIZE}
-					version={PAIRING_QR_VERSION}
-					className="block size-full [&_svg]:size-full"
-				/>
+				<QrCanvas value={value} size={QR_CODE_SIZE} version={PAIRING_QR_VERSION} cache className="block" />
 			</div>
 			{children}
 		</div>
