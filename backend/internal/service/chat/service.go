@@ -740,6 +740,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
+			HasPriorTurns:          conversation.LatestSequence > 0,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -941,7 +942,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -1430,11 +1431,7 @@ func truncateExcerptContext(text string) string {
 	if len(text) <= maxExcerptPairedTextBytes {
 		return text
 	}
-	cut := maxExcerptPairedTextBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n[truncated]"
+	return truncateUTF8Head(text, maxExcerptPairedTextBytes) + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.
@@ -2594,6 +2591,13 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 					choice.PermissionMode = mode
 					choice.Name = label
 				}
+			case domain.HarnessAgy:
+				// Antigravity's modes are approval tiers, relabelled into AO's
+				// vocabulary so the composer reads as the usual approval control.
+				if mode, label, ok := agyApprovalTier(choice.Value); ok {
+					choice.PermissionMode = mode
+					choice.Name = label
+				}
 			}
 		}
 	}
@@ -2613,6 +2617,22 @@ func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
 	}
 }
 
+// agyApprovalTier maps Antigravity's ACP modes onto AO's approval tiers. AO's
+// auto and bypass both select yolo, Antigravity's only run-without-asking mode,
+// which the menu presents as AO's auto.
+func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, "Use agent permissions", true
+	case "auto_edit":
+		return domain.PermissionModeAcceptEdits, "Accept edits", true
+	case "yolo":
+		return domain.PermissionModeAuto, "Auto-approve", true
+	default:
+		return "", "", false
+	}
+}
+
 func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	switch value {
 	case "ao-default":
@@ -2626,4 +2646,15 @@ func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func truncateUTF8Head(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }

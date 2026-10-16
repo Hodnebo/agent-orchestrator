@@ -115,6 +115,7 @@ import {
 	AssistantMessage,
 	CompactionMarker,
 	ProviderSwitchMarker,
+	ContinuedMarker,
 	HumanMessage,
 	OriginMessage,
 	SteerMessage,
@@ -203,6 +204,16 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
+
+// The daemon enriches this request with the interrupted task and response tail.
+// Continue starts another turn in the existing conversation; it is not an exact
+// execution checkpoint.
+export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
+
+/** The latest turn that still counts is one the user stopped. */
+export function continuableTurnId(snapshot: ConversationSnapshot): string {
+	return snapshot.continueTurnId ?? "";
+}
 
 export interface ChatRetryControl {
 	retry: (turnId: string) => void | Promise<unknown>;
@@ -398,6 +409,12 @@ export interface ChatWorkspaceProps {
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
 	onInterrupt?: () => void;
+	/**
+	 * Continues the latest turn after the user stopped it, sending
+	 * CONTINUE_STOPPED_TURN_PROMPT as a continuation. Offered on the composer's
+	 * button while that turn is the latest and nothing is running.
+	 */
+	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
@@ -661,6 +678,7 @@ function ChatWorkspaceContent({
 	onDecide,
 	onResolveInput,
 	onInterrupt,
+	onContinueTurn,
 	commandError,
 	onResumeAgent,
 	resumingAgent,
@@ -735,6 +753,7 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
+	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -937,6 +956,7 @@ function ChatWorkspaceContent({
 					role: "user",
 					origin: "human",
 					text: echo.text,
+				continuation: echo.continuation,
 					streaming: false,
 					delivery: "queued",
 					clientMessageId: echo.clientMessageId,
@@ -1813,6 +1833,7 @@ function ChatWorkspaceContent({
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={<>{agentSwitch ? null : <>{composerAction}<ContextMeter usage={snapshot.usage} compactsAt={compactsAt} /></>}{composerSettings}</>}
 										addMenuItems={agentSwitch ? (
@@ -2512,6 +2533,7 @@ export function Timeline({
 	const initialLayoutDone = useRef(false);
 	const initialLayoutAt = useRef(0);
 	const lastScrollTop = useRef(0);
+	const skipRelatchFollow = useRef(false);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
 		setPinned(next);
@@ -3215,6 +3237,7 @@ export function Timeline({
 				role: "user",
 				origin: "human",
 				text: echo.text,
+				continuation: echo.continuation,
 				content: echo.excerpts?.map((excerpt) => ({
 					type: "excerpt",
 					text: excerpt.text,
@@ -3567,7 +3590,9 @@ export function Timeline({
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
-		if (node && pinnedRef.current) {
+		const relatched = skipRelatchFollow.current;
+		skipRelatchFollow.current = false;
+		if (node && pinnedRef.current && !(relatched && !glideRequested.current)) {
 			if (glideRequested.current) {
 				glideRequested.current = false;
 				glideToEnd();
@@ -3666,6 +3691,9 @@ export function Timeline({
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
 		} else if (!pinnedRef.current && !movedUp) {
+			// The reader is already here: the follow layout this re-pin triggers must not
+			// snap the last few pixels under their scroll, which reads as a jitter.
+			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
 		updateScrollbar();
@@ -4501,6 +4529,9 @@ function TimelineItem({
 				/>
 			);
 		}
+		// A continue after a stop reaches the agent as a message, but the user did
+		// not write it: mark where the turn picked back up instead of a bubble.
+		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently.
 		if (item.origin === "human") {

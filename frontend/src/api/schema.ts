@@ -4138,6 +4138,10 @@ export interface components {
             active: boolean;
             enabled: boolean;
             hasBattery: boolean;
+            lidActive?: boolean;
+            lidClosed?: boolean;
+            lidReason?: string;
+            lidSupported?: boolean;
             supported: boolean;
         };
         ControllersKillSessionRequest: {
@@ -4247,6 +4251,7 @@ export interface components {
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
+            lidClosed?: null | boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -4365,6 +4370,7 @@ export interface components {
         ConversationMessageResponse: {
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
+            continuation?: boolean;
             createdAt: string;
             editAvailable: boolean;
             id: string;
@@ -4458,6 +4464,7 @@ export interface components {
             branchedFromEarlierMessage: boolean;
             capabilities?: string[];
             compactedAt?: null | string;
+            continueTurnId: string;
             /** @enum {string} */
             controller: "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
             conversationId: string;
@@ -5476,6 +5483,7 @@ export interface components {
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
+            continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
@@ -5758,6 +5766,8 @@ export interface components {
             conversationCheckpointOrigin?: "human" | "coordination";
             /** @description Opaque identity of an AO-authored semantic prompt accepted by the native agent. */
             coordinationId?: string;
+            /** @description Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook. */
+            entrypoint?: string;
             /** @description AO hook sub-command that produced this state (e.g. post-tool-use). */
             event?: string;
             /** @description The agent's final message of the turn, kept for terminal turn history only. */

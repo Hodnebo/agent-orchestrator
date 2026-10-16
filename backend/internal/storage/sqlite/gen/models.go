@@ -224,6 +224,7 @@ type ConversationMessage struct {
 	SenderSessionID     string
 	SenderProjectID     string
 	SenderDisplayName   string
+	Continuation        int64
 }
 
 type ConversationProviderEvent struct {
