@@ -51,7 +51,9 @@ func TestSiblingWorkIsPreservedAndRestored(t *testing.T) {
 	git := worker.ExecGitRunner{}
 	root := t.TempDir()
 	origin := filepath.Join(root, "julian.git")
-	mustGit(t, ctx, git, root, "init", "--bare", origin)
+	// Name the bare repository's default branch, so clones check out the
+	// pushed main branch whatever init.defaultBranch the machine has.
+	mustGit(t, ctx, git, root, "init", "--bare", "--initial-branch=main", origin)
 	seed := filepath.Join(root, "seed")
 	mustGit(t, ctx, git, root, "clone", origin, seed)
 	configIdentity(t, ctx, git, seed)
