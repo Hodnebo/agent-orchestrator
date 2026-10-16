@@ -7,7 +7,7 @@
 //   folder repoDirName gives it beside the main checkout;
 // - a standalone project has no repository (a scratch.ao.local placeholder).
 
-import type { CloudCpAgentStartsIn, CloudCpProject, CloudCpProjectRepo, CloudCpProjectScriptStep } from "./cloud-cp/types";
+import type { CloudCpAgentStartsIn, CloudCpProject, CloudCpProjectRepo } from "./cloud-cp/types";
 
 export const STANDALONE_REPOSITORY_HOST = "scratch.ao.local";
 export const STANDALONE_PROJECT_SOURCE = "standalone";
@@ -101,7 +101,7 @@ export function projectConfigText(config: ConfigLike, key: "workingDirectory" | 
  * control plane's NormalizeProjectRepos does: no duplicates, not the main
  * repository, and each in its own folder. Returns the first problem, if any.
  */
-export function additionalReposProblem(mainUrl: string | undefined, urls: readonly string[]): { kind: "duplicate" | "main" | "folder" | "reserved" | "limit"; url: string; folder?: string } | undefined {
+export function additionalReposProblem(mainUrl: string | undefined, urls: readonly string[]): { kind: "duplicate" | "main" | "folder" | "reserved" | "hidden" | "limit"; url: string; folder?: string } | undefined {
 	const filled = urls.filter((url) => url.trim() !== "");
 	if (filled.length > MAX_PROJECT_ADDITIONAL_REPOS) return { kind: "limit", url: filled[MAX_PROJECT_ADDITIONAL_REPOS] ?? "" };
 	const folders = new Map<string, string>();
@@ -114,6 +114,8 @@ export function additionalReposProblem(mainUrl: string | undefined, urls: readon
 		if (seen.has(key)) return { kind: "duplicate", url };
 		seen.add(key);
 		const folder = repoDirName(url);
+		// A folder starting with "." would land among dotfiles such as ~/.ssh.
+		if (folder.startsWith(".")) return { kind: "hidden", url, folder };
 		const owner = folders.get(folder.toLowerCase());
 		if (owner !== undefined) return { kind: owner === "" ? "reserved" : "folder", url, folder };
 		folders.set(folder.toLowerCase(), url);
@@ -121,35 +123,91 @@ export function additionalReposProblem(mainUrl: string | undefined, urls: readon
 	return undefined;
 }
 
-/** One Setup or Cleanup step as the editor holds it; repository "" is the main repository. */
-export type ScriptStepDraft = { command: string; repository: string };
+/**
+ * One Setup or Cleanup step as the editor holds it. folder is the repository
+ * folder the step runs in ("" for the main repository), as repoDirName gives it.
+ */
+export type ScriptStepDraft = { command: string; folder: string };
 
-/** Reads stored steps, each a plain command or {command, repository}. */
-export function parseScriptSteps(value: unknown): ScriptStepDraft[] | undefined {
+// The stored form of a step in another repository, written by the control
+// plane's domain.RepoScriptCommand: the command run in a subshell from that
+// repository's folder beside the main checkout. Keeping a plain string means a
+// control plane or desktop release without per-repository steps still runs
+// and keeps the step.
+const repoScriptCommandPattern = /^\(\ncd -- '\.\.\/([A-Za-z0-9_.-]+)' \|\| exit 1\n([\s\S]*)\n\)$/;
+
+/** The stored command for a step that runs in folder beside the main checkout. */
+export function repoScriptCommand(folder: string, command: string): string {
+	return `(\ncd -- '../${folder}' || exit 1\n${command}\n)`;
+}
+
+/** Splits a stored step into its folder ("" for the main repository) and command. */
+export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
+	const match = repoScriptCommandPattern.exec(stored);
+	return match ? { folder: match[1] ?? "", command: match[2] ?? "" } : { folder: "", command: stored };
+}
+
+/**
+ * Reads stored steps. Each is a plain command, the per-repository form above,
+ * or (from an earlier build of this feature) {command, repository}. A step in
+ * the main repository's own folder counts as a main repository step.
+ */
+export function parseScriptSteps(value: unknown, mainUrl?: string): ScriptStepDraft[] | undefined {
 	if (!Array.isArray(value)) return undefined;
+	const mainFolder = mainUrl ? repoDirName(mainUrl) : undefined;
+	const normalize = (step: ScriptStepDraft): ScriptStepDraft => step.folder === mainFolder ? { ...step, folder: "" } : step;
 	return value.flatMap((item): ScriptStepDraft[] => {
-		if (typeof item === "string") return [{ command: item, repository: "" }];
+		if (typeof item === "string") return [normalize(parseRepoScriptCommand(item))];
 		if (item && typeof item === "object" && typeof (item as { command?: unknown }).command === "string") {
 			const { command, repository } = item as { command: string; repository?: unknown };
-			return [{ command, repository: typeof repository === "string" ? repository.trim() : "" }];
+			const folder = typeof repository === "string" && repository.trim() !== "" ? repoDirName(repository) : "";
+			return [normalize({ command, folder })];
 		}
 		return [];
 	});
 }
 
 /**
- * The stored form of the steps: a step in the main repository stays a plain
- * string (as before per-repository steps), any other is {command, repository}.
- * A step whose repository is no longer one of the project's falls back to the
- * main repository. Blank commands are dropped.
+ * The stored form of the steps: a step in the main repository stays the plain
+ * command, any other is wrapped to run from its folder. Blank commands are dropped.
  */
-export function serializeScriptSteps(steps: readonly ScriptStepDraft[], additional: readonly string[] = []): CloudCpProjectScriptStep[] {
+export function serializeScriptSteps(steps: readonly ScriptStepDraft[]): string[] {
 	return steps
 		.filter((step) => step.command.trim() !== "")
-		.map((step) => {
-			const repository = additional.find((url) => step.repository !== "" && sameRepository(url, step.repository));
-			return repository ? { command: step.command, repository } : step.command;
-		});
+		.map((step) => step.folder === "" ? step.command : repoScriptCommand(step.folder, step.command));
+}
+
+/** The folders the stored Setup and Cleanup steps run in, other than the main repository's. */
+export function scriptStepFolders(config: ConfigLike, mainUrl?: string): Set<string> {
+	const folders = new Set<string>();
+	for (const key of ["postCreate", "preRemove"] as const) {
+		for (const step of parseScriptSteps(config?.[key], mainUrl) ?? []) {
+			if (step.folder !== "") folders.add(step.folder);
+		}
+	}
+	return folders;
+}
+
+/** Mirrors the control plane's limit on a working directory's length. */
+export const MAX_WORKING_DIRECTORY_LENGTH = 512;
+
+/**
+ * Why the control plane would reject a working directory, mirroring
+ * domain.ValidateCoderWorkingDirectory on the trimmed value; undefined when it
+ * is accepted ("" keeps the connection's).
+ */
+export function workingDirectoryProblem(value: string): "length" | "characters" | "form" | "segments" | "placeholder" | undefined {
+	const directory = value.trim();
+	if (directory === "") return undefined;
+	if ([...directory].length > MAX_WORKING_DIRECTORY_LENGTH) return "length";
+	// eslint-disable-next-line no-control-regex
+	if (/[\u0000-\u001f\u007f]/.test(directory)) return "characters";
+	const prefix = ["~/", "$HOME/", "/"].find((candidate) => directory.startsWith(candidate));
+	const rest = prefix === undefined ? undefined : directory.slice(prefix.length);
+	if (rest === undefined || rest.replace(/^\/+|\/+$/g, "") === "") return "form";
+	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return "segments";
+	if (/[{}$`\\]/.test(rest.split("{repo}").join(""))) return "placeholder";
+	return undefined;
 }
 
 /** UTF-8 byte length, for the 16 KB rules limit. */

@@ -84,13 +84,37 @@ it("offers the working folder only for a bring-your-own Coder org and validates 
 	mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 	const field = await screen.findByLabelText("Working folder");
-	fireEvent.change(field, { target: { value: "work/{repo}" } });
-	expect(screen.getByText(/Use an absolute path/)).toBeInTheDocument();
-	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+	for (const rejected of ["work/{repo}", "~", "$HOME", "/"]) {
+		fireEvent.change(field, { target: { value: rejected } });
+		expect(screen.getByText(/must be an absolute path or start with/)).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+	}
+	fireEvent.change(field, { target: { value: "~/work/{name}" } });
+	expect(screen.getByText(/may only use \{repo\} as a placeholder/)).toBeInTheDocument();
 	fireEvent.change(field, { target: { value: "~/work/{repo}" } });
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: { workingDirectory: "~/work/{repo}" } });
+});
+
+it("will not remove a repository a Setup step still runs in", async () => {
+	mocks.get.mockResolvedValue({ project: project({
+		repos: [{ url: "https://github.com/acme/11x" }],
+		postCreate: ["(\ncd -- '../11x' || exit 1\nmake dev-up\n)"],
+	}) });
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	await userEvent.click(await screen.findByRole("button", { name: "Remove acme/11x" }));
+	expect(screen.getByText(/acme\/11x is still used by a Setup or Cleanup step/)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
+it("surfaces the control plane's reason when a save is refused", async () => {
+	mocks.patch.mockReset().mockRejectedValue(new Error("acme/voice-calling-ai is not connected to this organization's GitHub App"));
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	await userEvent.click(await screen.findByRole("button", { name: "Agent starts in" }));
+	await userEvent.click(await screen.findByRole("menuitem", { name: "Folder with all repositories" }));
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	expect(await screen.findByText(/is not connected to this organization's GitHub App/)).toBeInTheDocument();
 });
 
 it("shows a standalone project as having no repository", async () => {

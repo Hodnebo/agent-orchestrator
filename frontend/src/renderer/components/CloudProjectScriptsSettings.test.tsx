@@ -108,11 +108,11 @@ it("shows a member the scripts read-only", async () => {
 	expect(screen.getByText("Only organization owners and admins can change these scripts.")).toBeInTheDocument();
 });
 
-it("runs a step in one of the project's additional repositories and stores it as an object", async () => {
+it("runs a step in one of the project's additional repositories and stores it as a plain command run from its folder", async () => {
 	const multi = {
 		...stored,
 		repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }],
-		postCreate: ["npm ci", { command: "make dev-up", repository: "https://github.com/acme/11x" }],
+		postCreate: ["npm ci", "(\ncd -- '../11x' || exit 1\nmake dev-up\n)"],
 	};
 	mocks.get.mockResolvedValue({ project: project(multi) });
 	renderScripts();
@@ -124,8 +124,29 @@ it("runs a step in one of the project's additional repositories and stores it as
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual([
-		{ command: "npm ci", repository: "https://github.com/acme/voice-calling-ai" },
-		{ command: "make dev-up", repository: "https://github.com/acme/11x" },
+		"(\ncd -- '../voice-calling-ai' || exit 1\nnpm ci\n)",
+		"(\ncd -- '../11x' || exit 1\nmake dev-up\n)",
+	]);
+});
+
+it("keeps a step in a folder that is no longer a project repository, and reads the earlier object form", async () => {
+	const legacy = {
+		...stored,
+		coder: { ...stored.coder, extraRepos: [{ url: "https://github.com/acme/11x.git" }] },
+		postCreate: [{ command: "make dev-up", repository: "https://github.com/acme/11x" }, "(\ncd -- '../gone' || exit 1\nmake old\n)"],
+	};
+	mocks.get.mockResolvedValue({ project: project(legacy) });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 1")).toHaveValue("make dev-up");
+	// A non-canonical legacy URL still matches its repository.
+	expect(screen.getByRole("button", { name: "Repository for step 1" })).toHaveTextContent("acme/11x");
+	expect(screen.getByRole("button", { name: "Repository for step 2" })).toHaveTextContent("gone (not a project repository)");
+	fireEvent.change(screen.getByLabelText("Step 1"), { target: { value: "make dev-up --fast" } });
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual([
+		"(\ncd -- '../11x' || exit 1\nmake dev-up --fast\n)",
+		"(\ncd -- '../gone' || exit 1\nmake old\n)",
 	]);
 });
 
