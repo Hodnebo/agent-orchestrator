@@ -380,6 +380,17 @@ function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArti
 	);
 }
 
+/** The artifact hover preview for an artifact already in hand (e.g. a board card row). */
+export function ArtifactPreviewCard({ artifact, session }: { artifact: SessionArtifact; session: WorkspaceSession }) {
+	return (
+		// React bubbles portal clicks through the component tree, so stop them
+		// before they reach a clickable parent such as the board card.
+		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3" onClick={(event) => event.stopPropagation()}>
+			<ArtifactCardBody artifact={artifact} session={session} remote={Boolean(session.cloud || (session.hostId && session.hostId !== LOCAL_HOST))} />
+		</HoverCardContent>
+	);
+}
+
 export function ArtifactLinkPreviewCard({
 	href,
 	sourceHostId,

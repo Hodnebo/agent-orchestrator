@@ -12,7 +12,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, FileText, GitBranch, Globe, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -37,6 +37,8 @@ import { cn } from "../lib/utils";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
+import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
@@ -263,7 +265,7 @@ function DesktopSessionCard({
 			action={action}
 			artifacts={
 				interactive && onOpenArtifact ? (
-					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} />
+					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
 				) : undefined
 			}
 			branchAction={branchAction}
@@ -327,9 +329,11 @@ export function latestSessionArtifacts(artifacts: SessionArtifact[], limit = BOA
 function BoardArtifactLinks({
 	artifacts,
 	onOpen,
+	session,
 }: {
 	artifacts: SessionArtifact[];
 	onOpen: (path: string) => void;
+	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
 	if (artifacts.length === 0) return null;
@@ -337,25 +341,25 @@ function BoardArtifactLinks({
 	const hidden = artifacts.length - latest.length;
 	return (
 		<div className="flex min-w-0 flex-col gap-0.5" data-testid="board-session-artifacts">
-			{latest.map((artifact) => {
-				const Icon = artifact.kind === "html" ? Globe : FileText;
-				return (
-					<button
-						aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
-						className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-						key={artifact.path}
-						onClick={(event) => {
-							event.stopPropagation();
-							onOpen(artifact.path);
-						}}
-						title={artifact.path}
-						type="button"
-					>
-						<Icon aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
-						<span className="truncate">{artifact.name}</span>
-					</button>
-				);
-			})}
+			{latest.map((artifact) => (
+				<HoverCard key={artifact.path}>
+					<HoverCardTrigger asChild>
+						<button
+							aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
+							className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-2xs text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							onClick={(event) => {
+								event.stopPropagation();
+								onOpen(artifact.path);
+							}}
+							type="button"
+						>
+							<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
+							<span className="truncate">{artifact.name}</span>
+						</button>
+					</HoverCardTrigger>
+					<ArtifactPreviewCard artifact={artifact} session={session} />
+				</HoverCard>
+			))}
 			{hidden > 0 ? (
 				<span className="pl-[18px] text-2xs text-muted-foreground">
 					{t("shell.moreArtifacts", { count: hidden })}
