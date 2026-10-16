@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -245,8 +246,28 @@ func (s ProjectScriptStep) ShellCommand(mainURL string) string {
 	if s.Repository == "" || strings.EqualFold(s.Repository, mainURL) {
 		return s.Command
 	}
-	dir := RepoDirName(s.Repository)
-	return "(\ncd -- '../" + dir + "' || exit 1\n" + s.Command + "\n)"
+	return RepoScriptCommand(RepoDirName(s.Repository), s.Command)
+}
+
+// RepoScriptCommand wraps a Setup or Cleanup command so it runs in another
+// repository's folder beside the main checkout. A project stores a
+// per-repository step in this plain-string form, so a control plane or desktop
+// release that predates per-repository steps still reads, runs and keeps it;
+// ParseRepoScriptCommand recovers the folder and the command for the editor.
+func RepoScriptCommand(dir, command string) string {
+	return "(\ncd -- '../" + dir + "' || exit 1\n" + command + "\n)"
+}
+
+var repoScriptCommandPattern = regexp.MustCompile(`^\(\ncd -- '\.\./([A-Za-z0-9_.-]+)' \|\| exit 1\n([\s\S]*)\n\)$`)
+
+// ParseRepoScriptCommand reports the repository folder and inner command of a
+// step written by RepoScriptCommand; ok is false for a main-repository step.
+func ParseRepoScriptCommand(stored string) (dir, command string, ok bool) {
+	match := repoScriptCommandPattern.FindStringSubmatch(stored)
+	if match == nil {
+		return "", stored, false
+	}
+	return match[1], match[2], true
 }
 
 // ProjectAgentStartsIn returns where a project's coding agent starts:
