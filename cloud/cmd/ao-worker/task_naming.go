@@ -133,8 +133,11 @@ type taskWorkspaceCheckpoint struct {
 	TargetBranch string `json:"targetBranch,omitempty"`
 }
 
-func readTaskWorkspaceCheckpoint(dataDir string) (taskWorkspaceCheckpoint, error) {
+func readTaskWorkspaceCheckpoint(ctx context.Context, dataDir string) (taskWorkspaceCheckpoint, error) {
 	var record taskWorkspaceCheckpoint
+	if err := ctx.Err(); err != nil {
+		return record, err
+	}
 	body, err := os.ReadFile(filepath.Join(dataDir, "task-workspace.json"))
 	if err == nil {
 		err = json.Unmarshal(body, &record)
@@ -142,7 +145,10 @@ func readTaskWorkspaceCheckpoint(dataDir string) (taskWorkspaceCheckpoint, error
 	return record, err
 }
 
-func writeTaskWorkspaceCheckpoint(dataDir string, record taskWorkspaceCheckpoint) error {
+func writeTaskWorkspaceCheckpoint(ctx context.Context, dataDir string, record taskWorkspaceCheckpoint) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	body, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -171,8 +177,36 @@ func writeTaskWorkspaceCheckpoint(dataDir string, record taskWorkspaceCheckpoint
 	return errors.Join(dir.Sync(), dir.Close())
 }
 
-func taskWorkspaceAdapter(canonical string, launch worker.LaunchContext, logger *slog.Logger) (*taskworkspace.Workspace, error) {
-	return taskworkspace.New(taskworkspace.Options{RepositoryPath: canonical, ManagedRoot: filepath.Join(canonical, ".ao-task-worktrees"), ProjectID: launch.ProjectID, SessionID: launch.SessionID, Logger: logger})
+func taskWorkspaceAdapter(ctx context.Context, canonical string, launch worker.LaunchContext, logger *slog.Logger) (*taskworkspace.Workspace, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	managedRoot := filepath.Join(canonical, ".ao-task-worktrees")
+	// Unlike local AO's data root, these components are repository-controlled.
+	// Reject indirection before the shared adapter physically resolves its root.
+	if launch.ProjectID == "" || filepath.Base(launch.ProjectID) != launch.ProjectID || launch.ProjectID == "." || launch.ProjectID == ".." {
+		return nil, errors.New("invalid task workspace project directory")
+	}
+	for _, path := range []string{managedRoot, filepath.Join(managedRoot, launch.ProjectID)} {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("managed task workspace parent must be a directory, not a symlink")
+		}
+		physical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return nil, err
+		}
+		if physical != path {
+			return nil, errors.New("managed task workspace parent must remain inside the canonical checkout")
+		}
+	}
+	return taskworkspace.New(taskworkspace.Options{RepositoryPath: canonical, ManagedRoot: managedRoot, ProjectID: launch.ProjectID, SessionID: launch.SessionID, Logger: logger})
 }
 
 func taskWorkspaceOccupied(ctx context.Context, repository, managedParent string) ([]string, error) {
@@ -279,7 +313,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 	var adapter *taskworkspace.Workspace
 	var err error
 	if !fixed {
-		adapter, err = taskWorkspaceAdapter(canonical, *launch, logger)
+		adapter, err = taskWorkspaceAdapter(ctx, canonical, *launch, logger)
 		if err != nil {
 			return canonical, err
 		}
@@ -287,7 +321,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			return canonical, err
 		}
 	}
-	record, readErr := readTaskWorkspaceCheckpoint(dataDir)
+	record, readErr := readTaskWorkspaceCheckpoint(ctx, dataDir)
 	recoveredMove := false
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return canonical, readErr
@@ -313,6 +347,12 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			branch, err := currentTaskBranch(ctx, canonical)
 			if err != nil {
 				return canonical, err
+			}
+			if branch == "" {
+				if launch.TaskNamingState != domain.TaskNamingDone {
+					return canonical, errors.New("fixed task checkout is detached during naming")
+				}
+				branch = launch.Branch
 			}
 			record = taskWorkspaceCheckpoint{Info: taskworkspace.Info{Path: canonical, Branch: branch}, Fixed: true}
 		} else if launch.TaskNamingState == domain.TaskNamingDone {
@@ -342,16 +382,23 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 		if err != nil {
 			return canonical, err
 		}
-		if branch != record.Info.Branch && branch != record.TargetBranch {
+		if launch.TaskNamingState != domain.TaskNamingDone && (branch == "" || branch != record.Info.Branch && branch != record.TargetBranch) {
 			return canonical, errors.New("fixed task checkout branch changed during naming")
 		}
-		record.Info.Branch, record.TargetBranch = branch, ""
+		if branch != "" {
+			record.Info.Branch = branch
+		}
+		record.TargetBranch = ""
 	} else {
 		// Restore uses the local adapter; reject another checkout occupying its
 		// target before Restore can consider repairing a missing registration.
 		if _, err := os.Lstat(record.Info.Path); err == nil {
-			if _, err := registeredTaskBranch(ctx, canonical, record.Info.Path); err != nil {
+			branch, err := registeredTaskBranch(ctx, canonical, record.Info.Path)
+			if err != nil {
 				return canonical, err
+			}
+			if launch.TaskNamingState != domain.TaskNamingDone && (branch == "" || branch != record.Info.Branch) {
+				return canonical, errors.New("managed task checkout branch changed during naming")
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return canonical, err
@@ -361,12 +408,16 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			return canonical, err
 		}
 	}
-	if err := writeTaskWorkspaceCheckpoint(dataDir, record); err != nil {
+	if err := writeTaskWorkspaceCheckpoint(ctx, dataDir, record); err != nil {
 		return canonical, err
 	}
 	if launch.TaskNamingState == domain.TaskNamingDone {
-		if record.Info.Branch != launch.Branch {
-			return canonical, errors.New("restored task branch differs from the committed task name")
+		branch, err := currentTaskBranch(ctx, record.Info.Path)
+		if err != nil {
+			return canonical, err
+		}
+		if branch != launch.Branch {
+			logger.Info("resuming task on changed HEAD", "sessionID", launch.SessionID, "detached", branch == "")
 		}
 		if adapter != nil {
 			if err := adapter.Complete(ctx, record.Info); err != nil {
@@ -396,7 +447,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			return reservation, err
 		}
 		// Persist the actual checkout before acknowledging an earlier move.
-		if err := writeTaskWorkspaceCheckpoint(dataDir, record); err != nil {
+		if err := writeTaskWorkspaceCheckpoint(ctx, dataDir, record); err != nil {
 			return reservation, err
 		}
 		if adapter != nil {
@@ -419,7 +470,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 					continue
 				}
 				record.TargetBranch = reservation.Branch
-				if err := writeTaskWorkspaceCheckpoint(dataDir, record); err != nil {
+				if err := writeTaskWorkspaceCheckpoint(ctx, dataDir, record); err != nil {
 					return canonical, err
 				}
 				_, err = (worker.ExecGitRunner{}).Run(ctx, record.Info.Path, nil, "branch", "-m", reservation.Branch)
@@ -449,7 +500,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 				return canonical, err
 			}
 		}
-		if err := writeTaskWorkspaceCheckpoint(dataDir, record); err != nil {
+		if err := writeTaskWorkspaceCheckpoint(ctx, dataDir, record); err != nil {
 			return canonical, err
 		}
 		result, completeErr := c.nameTask(ctx, domain.TaskNameRequest{Complete: true, Branch: record.Info.Branch})
@@ -477,7 +528,7 @@ func finalizeTaskWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 }
 
 func currentTaskBranch(ctx context.Context, workspace string) (string, error) {
-	out, err := (worker.ExecGitRunner{}).Run(ctx, workspace, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	out, err := (worker.ExecGitRunner{}).Run(ctx, workspace, nil, "branch", "--show-current")
 	return strings.TrimSpace(out), err
 }
 
@@ -492,6 +543,9 @@ func registeredTaskBranch(ctx context.Context, canonical, path string) (string, 
 			continue
 		}
 		for _, line := range lines {
+			if line == "detached" {
+				return "", nil
+			}
 			if branch, ok := strings.CutPrefix(line, "branch refs/heads/"); ok {
 				return branch, nil
 			}
@@ -537,8 +591,15 @@ func taskAdoptionLaunch(ctx context.Context, launch worker.LaunchContext, worksp
 	if launch.TaskNamingState == domain.TaskNamingDone {
 		return launch, nil
 	}
-	if record, err := readTaskWorkspaceCheckpoint(dataDir); err == nil && record.Fixed {
-		launch.Branch = record.Info.Branch
+	if record, err := readTaskWorkspaceCheckpoint(ctx, dataDir); err == nil && record.Fixed {
+		branch, err := currentTaskBranch(ctx, record.Info.Path)
+		if err != nil {
+			return launch, err
+		}
+		if branch == "" || branch != record.Info.Branch && branch != record.TargetBranch {
+			return launch, errors.New("fixed task checkout branch changed during naming")
+		}
+		launch.Branch = branch
 		return launch, nil
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return launch, err
@@ -609,6 +670,8 @@ func taskBranchOccupied(branch string, occupied []string, current string) bool {
 }
 
 func prepareNamedWorkspace(ctx context.Context, logger *slog.Logger, c *client, bootstrap *worker.BootstrapResponse, canonical, dataDir, publicURL string, reuse worker.ReuseDecision, fixed bool, job *taskNameJob) (string, error) {
+	_, checkoutErr := os.Stat(filepath.Join(canonical, ".git"))
+	freshFixed := fixed && !reuse.Reused && errors.Is(checkoutErr, os.ErrNotExist)
 	grant, err := c.checkoutGrant(ctx)
 	if err != nil {
 		if !anonymousCheckoutEnabled() {
@@ -633,8 +696,60 @@ func prepareNamedWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			return canonical, err
 		}
 	}
+	// A truly unborn new repository cannot host a linked worktree. Preserve
+	// the legacy first-commit path, recording that choice durably before launch.
+	legacyUnborn := false
+	if !reuse.Reused && bootstrap.Launch.TaskNamingState == domain.TaskNamingPending {
+		if _, err := readTaskWorkspaceCheckpoint(ctx, dataDir); errors.Is(err, os.ErrNotExist) {
+			if _, headErr := (worker.ExecGitRunner{}).Run(ctx, canonical, nil, "rev-parse", "--verify", "HEAD^{commit}"); headErr != nil {
+				commits, err := (worker.ExecGitRunner{}).Run(ctx, canonical, nil, "rev-list", "--all", "--max-count=1")
+				if err != nil {
+					return canonical, err
+				}
+				if strings.TrimSpace(commits) == "" {
+					if job != nil {
+						job.cancel()
+					}
+					var result domain.TaskNameResult
+					if err := c.do(ctx, "/worker/task-name", domain.TaskNameRequest{Skip: true}, &result); err != nil {
+						return canonical, err
+					}
+					if result.State != domain.TaskNamingDone || result.Slug != "" || result.Branch != bootstrap.Launch.Branch {
+						return canonical, errors.New("control plane did not preserve the unborn task branch")
+					}
+					bootstrap.Launch.TaskNamingState, bootstrap.Launch.TaskNameSlug = result.State, result.Slug
+					if err := worker.ConfigureWorkerGit(ctx, worker.ExecGitRunner{}, canonical, dataDir, publicURL, bootstrap.SessionID, result.Branch); err != nil {
+						return canonical, err
+					}
+					legacyUnborn = true
+				}
+			}
+		}
+	}
+	if freshFixed && bootstrap.Launch.TaskNamingState == domain.TaskNamingDone && !legacyUnborn {
+		// A replacement sandbox just cloned the default branch. Select this
+		// session's branch without resetting any pre-existing local ref.
+		branch := bootstrap.Launch.Branch
+		current, err := currentTaskBranch(ctx, canonical)
+		if err != nil {
+			return canonical, err
+		}
+		if current != branch {
+			args := []string{"checkout", branch}
+			if _, err := (worker.ExecGitRunner{}).Run(ctx, canonical, nil, "show-ref", "--verify", "refs/heads/"+branch); err != nil {
+				base := "HEAD"
+				if _, err := (worker.ExecGitRunner{}).Run(ctx, canonical, nil, "rev-parse", "--verify", "refs/remotes/origin/"+branch+"^{commit}"); err == nil {
+					base = "refs/remotes/origin/" + branch
+				}
+				args = []string{"checkout", "--no-track", "-b", branch, base}
+			}
+			if _, err := (worker.ExecGitRunner{}).Run(ctx, canonical, nil, args...); err != nil {
+				return canonical, err
+			}
+		}
+	}
 	if fixed && bootstrap.Launch.TaskNamingState != domain.TaskNamingDone {
-		if _, err := readTaskWorkspaceCheckpoint(dataDir); errors.Is(err, os.ErrNotExist) && !reuse.Reused {
+		if _, err := readTaskWorkspaceCheckpoint(ctx, dataDir); errors.Is(err, os.ErrNotExist) && !reuse.Reused {
 			branch, err := freshTaskPreparationBranch(ctx, canonical, bootstrap.SessionID)
 			if err != nil {
 				return canonical, err
@@ -650,15 +765,18 @@ func prepareNamedWorkspace(ctx context.Context, logger *slog.Logger, c *client, 
 			}
 		}
 	}
-	name := tasknaming.Name{}
-	if job != nil {
-		name = job.wait()
+	actual := canonical
+	if !legacyUnborn {
+		name := tasknaming.Name{}
+		if job != nil {
+			name = job.wait()
+		}
+		actual, err = finalizeTaskWorkspace(ctx, logger, c, bootstrap, canonical, dataDir, fixed, name)
+		if err != nil {
+			return canonical, fmt.Errorf("finalize task workspace: %w", err)
+		}
 	}
-	actual, err := finalizeTaskWorkspace(ctx, logger, c, bootstrap, canonical, dataDir, fixed, name)
-	if err != nil {
-		return canonical, fmt.Errorf("finalize task workspace: %w", err)
-	}
-	if !reuse.Reused {
+	if !reuse.Reused && !legacyUnborn {
 		if err := worker.ConfigureWorkerGitOnBranch(ctx, worker.ExecGitRunner{}, actual, dataDir, publicURL, bootstrap.SessionID, bootstrap.Launch.Branch); err != nil {
 			return canonical, err
 		}

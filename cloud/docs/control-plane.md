@@ -233,7 +233,7 @@ New Git-backed worker sessions reserve a short task slug before their agent
 starts. The worker uses `backend/pkg/tasknaming` for the same prompt, response
 parser, 20-second deadline, and prompt-derived fallback as the local daemon.
 Cloud's `opencode` harness uses the OpenCode 2 Chat driver; Claude Code, Codex,
-and Kimi use their corresponding local Chat drivers. Naming uses a disposable
+and Cursor use their corresponding local Chat drivers. Naming uses a disposable
 workspace and the selected provider credential, without project hooks or worker
 control credentials. A timely result can finish while checkout is still running;
 late results cannot rename an already launched session.
@@ -249,9 +249,12 @@ setup scripts, and workspace transport receive the final path and branch.
 AO-owned checkouts keep the canonical repository at its configured root and put
 the named worktree at `.ao-task-worktrees/<project-id>/<slug>` beneath it. An
 explicit working directory or adopted template checkout keeps its directory;
-only its branch is named. Resumes restore the committed names and preserve dirty
-work. Existing sessions, orchestrators, scratch repositories, and empty prompts
-keep their prior behavior.
+only its branch is named. Resumes preserve dirty work, branch switches, and
+detached HEAD states after naming completes. New repositories with no commits
+keep the original session branch and canonical checkout so the agent can create
+the first commit; that fallback is persisted before the agent starts. Existing
+sessions, orchestrators, scratch repositories, and empty prompts keep their prior
+behavior.
 
 Desktop task creation opts into generated titles with `generateTitle: true`.
 Other API callers omit it to preserve their explicit display name. A manual title

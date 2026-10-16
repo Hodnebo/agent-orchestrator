@@ -71,7 +71,7 @@ func TestTaskWorkspaceFinalizesActualPathBeforeCompletion(t *testing.T) {
 				}
 				result := domain.TaskNameResult{State: domain.TaskNamingReserved, Title: "Manually edited title", Branch: "ao/login-redirect/root", Slug: "login-redirect"}
 				if request.Complete {
-					record, err := readTaskWorkspaceCheckpoint(data)
+					record, err := readTaskWorkspaceCheckpoint(t.Context(), data)
 					if err != nil || record.Info.Branch != request.Branch {
 						t.Errorf("completion before durable filesystem checkpoint: %+v / %v", record, err)
 					}
@@ -228,7 +228,7 @@ func TestTaskWorkspaceKeepsMoveJournalWhenControlPlaneFailsAndResumes(t *testing
 	if _, err := finalizeTaskWorkspace(context.Background(), slog.Default(), c, &bootstrap, repo, data, false, tasknaming.Name{Slug: "login-redirect"}); err == nil {
 		t.Fatal("control-plane failure was hidden")
 	}
-	adapter, err := taskWorkspaceAdapter(repo, bootstrap.Launch, slog.Default())
+	adapter, err := taskWorkspaceAdapter(t.Context(), repo, bootstrap.Launch, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestTaskWorkspaceKeepsMoveJournalWhenControlPlaneFailsAndResumes(t *testing
 		t.Fatal(err)
 	}
 	// Model a worker with a stale private path: shared journal identity wins.
-	if err := writeTaskWorkspaceCheckpoint(data, taskWorkspaceCheckpoint{Info: taskworkspace.Info{Path: filepath.Join(repo, ".ao-task-worktrees", "project", "session-1"), Branch: "ao/task-naming-session-1/root"}}); err != nil {
+	if err := writeTaskWorkspaceCheckpoint(t.Context(), data, taskWorkspaceCheckpoint{Info: taskworkspace.Info{Path: filepath.Join(repo, ".ao-task-worktrees", "project", "session-1"), Branch: "ao/task-naming-session-1/root"}}); err != nil {
 		t.Fatal(err)
 	}
 	fail = false
@@ -387,7 +387,7 @@ func TestTaskWorkspaceRecoversCrashAfterReservationRetryBeforeJournalAcknowledge
 	repo, _ := namingRepository(t)
 	data := t.TempDir()
 	bootstrap := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", DefaultBranch: "main", TaskNamingState: domain.TaskNamingReserved, TaskNameSlug: "login-2", Branch: "ao/login-2/root"}}
-	adapter, err := taskWorkspaceAdapter(repo, bootstrap.Launch, slog.Default())
+	adapter, err := taskWorkspaceAdapter(t.Context(), repo, bootstrap.Launch, slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestTaskWorkspaceRecoversCrashAfterReservationRetryBeforeJournalAcknowledge
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTaskWorkspaceCheckpoint(data, taskWorkspaceCheckpoint{Info: info}); err != nil {
+	if err := writeTaskWorkspaceCheckpoint(t.Context(), data, taskWorkspaceCheckpoint{Info: info}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(info.Path, "dirty"), []byte("preserved"), 0o600); err != nil {
@@ -546,5 +546,371 @@ func TestTaskNameOccupiedMetadataIsBounded(t *testing.T) {
 	}
 	if !taskBranchOccupied("custom/prefix/login/root", occupied, "") {
 		t.Fatal("compacting metadata mutated the local inventory")
+	}
+}
+
+func TestCompletedTaskWorkspaceResumesChangedHead(t *testing.T) {
+	for _, fixed := range []bool{false, true} {
+		for _, detached := range []bool{false, true} {
+			t.Run(fmt.Sprintf("fixed=%v/detached=%v", fixed, detached), func(t *testing.T) {
+				repo, git := namingRepository(t)
+				data := t.TempDir()
+				launch := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", Branch: "ao/session-1/root", DefaultBranch: "main", TaskNamingState: domain.TaskNamingPending}}
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var request domain.TaskNameRequest
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					state := domain.TaskNamingReserved
+					if request.Complete {
+						state = domain.TaskNamingDone
+					}
+					_ = json.NewEncoder(w).Encode(domain.TaskNameResult{State: state, Slug: "login", Branch: "ao/login/root"})
+				}))
+				defer server.Close()
+				c := &client{baseURL: server.URL, http: server.Client()}
+				path, err := finalizeTaskWorkspace(t.Context(), slog.Default(), c, &launch, repo, data, fixed, tasknaming.Name{Slug: "login"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if detached {
+					git(path, "checkout", "--detach")
+				} else {
+					git(path, "checkout", "-b", "agent-work")
+				}
+				head := git(path, "rev-parse", "HEAD")
+				if err := os.WriteFile(filepath.Join(path, "dirty"), []byte("preserved"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				unfinished := launch
+				unfinished.Launch.TaskNamingState = domain.TaskNamingReserved
+				if _, err := finalizeTaskWorkspace(t.Context(), slog.Default(), c, &unfinished, repo, data, fixed, tasknaming.Name{}); err == nil {
+					t.Fatal("unfinished naming accepted an unrelated branch or detached HEAD")
+				}
+				for _, removeCheckpoint := range []bool{false, true} {
+					if removeCheckpoint {
+						if err := os.Remove(filepath.Join(data, "task-workspace.json")); err != nil {
+							t.Fatal(err)
+						}
+					}
+					resumed, err := finalizeTaskWorkspace(t.Context(), slog.Default(), c, &launch, repo, data, fixed, tasknaming.Name{})
+					if err != nil || resumed != path {
+						t.Fatalf("resume (missing checkpoint=%v): %s, %v", removeCheckpoint, resumed, err)
+					}
+					if got := git(path, "rev-parse", "HEAD"); got != head {
+						t.Fatalf("HEAD changed: %s", got)
+					}
+					wantBranch := "agent-work"
+					if detached {
+						wantBranch = ""
+					}
+					if got := git(path, "branch", "--show-current"); got != wantBranch {
+						t.Fatalf("branch changed: %s", got)
+					}
+					if body, err := os.ReadFile(filepath.Join(path, "dirty")); err != nil || string(body) != "preserved" {
+						t.Fatalf("dirty = %q, %v", body, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTaskWorkspaceRejectsRepositoryControlledManagedParent(t *testing.T) {
+	for _, component := range []string{"root", "project", "file"} {
+		t.Run(component, func(t *testing.T) {
+			repo, git := namingRepository(t)
+			outside := t.TempDir()
+			target := filepath.Join(repo, ".ao-task-worktrees")
+			if component == "project" {
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				target = filepath.Join(target, "project")
+			}
+			if component == "file" {
+				if err := os.WriteFile(target, []byte("repository content"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(outside, target); err != nil {
+				t.Fatal(err)
+			}
+			before := git(repo, "worktree", "list", "--porcelain")
+			launch := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", DefaultBranch: "main", TaskNamingState: domain.TaskNamingPending}}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "must reject before control request", http.StatusServiceUnavailable)
+			}))
+			defer server.Close()
+			_, err := finalizeTaskWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &launch, repo, t.TempDir(), false, tasknaming.Name{Slug: "login"})
+			if err == nil {
+				t.Fatal("accepted repository-controlled managed parent")
+			}
+			entries, readErr := os.ReadDir(outside)
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("outside directory changed: %v, %v", entries, readErr)
+			}
+			if after := git(repo, "worktree", "list", "--porcelain"); after != before {
+				t.Fatal("registered a worktree before rejecting managed parent")
+			}
+		})
+	}
+}
+
+func namingOrigin(t *testing.T, empty bool) (string, string, func(string, ...string) string) {
+	t.Helper()
+	repo, git := namingRepository(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	if empty {
+		git(repo, "init", "--bare", "-b", "main", origin)
+	} else {
+		git(repo, "clone", "--bare", repo, origin)
+	}
+	url := "https://github.com/acme/naming-regression.git"
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	// Only network commands are redirected to the local real-Git fixture;
+	// origin validation still reads the authorized URL without URL rewriting.
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+	script := "#!/bin/sh\nfor arg do\n case \"$arg\" in clone|fetch) exec " + quote(realGit) + " -c " + quote("url.file://"+origin+".insteadOf="+url) + " \"$@\" ;; esac\ndone\nexec " + quote(realGit) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file:https")
+	return origin, url, git
+}
+
+func TestPendingEmptyOriginUsesLegacyWorkspaceWithoutCommit(t *testing.T) {
+	for _, fixed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "managed", true: "fixed"}[fixed], func(t *testing.T) {
+			_, url, git := namingOrigin(t, true)
+			canonical := filepath.Join(t.TempDir(), "checkout")
+			data := t.TempDir()
+			bootstrap := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", RepositoryURL: url, Branch: "ao/session-1/root", DefaultBranch: "main", TaskNamingState: domain.TaskNamingPending}}
+			var skipped atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/worker/checkout-grant":
+					_ = json.NewEncoder(w).Encode(worker.CheckoutGrantResponse{CloneURL: url})
+				case "/worker/task-name":
+					var request domain.TaskNameRequest
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					if !request.Skip {
+						t.Errorf("empty origin requested naming: %+v", request)
+					}
+					skipped.Store(request.Skip)
+					_ = json.NewEncoder(w).Encode(domain.TaskNameResult{State: domain.TaskNamingDone, Branch: bootstrap.Launch.Branch})
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			c := &client{baseURL: server.URL, http: server.Client()}
+			path, err := prepareNamedWorkspace(t.Context(), slog.Default(), c, &bootstrap, canonical, data, server.URL, worker.ReuseDecision{Workspace: canonical}, fixed, nil)
+			if err != nil || path != canonical {
+				t.Fatalf("empty origin gate = %s, %v", path, err)
+			}
+			if !skipped.Load() || usesTaskWorkspace(bootstrap.Launch) || bootstrap.Launch.TaskNamingState != domain.TaskNamingDone || bootstrap.Launch.TaskNameSlug != "" {
+				t.Fatalf("legacy choice not persisted: %+v", bootstrap.Launch)
+			}
+			if got := git(path, "branch", "--show-current"); got != bootstrap.Launch.Branch {
+				t.Fatalf("unborn branch = %s", got)
+			}
+			if got := git(path, "rev-list", "--all"); got != "" {
+				t.Fatalf("fabricated a commit: %s", got)
+			}
+			if _, err := os.Stat(filepath.Join(path, ".ao-task-worktrees")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("managed worktree created: %v", err)
+			}
+			if _, err := os.Stat(worker.GitCredentialHelperPath(data)); err != nil {
+				t.Fatalf("legacy tooling not ready: %v", err)
+			}
+		})
+	}
+}
+
+func TestTaskWorkspaceCheckpointCancellation(t *testing.T) {
+	data := t.TempDir()
+	original := taskWorkspaceCheckpoint{Info: taskworkspace.Info{Path: "original", Branch: "original"}, Fixed: true}
+	if err := writeTaskWorkspaceCheckpoint(t.Context(), data, original); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := readTaskWorkspaceCheckpoint(ctx, data); !errors.Is(err, context.Canceled) {
+		t.Fatalf("read = %v", err)
+	}
+	if err := writeTaskWorkspaceCheckpoint(ctx, data, taskWorkspaceCheckpoint{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("write = %v", err)
+	}
+	got, err := readTaskWorkspaceCheckpoint(t.Context(), data)
+	if err != nil || got != original {
+		t.Fatalf("cancelled write changed checkpoint: %+v, %v", got, err)
+	}
+	entries, err := os.ReadDir(data)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cancelled write started I/O: %v, %v", entries, err)
+	}
+}
+
+func TestCompletedConfiguredTaskSelectsSessionBranchInFreshClone(t *testing.T) {
+	origin, url, git := namingOrigin(t, false)
+	sessionCommit := git(origin, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit-tree", "refs/heads/main^{tree}", "-p", "refs/heads/main", "-m", "session work")
+	git(origin, "update-ref", "refs/heads/ao/login/root", sessionCommit)
+	canonical := filepath.Join(t.TempDir(), "configured-checkout")
+	data := t.TempDir()
+	bootstrap := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", RepositoryURL: url, Branch: "ao/login/root", DefaultBranch: "main", TaskNamingState: domain.TaskNamingDone, TaskNameSlug: "login"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/worker/checkout-grant" {
+			t.Errorf("completed task requested naming: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(worker.CheckoutGrantResponse{CloneURL: url})
+	}))
+	defer server.Close()
+	resolution, err := taskAdoptionLaunch(t.Context(), bootstrap.Launch, canonical, data, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reuse, err := worker.ResolveWorkingDirectory(t.Context(), worker.ExecGitRunner{}, canonical, t.TempDir(), data, url, bootstrap.SessionID, resolution.Branch, resolution.DefaultBranch)
+	if err != nil || reuse.Reused {
+		t.Fatalf("fresh configured resolution = %+v, %v", reuse, err)
+	}
+	path, err := prepareNamedWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &bootstrap, canonical, data, server.URL, reuse, true, nil)
+	if err != nil || path != canonical {
+		t.Fatalf("fresh done checkout = %s, %v", path, err)
+	}
+	if got := git(path, "branch", "--show-current"); got != bootstrap.Launch.Branch {
+		t.Fatalf("fresh checkout activated default branch %s", got)
+	}
+	if got := git(path, "rev-parse", "HEAD"); got != sessionCommit {
+		t.Fatalf("fresh checkout ignored existing remote session commits: %s", got)
+	}
+}
+
+func TestFixedTaskWorkspaceRecoversDurableRenameIntentThroughAdoption(t *testing.T) {
+	for _, current := range []string{"preparation", "renamed", "unrelated"} {
+		t.Run(current, func(t *testing.T) {
+			repo, git := namingRepository(t)
+			data := t.TempDir()
+			url := "https://github.com/acme/app.git"
+			git(repo, "remote", "add", "origin", url)
+			if err := os.WriteFile(filepath.Join(repo, "tracked"), []byte("base"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			git(repo, "add", "tracked")
+			git(repo, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "tracked base")
+			oldBranch, target := "ao/task-naming-session-1/root", "ao/login/root"
+			git(repo, "checkout", "-b", oldBranch)
+			head := git(repo, "rev-parse", "HEAD")
+			if err := os.WriteFile(filepath.Join(repo, "tracked"), []byte("dirty tracked work"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, "dirty"), []byte("preserved"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeTaskWorkspaceCheckpoint(t.Context(), data, taskWorkspaceCheckpoint{Info: taskworkspace.Info{Path: repo, Branch: oldBranch}, Fixed: true, TargetBranch: target}); err != nil {
+				t.Fatal(err)
+			}
+			switch current {
+			case "renamed":
+				git(repo, "branch", "-m", target)
+			case "unrelated":
+				git(repo, "checkout", "-b", "unrelated")
+			}
+			launch := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", RepositoryURL: url, Branch: target, DefaultBranch: "main", TaskNamingState: domain.TaskNamingReserved, TaskNameSlug: "login"}}
+			var completed atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request domain.TaskNameRequest
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				state := domain.TaskNamingReserved
+				if request.Complete {
+					completed.Store(true)
+					state = domain.TaskNamingDone
+				}
+				_ = json.NewEncoder(w).Encode(domain.TaskNameResult{State: state, Slug: "login", Branch: target})
+			}))
+			defer server.Close()
+			resolution, err := taskAdoptionLaunch(t.Context(), launch.Launch, repo, data, repo)
+			if current == "unrelated" {
+				if err == nil {
+					t.Fatal("adoption accepted unrelated current branch")
+				}
+				if _, err := finalizeTaskWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &launch, repo, data, true, tasknaming.Name{}); err == nil {
+					t.Fatal("finalization accepted unrelated current branch")
+				}
+				if completed.Load() {
+					t.Fatal("completed unrelated branch")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := oldBranch
+			if current == "renamed" {
+				want = target
+			}
+			if resolution.Branch != want {
+				t.Fatalf("adoption selected stale branch: %s, want %s", resolution.Branch, want)
+			}
+			reuse, err := worker.ResolveWorkingDirectory(t.Context(), worker.ExecGitRunner{}, repo, t.TempDir(), data, url, launch.SessionID, resolution.Branch, launch.Launch.DefaultBranch)
+			if err != nil || !reuse.Reused {
+				t.Fatalf("configured resolution = %+v, %v", reuse, err)
+			}
+			path, err := finalizeTaskWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &launch, reuse.Workspace, data, true, tasknaming.Name{})
+			if err != nil || path != repo || !completed.Load() {
+				t.Fatalf("fixed rename recovery = %s, %v, completed=%v", path, err, completed.Load())
+			}
+			if got := git(repo, "rev-parse", "HEAD"); got != head {
+				t.Fatalf("HEAD changed: %s", got)
+			}
+			if got := git(repo, "branch", "--show-current"); got != target {
+				t.Fatalf("branch = %s", got)
+			}
+			if body, err := os.ReadFile(filepath.Join(repo, "dirty")); err != nil || string(body) != "preserved" {
+				t.Fatalf("dirty = %q, %v", body, err)
+			}
+			if body, err := os.ReadFile(filepath.Join(repo, "tracked")); err != nil || string(body) != "dirty tracked work" {
+				t.Fatalf("tracked dirty work = %q, %v", body, err)
+			}
+			if got := git(repo, "stash", "list"); got != "" {
+				t.Fatalf("adoption unexpectedly stashed dirty work: %s", got)
+			}
+			record, err := readTaskWorkspaceCheckpoint(t.Context(), data)
+			if err != nil || record.TargetBranch != "" || record.Info.Branch != target {
+				t.Fatalf("rename not acknowledged: %+v, %v", record, err)
+			}
+		})
+	}
+}
+
+func TestEmptyOriginDoesNotSkipReservedOrCompletedTask(t *testing.T) {
+	for _, state := range []string{domain.TaskNamingReserved, domain.TaskNamingDone} {
+		t.Run(state, func(t *testing.T) {
+			_, url, _ := namingOrigin(t, true)
+			canonical := filepath.Join(t.TempDir(), "checkout")
+			bootstrap := worker.BootstrapResponse{SessionID: "session-1", Launch: worker.LaunchContext{SessionID: "session-1", ProjectID: "project", Kind: "worker", RepositoryURL: url, Branch: "ao/login/root", DefaultBranch: "main", TaskNamingState: state, TaskNameSlug: "login"}}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/worker/checkout-grant" {
+					t.Errorf("reserved name discarded: %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(worker.CheckoutGrantResponse{CloneURL: url})
+			}))
+			defer server.Close()
+			_, err := prepareNamedWorkspace(t.Context(), slog.Default(), &client{baseURL: server.URL, http: server.Client()}, &bootstrap, canonical, t.TempDir(), server.URL, worker.ReuseDecision{Workspace: canonical}, false, nil)
+			if err == nil {
+				t.Fatal("empty origin discarded existing task identity")
+			}
+			if bootstrap.Launch.TaskNamingState != state || bootstrap.Launch.TaskNameSlug != "login" {
+				t.Fatalf("task identity changed: %+v", bootstrap.Launch)
+			}
+		})
 	}
 }
