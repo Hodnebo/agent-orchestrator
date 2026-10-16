@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 // secretFileDenyRules keep Claude Code's file tools out of secret environment
@@ -45,15 +44,24 @@ func checkoutSecretFileDenyRules(dir string) []string {
 	return []string{"Read(" + pattern + ")", "Edit(" + pattern + ")"}
 }
 
-// isCheckoutSecretFileDenyRule recognizes a rule checkoutSecretFileDenyRules
-// wrote, for any checkout, so a launch with other repositories replaces them.
-func isCheckoutSecretFileDenyRule(rule string) bool {
-	for _, tool := range []string{"Read(//", "Edit(//"} {
-		if strings.HasPrefix(rule, tool) && strings.HasSuffix(rule, "/**/.env.*)") {
-			return true
+// claudeCheckoutDenyRulesKey records, in Claude's settings, which
+// permissions.deny entries checkoutSecretFileDenyRules added, so a later launch
+// with other repositories replaces exactly those and never removes a rule of
+// the same shape the user wrote.
+const claudeCheckoutDenyRulesKey = "aoManagedCheckoutDenyRules"
+
+// managedCheckoutDenyRules reads the rules AO recorded under
+// claudeCheckoutDenyRulesKey.
+func managedCheckoutDenyRules(settings map[string]any) map[string]bool {
+	managed := map[string]bool{}
+	if previous, ok := settings[claudeCheckoutDenyRulesKey].([]any); ok {
+		for _, entry := range previous {
+			if rule, ok := entry.(string); ok {
+				managed[rule] = true
+			}
 		}
 	}
-	return false
+	return managed
 }
 
 // applySecretFileProtection adds secretFileDenyRules, plus the .env.* rules
@@ -84,21 +92,35 @@ func applySecretFileProtection(settings map[string]any, protect bool, extraDirs 
 	default:
 		return fmt.Errorf("permissions.deny is %T, not a list", value)
 	}
+	managed := managedCheckoutDenyRules(settings)
 	deny := make([]any, 0, len(existing)+len(secretFileDenyRules))
+	kept := map[string]bool{}
 	for _, rule := range existing {
-		if !slices.Contains(secretFileDenyRules, rule) && !isCheckoutSecretFileDenyRule(rule) {
+		if !slices.Contains(secretFileDenyRules, rule) && !managed[rule] {
 			deny = append(deny, rule)
+			kept[rule] = true
 		}
 	}
+	var added []any
 	if protect {
 		for _, rule := range secretFileDenyRules {
 			deny = append(deny, rule)
 		}
 		for _, dir := range extraDirs {
 			for _, rule := range checkoutSecretFileDenyRules(dir) {
+				if kept[rule] {
+					continue // The user already denies it; it stays theirs.
+				}
+				kept[rule] = true
 				deny = append(deny, rule)
+				added = append(added, rule)
 			}
 		}
+	}
+	if len(added) == 0 {
+		delete(settings, claudeCheckoutDenyRulesKey)
+	} else {
+		settings[claudeCheckoutDenyRulesKey] = added
 	}
 	if len(deny) == 0 {
 		delete(permissions, "deny")

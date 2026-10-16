@@ -22,11 +22,18 @@ func seedExtraRepoSource(t *testing.T) string {
 	return src
 }
 
+// prepareExtra prepares an AO-owned additional checkout (not the user's
+// workspace) and drops the adopted flag.
+func prepareExtra(ctx context.Context, dest string, repo RepoRef, branch string) error {
+	_, err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, repo, ExtraRepoOptions{SessionID: "abc123", SessionBranch: branch, DataDir: os.TempDir()})
+	return err
+}
+
 func TestPrepareExtraRepoChecksOutTheSessionBranchAndReviewBase(t *testing.T) {
 	src := seedExtraRepoSource(t)
 	dest := filepath.Join(t.TempDir(), "extra")
 	repo := RepoRef{URL: "file://" + src}
-	if err := PrepareExtraRepo(context.Background(), ExecGitRunner{}, dest, repo, "ao/abc123", "", t.TempDir()); err != nil {
+	if err := prepareExtra(context.Background(), dest, repo, "ao/abc123"); err != nil {
 		t.Fatalf("PrepareExtraRepo: %v", err)
 	}
 	if branch := gitOutput(t, dest, "rev-parse", "--abbrev-ref", "HEAD"); branch != "ao/abc123" {
@@ -44,7 +51,7 @@ func TestPrepareExtraRepoReusesAnExistingCheckout(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "extra")
 	repo := RepoRef{URL: "file://" + src}
 	ctx := context.Background()
-	if err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, repo, "ao/abc123", "", t.TempDir()); err != nil {
+	if err := prepareExtra(ctx, dest, repo, "ao/abc123"); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, dest, "config", "user.name", "AO Test")
@@ -61,7 +68,7 @@ func TestPrepareExtraRepoReusesAnExistingCheckout(t *testing.T) {
 	gitRun(t, src, "add", "upstream.txt")
 	gitRun(t, src, "commit", "-m", "upstream")
 
-	if err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, repo, "ao/abc123", "", t.TempDir()); err != nil {
+	if err := prepareExtra(ctx, dest, repo, "ao/abc123"); err != nil {
 		t.Fatalf("second PrepareExtraRepo: %v", err)
 	}
 	if head := gitOutput(t, dest, "rev-parse", "HEAD"); head != agentCommit {
@@ -82,7 +89,7 @@ func TestPrepareExtraRepoLeavesOtherFoldersAlone(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dest, "notes.txt"), []byte("mine"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x", "", t.TempDir())
+		err := prepareExtra(ctx, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x")
 		if err == nil || !strings.Contains(err.Error(), "not a Git checkout") {
 			t.Fatalf("err = %v, want a not-a-checkout refusal", err)
 		}
@@ -92,10 +99,10 @@ func TestPrepareExtraRepoLeavesOtherFoldersAlone(t *testing.T) {
 	})
 	t.Run("other repository", func(t *testing.T) {
 		dest := filepath.Join(t.TempDir(), "extra")
-		if err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x", "", t.TempDir()); err != nil {
+		if err := prepareExtra(ctx, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x"); err != nil {
 			t.Fatal(err)
 		}
-		err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x", "", t.TempDir())
+		err := prepareExtra(ctx, dest, RepoRef{URL: "file://" + seedExtraRepoSource(t)}, "ao/x")
 		if err == nil || !strings.Contains(err.Error(), "different repository") {
 			t.Fatalf("err = %v, want a different-repository refusal", err)
 		}
@@ -152,5 +159,95 @@ func TestPrepareStandaloneWorkspace(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(empty, ".git")); err != nil || !info.IsDir() {
 		t.Fatalf("an empty standalone folder was not initialized: %v", err)
+	}
+}
+
+// In the user's own workspace an existing checkout of the repository is
+// adopted: AO writes nothing into its git configuration, stashes the user's
+// uncommitted changes and starts the session branch from origin's branch, and
+// a restart keeps the agent's commits.
+func TestPrepareExtraRepoAdoptsTheUsersCheckoutWithoutRewritingIt(t *testing.T) {
+	ctx := context.Background()
+	src := seedExtraRepoSource(t)
+	dest := filepath.Join(t.TempDir(), "voice-calling-ai")
+	gitRun(t, filepath.Dir(dest), "clone", "--quiet", "file://"+src, dest)
+	gitRun(t, dest, "config", "user.name", "Dev")
+	gitRun(t, dest, "config", "user.email", "dev@example.test")
+	gitRun(t, dest, "checkout", "--quiet", "-b", "dev-feature")
+	if err := os.WriteFile(filepath.Join(dest, "README.md"), []byte("local edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := gitOutput(t, dest, "config", "--local", "--list")
+	repo := RepoRef{URL: "file://" + src}
+	opts := ExtraRepoOptions{SessionID: "abc123", SessionBranch: "ao/abc123", DataDir: t.TempDir(), Adopt: true}
+	adopted, err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, repo, opts)
+	if err != nil || !adopted {
+		t.Fatalf("PrepareExtraRepo = %v, %v; want an adopted checkout", adopted, err)
+	}
+	if after := gitOutput(t, dest, "config", "--local", "--list"); after != before {
+		t.Fatalf("adoption rewrote the checkout's git config:\nbefore %s\nafter  %s", before, after)
+	}
+	if branch := gitOutput(t, dest, "rev-parse", "--abbrev-ref", "HEAD"); branch != "ao/abc123" {
+		t.Fatalf("on %q, want the session branch", branch)
+	}
+	if head, base := gitOutput(t, dest, "rev-parse", "HEAD"), gitOutput(t, src, "rev-parse", "HEAD"); head != base {
+		t.Fatalf("session branch starts at %s, want origin's main %s", head, base)
+	}
+	if stash := gitOutput(t, dest, "stash", "list"); !strings.Contains(stash, "ao-session abc123") {
+		t.Fatalf("the user's edit was not stashed: %q", stash)
+	}
+	if mine := gitOutput(t, dest, "rev-parse", "--verify", "refs/heads/dev-feature"); mine == "" {
+		t.Fatal("the user's branch is gone")
+	}
+	gitRun(t, dest, "-c", "user.name=AO", "-c", "user.email=ao@example.test", "commit", "--allow-empty", "-m", "agent")
+	agent := gitOutput(t, dest, "rev-parse", "HEAD")
+	if _, err := PrepareExtraRepo(ctx, ExecGitRunner{}, dest, repo, opts); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if head := gitOutput(t, dest, "rev-parse", "HEAD"); head != agent {
+		t.Fatalf("restart moved the session branch to %s, want %s", head, agent)
+	}
+}
+
+// A restored sandbox clones fresh; a session branch the agent already pushed
+// is checked out from origin, so the next push fast-forwards.
+func TestPrepareExtraRepoResumesAPushedSessionBranch(t *testing.T) {
+	ctx := context.Background()
+	src := seedExtraRepoSource(t)
+	gitRun(t, src, "checkout", "--quiet", "-b", "ao/abc123")
+	if err := os.WriteFile(filepath.Join(src, "pushed.txt"), []byte("pushed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, src, "add", "pushed.txt")
+	gitRun(t, src, "commit", "-m", "pushed work")
+	pushed := gitOutput(t, src, "rev-parse", "HEAD")
+	gitRun(t, src, "checkout", "--quiet", "main")
+	dest := filepath.Join(t.TempDir(), "extra")
+	if err := prepareExtra(ctx, dest, RepoRef{URL: "file://" + src}, "ao/abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if head := gitOutput(t, dest, "rev-parse", "HEAD"); head != pushed {
+		t.Fatalf("session branch at %s, want the pushed %s", head, pushed)
+	}
+}
+
+func TestSessionRepoCheckoutsSkipsDotFoldersAndCollisions(t *testing.T) {
+	workspace := "/home/dev/work/app"
+	extras := []RepoRef{
+		{URL: "https://github.com/acme/.aws"},
+		{URL: "https://github.com/other/app"},
+		{URL: "https://github.com/acme/web"},
+		{URL: "https://github.com/fork/web"},
+	}
+	checkouts := SessionRepoCheckouts(workspace, "https://github.com/acme/web", extras)
+	if len(checkouts) != 2 || checkouts[1].FullName != "acme/web" || checkouts[1].Path != "/home/dev/work/web" {
+		t.Fatalf("checkouts = %+v, want the main checkout and acme/web only", checkouts)
+	}
+	if _, err := ResolveRepoCheckout(checkouts, "other/app"); err != ErrUnknownRepository {
+		t.Fatalf("a repository colliding with the main checkout resolved: %v", err)
+	}
+	skipped := SkippedExtraRepos(workspace, "https://github.com/acme/web", extras)
+	if len(skipped) != 3 {
+		t.Fatalf("skipped = %+v, want .aws, other/app and fork/web", skipped)
 	}
 }

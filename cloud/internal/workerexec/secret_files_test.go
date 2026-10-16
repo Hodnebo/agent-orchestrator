@@ -126,3 +126,31 @@ func TestSystemPromptNamesTheResolvedWorkspace(t *testing.T) {
 		t.Fatalf("prompt does not name the workspace:\n%s", prompt)
 	}
 }
+
+// A deny rule of the checkout shape that the user wrote is theirs: AO only
+// removes the checkout rules it recorded adding.
+func TestApplySecretFileProtectionKeepsTheUsersCheckoutShapedRules(t *testing.T) {
+	user := "Read(//home/dev/private/**/.env.*)"
+	settings := map[string]any{"permissions": map[string]any{"deny": []any{user}}}
+	if err := applySecretFileProtection(settings, true, []string{"/home/dev/work/voice"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySecretFileProtection(settings, true, []string{"/home/dev/work/julian"}); err != nil {
+		t.Fatal(err)
+	}
+	deny := settings["permissions"].(map[string]any)["deny"].([]any)
+	has := func(rule string) bool { return slices.Contains(deny, any(rule)) }
+	if !has(user) {
+		t.Fatalf("the user's rule was removed: %v", deny)
+	}
+	if has("Read(//home/dev/work/voice/**/.env.*)") || !has("Read(//home/dev/work/julian/**/.env.*)") {
+		t.Fatalf("checkout rules were not replaced: %v", deny)
+	}
+	if err := applySecretFileProtection(settings, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	deny = settings["permissions"].(map[string]any)["deny"].([]any)
+	if len(deny) != 1 || deny[0] != user {
+		t.Fatalf("turning protection off left %v, want only the user's rule", deny)
+	}
+}

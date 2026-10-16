@@ -20,13 +20,47 @@ import (
 // agentDirectory is where the coding agent starts: the main checkout, or its
 // parent folder for a project that starts agents there. A reviewer always
 // reviews from the main checkout, and a standalone session has only its own
-// folder.
+// folder. The parent folder is refused (the agent starts in the main checkout)
+// when it is unsafe to grant the agent: see parentAgentDirectoryRefusal.
 func agentDirectory(launch worker.LaunchContext, workspace string) string {
 	if launch.Kind == "reviewer" || worker.IsScratchRepositoryURL(launch.RepositoryURL) ||
-		strings.TrimSpace(launch.AgentStartsIn) != domain.ProjectAgentStartsInParent {
+		strings.TrimSpace(launch.AgentStartsIn) != domain.ProjectAgentStartsInParent ||
+		parentAgentDirectoryRefusal(workspace) != "" {
 		return workspace
 	}
 	return filepath.Dir(workspace)
+}
+
+// AgentDirectory is where the coding agent of launch starts for workspace,
+// for callers outside the launcher (transcript restore, the worker's log).
+func AgentDirectory(launch worker.LaunchContext, workspace string) string {
+	return agentDirectory(launch, workspace)
+}
+
+// ParentAgentDirectoryRefusal explains why the folder holding workspace cannot
+// be the agent's working directory, or returns "" when it can.
+func ParentAgentDirectoryRefusal(workspace string) string {
+	return parentAgentDirectoryRefusal(workspace)
+}
+
+// parentAgentDirectoryRefusal refuses a parent folder that would hand the
+// agent more than the project's repositories: the filesystem root, the user's
+// home directory (dotfiles and credentials), or a folder holding AO's own
+// worker state (.ao: the worker token, credential helper and cleanup hook),
+// which is the managed providers' layout. A bring-your-own workspace with a
+// working directory such as ~/work/{repo} gives ~/work, which is accepted.
+func parentAgentDirectoryRefusal(workspace string) string {
+	parent := filepath.Clean(filepath.Dir(workspace))
+	if parent == string(filepath.Separator) || parent == "." {
+		return "it is the filesystem root"
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" && filepath.Clean(home) == parent {
+		return "it is the home directory"
+	}
+	if _, err := os.Stat(filepath.Join(parent, ".ao")); err == nil {
+		return "it holds AO's worker state (.ao)"
+	}
+	return ""
 }
 
 // additionalDirectories are the checkouts outside the agent's starting folder
@@ -60,6 +94,9 @@ func repositoriesPromptNote(launch worker.LaunchContext, workspace string) strin
 	var b strings.Builder
 	b.WriteString("## Repositories\n\n")
 	if started == workspace {
+		if strings.TrimSpace(launch.AgentStartsIn) == domain.ProjectAgentStartsInParent && launch.Kind != "reviewer" {
+			fmt.Fprintf(&b, "The project asks agents to start in the folder that holds every repository, but %s cannot be used for that (%s), so you started in the main repository's checkout instead. ", filepath.Dir(workspace), parentAgentDirectoryRefusal(workspace))
+		}
 		fmt.Fprintf(&b, "Your working directory is the main repository's checkout, %s. The project's other repositories are checked out beside it, and you can read, edit and commit in them directly:\n\n", workspace)
 	} else {
 		fmt.Fprintf(&b, "Your working directory is %s, the folder that holds every repository of this project, each checked out in its own folder. Change into a repository's folder before running its git, build or test commands, and follow that repository's own instructions (AGENTS.md, CLAUDE.md):\n\n", started)

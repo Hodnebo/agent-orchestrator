@@ -505,8 +505,11 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 // pullRequestReference turns a bare pull request number into the pull
 // request's URL on the repository checked out in the working directory, so
 // `ao claim-pr 12` run in one of the session's additional repositories claims
-// that repository's pull request rather than the main repository's. A URL, or
-// a number outside a GitHub checkout, is sent as given.
+// that repository's pull request rather than the main repository's. It does so
+// only when that repository is one of the session's (worker.SessionRepositoriesEnv);
+// a URL, a number in any other checkout (a fork, say) or a worker that does not
+// list its repositories sends the reference as given, which the control plane
+// resolves against the main repository.
 func pullRequestReference(ctx context.Context, reference string) string {
 	number := strings.TrimPrefix(reference, "#")
 	if _, err := strconv.Atoi(number); err != nil {
@@ -517,10 +520,20 @@ func pullRequestReference(ctx context.Context, reference string) string {
 		return reference
 	}
 	fullName, ok := githubFullName(strings.TrimSpace(string(output)))
-	if !ok {
+	if !ok || !sessionRepository(os.Getenv(worker.SessionRepositoriesEnv), fullName) {
 		return reference
 	}
 	return "https://github.com/" + fullName + "/pull/" + number
+}
+
+// sessionRepository reports whether fullName is in the comma-separated list.
+func sessionRepository(list, fullName string) bool {
+	for _, entry := range strings.Split(list, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" && strings.EqualFold(entry, fullName) {
+			return true
+		}
+	}
+	return false
 }
 
 // githubFullName extracts owner/name from a GitHub https or ssh remote URL.

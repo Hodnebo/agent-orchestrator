@@ -260,3 +260,34 @@ func stringsOf(value any) []string {
 	}
 	return nil
 }
+
+// The folder holding the checkouts is refused as the agent's working directory
+// when granting it would hand the agent more than the repositories: the home
+// directory or a folder holding AO's worker state. The agent then starts in
+// the main checkout and the prompt says why.
+func TestParentAgentDirectoryIsRefusedWhenUnsafe(t *testing.T) {
+	t.Run("home directory", func(t *testing.T) {
+		workspace, launch := multiRepoWorkspace(t)
+		launch.AgentStartsIn = domain.ProjectAgentStartsInParent
+		t.Setenv("HOME", filepath.Dir(workspace))
+		if got := agentDirectory(launch, workspace); got != workspace {
+			t.Fatalf("agent directory = %s, want the main checkout", got)
+		}
+		if got := additionalDirectories(launch, workspace); len(got) == 0 {
+			t.Fatal("the fallback must still grant the sibling checkouts")
+		}
+		if note := repositoriesPromptNote(launch, workspace); !strings.Contains(note, "it is the home directory") {
+			t.Fatalf("prompt does not explain the fallback:\n%s", note)
+		}
+	})
+	t.Run("AO worker state", func(t *testing.T) {
+		workspace, launch := multiRepoWorkspace(t)
+		launch.AgentStartsIn = domain.ProjectAgentStartsInParent
+		if err := os.MkdirAll(filepath.Join(filepath.Dir(workspace), ".ao", "worker"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if got := agentDirectory(launch, workspace); got != workspace {
+			t.Fatalf("agent directory = %s, want the main checkout", got)
+		}
+	})
+}
