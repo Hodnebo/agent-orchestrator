@@ -48,11 +48,13 @@ function session(artifactFiles: SessionArtifact[] = artifacts): WorkspaceSession
 
 function renderView(ui: ReactNode) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const wrap = (node: ReactNode) => (
 		<QueryClientProvider client={client}>
-			<TooltipProvider>{ui}</TooltipProvider>
-		</QueryClientProvider>,
+			<TooltipProvider>{node}</TooltipProvider>
+		</QueryClientProvider>
 	);
+	const view = render(wrap(ui));
+	return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
 }
 
 const CLOUD_ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
@@ -78,8 +80,19 @@ describe("SessionArtifactsView for a cloud session", () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
 
-		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html`);
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html?v=2026-09-23T00%3A00%3A00Z`);
 		expect(openPreviewMock).not.toHaveBeenCalled();
+	});
+
+	it("reloads an open html artifact when the file changes", async () => {
+		const { rerender } = renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+
+		const changed = cloudSession();
+		changed.artifactFiles = changed.artifactFiles!.map((file) => (file.path === "report.html" ? { ...file, updatedAt: "2026-09-24T00:00:00Z" } : file));
+		rerender(<SessionArtifactsView session={changed} />);
+
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html?v=2026-09-24T00%3A00%3A00Z`);
 	});
 
 	it("opens a markdown artifact in the viewer through the cloud fetch", async () => {
@@ -88,7 +101,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 
 		const viewer = screen.getByTestId("artifact-view");
 		expect(viewer).toHaveAttribute("data-cloud", "true");
-		expect(viewer).toHaveAttribute("data-raw-url", `${CLOUD_ROOT}docs/notes.md`);
+		expect(viewer).toHaveAttribute("data-raw-url", `${CLOUD_ROOT}docs/notes.md?v=2026-09-22T00%3A00%3A00Z`);
 	});
 
 	it("says when the files cannot be reached", async () => {

@@ -32,6 +32,12 @@ describe("cloudArtifactFileUrl", () => {
 			"https://cp.test/api/cloud/v1/artifact-files/t/my%20docs/r%231.html",
 		);
 	});
+
+	it("adds the file version as a query parameter", () => {
+		expect(cloudArtifactFileUrl("https://cp.test/files/t/", "report.html", "2026-10-16T09:55:07.878689Z")).toBe(
+			"https://cp.test/files/t/report.html?v=2026-10-16T09%3A55%3A07.878689Z",
+		);
+	});
 });
 
 describe("toCloudWorkspaceSession artifacts", () => {

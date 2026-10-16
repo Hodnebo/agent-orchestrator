@@ -32,9 +32,14 @@ export function useCloudArtifactAccess(session: WorkspaceSession, enabled = true
 	});
 }
 
-/** One artifact file's URL under an access root from useCloudArtifactAccess. */
-export function cloudArtifactFileUrl(root: string, path: string): string {
-	return root + path.split("/").map(encodeURIComponent).join("/");
+/**
+ * One artifact file's URL under an access root from useCloudArtifactAccess.
+ * `version` (the file's updatedAt) becomes a query parameter, so the URL
+ * changes when the file does and an open view reloads it.
+ */
+export function cloudArtifactFileUrl(root: string, path: string, version?: string): string {
+	const url = root + path.split("/").map(encodeURIComponent).join("/");
+	return version ? `${url}?v=${encodeURIComponent(version)}` : url;
 }
 
 /** Refreshes the cloud session list when the session's artifacts change. */

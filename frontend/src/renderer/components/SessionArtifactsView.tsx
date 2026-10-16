@@ -291,7 +291,7 @@ export function SessionArtifactsView({
 	const artifacts = useMemo(
 		() =>
 			sortedArtifacts(session.artifactFiles ?? []).map((artifact) =>
-				cloud && cloudRoot ? { ...artifact, rawUrl: cloudArtifactFileUrl(cloudRoot, artifact.path) } : artifact,
+				cloud && cloudRoot ? { ...artifact, rawUrl: cloudArtifactFileUrl(cloudRoot, artifact.path, artifact.updatedAt) } : artifact,
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
