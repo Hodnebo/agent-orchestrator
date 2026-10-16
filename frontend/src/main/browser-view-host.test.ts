@@ -1123,9 +1123,11 @@ function setupTabHost(
 		}),
 		dispose: vi.fn(async () => undefined),
 	} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+	const addChildView = vi.fn();
+	const onNativeViewAdded = vi.fn();
 	const host = createBrowserViewHost({
 		mainWindow: {
-			contentView: { addChildView: () => undefined, removeChildView: () => undefined },
+			contentView: { addChildView, removeChildView: () => undefined },
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 			webContents: {
 				id: 1,
@@ -1158,6 +1160,7 @@ function setupTabHost(
 		browserProfileStore,
 		browserHistoryStore,
 		clearBrowserProfileData,
+		onNativeViewAdded,
 		// Kept only as a regression tripwire: the removed auto-send path used
 		// this option to discover the daemon before calling net.fetch.
 		...({ getDaemonPort: () => 43123 } as Record<string, unknown>),
@@ -1178,6 +1181,8 @@ function setupTabHost(
 		eventHandlers.get(channel)!({ sender: { id: senderId } }, ...args);
 	return {
 		activeTargets,
+		addChildView,
+		onNativeViewAdded,
 		constructorOptions,
 		debuggerCommands,
 		emit,
@@ -1245,6 +1250,18 @@ describe("browser:closeTab automation-runtime fallback", () => {
 		await invoke("browser:closeTab", { viewId, tabId: first.activeTabId });
 		const reopened = await invoke("browser:openTab", { viewId }) as BrowserTabsState;
 		expect(reopened.tabs).toHaveLength(1);
+	});
+
+	it("lets the window composition restack after each new page view", async () => {
+		const { addChildView, invoke, onNativeViewAdded } = setupTabHost();
+		const { viewId } = await invoke("browser:ensure", "sess-1", false) as BrowserNavState;
+		await invoke("browser:openTab", { viewId });
+		await invoke("browser:openTab", { viewId });
+		// A new view is appended above the shell, so the hook must fire after
+		// every append; otherwise an open dialog/notice ends up under the page.
+		expect(addChildView).toHaveBeenCalledTimes(2);
+		expect(onNativeViewAdded).toHaveBeenCalledTimes(2);
+		expect(onNativeViewAdded.mock.invocationCallOrder[1]).toBeGreaterThan(addChildView.mock.invocationCallOrder[1]);
 	});
 
 	it("opens just one tab for an agent tab-new after empty renderer initialization", async () => {

@@ -17,8 +17,8 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";
-import { BROWSER_OVERLAY_CANDIDATE_SELECTOR, OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { subscribeBrowserOverlaySync } from "../lib/browser-overlay-sync";
 
 export type { BrowserNavState };
 
@@ -306,7 +306,6 @@ export function useBrowserView({
 	const settleTimerRef = useRef<number | null>(null);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
-	const overlayOpenRef = useRef(false);
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
@@ -690,44 +689,12 @@ export function useBrowserView({
 			isResizing = document.body.classList.contains("is-resizing-x");
 			if (wasResizing !== isResizing) scheduleSettleMeasure();
 		};
-		const updateOverlay = () => {
-			const open = document.querySelector(OPEN_BROWSER_OVERLAY_SELECTOR) !== null;
-			if (open !== overlayOpenRef.current) {
-				overlayOpenRef.current = open;
-				// The live page never moves or becomes a bitmap. Reordering the explicit
-				// transparent shell is the complete overlay handoff for menus/dialogs.
-				window.ao?.browser.setOverlayOpen(open);
-			}
-		};
-		const containsOverlayCandidate = (node: Node): boolean =>
-			node instanceof Element &&
-			(node.matches(BROWSER_OVERLAY_CANDIDATE_SELECTOR) ||
-				node.querySelector(BROWSER_OVERLAY_CANDIDATE_SELECTOR) !== null);
-		updateOverlay();
+		const unsubscribeOverlay = subscribeBrowserOverlaySync();
 		updateResize();
-		const observer = new MutationObserver((mutations) => {
-			const overlayChanged = mutations.some((mutation) => {
-				if (mutation.type === "attributes") return containsOverlayCandidate(mutation.target);
-				return [...mutation.addedNodes, ...mutation.removedNodes].some(containsOverlayCandidate);
-			});
-			if (overlayChanged) updateOverlay();
-		});
-		// Radix reuses its portal node and flips `data-state` in place rather than
-		// adding/removing a body child, so a `childList`-only observer misses the
-		// open/close transition under rapid toggling and the overlay state desyncs.
-		// Watch subtree attribute flips on `data-state`, but inspect the mutation
-		// target before querying open overlays. Unrelated Radix state changes no
-		// longer trigger a document-wide selector scan.
-		observer.observe(document.body, {
-			childList: true,
-			subtree: true,
-			attributes: true,
-			attributeFilter: ["data-state"],
-		});
 		// useResizable.ts toggles `is-resizing-x` on <body> (outside React) while the
 		// inspector's own drag handle is held. The handle captures its pointer in
 		// useResizable, so we only need to keep the native bounds synchronized here.
-		// A dedicated, non-subtree observer keeps this cheap: unlike `data-state` above,
+		// A dedicated, non-subtree observer keeps this cheap: unlike the overlay observer's `data-state`,
 		// `class` churns on nearly every render throughout the app, so watching it
 		// subtree-wide would run `update()` far more often than the dialog/menu case.
 		const resizeObserver = new MutationObserver(updateResize);
@@ -736,10 +703,8 @@ export function useBrowserView({
 			attributeFilter: ["class"],
 		});
 		return () => {
-			observer.disconnect();
+			unsubscribeOverlay();
 			resizeObserver.disconnect();
-			window.ao?.browser.setOverlayOpen(false);
-			overlayOpenRef.current = false;
 		};
 	}, [hasNativeBrowser, scheduleSettleMeasure]);
 
@@ -1098,7 +1063,6 @@ export function useBrowserView({
 			void window.ao?.browser.setAnnotationMode({ viewId: id, enabled: false });
 			setAnnotationModeState(false);
 		}
-		overlayOpenRef.current = false;
 		sendHiddenBounds(id);
 		window.ao?.browser.destroy(id);
 		viewIdRef.current = "";

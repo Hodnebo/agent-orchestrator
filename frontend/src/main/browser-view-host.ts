@@ -457,6 +457,9 @@ export type BrowserViewHostOptions = {
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
   clipboard?: Pick<Clipboard, "writeImage">;
+  // Called after a page view is appended to the window so the composition can
+  // keep a raised shell (open dialog/notice) above the new view.
+  onNativeViewAdded?: () => void;
 };
 
 export type BrowserViewHost = {
@@ -971,6 +974,7 @@ export function createBrowserViewHost(
     });
     applyBrowserViewBounds(view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.addChildView(view);
+    options.onNativeViewAdded?.();
     view.setBorderRadius?.(BROWSER_VIEW_BORDER_RADIUS);
     // Main-frame sites use this permission for actions such as "Copy link".
     // Keep embedded frames, clipboard reads, and every other permission denied.
