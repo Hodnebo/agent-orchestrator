@@ -111,6 +111,8 @@ async function startAdding(user: User, index = 0, method?: string) {
 
 describe("accounts list and detail", () => {
 	it("lists every account by provider and shows the one that is clicked", async () => {
+		// Only sessions the app lists are counted.
+		mock.workspaces = [{ id: "project-1", sessions: [{ id: "session-a", title: "Fix login", status: "idle", provider: "codex" }] }];
 		const user = await start();
 		expect(within(screen.getByTestId("provider-section-codex")).getAllByRole("button").map(row => row.dataset.testid)).toEqual(["provider-account-a", "provider-account-b", undefined]);
 		expect(within(screen.getByTestId("provider-section-claude")).getAllByRole("button").map(row => row.dataset.testid)).toEqual(["provider-account-c", undefined]);

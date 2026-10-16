@@ -255,9 +255,11 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 	const workspaces = useWorkspaceQuery({ includeCloud: false }).data ?? [];
 	const sessions = served(account, workspaces);
 	const count = sessions.length;
-	// Archived sessions still hold the account; they are counted apart from the ones at work.
-	const archived = sessions.filter((id) => { const session = findSession(workspaces, id)?.session; return session ? isArchivedSession(session) : false; }).length;
-	const sessionsHint = [count - archived ? t("providerAccounts.sessionsActive", { count: count - archived }) : "", archived ? t("providerAccounts.sessionsArchived", { count: archived }) : ""].filter(Boolean).join(" · ");
+	// Only sessions the app lists are counted, archived apart from the ones at work; an id it does not list may be gone.
+	const listed = sessions.flatMap((id) => findSession(workspaces, id)?.session ?? []);
+	const archived = listed.filter(isArchivedSession).length;
+	const active = listed.length - archived;
+	const sessionsHint = [active ? t("providerAccounts.sessionsActive", { count: active }) : "", archived ? t("providerAccounts.sessionsArchived", { count: archived }) : ""].filter(Boolean).join(" · ");
 	// An API key has no limits to report, but the helper still knows its activity.
 	const usage = account.usage?.status === "available" || apiKey ? account.usage : undefined;
 	const known = account.usage; // The plan is shown whenever it is known, even while the limits are not.
