@@ -788,58 +788,51 @@ func (m *Service) UpdateConfig(ctx context.Context, id domain.ProjectID, in Upda
 	if err := validateProjectID(id); err != nil {
 		return UpdateConfigResult{}, err
 	}
-	row, ok, err := m.store.GetProject(ctx, string(id))
-	if err != nil {
-		return UpdateConfigResult{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
-	}
-	if !ok || !row.ArchivedAt.IsZero() {
-		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
-	}
-	updated := row.Config
 	changes := make([]ConfigChange, 0, 2)
-	if in.CanonicalRepoURL != nil {
-		from := updated.CanonicalRepoURL
-		updated.CanonicalRepoURL = strings.TrimSpace(*in.CanonicalRepoURL)
-		if from != updated.CanonicalRepoURL {
-			changes = append(changes, ConfigChange{Path: "config.canonicalRepoURL", From: from, To: updated.CanonicalRepoURL})
+	row, ok, err := m.store.UpdateProjectConfig(ctx, string(id), in.DryRun, func(current domain.ProjectRecord) (domain.ProjectConfig, bool, error) {
+		updated := current.Config
+		if in.CanonicalRepoURL != nil {
+			from := updated.CanonicalRepoURL
+			updated.CanonicalRepoURL = strings.TrimSpace(*in.CanonicalRepoURL)
+			if from != updated.CanonicalRepoURL {
+				changes = append(changes, ConfigChange{Path: "config.canonicalRepoURL", From: from, To: updated.CanonicalRepoURL})
+			}
 		}
-	}
-	if in.DefaultBranch != nil {
-		from := updated.DefaultBranch
-		updated.DefaultBranch = strings.TrimSpace(*in.DefaultBranch)
-		if from != updated.DefaultBranch {
-			changes = append(changes, ConfigChange{Path: "config.defaultBranch", From: from, To: updated.DefaultBranch})
+		if in.DefaultBranch != nil {
+			from := updated.DefaultBranch
+			updated.DefaultBranch = strings.TrimSpace(*in.DefaultBranch)
+			if from != updated.DefaultBranch {
+				changes = append(changes, ConfigChange{Path: "config.defaultBranch", From: from, To: updated.DefaultBranch})
+			}
 		}
-	}
-	if err := updated.Validate(); err != nil {
-		return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
-	}
-	if row.Kind.WithDefault() == domain.ProjectKindScratch {
-		if err := validateScratchProjectConfig(updated); err != nil {
-			return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+		if err := updated.Validate(); err != nil {
+			return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 		}
-	}
-	if err := updated.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
-		return UpdateConfigResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
-	}
-	result := UpdateConfigResult{Changes: changes, DryRun: in.DryRun}
-	if in.DryRun || len(changes) == 0 {
-		project := m.projectFromRow(ctx, row)
-		result.Project = &project
-		return result, nil
-	}
-	stored, updatedRow, err := m.store.UpdateProjectConfig(ctx, string(id), updated)
+		if current.Kind.WithDefault() == domain.ProjectKindScratch {
+			if err := validateScratchProjectConfig(updated); err != nil {
+				return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+			}
+		}
+		if err := updated.ValidateCanonicalRepository(current.RepoOriginURL); err != nil {
+			return domain.ProjectConfig{}, false, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+		}
+		return updated, len(changes) > 0, nil
+	})
 	if err != nil {
+		var validation *apierr.Error
+		if errors.As(err, &validation) {
+			return UpdateConfigResult{}, err
+		}
 		return UpdateConfigResult{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
 	}
-	if !updatedRow {
+	if !ok {
 		return UpdateConfigResult{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	}
-	row = stored
-	m.modelScopeChanged(row.ID)
+	if !in.DryRun && len(changes) > 0 {
+		m.modelScopeChanged(row.ID)
+	}
 	project := m.projectFromRow(ctx, row)
-	result.Project = &project
-	return result, nil
+	return UpdateConfigResult{Project: &project, Changes: changes, DryRun: in.DryRun}, nil
 }
 
 func validateScratchProjectConfig(cfg domain.ProjectConfig) error {

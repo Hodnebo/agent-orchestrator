@@ -350,18 +350,14 @@ func (s *Store) SetProjectPermissions(ctx context.Context, id string, permission
 	return row, updated, err
 }
 
-// UpdateProjectConfig serializes a focused config update with other project
-// writes and returns the stored row.
-func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domain.ProjectConfig) (domain.ProjectRecord, bool, error) {
-	serialized, err := marshalProjectConfig(config)
-	if err != nil {
-		return domain.ProjectRecord{}, false, err
-	}
+// UpdateProjectConfig reads, merges, and writes a focused project config change
+// under one writer lock and transaction. Dry runs use the same current row.
+func (s *Store) UpdateProjectConfig(ctx context.Context, id string, dryRun bool, merge func(domain.ProjectRecord) (domain.ProjectConfig, bool, error)) (domain.ProjectRecord, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	var row domain.ProjectRecord
-	var updated bool
-	err = s.inTx(ctx, "update project config", func(q *gen.Queries) error {
+	var found bool
+	err := s.inTx(ctx, "update project config", func(q *gen.Queries) error {
 		stored, err := q.GetProject(ctx, domain.ProjectID(id))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -373,12 +369,30 @@ func (s *Store) UpdateProjectConfig(ctx context.Context, id string, config domai
 		if !row.ArchivedAt.IsZero() {
 			return nil
 		}
-		row.Config = config
+		found = true
+		config, changed, err := merge(row)
+		if err != nil {
+			return err
+		}
+		if dryRun || !changed {
+			return nil
+		}
+		serialized, err := marshalProjectConfig(config)
+		if err != nil {
+			return err
+		}
 		rows, err := q.UpdateProjectSettings(ctx, gen.UpdateProjectSettingsParams{
 			ID: domain.ProjectID(id), DisplayName: row.DisplayName, Config: serialized,
 		})
-		updated = rows > 0
-		return err
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			found = false
+			return nil
+		}
+		row.Config = config
+		return nil
 	})
-	return row, updated, err
+	return row, found, err
 }

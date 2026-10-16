@@ -49,6 +49,18 @@ func (s failingProjectUpsertStore) UpsertProject(context.Context, domain.Project
 	return errors.New("forced project upsert failure")
 }
 
+type interleavingProjectConfigStore struct {
+	project.Store
+	beforeMerge func()
+}
+
+func (s *interleavingProjectConfigStore) UpdateProjectConfig(ctx context.Context, id string, dryRun bool, merge func(domain.ProjectRecord) (domain.ProjectConfig, bool, error)) (domain.ProjectRecord, bool, error) {
+	if s.beforeMerge != nil {
+		s.beforeMerge()
+	}
+	return s.Store.UpdateProjectConfig(ctx, id, dryRun, merge)
+}
+
 func prepareClone(t *testing.T, m project.Manager, remoteURL string) project.ClonePreparationResult {
 	t.Helper()
 	prepared, err := m.PrepareClone(context.Background(), project.CloneInput{
@@ -2321,6 +2333,47 @@ func TestManager_UpdateConfigPreservesUnchangedFieldsAndDryRun(t *testing.T) {
 	got, err = m.Get(ctx, "ao")
 	if err != nil || got.Project.Config.CanonicalRepoURL != newURL || got.Project.Config.Env["KEEP"] != "yes" || got.Project.Config.AgentRules != "keep" {
 		t.Fatalf("updated config = %#v, err=%v", got.Project.Config, err)
+	}
+}
+
+func TestManager_UpdateConfigMergesAgainstLatestStoredConfig(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	interleaved := &interleavingProjectConfigStore{Store: store}
+	m := project.New(interleaved)
+	repo := gitRepo(t)
+	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://github.com/Untrivial-ai/agent-orchestrator").CombinedOutput(); err != nil {
+		t.Fatalf("origin: %v %s", err, out)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: repo, ProjectID: ptr("ao")}); err != nil {
+		t.Fatal(err)
+	}
+	interleaved.beforeMerge = func() {
+		if _, err := m.SetConfig(ctx, "ao", project.SetConfigInput{Config: domain.ProjectConfig{
+			CanonicalRepoURL: "https://github.com/Untrivial-ai/agent-orchestrator",
+			DefaultBranch:    "develop", Env: map[string]string{"CONCURRENT": "preserve"},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	canonical := "https://github.com/OrchestratorInc/agent-orchestrator"
+	result, err := m.UpdateConfig(ctx, "ao", project.UpdateConfigInput{CanonicalRepoURL: &canonical})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Changes) != 1 || result.Changes[0].From != "https://github.com/Untrivial-ai/agent-orchestrator" || result.Changes[0].To != canonical {
+		t.Fatalf("changes = %#v", result.Changes)
+	}
+	got, err := m.Get(ctx, "ao")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Project.Config.CanonicalRepoURL != canonical || got.Project.Config.DefaultBranch != "develop" || got.Project.Config.Env["CONCURRENT"] != "preserve" {
+		t.Fatalf("concurrent update was lost: %#v", got.Project.Config)
 	}
 }
 
