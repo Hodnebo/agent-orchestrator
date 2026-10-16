@@ -130,3 +130,27 @@ func TestSessionRepoCheckoutsAndSelectors(t *testing.T) {
 		t.Fatalf("standalone checkouts = %+v, want only the workspace", standalone)
 	}
 }
+
+func TestPrepareStandaloneWorkspace(t *testing.T) {
+	ctx := context.Background()
+	filled := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(filled, "alice", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareStandaloneWorkspace(ctx, ExecGitRunner{}, filled, true); err != nil {
+		t.Fatalf("adopting a filled folder: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filled, ".git")); !os.IsNotExist(err) {
+		t.Fatal("an adopted folder was git-initialized")
+	}
+	if err := PrepareStandaloneWorkspace(ctx, ExecGitRunner{}, filled, false); err == nil {
+		t.Fatal("a filled non-repository folder must still be refused without adoption")
+	}
+	empty := filepath.Join(t.TempDir(), "standalone")
+	if err := PrepareStandaloneWorkspace(ctx, ExecGitRunner{}, empty, true); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(empty, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("an empty standalone folder was not initialized: %v", err)
+	}
+}

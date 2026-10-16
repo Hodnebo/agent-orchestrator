@@ -736,6 +736,20 @@ func PrepareScratchWorkspace(
 	return nil
 }
 
+// PrepareStandaloneWorkspace prepares a standalone session's folder. An empty
+// or missing folder becomes a fresh Git repository, as PrepareScratchWorkspace
+// makes it. With adoptExisting, a folder that already holds files (a working
+// directory the workspace template filled, such as ~/work with its own
+// checkouts) is used exactly as it is: nothing is initialized or changed.
+func PrepareStandaloneWorkspace(ctx context.Context, runner GitRunner, workspace string, adoptExisting bool) error {
+	if adoptExisting {
+		if entries, err := os.ReadDir(workspace); err == nil && len(entries) > 0 {
+			return nil
+		}
+	}
+	return PrepareScratchWorkspace(ctx, runner, workspace)
+}
+
 // ProjectSnapshotMarker, inside .git, marks a pristine checkout baked into a
 // project snapshot. Its commit is as old as the snapshot, so the first
 // checkout moves it to the latest origin/HEAD. The marker is then removed, so a

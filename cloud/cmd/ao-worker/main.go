@@ -168,10 +168,24 @@ func run(logger *slog.Logger) error {
 	var workingDirectoryErr error
 	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
 		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
+	adoptStandaloneFolder := false
 	switch {
 	case workingDirectory != "" && hasRepository:
 		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
 		workspace = reuse.Workspace
+	case workingDirectory != "" && worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL):
+		// A standalone project (no repository) on a workspace with a
+		// configured working directory works in that folder as the template
+		// left it, for example ~/work holding the repositories the template
+		// cloned itself.
+		if dir, err := worker.ExpandWorkingDirectory(workingDirectory, os.Getenv("HOME"), ""); err != nil {
+			logger.Warn("working directory: a standalone session cannot use the configured directory; using the default",
+				"working_directory", workingDirectory, "error", err)
+		} else {
+			workspace, adoptStandaloneFolder = dir, true
+			reuse.Workspace = dir
+			_ = os.Setenv("AO_WORKSPACE_DIR", dir)
+		}
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
@@ -327,7 +341,8 @@ func run(logger *slog.Logger) error {
 		compareBase = "origin/" + defaultBranch
 	}
 	transportSupervisor := workertransport.Supervisor{
-		Control: client, Workspace: workspace, DataDir: dataDir, Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		Control: client, Workspace: workspace, DataDir: dataDir,
+		Repositories: worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)[1:], Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
 		AgentCommandFactory: agentCommandFactory,
 		Started:             started, ChatRunner: chatRunner,
 		ChatWorkspaceReady: chatWorkspaceReady,
@@ -453,7 +468,7 @@ func run(logger *slog.Logger) error {
 		for {
 			err := workingDirectoryErr
 			if err == nil {
-				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse)
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse, adoptStandaloneFolder)
 			}
 			if err == nil {
 				break
@@ -604,9 +619,10 @@ func prepareWorkspace(
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
 	reuse worker.ReuseDecision,
+	adoptExistingFolder bool,
 ) error {
 	if worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
-		if err := worker.PrepareScratchWorkspace(ctx, worker.ExecGitRunner{}, workspace); err != nil {
+		if err := worker.PrepareStandaloneWorkspace(ctx, worker.ExecGitRunner{}, workspace, adoptExistingFolder); err != nil {
 			return fmt.Errorf("prepare scratch workspace: %w", err)
 		}
 		logger.Info("initialized scratch workspace")
