@@ -326,7 +326,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersArtifactFileQuery":                        "ArtifactFileQuery",
 	"ControllersArtifactFileResponse":                     "ArtifactFileResponse",
 	"ControllersUpdateArtifactFileRequest":                "UpdateArtifactFileRequest",
-	"ControllersGitHubStatusResponse":                     "GitHubStatusResponse",
 	"ControllersArtifactVersionQuery":                     "ArtifactVersionQuery",
 	"ControllersArtifactVersionSummary":                   "ArtifactVersionSummary",
 	"ControllersListArtifactVersionsResponse":             "ListArtifactVersionsResponse",
@@ -3428,8 +3427,8 @@ func prOperations() []operation {
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/github/status", id: "getGitHubStatus", tag: "github",
-			summary: "Report whether a GitHub token is stored and the GitHub username AO is signed in as",
-			resps:   []respUnit{{http.StatusOK, controllers.GitHubStatusResponse{}}, {http.StatusInternalServerError, envelope.APIError{}}},
+			summary: "Check whether a GitHub personal access token is stored locally",
+			resps:   []respUnit{{http.StatusOK, map[string]bool{"connected": false}}, {http.StatusInternalServerError, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/github/repos", id: "listGitHubRepos", tag: "github",

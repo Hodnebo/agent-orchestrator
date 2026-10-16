@@ -732,7 +732,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Report whether a GitHub token is stored and the GitHub username AO is signed in as */
+        /** Check whether a GitHub personal access token is stored locally */
         get: operations["getGitHubStatus"];
         put?: never;
         post?: never;
@@ -4929,11 +4929,6 @@ export interface components {
             name?: string;
             owner?: string;
             private?: null | boolean;
-        };
-        GitHubStatusResponse: {
-            connected: boolean;
-            /** @description GitHub username AO is signed in as, from a stored token or the gh CLI; absent when it could not be resolved. */
-            login?: string;
         };
         GitPreparationEvent: {
             /** @enum {string} */
@@ -9349,7 +9344,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GitHubStatusResponse"];
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
                 };
             };
             /** @description Internal Server Error */

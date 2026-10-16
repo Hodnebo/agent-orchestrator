@@ -6,8 +6,7 @@ import type { ArtifactVersionSummary } from "../hooks/useArtifactVersions";
 import { ArtifactHistoryMenu, ArtifactVersionPreview, formatVersionTime } from "./ArtifactHistory";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { versionsMock, versionMock, statusMock, syncMock } = vi.hoisted(() => ({ versionsMock: vi.fn(), versionMock: vi.fn(), statusMock: vi.fn(), syncMock: vi.fn() }));
-vi.mock("../lib/github-daemon", () => ({ getGitHubStatus: statusMock }));
+const { versionsMock, versionMock, syncMock } = vi.hoisted(() => ({ versionsMock: vi.fn(), versionMock: vi.fn(), syncMock: vi.fn() }));
 vi.mock("../hooks/useArtifactVersions", () => ({
 	useArtifactVersions: versionsMock,
 	useArtifactVersion: versionMock,
@@ -25,7 +24,6 @@ const v = (version: number, source: "agent" | "user", minute: number, harness?: 
 });
 
 function renderMenu(data: ArtifactVersionSummary[] | null, extra: { isError?: boolean } = {}) {
-	statusMock.mockResolvedValue({ connected: true, login: "octocat" });
 	versionsMock.mockReturnValue({
 		data: data ?? undefined,
 		isPending: data === null && !extra.isError,
@@ -53,10 +51,9 @@ describe("ArtifactHistoryMenu", () => {
 		const items = within(menu).getAllByRole("menuitem");
 		expect(items).toHaveLength(4);
 		expect(within(items[0]!).getByText("Current")).toBeTruthy();
-		// The agent shows as its logo (named by the harness), a user save as a lettered avatar.
+		// The agent shows as its logo (named by the harness), a save made in the app as the user.
 		expect(within(items[0]!).getByAltText(/claude/i)).toBeTruthy();
-		// A version saved in the app wears the GitHub account's avatar, named by its username.
-		expect(await within(items[3]!).findByTitle("octocat")).toBeTruthy();
+		expect(within(items[3]!).getByTitle("You")).toBeTruthy();
 
 		await userEvent.click(items[2]!);
 		expect(onSelect).toHaveBeenCalledWith(2);
