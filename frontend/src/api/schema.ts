@@ -286,7 +286,7 @@ export interface paths {
         };
         /** Read the account a session uses per provider */
         get: operations["getSessionAgentAccounts"];
-        /** Move a session to another account, restarting an idle agent in the same conversation */
+        /** Start moving a session to another account through the durable controller handoff */
         put: operations["switchSessionAgentAccount"];
         post?: never;
         delete?: never;
@@ -5974,8 +5974,10 @@ export interface components {
             /** @enum {string} */
             policy: "drain" | "interrupt";
             sessionId: string;
+            sourceAccountId?: string;
             /** @enum {string} */
             sourceMode: "chat" | "tui";
+            targetAccountId?: string;
             /** @enum {string} */
             targetMode: "chat" | "tui";
             /** Format: date-time */
@@ -7880,13 +7882,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description OK */
-            200: {
+            /** @description Accepted */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionResponse"];
+                    "application/json": components["schemas"]["StartSessionInterfaceTransitionResponse"];
                 };
             };
             /** @description Bad Request */

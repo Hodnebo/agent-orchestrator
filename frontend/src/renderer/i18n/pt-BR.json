@@ -3196,5 +3196,7 @@
 	"settings.agentAccounts.loading": "Carregando contas…",
 	"settings.agentAccounts.stopAndMoveTitle": "Parar o turno e mover?",
 	"settings.agentAccounts.stopAndMoveDescription": "O agente está trabalhando ou aguardando a renovação de um limite. O AO para este turno e retoma a conversa em {{email}}.",
-	"settings.agentAccounts.stopAndMove": "Parar e mover"
+	"settings.agentAccounts.stopAndMove": "Parar e mover",
+	"settings.agentAccounts.switching": "Trocando para {{email}}…",
+	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior."
 }

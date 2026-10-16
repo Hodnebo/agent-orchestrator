@@ -16,7 +16,7 @@ var (
 	ErrAgentAccountDuplicate        = errors.New("that login is already an account")
 	ErrAgentAccountLoginUnknown     = errors.New("agent account sign-in not found")
 	ErrAgentAccountDeviceFixed      = errors.New("the computer's own login cannot be removed here")
-	ErrAgentAccountSessionBusy      = errors.New("the session is working; move it after its turn ends")
+	ErrAgentAccountUnchanged        = errors.New("the session already uses this account")
 )
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
@@ -64,7 +64,16 @@ type AgentAccountLaunchEnv interface {
 	// the session's account, binding the provider's default first when the
 	// session has none yet.
 	SessionLaunchEnv(ctx context.Context, sessionID domain.SessionID) (map[string]string, error)
+	// SessionLaunchEnvWith is SessionLaunchEnv with accountID in place of the
+	// session's account for its provider. It binds nothing.
+	SessionLaunchEnvWith(ctx context.Context, sessionID domain.SessionID, accountID string) (map[string]string, error)
 	// BindSession pins the session to accountID, or to the provider's default
 	// when accountID is empty.
 	BindSession(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, accountID string) error
+	// SessionAccountID is the account the session uses for harness's provider,
+	// or "" when the harness has no accounts.
+	SessionAccountID(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness) (string, error)
+	// ValidateAccount checks that accountID can run harness now: it is of the
+	// harness's provider and signed in as the login it was added with.
+	ValidateAccount(ctx context.Context, harness domain.AgentHarness, accountID string) error
 }

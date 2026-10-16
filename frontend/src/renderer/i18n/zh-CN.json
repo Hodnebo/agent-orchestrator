@@ -3131,5 +3131,7 @@
 	"settings.agentAccounts.loading": "正在加载账户…",
 	"settings.agentAccounts.stopAndMoveTitle": "停止本轮并移动？",
 	"settings.agentAccounts.stopAndMoveDescription": "代理正在工作或等待限额重置。AO 会停止本轮，并在 {{email}} 上继续对话。",
-	"settings.agentAccounts.stopAndMove": "停止并移动"
+	"settings.agentAccounts.stopAndMove": "停止并移动",
+	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
+	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。"
 }

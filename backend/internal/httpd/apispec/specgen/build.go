@@ -1844,9 +1844,9 @@ func agentOperations() []operation {
 		},
 		{
 			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}", id: "switchSessionAgentAccount", tag: "agents",
-			summary: "Move a session to another account, restarting an idle agent in the same conversation", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
+			summary: "Start moving a session to another account through the durable controller handoff", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
 			reqBody: controllers.SwitchSessionAgentAccountRequest{},
-			resps:   []respUnit{{http.StatusOK, controllers.SessionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartSessionInterfaceTransitionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/default", id: "setDefaultAgentAccount", tag: "agents",

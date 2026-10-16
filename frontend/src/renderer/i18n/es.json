@@ -3196,5 +3196,7 @@
 	"settings.agentAccounts.loading": "Cargando cuentas…",
 	"settings.agentAccounts.stopAndMoveTitle": "¿Detener el turno y mover?",
 	"settings.agentAccounts.stopAndMoveDescription": "El agente está trabajando o esperando a que se restablezca un límite. AO detiene este turno y reanuda la conversación en {{email}}.",
-	"settings.agentAccounts.stopAndMove": "Detener y mover"
+	"settings.agentAccounts.stopAndMove": "Detener y mover",
+	"settings.agentAccounts.switching": "Cambiando a {{email}}…",
+	"settings.agentAccounts.switchFailed": "El cambio falló. El agente sigue en su cuenta anterior."
 }

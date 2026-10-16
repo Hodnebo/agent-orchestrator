@@ -56,3 +56,31 @@ func TestAgentAccountUsageFollowsBindingHistory(t *testing.T) {
 		t.Fatalf("default after delete: ok=%v err=%v", ok, err)
 	}
 }
+
+// A controller handoff must change the mode or the account: an account move is
+// a same-mode transition that names both accounts.
+func TestInterfaceTransitionsAllowSameModeOnlyForAnAccountMove(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	session := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	now := time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
+	move := domain.SessionInterfaceTransition{
+		ID: "same-mode", SessionID: session.ID, SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeTUI,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: domain.SessionInterfaceTransitionRequested, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, _, err := s.CreateSessionInterfaceTransition(ctx, move); err == nil {
+		t.Fatal("a same-mode transition without an account change was accepted")
+	}
+	move.ID, move.SourceAccountID, move.TargetAccountID = "account-move", "device-claude", "acct-b"
+	created, ok, err := s.CreateSessionInterfaceTransition(ctx, move)
+	mustNoError(t, err)
+	if !ok || created.SourceAccountID != "device-claude" || created.TargetAccountID != "acct-b" || !created.AccountMove() {
+		t.Fatalf("created = %+v", created)
+	}
+	active, found, err := s.GetActiveSessionInterfaceTransition(ctx, session.ID)
+	mustNoError(t, err)
+	if !found || active.TargetAccountID != "acct-b" {
+		t.Fatalf("active = %+v", active)
+	}
+}

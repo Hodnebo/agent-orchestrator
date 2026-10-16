@@ -29,6 +29,15 @@ CREATE TABLE session_agent_accounts (
     PRIMARY KEY (session_id, provider, bound_at)
 );
 
+-- Every session that exists already ran on the computer's own login. Recording
+-- that keeps it there when a default account is picked later (a session with no
+-- binding would otherwise read as the default) and attributes its usage to the
+-- login it used.
+INSERT INTO session_agent_accounts (session_id, provider, account_id, bound_at)
+SELECT sessions.id, providers.provider, 'device-' || providers.provider, sessions.created_at
+FROM sessions
+CROSS JOIN (SELECT 'claude' AS provider UNION ALL SELECT 'codex') AS providers;
+
 -- +goose Down
 DROP TABLE session_agent_accounts;
 DROP TABLE agent_account_defaults;

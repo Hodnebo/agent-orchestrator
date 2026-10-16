@@ -742,12 +742,12 @@ paths:
               $ref: '#/components/schemas/SwitchSessionAgentAccountRequest'
         required: true
       responses:
-        "200":
+        "202":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionResponse'
-          description: OK
+                $ref: '#/components/schemas/StartSessionInterfaceTransitionResponse'
+          description: Accepted
         "400":
           content:
             application/json:
@@ -772,8 +772,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Move a session to another account, restarting an idle agent in the
-        same conversation
+      summary: Start moving a session to another account through the durable controller
+        handoff
       tags:
       - agents
   /api/v1/agents/accounts/usage:
@@ -17085,10 +17085,14 @@ components:
           type: string
         sessionId:
           type: string
+        sourceAccountId:
+          type: string
         sourceMode:
           enum:
           - chat
           - tui
+          type: string
+        targetAccountId:
           type: string
         targetMode:
           enum:

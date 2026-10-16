@@ -433,6 +433,8 @@ type Manager struct {
 	browser                     BrowserLifecycle
 	browserCapabilities         BrowserCapabilityIssuer
 	agentAccounts               ports.AgentAccountLaunchEnv
+	accountOverrideMu           sync.Mutex
+	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
 	attachmentSuffix            func() (string, error)
 	dataDir                     string
@@ -5859,7 +5861,13 @@ func (m *Manager) applyAgentAccountEnv(id domain.SessionID, env map[string]strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	accountEnv, err := m.agentAccounts.SessionLaunchEnv(ctx, id)
+	var accountEnv map[string]string
+	var err error
+	if override := m.accountOverride(id); override != "" {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, override)
+	} else {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnv(ctx, id)
+	}
 	if err != nil {
 		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}

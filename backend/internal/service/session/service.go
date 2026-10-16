@@ -110,7 +110,7 @@ type exitAgentCommander interface {
 
 // agentAccountCommander keeps account moves optional for focused service fakes.
 type agentAccountCommander interface {
-	SwitchAgentAccount(context.Context, domain.SessionID, string, bool) (domain.SessionRecord, error)
+	StartAccountTransition(context.Context, domain.SessionID, string, domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error)
 }
 
 // RollbackOutcome reports what happened in a rollback: either the seed row was
@@ -763,20 +763,21 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
 }
 
-// SwitchAgentAccount moves the session's agent to another provider account and
-// restarts it in the same conversation. stopTurn allows stopping a turn in
-// progress.
-func (s *Service) SwitchAgentAccount(ctx context.Context, id domain.SessionID, accountID string, stopTurn bool) (domain.Session, error) {
+// StartAccountTransition moves the session's agent to another provider account
+// through the durable controller handoff. stopTurn cancels a turn in progress;
+// otherwise the move waits for it to finish.
+func (s *Service) StartAccountTransition(ctx context.Context, id domain.SessionID, accountID string, stopTurn bool) (domain.SessionInterfaceTransition, error) {
 	manager, ok := s.manager.(agentAccountCommander)
 	if !ok {
-		return domain.Session{}, apierr.Conflict(
+		return domain.SessionInterfaceTransition{}, apierr.Conflict(
 			"AGENT_ACCOUNT_UNSUPPORTED", "This build cannot move a session to another account", nil)
 	}
-	rec, err := manager.SwitchAgentAccount(ctx, id, accountID, stopTurn)
-	if err != nil {
-		return domain.Session{}, toAPIError(err)
+	policy := domain.SessionInterfaceTransitionDrain
+	if stopTurn {
+		policy = domain.SessionInterfaceTransitionInterrupt
 	}
-	return s.toSession(ctx, rec)
+	transition, err := manager.StartAccountTransition(ctx, id, accountID, policy)
+	return transition, toAPIError(err)
 }
 
 // InterfaceTransitionStatus returns capability and progress without launching
@@ -1381,8 +1382,8 @@ func mapSessionError(err error) error {
 		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignedOut):
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
-	case errors.Is(err, ports.ErrAgentAccountSessionBusy):
-		return apierr.Conflict("AGENT_ACCOUNT_SESSION_BUSY", "The agent is working; stop the turn to switch the account now", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnchanged):
+		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

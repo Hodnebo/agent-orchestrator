@@ -755,6 +755,8 @@ type SessionInterfaceTransition struct {
 	CompletedAt          sql.NullTime
 	NoticeAcknowledgedAt sql.NullTime
 	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy
+	SourceAccountID      string
+	TargetAccountID      string
 }
 
 type SessionInterfaceTransitionMessage struct {

@@ -433,34 +433,62 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 		}
 		return nil
 	}
-	picked := accountID != ""
-	if !picked {
-		var err error
-		if accountID, err = s.defaultID(ctx, p); err != nil {
+	if accountID == "" {
+		def, err := s.defaultID(ctx, p)
+		if err != nil {
 			return err
 		}
+		return s.store.BindSessionAgentAccount(ctx, id, p, def, s.now())
 	}
-	account, err := s.find(ctx, accountID)
+	account, err := s.pick(ctx, harness, accountID)
 	if err != nil {
 		return err
 	}
-	if account.Provider != p {
-		return ports.ErrAgentAccountProviderMismatch
-	}
-	// A picked account must be signed in as itself, or the agent would start
-	// signed out or as someone else.
-	if picked {
-		if s.needsReading(account.ID, false) {
-			s.read(ctx, account)
-		}
-		s.mu.Lock()
-		r := s.readings[account.ID]
-		s.mu.Unlock()
-		if r == nil || !r.identity.SignedIn {
-			return ports.ErrAgentAccountSignedOut
-		}
-	}
 	return s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now())
+}
+
+// ValidateAccount checks that accountID can run harness now.
+func (s *Service) ValidateAccount(ctx context.Context, harness domain.AgentHarness, accountID string) error {
+	_, err := s.pick(ctx, harness, accountID)
+	return err
+}
+
+// pick resolves an account chosen for harness. It must be of the harness's
+// provider and signed in as itself, or the agent would start signed out or as
+// someone else.
+func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, accountID string) (domain.AgentAccount, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return domain.AgentAccount{}, ports.ErrAgentAccountProviderMismatch
+	}
+	account, err := s.find(ctx, accountID)
+	if err != nil {
+		return domain.AgentAccount{}, err
+	}
+	if account.Provider != p {
+		return domain.AgentAccount{}, ports.ErrAgentAccountProviderMismatch
+	}
+	if s.needsReading(account.ID, false) {
+		s.read(ctx, account)
+	}
+	s.mu.Lock()
+	r := s.readings[account.ID]
+	s.mu.Unlock()
+	if r == nil || !r.identity.SignedIn {
+		return domain.AgentAccount{}, ports.ErrAgentAccountSignedOut
+	}
+	return account, nil
+}
+
+// SessionAccountID is the account a session uses for harness's provider, or
+// "" when the harness has no accounts.
+func (s *Service) SessionAccountID(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", nil
+	}
+	account, _, err := s.SessionAccount(ctx, id, p)
+	return account.ID, err
 }
 
 // SessionAccount is the account a session uses for the provider now: its
@@ -503,6 +531,21 @@ func (s *Service) SessionAccounts(ctx context.Context, id domain.SessionID) (map
 // session's account. A session with no account for a provider yet is bound to
 // that provider's default here, so a later default change does not move it.
 func (s *Service) SessionLaunchEnv(ctx context.Context, id domain.SessionID) (map[string]string, error) {
+	return s.launchEnv(ctx, id, domain.AgentAccount{})
+}
+
+// SessionLaunchEnvWith is SessionLaunchEnv with accountID in place of the
+// session's account for its provider, for starting an agent on an account the
+// session moves to. The session's binding is not changed.
+func (s *Service) SessionLaunchEnvWith(ctx context.Context, id domain.SessionID, accountID string) (map[string]string, error) {
+	account, err := s.find(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return s.launchEnv(ctx, id, account)
+}
+
+func (s *Service) launchEnv(ctx context.Context, id domain.SessionID, override domain.AgentAccount) (map[string]string, error) {
 	env := map[string]string{}
 	var errs []error
 	for _, p := range domain.AgentAccountProviders {
@@ -510,14 +553,19 @@ func (s *Service) SessionLaunchEnv(ctx context.Context, id domain.SessionID) (ma
 		if provider == nil {
 			continue
 		}
-		account, bound, err := s.SessionAccount(ctx, id, p)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !bound {
-			if err := s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now()); err != nil {
+		account := override
+		if override.Provider != p {
+			var bound bool
+			var err error
+			account, bound, err = s.SessionAccount(ctx, id, p)
+			if err != nil {
 				errs = append(errs, err)
+				continue
+			}
+			if !bound {
+				if err := s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now()); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 		if account.Device() {

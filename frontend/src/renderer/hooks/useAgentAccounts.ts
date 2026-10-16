@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
 export type AgentAccountProvider = AgentAccount["provider"];
@@ -76,12 +77,14 @@ export function useAgentAccountActions() {
 			await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey });
 			return result.outcome;
 		},
+		/** Starts the durable move; the shared interface-transition status shows its progress. */
 		switchSession: async (sessionId: string, accountId: string, stopTurn = false) => {
 			const result = unwrap(await apiClient.PUT("/api/v1/agents/accounts/sessions/{sessionId}", {
 				params: { path: { sessionId } }, body: { accountId, ...(stopTurn ? { stopTurn: true } : {}) },
 			}));
-			await queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId) });
-			return result.session;
+			await queryClient.invalidateQueries({ queryKey: sessionInterfaceTransitionQueryKey(sessionId) });
+			return result.transition;
 		},
+		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId) }),
 	};
 }

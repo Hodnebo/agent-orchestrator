@@ -3130,5 +3130,7 @@
 	"settings.agentAccounts.loading": "Loading accounts…",
 	"settings.agentAccounts.stopAndMoveTitle": "Stop the turn and move?",
 	"settings.agentAccounts.stopAndMoveDescription": "The agent is working or waiting for a limit to reset. AO stops this turn and resumes the conversation on {{email}}.",
-	"settings.agentAccounts.stopAndMove": "Stop and move"
+	"settings.agentAccounts.stopAndMove": "Stop and move",
+	"settings.agentAccounts.switching": "Switching to {{email}}…",
+	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account."
 }

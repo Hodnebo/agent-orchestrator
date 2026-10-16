@@ -3196,5 +3196,7 @@
 	"settings.agentAccounts.loading": "Chargement des comptes…",
 	"settings.agentAccounts.stopAndMoveTitle": "Arrêter le tour et déplacer ?",
 	"settings.agentAccounts.stopAndMoveDescription": "L'agent travaille ou attend la réinitialisation d'une limite. AO arrête ce tour et reprend la conversation sur {{email}}.",
-	"settings.agentAccounts.stopAndMove": "Arrêter et déplacer"
+	"settings.agentAccounts.stopAndMove": "Arrêter et déplacer",
+	"settings.agentAccounts.switching": "Passage à {{email}}…",
+	"settings.agentAccounts.switchFailed": "Le changement a échoué. L'agent reste sur son compte précédent."
 }

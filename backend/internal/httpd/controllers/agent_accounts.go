@@ -32,7 +32,7 @@ type AgentAccountService interface {
 
 // AgentAccountSessionMover moves a session's agent to another account.
 type AgentAccountSessionMover interface {
-	SwitchAgentAccount(context.Context, domain.SessionID, string, bool) (domain.Session, error)
+	StartAccountTransition(context.Context, domain.SessionID, string, bool) (domain.SessionInterfaceTransition, error)
 }
 
 // AgentAccountsController exposes accounts, sign-in, limits, usage, and the
@@ -240,12 +240,14 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "accountId is required", nil)
 		return
 	}
-	session, err := c.Sessions.SwitchAgentAccount(r.Context(), domain.SessionID(strings.TrimSpace(chi.URLParam(r, "sessionId"))), strings.TrimSpace(in.AccountID), in.StopTurn)
+	transition, err := c.Sessions.StartAccountTransition(r.Context(), domain.SessionID(strings.TrimSpace(chi.URLParam(r, "sessionId"))), strings.TrimSpace(in.AccountID), in.StopTurn)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, session)})
+	envelope.WriteJSON(w, http.StatusAccepted, StartSessionInterfaceTransitionResponse{
+		OK: true, SessionID: transition.SessionID, Transition: sessionInterfaceTransitionView(transition),
+	})
 }
 
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {

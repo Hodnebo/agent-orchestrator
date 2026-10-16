@@ -992,19 +992,23 @@ type StartSessionInterfaceTransitionRequest struct {
 // provider-native conversation id is intentionally not exposed: clients need
 // controller state, not an adapter implementation detail.
 type SessionInterfaceTransitionView struct {
-	ID                   string                                         `json:"id"`
-	SessionID            domain.SessionID                               `json:"sessionId"`
-	SourceMode           domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
-	TargetMode           domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
-	Policy               domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
-	HistoryPolicy        domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
-	Phase                domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
-	ErrorCode            string                                         `json:"errorCode,omitempty"`
-	ErrorDetail          string                                         `json:"errorDetail,omitempty"`
-	CreatedAt            time.Time                                      `json:"createdAt"`
-	UpdatedAt            time.Time                                      `json:"updatedAt"`
-	CompletedAt          *time.Time                                     `json:"completedAt,omitempty"`
-	NoticeAcknowledgedAt *time.Time                                     `json:"noticeAcknowledgedAt,omitempty"`
+	ID            string                                         `json:"id"`
+	SessionID     domain.SessionID                               `json:"sessionId"`
+	SourceMode    domain.SessionMode                             `json:"sourceMode" enum:"chat,tui"`
+	TargetMode    domain.SessionMode                             `json:"targetMode" enum:"chat,tui"`
+	Policy        domain.SessionInterfaceTransitionPolicy        `json:"policy" enum:"drain,interrupt"`
+	HistoryPolicy domain.SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
+	Phase         domain.SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
+	// SourceAccountID and TargetAccountID are set when the handoff moves the
+	// agent to another provider account; the mode then stays the same.
+	SourceAccountID      string     `json:"sourceAccountId,omitempty"`
+	TargetAccountID      string     `json:"targetAccountId,omitempty"`
+	ErrorCode            string     `json:"errorCode,omitempty"`
+	ErrorDetail          string     `json:"errorDetail,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+	CompletedAt          *time.Time `json:"completedAt,omitempty"`
+	NoticeAcknowledgedAt *time.Time `json:"noticeAcknowledgedAt,omitempty"`
 }
 
 // SessionInterfaceTransitionStatusResponse is the body of GET
@@ -3603,7 +3607,7 @@ type SessionAgentAccountsResponse struct {
 // SwitchSessionAgentAccountRequest moves a session to another account.
 type SwitchSessionAgentAccountRequest struct {
 	AccountID string `json:"accountId" minLength:"1"`
-	// StopTurn stops a turn in progress instead of refusing the move, for an
-	// agent stuck waiting on the old account's limit.
+	// StopTurn cancels a turn in progress, for an agent stuck waiting on the old
+	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
 }
