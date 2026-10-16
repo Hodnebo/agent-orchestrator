@@ -445,6 +445,35 @@ paths:
                 $ref: "#/components/schemas/CreateGitHubScratchProjectResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/standalone:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: createStandaloneProject
+      tags: [Projects]
+      description: >-
+        Create a project with no repository. Its sessions start in an empty,
+        git-initialized folder, for a workspace template that brings its own
+        code or work that needs none. It takes the same config as a repository
+        project except additional repositories, and cannot open pull requests.
+        Its repositoryUrl is a placeholder, https://scratch.ao.local/<id>.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStandaloneProjectInput"
+      responses:
+        "201":
+          description: Standalone project created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -1044,6 +1073,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
     get:
       operationId: listWorkspaceFiles
       tags: [Workspace]
@@ -1068,6 +1098,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
     get:
       operationId: readWorkspaceFile
       tags: [Workspace]
@@ -1109,6 +1140,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
     get:
       operationId: readWorkspaceDiffFile
       tags: [Workspace]
@@ -1135,6 +1167,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/OrgId"
       - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
     get:
       operationId: getWorkspaceDiff
       tags: [Workspace]
@@ -1148,6 +1181,28 @@ paths:
                 $ref: "#/components/schemas/WorkspaceDiff"
         "501":
           $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/repositories:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listWorkspaceRepositories
+      tags: [Workspace]
+      description: >-
+        The session's repository checkouts: the main one and, for a project
+        with additional repositories, one per additional repository. A
+        checkout's name is the value the workspace endpoints take as
+        ?repository=. A single-repository session lists only the main
+        checkout.
+      responses:
+        "200":
+          description: The session's repository checkouts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceRepositoryList"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/provider-connections:
@@ -2226,6 +2281,18 @@ components:
       schema:
         type: string
         format: uuid
+    WorkspaceRepository:
+      name: repository
+      in: query
+      required: false
+      description: >-
+        Which of the session's repository checkouts the request is about, by
+        folder name or GitHub owner/name (see listWorkspaceRepositories).
+        Absent means the main repository. Ignored when checking out a branch.
+      schema:
+        type: string
+        maxLength: 201
+        pattern: '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$'
     TurnId:
       name: turnId
       in: path
@@ -2771,13 +2838,92 @@ components:
           $ref: "#/components/schemas/ProjectScriptCommands"
         preRemove:
           $ref: "#/components/schemas/ProjectScriptCommands"
+        repos:
+          $ref: "#/components/schemas/ProjectAdditionalRepositories"
+        agentStartsIn:
+          $ref: "#/components/schemas/ProjectAgentStartsIn"
+        workingDirectory:
+          $ref: "#/components/schemas/ProjectWorkingDirectory"
+        agentRules:
+          $ref: "#/components/schemas/ProjectRules"
+        orchestratorRules:
+          $ref: "#/components/schemas/ProjectRules"
+        source:
+          type: string
+          description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
+    ProjectAdditionalRepositories:
+      type: array
+      maxItems: 10
+      description: >-
+        The project's additional repositories, beside its main repository
+        (repositoryUrl). Every session clones each into its own folder beside
+        the main checkout, named after the repository, and checks it out on
+        the session branch, on every sandbox provider. Each must be a
+        github.com repository granted to the organization's GitHub App through
+        the same installation as the main one; none may repeat the main
+        repository or share a folder name with another. Replaces the legacy
+        coder.extraRepos, which is still read when repos is absent.
+      items:
+        $ref: "#/components/schemas/ProjectRepository"
+    ProjectRepository:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: https://github.com/<owner>/<name>; stored canonicalized.
+        branch:
+          type: string
+          maxLength: 255
+          description: Branch to clone; empty clones the repository's default branch.
+    ProjectAgentStartsIn:
+      type: string
+      enum: [repository, parent]
+      description: >-
+        Where the coding agent starts: repository (the default) is the main
+        repository's checkout, with access to every other checkout; parent is
+        the folder that holds every checkout.
+    ProjectWorkingDirectory:
+      type: string
+      maxLength: 512
+      description: >-
+        Where sessions work in a bring-your-own Coder workspace when AO runs as
+        the workspace user, for example ~/work/{repo}; it overrides the Coder
+        connection's working directory. Ignored otherwise.
+    ProjectRules:
+      type: string
+      maxLength: 16384
+      description: >-
+        Standing instructions added to every session's system prompt
+        (agentRules for workers, orchestratorRules for orchestrators).
+    ProjectScriptStep:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        command:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        repository:
+          type: string
+          format: uri
+          description: >-
+            The project repository the command runs in (its URL, the main
+            repository or one of repos); absent runs it in the main
+            repository's checkout. Stored as a plain command when it names the
+            main repository.
     ProjectScriptCommands:
       type: array
       maxItems: 20
       items:
-        type: string
-        minLength: 1
-        maxLength: 4096
+        oneOf:
+          - type: string
+            minLength: 1
+            maxLength: 4096
+          - $ref: "#/components/schemas/ProjectScriptStep"
       description: >-
         A project's Setup (postCreate) or Cleanup (preRemove) shell commands,
         the same settings a local project has. Setup commands run in order
@@ -3092,6 +3238,16 @@ components:
           $ref: "#/components/schemas/ProjectScriptCommands"
         preRemove:
           $ref: "#/components/schemas/ProjectScriptCommands"
+        repos:
+          $ref: "#/components/schemas/ProjectAdditionalRepositories"
+        agentStartsIn:
+          $ref: "#/components/schemas/ProjectAgentStartsIn"
+        workingDirectory:
+          $ref: "#/components/schemas/ProjectWorkingDirectory"
+        agentRules:
+          $ref: "#/components/schemas/ProjectRules"
+        orchestratorRules:
+          $ref: "#/components/schemas/ProjectRules"
     ProjectSettingsInput:
       type: object
       additionalProperties: false
@@ -3106,6 +3262,45 @@ components:
           maxLength: 255
         config:
           $ref: "#/components/schemas/ProjectSettingsConfigPatch"
+    CreateStandaloneProjectInput:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        config:
+          $ref: "#/components/schemas/ProjectConfig"
+    WorkspaceRepositoryList:
+      type: object
+      additionalProperties: false
+      required: [repositories]
+      properties:
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkspaceRepository"
+    WorkspaceRepository:
+      type: object
+      additionalProperties: false
+      required: [name, present]
+      properties:
+        name:
+          type: string
+          description: The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session.
+        repository:
+          type: string
+          description: GitHub owner/name of an additional repository.
+        branch:
+          type: string
+          description: Branch an additional repository was cloned from.
+        main:
+          type: boolean
+        present:
+          type: boolean
+          description: False for an additional repository that could not be cloned.
     ProjectResponse:
       type: object
       additionalProperties: false
@@ -3135,6 +3330,9 @@ components:
           type: string
           pattern: "^[1-9][0-9]*$"
           description: GitHub's integer repository ID encoded as a decimal string to preserve precision.
+        standalone:
+          type: boolean
+          description: True for a project with no repository; its repositoryUrl is a placeholder that is never cloned.
         config:
           $ref: "#/components/schemas/ProjectConfig"
         createdAt:

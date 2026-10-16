@@ -90,7 +90,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 }
 
 // WorkerSessionExtraRepos returns the additional repositories a session's
-// project declares (the coder dev-kit "extraRepos"), if any. It is a
+// project declares (config "repos", or the legacy coder dev-kit "extraRepos"),
+// if any. It is a
 // best-effort read used only to broaden a checkout token's repository scope, so
 // callers must tolerate an empty result and must never fail the primary checkout
 // on its account. Repository and installation authority still come exclusively
@@ -125,11 +126,7 @@ func (s *Store) WorkerSessionExtraRepos(
 	if err != nil {
 		return nil, err
 	}
-	coder, ok := domain.DecodeProjectCoderConfig(config)
-	if !ok {
-		return nil, nil
-	}
-	return coder.ExtraRepos, nil
+	return domain.ProjectAdditionalRepos(config), nil
 }
 
 // WorkerGitHubPAT resolves the session creator's explicitly configured GitHub

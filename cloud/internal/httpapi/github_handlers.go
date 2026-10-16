@@ -508,6 +508,7 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
+	ok := true
 	githubRepositoryID, err := strconv.ParseInt(
 		strings.TrimSpace(request.GitHubRepositoryID),
 		10,
@@ -529,6 +530,9 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
+	if config, ok = s.prepareGitHubProjectRepos(w, r, orgID, githubRepositoryID, config); !ok {
+		return
+	}
 	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
 		return
 	}
@@ -542,8 +546,8 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
-	store, ok := s.store.(githubProjectStore)
-	if !ok {
+	store, isGitHubStore := s.store.(githubProjectStore)
+	if !isGitHubStore {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
 		return
 	}

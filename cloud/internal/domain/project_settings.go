@@ -71,8 +71,10 @@ func ValidateProjectScriptCommands(kind string, commands []string) error {
 }
 
 // ValidateProjectScriptsConfig checks the postCreate and preRemove keys of a
-// project config: each, when present, must be an array of commands that
-// passes ValidateProjectScriptCommands.
+// project config: each, when present, must be an array of commands (plain
+// strings or {command, repository} steps) that passes
+// ValidateProjectScriptCommands. Which repository a step names is checked
+// against the project's repositories by NormalizeProjectRepoSettings.
 func ValidateProjectScriptsConfig(config json.RawMessage) error {
 	var values map[string]json.RawMessage
 	if len(config) == 0 || json.Unmarshal(config, &values) != nil {
@@ -83,21 +85,36 @@ func ValidateProjectScriptsConfig(config json.RawMessage) error {
 		if !ok {
 			continue
 		}
-		var commands []string
-		if json.Unmarshal(raw, &commands) != nil {
-			return fmt.Errorf("%s must be an array of strings", key)
-		}
-		if err := ValidateProjectScriptCommands(key, commands); err != nil {
+		if _, err := ParseProjectScriptSteps(key, raw); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// ParseProjectScriptSteps decodes and validates one list of Setup or Cleanup
+// steps.
+func ParseProjectScriptSteps(kind string, raw json.RawMessage) ([]ProjectScriptStep, error) {
+	var steps []ProjectScriptStep
+	if err := json.Unmarshal(raw, &steps); err != nil {
+		return nil, fmt.Errorf("%s must be an array of commands", kind)
+	}
+	commands := make([]string, len(steps))
+	for index, step := range steps {
+		commands[index] = step.Command
+	}
+	if err := ValidateProjectScriptCommands(kind, commands); err != nil {
+		return nil, err
+	}
+	return steps, nil
+}
+
 // ProjectScripts reads a project's Setup and Cleanup commands from its config
-// for a worker launch. Like the role rules, a value of the wrong shape is
-// ignored rather than making the session unbootable.
-func ProjectScripts(config json.RawMessage) (postCreate, preRemove []string) {
+// for a worker launch, as the shell commands the worker runs from the main
+// repository's checkout (see ProjectScriptStep.ShellCommand). mainURL is the
+// project's main repository URL. Like the role rules, a value of the wrong
+// shape is ignored rather than making the session unbootable.
+func ProjectScripts(config json.RawMessage, mainURL string) (postCreate, preRemove []string) {
 	var values struct {
 		PostCreate json.RawMessage `json:"postCreate"`
 		PreRemove  json.RawMessage `json:"preRemove"`
@@ -106,14 +123,14 @@ func ProjectScripts(config json.RawMessage) (postCreate, preRemove []string) {
 		return nil, nil
 	}
 	decode := func(raw json.RawMessage) []string {
-		var commands []string
-		if len(raw) == 0 || json.Unmarshal(raw, &commands) != nil {
+		var steps []ProjectScriptStep
+		if len(raw) == 0 || json.Unmarshal(raw, &steps) != nil {
 			return nil
 		}
-		kept := make([]string, 0, len(commands))
-		for _, command := range commands {
-			if strings.TrimSpace(command) != "" {
-				kept = append(kept, command)
+		kept := make([]string, 0, len(steps))
+		for _, step := range steps {
+			if strings.TrimSpace(step.Command) != "" {
+				kept = append(kept, step.ShellCommand(mainURL))
 			}
 		}
 		if len(kept) == 0 {
@@ -318,7 +335,8 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 		return fmt.Errorf("%s must be an object", kind)
 	}
 	allowed := map[string][]string{
-		"config":      {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder", "postCreate", "preRemove"},
+		"config": {"worker", "orchestrator", "reviewers", "autoReview", "sessionPrefix", "coder", "postCreate", "preRemove",
+			"repos", "agentStartsIn", "workingDirectory", "agentRules", "orchestratorRules"},
 		"coder":       {"workspaceNamePrefix", "parameters"},
 		"role":        {"agent", "agentConfig"},
 		"reviewer":    {"harness", "agentConfig"},
@@ -387,11 +405,31 @@ func validateSettingsPatchObject(raw json.RawMessage, kind string) error {
 				return fmt.Errorf("autoReview must be a boolean")
 			}
 		case "postCreate", "preRemove":
-			var commands []string
-			if json.Unmarshal(value, &commands) != nil {
-				return fmt.Errorf("%s must be an array of strings", key)
+			if _, err := ParseProjectScriptSteps(key, value); err != nil {
+				return err
 			}
-			if err := ValidateProjectScriptCommands(key, commands); err != nil {
+		case "repos":
+			if _, err := decodeProjectRepoList(value); err != nil {
+				return err
+			}
+		case "agentStartsIn":
+			if err := validateAgentStartsIn(value); err != nil {
+				return err
+			}
+		case "workingDirectory":
+			var directory string
+			if json.Unmarshal(value, &directory) != nil {
+				return fmt.Errorf("workingDirectory must be a string")
+			}
+			if err := ValidateCoderWorkingDirectory(strings.TrimSpace(directory)); err != nil {
+				return err
+			}
+		case "agentRules", "orchestratorRules":
+			var rules string
+			if json.Unmarshal(value, &rules) != nil {
+				return fmt.Errorf("%s must be a string", key)
+			}
+			if err := ValidateProjectRules(key, rules); err != nil {
 				return err
 			}
 		default:

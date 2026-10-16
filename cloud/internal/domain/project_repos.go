@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -283,4 +284,180 @@ func ValidateProjectRules(key, rules string) error {
 		return fmt.Errorf("%s contains invalid characters", key)
 	}
 	return nil
+}
+
+// decodeProjectRepoList decodes a "repos" value: an array of {url, branch}.
+func decodeProjectRepoList(raw json.RawMessage) ([]RepoRef, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var repos []RepoRef
+	if err := decoder.Decode(&repos); err != nil {
+		return nil, errors.New("repos must be an array of {url, branch} objects")
+	}
+	return repos, nil
+}
+
+func validateAgentStartsIn(raw json.RawMessage) error {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return errors.New("agentStartsIn must be a string")
+	}
+	switch strings.TrimSpace(value) {
+	case "", ProjectAgentStartsInRepository, ProjectAgentStartsInParent:
+		return nil
+	}
+	return fmt.Errorf("agentStartsIn must be %q or %q", ProjectAgentStartsInRepository, ProjectAgentStartsInParent)
+}
+
+// AdoptLegacyExtraRepos moves a new project's coder dev kit "extraRepos" (the
+// shape the project form sent before "repos" existed) to "repos", unless the
+// config already carries "repos". Run on create only: an existing project's
+// legacy list keeps being read in place by ProjectAdditionalRepos.
+func AdoptLegacyExtraRepos(config json.RawMessage) (json.RawMessage, error) {
+	var values map[string]json.RawMessage
+	if len(config) == 0 {
+		return config, nil
+	}
+	if err := json.Unmarshal(config, &values); err != nil || values == nil {
+		return nil, errors.New("project config must be an object")
+	}
+	rawCoder, ok := values["coder"]
+	if !ok {
+		return config, nil
+	}
+	var coder map[string]json.RawMessage
+	if err := json.Unmarshal(rawCoder, &coder); err != nil || coder == nil {
+		return config, nil
+	}
+	legacy, ok := coder["extraRepos"]
+	if !ok {
+		return config, nil
+	}
+	delete(coder, "extraRepos")
+	if _, hasRepos := values["repos"]; !hasRepos {
+		values["repos"] = legacy
+	}
+	encodedCoder, err := json.Marshal(coder)
+	if err != nil {
+		return nil, err
+	}
+	values["coder"] = encodedCoder
+	return json.Marshal(values)
+}
+
+// NormalizeProjectRepoSettings validates and canonicalizes the multi-repo
+// settings of a project config whose main repository is mainURL: "repos" (see
+// NormalizeProjectRepos), "agentStartsIn", "workingDirectory", "agentRules",
+// "orchestratorRules", and the repository each Setup and Cleanup step names,
+// which must be the main repository or one of the additional ones. A step in
+// the main repository is stored as a plain command. Keys it does not know are
+// left as they are, so a config without any of these keys comes back
+// unchanged.
+func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.RawMessage, error) {
+	var values map[string]json.RawMessage
+	if len(config) == 0 {
+		return config, nil
+	}
+	if err := json.Unmarshal(config, &values); err != nil || values == nil {
+		return nil, errors.New("project config must be an object")
+	}
+	changed := false
+	if raw, ok := values["repos"]; ok {
+		listed, err := decodeProjectRepoList(raw)
+		if err != nil {
+			return nil, err
+		}
+		repos, err := NormalizeProjectRepos(mainURL, listed)
+		if err != nil {
+			return nil, err
+		}
+		if repos == nil {
+			repos = []RepoRef{}
+		}
+		values["repos"], _ = json.Marshal(repos)
+		changed = true
+	}
+	if raw, ok := values["agentStartsIn"]; ok {
+		if err := validateAgentStartsIn(raw); err != nil {
+			return nil, err
+		}
+	}
+	if raw, ok := values["workingDirectory"]; ok {
+		var directory string
+		if json.Unmarshal(raw, &directory) != nil {
+			return nil, errors.New("workingDirectory must be a string")
+		}
+		if err := ValidateCoderWorkingDirectory(strings.TrimSpace(directory)); err != nil {
+			return nil, err
+		}
+	}
+	for _, key := range []string{"agentRules", "orchestratorRules"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		var rules string
+		if json.Unmarshal(raw, &rules) != nil {
+			return nil, fmt.Errorf("%s must be a string", key)
+		}
+		if err := ValidateProjectRules(key, rules); err != nil {
+			return nil, err
+		}
+	}
+	known := map[string]string{}
+	mainCanonical, _, mainErr := CanonicalGitHubRepoURL(mainURL)
+	if mainErr == nil {
+		known[strings.ToLower(mainCanonical)] = ""
+	}
+	interim, _ := json.Marshal(values)
+	for _, repo := range ProjectAdditionalRepos(interim) {
+		if canonical, _, err := CanonicalGitHubRepoURL(repo.URL); err == nil {
+			known[strings.ToLower(canonical)] = canonical
+		}
+	}
+	for _, key := range []string{"postCreate", "preRemove"} {
+		raw, ok := values[key]
+		if !ok {
+			continue
+		}
+		steps, err := ParseProjectScriptSteps(key, raw)
+		if err != nil {
+			return nil, err
+		}
+		rewrite := false
+		for index, step := range steps {
+			if step.Repository == "" {
+				continue
+			}
+			rewrite = true
+			canonical, _, err := CanonicalGitHubRepoURL(step.Repository)
+			if err != nil {
+				return nil, fmt.Errorf("%s step %d names %q, which is not one of the project's repositories", key, index+1, step.Repository)
+			}
+			stored, isProjectRepo := known[strings.ToLower(canonical)]
+			if !isProjectRepo {
+				return nil, fmt.Errorf("%s step %d runs in %s, which is not one of the project's repositories", key, index+1, canonical)
+			}
+			// The main repository maps to "", which stores the step as a plain command.
+			steps[index].Repository = stored
+		}
+		if rewrite {
+			values[key], _ = json.Marshal(steps)
+			changed = true
+		}
+	}
+	if !changed {
+		return config, nil
+	}
+	return json.Marshal(values)
+}
+
+// GitHubRepositoryAccess is what project setup knows about a project's
+// repositories through the organization's GitHub App grants: the granted main
+// repository's URL and installation, and the installation each additional
+// repository (keyed by lower-cased owner/name) is granted through.
+type GitHubRepositoryAccess struct {
+	MainURL          string
+	MainInstallation string
+	Installations    map[string]string
 }

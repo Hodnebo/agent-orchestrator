@@ -188,7 +188,7 @@ func TestProjectSettingsScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	postCreate, preRemove := ProjectScripts(merged)
+	postCreate, preRemove := ProjectScripts(merged, "")
 	if strings.Join(postCreate, "|") != "npm ci|make up" || strings.Join(preRemove, "|") != "make down" ||
 		settings.Coder == nil || settings.Coder.TemplateID != "t" {
 		t.Fatalf("settings = %+v, scripts = %q %q", settings, postCreate, preRemove)
@@ -202,7 +202,7 @@ func TestProjectSettingsScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, preRemove := ProjectScripts(cleared); preRemove != nil {
+	if _, preRemove := ProjectScripts(cleared, ""); preRemove != nil {
 		t.Fatalf("cleared preRemove = %q", preRemove)
 	}
 	tooMany := make([]string, MaxProjectScriptCommands+1)
