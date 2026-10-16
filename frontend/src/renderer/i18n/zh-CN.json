@@ -1451,6 +1451,8 @@
 	"settings.sessionInterface.unavailable": "适用于新会话。目前没有已安装的代理支持聊天。",
 	"settings.soundNotifications": "声音通知",
 	"settings.soundNotifications.saveFailed": "无法保存声音通知偏好设置。",
+	"settings.cardSummaries": "卡片摘要",
+	"settings.cardSummariesHint": "在每张看板卡片上显示一行由 AI 撰写的简短说明，介绍智能体正在做什么。每隔几秒会额外调用一次小型模型。",
 	"settings.project.trackerIntake": "议题接入",
 	"settings.project.workspaceRepos": "工作区仓库",
 	"settings.project.worktrees": "工作树",

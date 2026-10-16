@@ -1685,6 +1685,8 @@
 	"settings.sessionInterface.unavailable": "Applies to new sessions. No installed agent supports chat yet.",
 	"settings.soundNotifications": "Sound notifications",
 	"settings.soundNotifications.saveFailed": "Could not save the sound notifications preference.",
+	"settings.cardSummaries": "Card summaries",
+	"settings.cardSummariesHint": "Show a short, AI-written line on each kanban card saying what the agent is doing. Uses a small extra model call every few seconds.",
 	"settings.project.trackerIntake": "Tracker intake",
 	"settings.project.workspaceRepos": "Workspace repos",
 	"settings.project.worktrees": "Worktrees",

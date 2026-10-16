@@ -467,7 +467,7 @@ describe("SessionsBoard", () => {
 		expect(terminateButton).toHaveClass("opacity-0", "group-hover:opacity-100", "group-focus-within:opacity-100");
 		expect(terminateButton.querySelector("svg")).toHaveClass("lucide-archive");
 		expect(within(idleCard).getByText("Idle").parentElement?.parentElement).toHaveClass("flex");
-		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
+		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "truncate", "text-sm");
 	});
 
 	it("styles a working card from its building lane without inferring from runtime activity", () => {
