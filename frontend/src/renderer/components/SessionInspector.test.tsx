@@ -4709,12 +4709,12 @@ describe("SessionInspector branch summary", () => {
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
 
-  it("shimmers while naming and reveals the final branch when its worktree is ready", () => {
+  it.each(["provisioning", "ready"] as const)("shimmers while naming in %s and reveals the final branch when its worktree is ready", (provisionState) => {
     mockGitState({});
     const starting = session([], {
       branch: "ao/sess-1/root",
-      provisionState: "provisioning",
-      provisionSteps: [],
+      provisionState,
+      provisionSteps: provisionState === "ready" ? [{ id: "worktree", status: "running" }] : [],
     });
     const view = renderWithQuery(<SessionInspector session={starting} />);
     const namingLabel = branch().getByRole("status");

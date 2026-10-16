@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -145,12 +146,38 @@ func (m *Manager) nameTaskWorkspace(ctx context.Context, rec domain.SessionRecor
 	info, namingErr := namer.NameTaskWorkspace(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), name.Slug, "root"), name.Slug)
 	persistErr := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath)
 	if namingErr == nil && persistErr == nil {
-		persistErr = m.completeTaskNaming(ctx, info)
+		persistErr = m.completeNamedWorktree(ctx, info)
 	}
 	if project != nil {
 		project = &info
 	}
 	return info.Root, project, errors.Join(namingErr, persistErr)
+}
+
+// Complete synchronous naming progress before acknowledging its move journal.
+// Recovery must not leave a repaired final branch hidden behind a stale shimmer.
+func (m *Manager) completeNamedWorktree(ctx context.Context, info ports.WorkspaceProjectInfo) error {
+	rec, found, err := m.store.GetSession(ctx, info.Root.SessionID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("naming session no longer exists")
+	}
+	if rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		for i, step := range rec.ProvisionSteps {
+			if step.ID == domain.SessionProvisionStepWorktree && step.Status != domain.SessionProvisionStepDone {
+				steps := slices.Clone(rec.ProvisionSteps)
+				now := m.clock()
+				steps[i].Status, steps[i].EndedAt = domain.SessionProvisionStepDone, &now
+				if err := m.store.SetSessionProvisionSteps(ctx, rec.ID, steps, now); err != nil {
+					return err
+				}
+				break
+			}
+		}
+	}
+	return m.completeTaskNaming(ctx, info)
 }
 
 func (m *Manager) completeTaskNaming(ctx context.Context, info ports.WorkspaceProjectInfo) error {
@@ -172,7 +199,7 @@ func (m *Manager) recoverTaskNaming(ctx context.Context, rec domain.SessionRecor
 	if err := m.persistTaskWorkspace(ctx, rec.ID, info, rec.Metadata.WorkspacePath); err != nil {
 		return info, true, err
 	}
-	return info, true, recovery.CompleteTaskWorkspaceNaming(ctx, info)
+	return info, true, m.completeNamedWorktree(ctx, info)
 }
 
 // Persist the actual result even after a partial Git failure. The provision

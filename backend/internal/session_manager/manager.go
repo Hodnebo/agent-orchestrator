@@ -1206,7 +1206,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// synchronous workspace lifecycle as before. Async Chat acquires it in its
 	// background half so the API response never waits on Git.
 	var taskName func() generatedTaskName
+	var namingProgress *provisionProgress
 	if !asyncChat {
+		if cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {
+			namingProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepWorktree})
+		}
 		var cancelNaming context.CancelFunc
 		taskName, cancelNaming = m.startTaskNaming(ctx, cfg, rec, project.Config)
 		defer cancelNaming()
@@ -1283,9 +1287,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// A synchronous request is unacknowledged until launch. Record that setup
 	// has not completed before naming publishes its workspace path.
 	trackSetup := taskName != nil && cfg.ClientRequestID != ""
-	setupSteps := []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning}}
 	if trackSetup {
-		if err := m.store.SetSessionProvisionSteps(ctx, id, setupSteps, m.clock()); err != nil {
+		namingProgress.steps = append(namingProgress.steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning})
+		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 		}
@@ -1297,6 +1301,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
 	}
+	if namingProgress != nil {
+		namingProgress.complete(ctx, domain.SessionProvisionStepWorktree)
+	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
 	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
@@ -1304,9 +1311,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
 
+	if namingProgress != nil {
+		namingProgress.complete(ctx, domain.SessionProvisionStepSetup)
+	}
 	if trackSetup {
-		setupSteps[0].Status = domain.SessionProvisionStepDone
-		if err := m.store.SetSessionProvisionSteps(ctx, id, setupSteps, m.clock()); err != nil {
+		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 		}

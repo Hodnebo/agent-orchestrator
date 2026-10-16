@@ -626,6 +626,33 @@ describe("SessionsBoard", () => {
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});
 
+	it("shows naming shimmer on a synchronous orchestrator-created worker until its worktree is ready", () => {
+		const worker = boardSession({
+			id: "s-delegated",
+			title: "Review: composer correctness",
+			status: "idle",
+			provisionState: "ready",
+			branch: undefined,
+			provisionSteps: [{ id: "worktree", status: "running" }],
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([worker])], isError: false, isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderBoardWithClient(queryClient, "p1");
+		const card = () => screen.getByText(worker.title).closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card()).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card()).getByRole("status").textContent).not.toMatch(/…|\.\.\./);
+
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([{ ...worker, branch: "ao/composer-review/root", provisionSteps: [{ id: "worktree", status: "done" }] }])],
+			isError: false, isSuccess: true,
+		});
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
+		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
+		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+	});
+
 	it("shows start failure instead of Awaiting PR on a failed card", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({
