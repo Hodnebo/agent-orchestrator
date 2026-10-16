@@ -28,6 +28,44 @@ func TestClientMsgRoundTrip(t *testing.T) {
 	}
 }
 
+// TestClientMsgDecodesMobileFrames decodes the exact frames the mobile client
+// sends (packages/mobile/lib/mux.test.ts pins the same literals). The fakeConn
+// tests hand the manager ready-made clientMsg values, so they cannot notice a
+// client frame that decodes to something else, which is how a subscribe frame
+// without "type" went unnoticed. "projectId" and "topics" are not clientMsg
+// fields; decoding ignores them.
+func TestClientMsgDecodesMobileFrames(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame string
+		want  clientMsg
+	}{
+		{"subscribe", `{"ch":"subscribe","type":"subscribe","topics":["sessions","notifications"]}`,
+			clientMsg{Ch: chSubscribe, Type: msgSubscribe}},
+		{"terminal open", `{"ch":"terminal","id":"s1","type":"open","projectId":"p1","role":"secondary"}`,
+			clientMsg{Ch: chTerminal, ID: "s1", Type: msgOpen, Role: roleSecondary}},
+		{"terminal data", `{"ch":"terminal","id":"s1","type":"data","data":"bHMK","projectId":"p1"}`,
+			clientMsg{Ch: chTerminal, ID: "s1", Type: msgData, Data: "bHMK"}},
+		{"terminal resize", `{"ch":"terminal","id":"s1","type":"resize","cols":80,"rows":24,"projectId":"p1"}`,
+			clientMsg{Ch: chTerminal, ID: "s1", Type: msgResize, Cols: 80, Rows: 24}},
+		{"terminal close", `{"ch":"terminal","id":"s1","type":"close","projectId":"p1"}`,
+			clientMsg{Ch: chTerminal, ID: "s1", Type: msgClose}},
+		{"system ping", `{"ch":"system","type":"ping"}`,
+			clientMsg{Ch: chSystem, Type: msgPing}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got clientMsg
+			if err := json.Unmarshal([]byte(tt.frame), &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("decoded:\n got %+v\nwant %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServerMsgSessionFrameWireShape(t *testing.T) {
 	msg := serverMsg{
 		Ch:   chSessions,

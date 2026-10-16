@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // mux.ts imports ./config, which reaches React Native's Flow-typed sources
 // through these two. Same preamble as lib/chat/eventCursor.test.ts.
@@ -9,7 +9,8 @@ vi.mock("expo-secure-store", () => ({
 	getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn(),
 }));
 
-import { base64ToBytes, bytesToBase64 } from "./mux";
+import type { ServerConfig } from "./config";
+import { base64ToBytes, bytesToBase64, MuxClient } from "./mux";
 
 /**
  * Every literal below was produced by Go's `base64.StdEncoding`, the daemon's
@@ -91,5 +92,96 @@ describe("bytesToBase64", () => {
 	it("round-trips arbitrary non-UTF8 bytes", () => {
 		const bytes = new Uint8Array([0x00, 0x1b, 0x5b, 0xff, 0xfe, 0x7f, 0x41]);
 		expect(base64ToBytes(bytesToBase64(bytes))).toEqual(bytes);
+	});
+});
+
+/**
+ * Client frames, as the literal JSON the daemon decodes. The daemon routes on
+ * `ch` and then on `type`, and its subscribe handler returns without a word
+ * unless `type` is "subscribe" (backend/internal/terminal/manager.go,
+ * handleSubscribe), so a subscribe frame without `type` is dropped silently.
+ * TestClientMsgDecodesMobileFrames (terminal/protocol_test.go) decodes the same
+ * literals with the daemon's own struct.
+ */
+const SUBSCRIBE = { ch: "subscribe", type: "subscribe", topics: ["sessions", "notifications"] };
+
+const config: ServerConfig = { host: "127.0.0.1", httpPort: "3011", muxPort: "14801", password: "" };
+
+class FakeSocket {
+	static OPEN = 1;
+	static instances: FakeSocket[] = [];
+	readyState = 0;
+	sent: string[] = [];
+	onopen: (() => void) | null = null;
+	onclose: (() => void) | null = null;
+	constructor(public url: string) {
+		FakeSocket.instances.push(this);
+	}
+	send(frame: string) {
+		this.sent.push(frame);
+	}
+	close() {}
+	open() {
+		this.readyState = FakeSocket.OPEN;
+		this.onopen?.();
+	}
+	frames(): unknown[] {
+		return this.sent.map((s) => JSON.parse(s));
+	}
+}
+
+describe("MuxClient frames", () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.useFakeTimers();
+		vi.stubGlobal("WebSocket", FakeSocket);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	function connected() {
+		const mux = new MuxClient(config, {});
+		mux.connect();
+		const socket = FakeSocket.instances[FakeSocket.instances.length - 1];
+		socket.open();
+		return { mux, socket };
+	}
+
+	it("subscribes with the typed frame the daemon accepts", () => {
+		const { mux, socket } = connected();
+		mux.subscribeSessions();
+		expect(socket.frames()).toEqual([SUBSCRIBE]);
+	});
+
+	it("subscribes again with the same frame after a reconnect", () => {
+		const { mux, socket } = connected();
+		mux.subscribeSessions();
+		socket.onclose?.();
+		vi.advanceTimersByTime(1000); // first reconnect backoff
+		const next = FakeSocket.instances[FakeSocket.instances.length - 1];
+		expect(next).not.toBe(socket);
+		next.open();
+		expect(next.frames()).toEqual([SUBSCRIBE]);
+	});
+
+	it("gives every frame a channel and a type", () => {
+		const { mux, socket } = connected();
+		mux.subscribeSessions();
+		mux.openTerminal("s1", "p1");
+		mux.sendInput("s1", "ls\n", "p1");
+		mux.resize("s1", 80, 24, "p1");
+		vi.advanceTimersByTime(20_000); // the keep-alive ping
+		mux.closeTerminal("s1", "p1");
+		expect(socket.frames()).toEqual([
+			SUBSCRIBE,
+			{ ch: "terminal", id: "s1", type: "open", projectId: "p1", role: "secondary" },
+			{ ch: "terminal", id: "s1", type: "data", data: "bHMK", projectId: "p1" },
+			{ ch: "terminal", id: "s1", type: "resize", cols: 80, rows: 24, projectId: "p1" },
+			{ ch: "system", type: "ping" },
+			{ ch: "terminal", id: "s1", type: "close", projectId: "p1" },
+		]);
 	});
 });
