@@ -86,6 +86,20 @@ type Config struct {
 	SessionMode func(ports.PermissionMode) string
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// LaunchSessionOptions returns config options whose value is fixed for the
+	// whole session and known only from the launch, such as a persona the agent
+	// lets AO select by id but not by launch flag. They are set once after
+	// session/new or session/load, before the launch's turn settings.
+	LaunchSessionOptions func(LaunchConfig) []SessionOption
+	// RequireAdvertisedOptions refuses to send a config option, or a value, the
+	// session did not advertise. Set it for agents that acknowledge an unknown
+	// option without applying it, so the choice fails visibly instead.
+	RequireAdvertisedOptions bool
+	// CloseSessionBeforeReload closes the session before a history refresh
+	// reloads it on the same connection. Set it for agents that answer a second
+	// session/load with "already loaded". It applies only when the agent
+	// advertises session/close.
+	CloseSessionBeforeReload bool
 	// PermissionPolicy lets a provider binding resolve permission requests that
 	// have an exact AO policy mapping before the generic client parks them for a
 	// human. Returning handled=false preserves the ordinary approval flow.
@@ -314,6 +328,9 @@ func (d *Driver) openNewSession(
 		conv.setReportedProviderConversationID(d.cfg.EncodeProviderConversationID(string(resp.SessionId)))
 	}
 	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
+		return fmt.Errorf("configure ACP session: %w", err)
+	}
 	settingsStarted := time.Now()
 	err = conv.applyTurnSettings(ctx, settings)
 	d.logStartStage(launchCfg.SessionID, "initial_settings", settingsStarted, err)
@@ -327,6 +344,15 @@ func (d *Driver) openNewSession(
 		}
 	}
 	return nil
+}
+
+// applyLaunchSessionOptions sets the binding's session-scoped config options.
+// A persistent-host reconnect skips it: that provider session already has them.
+func (d *Driver) applyLaunchSessionOptions(ctx context.Context, conv *conversation, cfg LaunchConfig) error {
+	if d.cfg.LaunchSessionOptions == nil {
+		return nil
+	}
+	return conv.applySessionOptions(ctx, d.cfg.LaunchSessionOptions(cfg))
 }
 
 func (d *Driver) sessionPreamble(cfg LaunchConfig) []acpsdk.ContentBlock {
@@ -480,6 +506,8 @@ func (d *Driver) resumeSession(
 			AdditionalDirectories: additional,
 			McpServers:            mcpServers,
 		})
+		historyConversation.closeBeforeReload = d.cfg.CloseSessionBeforeReload &&
+			init.AgentCapabilities.SessionCapabilities.Close != nil
 		resp, err := historyConversation.loadHistory(resumeCtx)
 		if err != nil {
 			if cfg.FreshIfMissing && !cfg.ReconnectOnly && isACPResourceNotFound(err) {
@@ -520,6 +548,10 @@ func (d *Driver) resumeSession(
 	// conversation must receive it again even though the provider recovers the
 	// messages itself.
 	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
+		conv.discard()
+		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
+	}
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()
@@ -589,6 +621,7 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
