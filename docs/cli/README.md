@@ -333,6 +333,9 @@ Use `ao project update my-project --canonical-repo-url <url>` for a focused
 change that preserves omitted fields. `--default-branch` is supported by the
 same command. `--dry-run --json` returns a typed `changes` list, and `--yes`
 skips the confirmation prompt. An empty flag value clears that field.
+The `PATCH /api/v1/projects/{id}/config` API uses the same empty string to clear
+`canonicalRepoURL` or `defaultBranch`. An omitted field or explicit `null` leaves
+that field unchanged.
 Use an HTTPS repository URL, without a PR/MR suffix, credentials, query, or fragment.
 Self-managed GitLab URLs and nested namespaces are supported. Explicit ports
 are preserved and must match too; `gitlab.example.com:8443` is a different

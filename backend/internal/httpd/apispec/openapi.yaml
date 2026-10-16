@@ -3149,7 +3149,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Update selected project config fields
+      summary: Update selected project config fields; empty strings clear, null leaves
+        unchanged
       tags:
       - projects
     put:
@@ -18624,10 +18625,14 @@ components:
     UpdateProjectConfigInput:
       properties:
         canonicalRepoURL:
+          description: Upstream repository URL. An empty string clears it; null or
+            omission leaves it unchanged.
           type:
           - "null"
           - string
         defaultBranch:
+          description: Base branch. An empty string restores automatic inference;
+            null or omission leaves it unchanged.
           type:
           - "null"
           - string

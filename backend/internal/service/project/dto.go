@@ -67,11 +67,11 @@ type SetConfigInput struct {
 	Config domain.ProjectConfig `json:"config"`
 }
 
-// UpdateConfigInput changes only fields present in the request. A nil pointer
-// leaves the current value unchanged, while a non-nil empty string clears it.
+// UpdateConfigInput changes only fields with a non-null string value. Omitted
+// fields and explicit null leave the current value unchanged. Empty strings clear.
 type UpdateConfigInput struct {
-	CanonicalRepoURL *string `json:"canonicalRepoURL,omitempty"`
-	DefaultBranch    *string `json:"defaultBranch,omitempty"`
+	CanonicalRepoURL *string `json:"canonicalRepoURL,omitempty" description:"Upstream repository URL. An empty string clears it; null or omission leaves it unchanged."`
+	DefaultBranch    *string `json:"defaultBranch,omitempty" description:"Base branch. An empty string restores automatic inference; null or omission leaves it unchanged."`
 	DryRun           bool    `json:"dryRun,omitempty"`
 }
 

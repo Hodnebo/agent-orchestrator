@@ -2478,7 +2478,7 @@ func projectOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/projects/{id}/config", id: "updateProjectConfig", tag: "projects",
-			summary:    "Update selected project config fields",
+			summary:    "Update selected project config fields; empty strings clear, null leaves unchanged",
 			pathParams: []any{controllers.ProjectIDParam{}},
 			reqBody:    projectsvc.UpdateConfigInput{},
 			resps: []respUnit{

@@ -1189,7 +1189,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update selected project config fields */
+        /** Update selected project config fields; empty strings clear, null leaves unchanged */
         patch: operations["updateProjectConfig"];
         trace?: never;
     };
@@ -6537,7 +6537,9 @@ export interface components {
             disabledModels: null | string[];
         };
         UpdateProjectConfigInput: {
+            /** @description Upstream repository URL. An empty string clears it; null or omission leaves it unchanged. */
             canonicalRepoURL?: null | string;
+            /** @description Base branch. An empty string restores automatic inference; null or omission leaves it unchanged. */
             defaultBranch?: null | string;
             dryRun?: boolean;
         };
