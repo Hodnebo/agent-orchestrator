@@ -1627,7 +1627,15 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			resolved.Effort = ""
 		}
 	}
-	if resolved.Effort == "" || (unlistedToCLI && selected == nil) {
+	if resolved.Effort == "" {
+		return resolved, nil
+	}
+	if unlistedToCLI && selected == nil {
+		// The CLI owns per-model capabilities, but a level no Claude model
+		// accepts can still be refused here rather than after the session starts.
+		if !containsString(claudeEffortLevels, resolved.Effort) {
+			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
+		}
 		return resolved, nil
 	}
 	if (catalog.Stale && !renewableLogin) || selected == nil {
@@ -1641,6 +1649,7 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 
 var (
 	claudeFamilyAliases = []string{"fable", "opus", "sonnet", "haiku"}
+	claudeEffortLevels  = []string{"low", "medium", "high", "xhigh", "max"}
 	claudeVersionNumber = regexp.MustCompile(`\d+`)
 	claudeVersionNoise  = regexp.MustCompile(`\(.*?\)|\[.*?\]`)
 )
