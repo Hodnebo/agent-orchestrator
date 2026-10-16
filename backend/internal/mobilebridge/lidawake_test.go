@@ -149,6 +149,7 @@ func TestWakeSetupAcceptsDaemonParentAndReusesRegisteredBuild(t *testing.T) {
 				supported bool
 			}{
 				{1, true},
+				{2, true},
 				{lidHelperVersion + 1, true},
 				// A protocol-compatible older helper may still reject macOS 27.
 				{lidHelperVersion, false},
@@ -303,5 +304,57 @@ func TestWakeSetupMissingRegisteredPlistReportsUpgradeRecovery(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(l.directory, "agent.plist")); !os.IsNotExist(err) {
 		t.Fatalf("legacy registration was replaced: %v", err)
+	}
+}
+
+func TestDesktopIdleLeaseDoesNotReportAnotherOwnersLidControl(t *testing.T) {
+	directory := t.TempDir()
+	noLid := false
+	yesLid := true
+	data, _ := json.Marshal(lidStatus{Version: lidHelperVersion, UpdatedAt: float64(time.Now().UnixMilli()) / 1000, Active: true, LidActive: &yesLid, Leases: []string{"desktop", "mobile"}})
+	if err := writeWakeFile(filepath.Join(directory, "status.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	l := &LidAwake{supported: true, directory: directory, id: "desktop", requestedLid: &noLid}
+	if !l.WakeActive() {
+		t.Fatal("own idle assertion not acknowledged")
+	}
+	_, active, _ := l.Status()
+	if active {
+		t.Fatal("desktop adopted mobile lid control")
+	}
+}
+func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directory, "leases"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	l := &LidAwake{directory: directory, id: "desktop", pid: 42, started: 99}
+	end := time.Now().Add(time.Minute)
+	if err := l.ConfigurePolicy(false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SetDeadline(end); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SetProtection(30); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.ConfigureEffects(true, []string{"example.app"}, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.renew(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "leases/desktop.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lease lidLease
+	if err := json.Unmarshal(data, &lease); err != nil {
+		t.Fatal(err)
+	}
+	if lease.LidClosed == nil || *lease.LidClosed || !lease.DisplayAwake || lease.ExpiresAt == nil || lease.StopBatteryPercent != 30 || !lease.MuteAudio || !lease.RestoreDisplay || !lease.DarkenKeyboard || len(lease.PauseApps) != 1 {
+		t.Fatalf("policy lost in native lease: %+v", lease)
 	}
 }

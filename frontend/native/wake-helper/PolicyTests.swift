@@ -34,6 +34,30 @@ import Foundation
         assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 10) == nil)
         assert(WakePolicy.safety(thermalCritical: false, onBattery: false, percent: nil) == nil)
         assert(WakePolicy.safety(thermalCritical: false, onBattery: nil, percent: nil) == "battery_unknown")
+        // Default/mobile and explicit lid requests work without optional effects.
+        assert(lease(a).wantsLid && !lease(a).wantsEffects)
+        var desktop = lease(b)
+        desktop.lidClosed = true
+        assert(desktop.wantsLid && !desktop.wantsEffects)
+        desktop.lidClosed = false
+        desktop.muteAudio = true
+        assert(!desktop.wantsLid && !desktop.wantsEffects)
+        var finite = lease(a)
+        finite.expiresAt = 120
+        var finitePolicy = WakePolicy()
+        assert(finitePolicy.live([finite], now: 0, wall: 100, identity: identity).count == 1)
+        assert(finitePolicy.live([finite], now: 20, wall: 90, identity: identity).isEmpty)
+        assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 29, minimumPercent: 30) == "low_battery")
+        assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 9, minimumPercent: 0) == "low_battery")
+        assert(!WakeLightPolicy.supportsOS(15))
+        assert(WakeLightPolicy.supportsOS(26) && WakeLightPolicy.supportsOS(27))
+        assert(!WakeLightPolicy.supportsOS(28))
+        assert(WakeLightPolicy.keyboardCompatible(WakeLightPolicy.keyboardSignatures))
+        var badABI = WakeLightPolicy.keyboardSignatures
+        badABI["brightnessForKeyboard:"] = "d@:Q"
+        assert(!WakeLightPolicy.keyboardCompatible(badABI))
+        badABI.removeValue(forKey: "brightnessForKeyboard:")
+        assert(!WakeLightPolicy.keyboardCompatible(badABI))
         var events: [String] = []
         var owner = WakeOwnership(journal: WakeJournal())
         let acquired = try owner.acquire(persist: { assert($0.owned); events.append("persist") },

@@ -3,9 +3,10 @@ import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
 import CoreGraphics
+import AppKit
 import Darwin
 
-let protocolVersion = 2
+let protocolVersion = 3
 let home = FileManager.default.homeDirectoryForCurrentUser
 let directory = home.appendingPathComponent(".ao/data/wake")
 let leasesDirectory = directory.appendingPathComponent("leases")
@@ -43,6 +44,7 @@ func read<T: Decodable>(_ type: T.Type, _ url: URL) throws -> T {
 
 func write<T: Encodable>(_ value: T, _ url: URL) throws {
     let data = try JSONEncoder().encode(value)
+    guard data.count <= 65536 else { throw NSError(domain: "awake state exceeds recovery limit", code: 1) }
     let temporary = url.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
     let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { throw NSError(domain: "write", code: Int(errno)) }
@@ -117,8 +119,49 @@ func displaySleep() -> Bool {
     return command.terminationStatus == 0
 }
 
+// Process-owned IOPM assertions are automatically released if this helper dies.
+struct WakeAssertions {
+    var idle: IOPMAssertionID = 0
+    var display: IOPMAssertionID = 0
+    mutating func update(idle requestedIdle: Bool, display requestedDisplay: Bool) -> Bool {
+        if !requestedDisplay && display != 0 { IOPMAssertionRelease(display); display = 0 }
+        if !requestedIdle && idle != 0 { IOPMAssertionRelease(idle); idle = 0 }
+        if requestedIdle && idle == 0 {
+            guard IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn), "AO Stay Awake" as CFString, &idle) == kIOReturnSuccess else { return false }
+        }
+        if requestedDisplay && display == 0 {
+            guard IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn), "AO Stay Awake display" as CFString, &display) == kIOReturnSuccess else { return false }
+        }
+        return true
+    }
+}
+
+// A separate thread kills a stuck coordinator so launchd can replay its
+// already-fsynced recovery journals. It never performs OS mutations itself.
+final class WakeWatchdog {
+    private let lock = NSLock()
+    private var last = ProcessInfo.processInfo.systemUptime
+    private var running = true
+    init() {
+        Thread.detachNewThread { [self] in
+            while true {
+                Thread.sleep(forTimeInterval: 1)
+                lock.lock(); let active = running; let age = ProcessInfo.processInfo.systemUptime - last; lock.unlock()
+                if !active { return }
+                if age > 30 { kill(getpid(), SIGKILL); return }
+            }
+        }
+    }
+    func beat() { lock.lock(); last = ProcessInfo.processInfo.systemUptime; lock.unlock() }
+    func stop() { lock.lock(); running = false; lock.unlock() }
+}
+
 var stopping = false
 func serve() throws {
+    let watchdog = WakeWatchdog()
+    defer { watchdog.stop() }
     signal(SIGTERM) { _ in stopping = true }
     signal(SIGINT) { _ in stopping = true }
     try secureDirectory(directory)
@@ -136,6 +179,7 @@ func serve() throws {
         }
     } else { journal = WakeJournal() }
     var ownership = WakeOwnership(journal: journal)
+    var assertions = WakeAssertions()
     func restore() -> Bool {
         ownership.release(persist: { try write($0, journalURL) }, restore: {
             // Clear our override, never manufacture a replacement bit from
@@ -143,7 +187,19 @@ func serve() throws {
             return setLidSleepDisabled(false)
         })
     }
+    var effects: WakeEffects
+    do { effects = try WakeEffects(url: directory.appendingPathComponent("effects.json")) }
+    catch {
+        // An unreadable optional journal cannot leave the global lid override
+        // armed forever. Preserve the file and report recovery before release.
+        try? write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
+                              active: false, reason: "recovery_failed", leases: [], blocked: ownership.journal.blocked), statusURL)
+        _ = restore()
+        throw error
+    }
     defer {
+        _ = assertions.update(idle: false, display: false)
+        _ = effects.reconcile([], owners: [])
         let clean = restore()
         try? write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
                               active: false, reason: clean ? "helper_unavailable" : "recovery_failed",
@@ -165,15 +221,24 @@ func serve() throws {
     // Persist a safety stop before restoring: restoration may immediately sleep
     // the Mac, and a quick wake must not silently clear that stop.
     try ownership.latch(initialLeases, reason: initialReason, persist: { try write($0, journalURL) })
+    for lease in initialLeases {
+        try ownership.latch([lease], reason: WakePolicy.safety(
+            thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
+            onBattery: initialBattery, percent: initialPercent, minimumPercent: lease.stopBatteryPercent ?? 10),
+            persist: { try write($0, journalURL) })
+    }
     // Reconcile before serving. A helper restart must not clear a valid live
     // owner's bit with the lid shut: clearing it can immediately sleep the Mac.
     // Abandoned, unsafe, expired and reused-PID requests still restore first.
-    if ownership.journal.owned && (initialReason != nil || initialLeases.isEmpty) && !restore() {
+    let initialAccepted = initialLeases.filter { ownership.journal.blocked[$0.id] == nil }
+    if initialAccepted.isEmpty { _ = effects.reconcile([], owners: []) }
+    if ownership.journal.owned && (initialReason != nil || initialAccepted.isEmpty) && !restore() {
         try write(WakeStatus(version: protocolVersion, updatedAt: Date().timeIntervalSince1970,
                              active: false, reason: "recovery_failed", leases: [], blocked: ownership.journal.blocked), statusURL)
         throw NSError(domain: "recovery", code: 1)
     }
     while !stopping {
+        watchdog.beat()
         let now = Date().timeIntervalSince1970
         let uptime = ProcessInfo.processInfo.systemUptime
         let requests = try requests()
@@ -185,10 +250,36 @@ func serve() throws {
             thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
             onBattery: onBattery, percent: percent)
         try ownership.latch(live, reason: safetyReason, persist: { try write($0, journalURL) })
+        for lease in live {
+            try ownership.latch([lease], reason: WakePolicy.safety(
+                thermalCritical: ProcessInfo.processInfo.thermalState == .critical,
+                onBattery: onBattery, percent: percent, minimumPercent: lease.stopBatteryPercent ?? 10),
+                persist: { try write($0, journalURL) })
+        }
         let accepted = live.filter { ownership.journal.blocked[$0.id] == nil }
+        if rootProperty("AppleClamshellState") == false && accepted.contains(where: { $0.restoreDisplay == true || $0.darkenKeyboard == true }) { effects.lights.sampleOpen() }
+        try effects.prune(Set(live.map(\.id)))
+        let effectsWanted = rootProperty("AppleClamshellState") == true && docked() == false
+            ? accepted.filter { $0.wantsEffects } : []
+        struct RecoveryRequest: Codable { let id: String; let writtenAt: Double }
+        let recoveryURL = directory.appendingPathComponent("effects-recovery.json")
+        let recovery = try? read(RecoveryRequest.self, recoveryURL)
+        let forceRecovery = recovery.map { UUID(uuidString: $0.id) != nil && now - $0.writtenAt >= -5 && now - $0.writtenAt < 30 } ?? false
+        let effectOK = effects.reconcile(effectsWanted, owners: Set(live.map(\.pid)), forceRecovery: forceRecovery && effectsWanted.isEmpty)
+        if forceRecovery && effectsWanted.isEmpty && effectOK { try? FileManager.default.removeItem(at: recoveryURL) }
+        if !effectOK {
+            try effects.block(effectsWanted, reason: effects.reason)
+        }
+        let effectReason = effects.reason.isEmpty ? (effects.journal.blocked.values.first ?? "") : effects.reason
         var reason = ""
         var active = false
-        if accepted.isEmpty {
+        let lidClosed = rootProperty("AppleClamshellState") == true
+        var idleActive = !accepted.isEmpty && assertions.update(idle: true,
+            display: accepted.contains { $0.displayAwake == true } && !lidClosed)
+        if !idleActive { _ = assertions.update(idle: false, display: false) }
+        let lidLeases = idleActive ? accepted.filter { $0.wantsLid } : []
+        if !accepted.isEmpty && !idleActive { reason = "native_failed" }
+        if lidLeases.isEmpty {
             if !restore() { reason = "recovery_failed" }
         } else if rootProperty("AppleClamshellState") != nil {
             if ownership.journal.owned {
@@ -213,8 +304,13 @@ func serve() throws {
         if !active && ownership.journal.owned && reason != "recovery_failed" {
             if !restore() { reason = "recovery_failed" }
         }
-        try write(WakeStatus(version: protocolVersion, updatedAt: now, active: active, reason: reason,
-                             leases: active ? accepted.map(\.id) : [], blocked: ownership.journal.blocked), statusURL)
+        if reason == "display_failed" || reason == "recovery_failed" {
+            _ = assertions.update(idle: false, display: false)
+            idleActive = false
+        }
+        if reason.isEmpty { reason = effectReason }
+        try write(WakeStatus(version: protocolVersion, updatedAt: now, active: idleActive, reason: reason,
+                             leases: idleActive ? accepted.map(\.id) : [], blocked: ownership.journal.blocked, lidActive: active, effectsBlocked: effects.journal.blocked), statusURL)
         sleep(2)
     }
 }
@@ -230,6 +326,60 @@ let supported = platformSupported && rootProperty("AppleClamshellState") != nil 
 if CommandLine.arguments == [CommandLine.arguments[0], "probe"] {
     let object: [String: Any] = ["supported": supported, "started": processStart(getppid()) ?? 0, "version": protocolVersion]
     if let data = try? JSONSerialization.data(withJSONObject: object) { FileHandle.standardOutput.write(data) }
+} else if CommandLine.arguments == [CommandLine.arguments[0], "observe"] {
+    let (battery, percent) = power()
+    var displays = [CGDirectDisplayID](repeating: 0, count: 32)
+    var count: UInt32 = 0
+    let displayOK = CGGetOnlineDisplayList(UInt32(displays.count), &displays, &count) == .success
+    let thermal: String
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal: thermal = "nominal"
+    case .fair: thermal = "fair"
+    case .serious: thermal = "serious"
+    case .critical: thermal = "critical"
+    @unknown default: thermal = "unknown"
+    }
+    let guardians = WakeEffects.guardedProcesses([getppid()])
+    let apps: [[String: Any]] = NSWorkspace.shared.runningApplications.compactMap { app in
+        // Only apps with a Dock presence: background agents and system services
+        // (loginwindow, WindowManager, ...) mean nothing to users here.
+        guard app.activationPolicy == .regular, let id = app.bundleIdentifier, let identity = processStart(app.processIdentifier) else { return nil }
+        return ["id": id, "name": app.localizedName ?? id, "identity": String(app.processIdentifier) + ":" + String(identity), "protected": WakeEffects.protected(app, owners: guardians)]
+    }
+    var lowPower = false
+    if #available(macOS 12.0, *) { lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled }
+    var object: [String: Any] = ["thermal": thermal, "uptimeSeconds": ProcessInfo.processInfo.systemUptime,
+        "externalDisplays": displayOK ? displays.prefix(Int(count)).filter { CGDisplayIsBuiltin($0) == 0 }.count : -1,
+        "lowPowerMode": lowPower, "applications": apps,
+        "displayControl": WakeLights().available("display"), "keyboardControl": WakeLights().available("keyboard"), "audioControl": WakeEffects.canMute(), "appPause": WakeEffects.inputBusy() == false,
+        "knownNetworks": wakeKnownNetworks(),
+        "browsers": wakeBrowserTargets.filter { trustedBrowser($0) != nil }.map { ["id": $0.id, "name": $0.name, "identity": "", "protected": false] }]
+    if let connected = wakeNetworkConnected() { object["networkConnected"] = connected }
+    if let battery { object["onBattery"] = battery }
+    if let percent { object["batteryPercent"] = percent }
+    if let data = try? JSONSerialization.data(withJSONObject: object) { FileHandle.standardOutput.write(data) }
+} else if CommandLine.arguments == [CommandLine.arguments[0], "join-known-network"] {
+    struct Request: Decodable { let ssid: String }
+    do {
+        let request = try JSONDecoder().decode(Request.self, from: FileHandle.standardInput.readData(ofLength: 4096))
+        try joinWakeKnownNetwork(request.ssid)
+        FileHandle.standardOutput.write(Data("{\"ok\":true}".utf8))
+    } catch {
+        if let data = try? JSONSerialization.data(withJSONObject: ["ok": false, "error": (error as NSError).domain] as [String: Any]) { FileHandle.standardOutput.write(data) }
+        exit(1)
+    }
+} else if CommandLine.arguments == [CommandLine.arguments[0], "relaunch-browser"] {
+    struct Request: Decodable { let browserID: String }
+    do {
+        let data = FileHandle.standardInput.readData(ofLength: 4096)
+        let request = try JSONDecoder().decode(Request.self, from: data)
+        try relaunchWakeBrowser(request.browserID)
+        FileHandle.standardOutput.write(Data("{\"ok\":true}".utf8))
+    } catch {
+        let object: [String: Any] = ["ok": false, "error": (error as NSError).domain]
+        if let data = try? JSONSerialization.data(withJSONObject: object) { FileHandle.standardOutput.write(data) }
+        exit(1)
+    }
 } else if CommandLine.arguments == [CommandLine.arguments[0], "serve"] {
     do { try serve() } catch { fputs("AO wake helper stopped; recovery will retry.\n", stderr); exit(1) }
 } else { exit(2) }
