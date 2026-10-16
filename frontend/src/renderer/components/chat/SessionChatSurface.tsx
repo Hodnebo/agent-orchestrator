@@ -33,6 +33,7 @@ import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { listsModelVariants } from "../../lib/model-variants";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
@@ -603,7 +604,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (pendingSwitch) {
 						// Nothing was sent if the switch fails, so the draft must stay editable
 						// instead of being held as a delivery that might have gone through.
-						const { harness: targetHarness, model, effort, fastMode, autoCompactWindow } = pendingSwitch;
+						const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
+						// Match the displayed effort, as the terminal switch does. Cursor's
+						// variant model id already carries its effort.
+						const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
 						await providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, autoCompactWindow })
 							.catch((error) => { throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED }); });
 						setChosenSwitch(undefined);

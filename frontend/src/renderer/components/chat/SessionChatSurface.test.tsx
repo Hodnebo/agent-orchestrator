@@ -7,6 +7,7 @@ import type { ChatConfigOption, ChatModel, ConversationMessage, ConversationSnap
 import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
+import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 const LINK = "http://localhost:5173";
@@ -38,6 +39,7 @@ const {
 	getMock,
 	invalidateCatalogsMock,
 	postMock,
+	providerSwitchMock,
 	workspacePathsState,
 	conversationState,
 	conversationCommandState,
@@ -47,6 +49,7 @@ const {
 	getMock: vi.fn(),
 	invalidateCatalogsMock: vi.fn(),
 	postMock: vi.fn(),
+	providerSwitchMock: vi.fn(),
 	workspacePathsState: { paths: [] as string[] },
 	conversationCommandState: {
 		busy: false,
@@ -78,6 +81,7 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { hasWork: boolean }[],
+	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
@@ -106,7 +110,7 @@ vi.mock("../../hooks/useConversation", () => ({
 	}),
 	useConversationCommands: () => conversationCommandState,
 	useProviderSwitchCommand: () => ({
-		mutateAsync: vi.fn(),
+		mutateAsync: providerSwitchMock,
 		isPending: false,
 		error: null,
 		reset: vi.fn(),
@@ -128,6 +132,7 @@ vi.mock("./ChatWorkspace", async () => {
 		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
 		ChatWorkspace: ({
+			agentSwitch,
 			agentInputDisabled,
 			headerActions,
 			sessionTabAction,
@@ -145,6 +150,7 @@ vi.mock("./ChatWorkspace", async () => {
 			onSend,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -161,6 +167,7 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -230,6 +237,8 @@ beforeEach(() => {
 		response: { status: 200 },
 	}));
 	postMock.mockReset().mockResolvedValue({ data: {}, error: undefined });
+	providerSwitchMock.mockReset().mockResolvedValue({});
+	sideMocks.agentSwitch = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -249,6 +258,24 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+});
+
+describe("SessionChatSurface pending switch effort", () => {
+	it.each([
+		{ harness: "codex", effort: undefined, shownEffort: "low", expected: "low" },
+		{ harness: "codex", effort: "high", shownEffort: "low", expected: "high" },
+		{ harness: "cursor", effort: undefined, shownEffort: "high", expected: undefined },
+	])("sends $harness effort $expected from the pending picker", async ({ harness, effort, shownEffort, expected }) => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness, model: "chosen-model", effort, shownEffort });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
+		});
+		expect(providerSwitchMock).toHaveBeenCalledWith(expect.objectContaining({ targetHarness: harness, effort: expected }));
+	});
 });
 
 describe("SessionChatSurface prompt suggestions", () => {
