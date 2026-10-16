@@ -3097,6 +3097,12 @@ type UpdateHarnessDefaultRequest struct {
 	// DisabledModels lists the model ids (each up to 256 characters) clients
 	// should leave out of their pickers. An empty list offers every catalog model.
 	DisabledModels *[]string `json:"disabledModels" required:"true" maxItems:"20000"`
+	// DefaultModel is the model new sessions run when nothing more specific
+	// names one; empty leaves it to the agent. Omitted keeps the saved value.
+	DefaultModel *string `json:"defaultModel,omitempty" maxLength:"256"`
+	// DefaultEffort goes with DefaultModel; empty leaves it to the model.
+	// Omitted keeps the saved value.
+	DefaultEffort *string `json:"defaultEffort,omitempty" maxLength:"64"`
 }
 
 // UpdateCloudOfferingRequest flips the user's cloud toggle.

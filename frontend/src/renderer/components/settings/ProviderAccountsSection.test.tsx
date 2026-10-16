@@ -688,16 +688,17 @@ describe("plan and activity", () => {
 		await user.click(within(detail()).getByRole("button", { name: "Manage plan" }));
 		expect(mock.open).toHaveBeenLastCalledWith("https://claude.ai/settings/usage");
 		for (const fact of ["PlanTeam", "RenewsNov 14, 2030", "OrganizationAcme", "AddedSep 3, 2030"]) expect(aside()).toHaveTextContent(fact);
-		// The models it can use: six by name, the rest counted and named on pointing.
+		// The models it can use: six by name, the rest counted; they open the Models tab.
 		expect(aside()).toHaveTextContent("Modelsopussonnethaikuopus-4sonnet-4haiku-4+2");
-		expect(within(aside()).getByText("+2")).toHaveAttribute("title", "opus-3, haiku-3");
+		expect(within(aside()).getByRole("button", { name: "Open models" })).toHaveTextContent("+2");
 		// Renewing the sign-in is a row among the account's own, which says what it does and when it last happened.
 		expect(detail()).toHaveTextContent(/AccountDisplay name.*Signed in as.*Renew sign-inGets a fresh login from Claude\. Last renewed 12 minutes ago\.RenewSign out/);
 		await user.click(within(detail()).getByRole("button", { name: "Renew" }));
 		expect(await screen.findByText("Sign-in renewed.")).toBeInTheDocument();
 		expect(actions("refresh-sign-in")).toEqual([["c", { action: "refresh-sign-in" }]]);
-		// Its recent requests are on the Usage tab.
-		await showTab(user, "Usage");
+		// Its recent requests are on the Usage tab, which the running sessions row opens.
+		await user.click(within(detail()).getByRole("button", { name: "Open usage" }));
+		expect(within(detail()).getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
 		expect(aside()).toHaveTextContent("RequestsLast 3 hours163 failed");
 		expect(aside()).not.toHaveTextContent("Plan");
 		// An API key has no limits and no sign-in to renew, but its activity is known.

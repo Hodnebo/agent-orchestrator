@@ -4557,6 +4557,8 @@ export interface components {
             repoPath: string;
         };
         HarnessDefault: {
+            defaultEffort?: string;
+            defaultModel?: string;
             disabledModels?: string[];
         };
         IdentityResponse: {
@@ -6295,6 +6297,8 @@ export interface components {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
+            defaultEffort?: null | string;
+            defaultModel?: null | string;
             disabledModels: null | string[];
         };
         UpdateProjectSettingsInput: {

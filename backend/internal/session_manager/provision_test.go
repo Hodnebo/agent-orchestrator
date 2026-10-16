@@ -343,6 +343,36 @@ func TestResolveAgentConfigValidatesAgainstTheChosenAccountsCatalogue(t *testing
 	}
 }
 
+type agentModelDefault struct {
+	SessionModeDefaults
+	model, effort string
+}
+
+func (d agentModelDefault) HarnessModelDefault(context.Context, domain.AgentHarness) (string, string) {
+	return d.model, d.effort
+}
+
+func TestResolveAgentConfigStartsOnTheAgentDefaultWhenTheAccountCanRunIt(t *testing.T) {
+	catalog := tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-x", Efforts: []string{"low", "high"}, IsDefault: true}, {ID: "claude-y", Efforts: []string{"low"}}}}}
+	m := &Manager{modelCatalog: catalog, defaults: agentModelDefault{model: "claude-y", effort: "low"}}
+	spawn := ports.SpawnConfig{ProjectID: "p", Harness: domain.HarnessClaudeCode}
+	resolved, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{})
+	if err != nil || resolved.Model != "claude-y" || resolved.Effort != "low" {
+		t.Fatalf("resolved = %#v err = %v, want the agent default", resolved, err)
+	}
+	// A named model wins over the default.
+	spawn.AgentConfig = ports.AgentConfig{Model: "claude-x"}
+	if resolved, err = m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{}); err != nil || resolved.Model != "claude-x" || resolved.Effort != "" {
+		t.Fatalf("resolved = %#v err = %v, want the named model", resolved, err)
+	}
+	// An account that does not list the default starts on the agent's own.
+	spawn.AgentConfig = ports.AgentConfig{}
+	m.defaults = agentModelDefault{model: "claude-z", effort: "high"}
+	if resolved, err = m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{}); err != nil || resolved.Model != "" || resolved.Effort != "" {
+		t.Fatalf("resolved = %#v err = %v, want the default dropped", resolved, err)
+	}
+}
+
 func TestResolveAgentConfigPassesAnEffortOnWhenTheAccountsCatalogueNamesNoDefault(t *testing.T) {
 	models := []ports.AgentModelInfo{{ID: "gpt-a", Efforts: []string{"low", "high"}}}
 	project := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}}

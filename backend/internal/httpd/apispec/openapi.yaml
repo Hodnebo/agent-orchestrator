@@ -13465,6 +13465,12 @@ components:
       type: object
     HarnessDefault:
       properties:
+        defaultEffort:
+          maxLength: 64
+          type: string
+        defaultModel:
+          maxLength: 256
+          type: string
         disabledModels:
           items:
             type: string
@@ -17820,6 +17826,16 @@ components:
       type: object
     UpdateHarnessDefaultRequest:
       properties:
+        defaultEffort:
+          maxLength: 64
+          type:
+          - "null"
+          - string
+        defaultModel:
+          maxLength: 256
+          type:
+          - "null"
+          - string
         disabledModels:
           items:
             type: string

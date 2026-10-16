@@ -1,6 +1,6 @@
 import { useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, X, type LucideIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, ChevronRight, CirclePause, Copy, ExternalLink, Laptop, Link2, LoaderCircle, SquareArrowOutUpRight, X, type LucideIcon } from "lucide-react";
 import { accountProvider, canMoveSessions, PROVIDERS, percentLeft, type ProviderAccount, type ProviderLogin } from "../../hooks/useProviderAccounts";
 import { useSessionUsageSummaries } from "../../hooks/useSessionUsageSummaries";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
@@ -319,10 +319,11 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 		[t("providerAccounts.factOrganization"), usage?.organization ? <span className="max-w-36 truncate" title={usage.organization}>{usage.organization}</span> : null],
 		[t("providerAccounts.factAdded"), usage?.addedAt ? formatWhen(usage.addedAt, "day") : null],
 		[t("providerAccounts.factModels"), usage?.models?.length ? (
-			<span className="flex max-w-44 flex-wrap justify-end gap-1">
+			<button type="button" aria-label={t("providerAccounts.openModels")} title={t("providerAccounts.openModels")} onClick={() => onTab("models")}
+				className="-m-1 flex max-w-44 cursor-pointer flex-wrap justify-end gap-1 rounded-md p-1 hover:bg-(--color-bg-secondary) focus-visible:outline-2 focus-visible:outline-ring">
 				{usage.models.slice(0, 6).map((model) => <span key={model} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs">{model}</span>)}
-				{usage.models.length > 6 ? <span title={usage.models.slice(6).join(", ")} className="rounded-[5px] bg-muted px-1.5 py-px text-2xs text-muted-foreground">+{usage.models.length - 6}</span> : null}
-			</span>
+				{usage.models.length > 6 ? <span className="rounded-[5px] bg-muted px-1.5 py-px text-2xs text-muted-foreground">+{usage.models.length - 6}</span> : null}
+			</button>
 		) : null],
 	]);
 	const tokenFacts = tokens ? facts([
@@ -447,6 +448,7 @@ export function AccountDetail({ account, page, tab, onTab, models }: { account: 
 									</Row>
 								) : null}
 								<Row title={t("providerAccounts.runningSessions")} hint={count ? t("providerAccounts.sessionsUsing", { count }) : t("providerAccounts.noSessionsUsing")}>
+									<IconAction name={t("providerAccounts.openUsage")} icon={SquareArrowOutUpRight} onClick={() => onTab("usage")} />
 									{count && others.length ? (
 										<AccountMenu accounts={others} onSelect={(target) => void page.moveSessions(sessions, target, t("providerAccounts.sessionsMoved", { count, name: target.displayName }))}>
 											<Button type="button" variant="secondary" className="gap-1.5" disabled={page.pending}>{t("providerAccounts.moveSessions")}<ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Button>

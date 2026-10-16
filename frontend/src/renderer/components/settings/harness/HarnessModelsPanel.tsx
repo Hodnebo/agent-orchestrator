@@ -63,6 +63,26 @@ export function HarnessModelsPanel({ agentId, hostId, catalogScope = "", install
 	const isModelEnabled = (id: string) => !disabledSet.has(id);
 	const enabledCount = allModelIds.filter(isModelEnabled).length;
 	// `keepOn` stays switched on, so Disable all leaves the pickers one model.
+	// One request at a time, in click order, so an older value never lands last.
+	const queueSave = (body: { disabledModels: string[]; defaultModel?: string; defaultEffort?: string }) => {
+		queuedSaves.current += 1;
+		saveQueue.current = saveQueue.current
+			.then(() => updateHarnessDefault({ agentId, ...body }))
+			.catch(() => undefined)
+			.finally(() => {
+				queuedSaves.current -= 1;
+				if (queuedSaves.current === 0) { setDisabledDraft(undefined); setDefaultDraft(undefined); }
+			});
+	};
+	// The model and effort new sessions start on, for every account of the agent.
+	const [defaultDraft, setDefaultDraft] = useState<{ scope: string; defaultModel: string; defaultEffort: string }>();
+	const savedDefault = defaultDraft?.scope === scope ? defaultDraft : settings?.harnessDefaults?.[agentId];
+	const defaultModel = savedDefault?.defaultModel ?? "";
+	const defaultEffort = savedDefault?.defaultEffort ?? "";
+	const setDefault = (model: string, effort: string) => {
+		setDefaultDraft({ scope, defaultModel: model, defaultEffort: effort });
+		queueSave({ disabledModels: savedDisabledIds, defaultModel: model, defaultEffort: effort });
+	};
 	const setModelsEnabled = (ids: string[], on: boolean, keepOn?: string) => {
 		// Ids the catalog no longer lists stay saved in case it lists them again.
 		const next = new Set(disabledIds);
@@ -74,15 +94,7 @@ export function HarnessModelsPanel({ agentId, hostId, catalogScope = "", install
 		if (allModelIds.every((id) => next.has(id))) return;
 		const saved = [...next];
 		setDisabledDraft({ scope, ids: saved });
-		queuedSaves.current += 1;
-		// One request at a time, in click order, so an older list never lands last.
-		saveQueue.current = saveQueue.current
-			.then(() => updateHarnessDefault({ agentId, disabledModels: saved }))
-			.catch(() => undefined)
-			.finally(() => {
-				queuedSaves.current -= 1;
-				if (queuedSaves.current === 0) setDisabledDraft(undefined);
-			});
+		queueSave({ disabledModels: saved });
 	};
 	const initialModel = allModels?.find((model) => model.isDefault);
 	const initialProviderID = initialModel ? initialModel.provider?.trim() ?? "" : undefined;
@@ -137,7 +149,34 @@ export function HarnessModelsPanel({ agentId, hostId, catalogScope = "", install
 			<span aria-hidden="true" className="ml-auto shrink-0 pl-2 text-xs tabular-nums text-settings-muted">{count}</span>
 		</span>;
 	};
+	const defaultChoices = (allModels ?? []).filter((model) => isConcreteModelID(model.id) && (isModelEnabled(model.id) || model.id === defaultModel));
+	const defaultModelInfo = allModels?.find((model) => model.id === defaultModel);
+	const defaultEfforts = defaultModelInfo?.efforts?.filter((effort) => effort && effort.toLowerCase() !== "default") ?? [];
+	// An account on another plan may not list the agent's default; its sessions then start on the agent's own.
+	const defaultMissing = Boolean(defaultModel && allModels && !defaultModelInfo);
+	const defaultSection = <section className="shrink-0 space-y-2">
+		<h3 className="text-xs font-medium leading-4 text-settings-muted">{t("settings.harness.models.defaultTitle", { agent })}</h3>
+		<div className={HARNESS_CARD_CLASS}>
+			<div className={cn(HARNESS_CARD_ROW_CLASS, "flex-wrap gap-x-4 gap-y-2")}>
+				<span className="min-w-0 flex-1">
+					<span className="block text-sm leading-5 text-settings-label">{t("settings.harness.models.defaultRow")}</span>
+					<span className="block text-xs text-settings-muted">{t(defaultModel ? "settings.harness.models.defaultEveryAccount" : "settings.harness.models.defaultAgentOwn", { agent })}</span>
+				</span>
+				<SettingsOptionMenu aria-label={t("settings.harness.models.defaultModel")} value={defaultModel} menuAlign="end"
+					options={[{ value: "", label: t("settings.harness.models.agentDefault") }, ...(defaultMissing ? [{ value: defaultModel, label: defaultModel }] : []),
+						...defaultChoices.map((model) => ({ value: model.id, label: agentModelDisplayLabel(agentId, model.label) }))]}
+					onChange={(model) => setDefault(model, allModels?.find((item) => item.id === model)?.efforts?.includes(defaultEffort) ? defaultEffort : "")}
+					searchable={defaultChoices.length > 8} />
+				{defaultModel && defaultEfforts.length ? <SettingsOptionMenu aria-label={t("settings.harness.models.defaultEffort")} value={defaultEffort} menuAlign="end"
+					options={[{ value: "", label: t("settings.harness.models.modelDefaultEffort") }, ...defaultEfforts.map((effort) => ({ value: effort, label: effort }))]}
+					onChange={(effort) => setDefault(defaultModel, effort)} /> : null}
+				{defaultModel ? <Button type="button" size="sm" variant="ghost" onClick={() => setDefault("", "")}>{t("settings.harness.models.resetDefault")}</Button> : null}
+			</div>
+			{defaultMissing ? <p role="status" className="px-3 pb-2.5 text-xs text-warning">{t("settings.harness.models.defaultMissing", { model: defaultModel, agent })}</p> : null}
+		</div>
+	</section>;
 	return <div className="flex min-h-0 flex-1 flex-col gap-3">
+		{defaultSection}
 		{showProviders ? <div className="shrink-0 space-y-2">
 			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.provider")}</h3>
 			<SettingsOptionMenu
@@ -188,8 +227,9 @@ export function HarnessModelsPanel({ agentId, hostId, catalogScope = "", install
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
 						</span> : null}
 					</span>
-					{model.efforts?.length ? <span className="shrink-0 text-right text-xs text-settings-muted">
-						{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}
+					{model.efforts?.length ? <span className="flex shrink-0 flex-wrap justify-end gap-1">
+						<span className="sr-only">{t("settings.harness.models.efforts", { levels: model.efforts.join(" · ") })}</span>
+						{model.efforts.map((effort) => <span key={effort} aria-hidden="true" className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-caption text-settings-muted">{effort}</span>)}
 					</span> : null}
 					{isConcreteModelID(model.id) ? <Switch
 						aria-label={t("settings.harness.models.toggleModel", { model: agentModelDisplayLabel(agentId, model.label) })}
