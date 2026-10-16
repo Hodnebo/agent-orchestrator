@@ -105,6 +105,18 @@ describe("bytesToBase64", () => {
  */
 const SUBSCRIBE = { ch: "subscribe", type: "subscribe", topics: ["sessions", "notifications"] };
 
+/**
+ * Frames the daemon pushes on the "sessions" channel: one change_log row per frame,
+ * carried as `session` (backend/internal/terminal/protocol.go, sessionUpdate), never
+ * as a `sessions` list. The literals are the ones the daemon's own golden tests
+ * produce (TestServerMsgSessionFrameWireShape and TestServerMsgProjectEventFrameWireShape
+ * in terminal/protocol_test.go). The daemon omits `sessionId` for a project-level change.
+ */
+const DAEMON_SESSION_FRAME =
+	'{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1","sessionId":"s1","eventType":"session_updated"}}';
+const DAEMON_PROJECT_FRAME =
+	'{"ch":"sessions","type":"snapshot","session":{"seq":8,"projectId":"p1","eventType":"pr_updated"}}';
+
 const config: ServerConfig = { host: "127.0.0.1", httpPort: "3011", muxPort: "14801", password: "" };
 
 class FakeSocket {
@@ -134,7 +146,7 @@ class FakeSocket {
 	}
 }
 
-describe("MuxClient frames", () => {
+describe("MuxClient", () => {
 	beforeEach(() => {
 		FakeSocket.instances = [];
 		vi.useFakeTimers();
@@ -146,113 +158,89 @@ describe("MuxClient frames", () => {
 		vi.unstubAllGlobals();
 	});
 
-	function connected() {
-		const mux = new MuxClient(config, {});
+	function connected(handlers: ConstructorParameters<typeof MuxClient>[1] = {}) {
+		const mux = new MuxClient(config, handlers);
 		mux.connect();
 		const socket = FakeSocket.instances[FakeSocket.instances.length - 1];
 		socket.open();
 		return { mux, socket };
 	}
 
-	it("subscribes with the typed frame the daemon accepts", () => {
-		const { mux, socket } = connected();
-		mux.subscribeSessions();
-		expect(socket.frames()).toEqual([SUBSCRIBE]);
+	describe("frames it sends", () => {
+		it("subscribes with the typed frame the daemon accepts", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			expect(socket.frames()).toEqual([SUBSCRIBE]);
+		});
+
+		it("subscribes again with the same frame after a reconnect", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			socket.onclose?.();
+			vi.advanceTimersByTime(1000); // first reconnect backoff
+			const next = FakeSocket.instances[FakeSocket.instances.length - 1];
+			expect(next).not.toBe(socket);
+			next.open();
+			expect(next.frames()).toEqual([SUBSCRIBE]);
+		});
+
+		it("gives every frame a channel and a type", () => {
+			const { mux, socket } = connected();
+			mux.subscribeSessions();
+			mux.openTerminal("s1", "p1");
+			mux.sendInput("s1", "ls\n", "p1");
+			mux.resize("s1", 80, 24, "p1");
+			vi.advanceTimersByTime(20_000); // the keep-alive ping
+			mux.closeTerminal("s1", "p1");
+			expect(socket.frames()).toEqual([
+				SUBSCRIBE,
+				{ ch: "terminal", id: "s1", type: "open", projectId: "p1", role: "secondary" },
+				{ ch: "terminal", id: "s1", type: "data", data: "bHMK", projectId: "p1" },
+				{ ch: "terminal", id: "s1", type: "resize", cols: 80, rows: 24, projectId: "p1" },
+				{ ch: "system", type: "ping" },
+				{ ch: "terminal", id: "s1", type: "close", projectId: "p1" },
+			]);
+		});
 	});
 
-	it("subscribes again with the same frame after a reconnect", () => {
-		const { mux, socket } = connected();
-		mux.subscribeSessions();
-		socket.onclose?.();
-		vi.advanceTimersByTime(1000); // first reconnect backoff
-		const next = FakeSocket.instances[FakeSocket.instances.length - 1];
-		expect(next).not.toBe(socket);
-		next.open();
-		expect(next.frames()).toEqual([SUBSCRIBE]);
-	});
+	describe("session frames it receives", () => {
+		function subscribed() {
+			const onSessionUpdate = vi.fn();
+			const { mux, socket } = connected({ onSessionUpdate });
+			mux.subscribeSessions();
+			return { onSessionUpdate, socket };
+		}
 
-	it("gives every frame a channel and a type", () => {
-		const { mux, socket } = connected();
-		mux.subscribeSessions();
-		mux.openTerminal("s1", "p1");
-		mux.sendInput("s1", "ls\n", "p1");
-		mux.resize("s1", 80, 24, "p1");
-		vi.advanceTimersByTime(20_000); // the keep-alive ping
-		mux.closeTerminal("s1", "p1");
-		expect(socket.frames()).toEqual([
-			SUBSCRIBE,
-			{ ch: "terminal", id: "s1", type: "open", projectId: "p1", role: "secondary" },
-			{ ch: "terminal", id: "s1", type: "data", data: "bHMK", projectId: "p1" },
-			{ ch: "terminal", id: "s1", type: "resize", cols: 80, rows: 24, projectId: "p1" },
-			{ ch: "system", type: "ping" },
-			{ ch: "terminal", id: "s1", type: "close", projectId: "p1" },
-		]);
-	});
-});
+		it("reports the change the daemon sends for a session", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_SESSION_FRAME);
+			expect(onSessionUpdate.mock.calls).toEqual([
+				[{ seq: 7, projectId: "p1", sessionId: "s1", eventType: "session_updated" }],
+			]);
+		});
 
-/**
- * Frames the daemon pushes on the "sessions" channel: one change_log row per frame,
- * carried as `session` (backend/internal/terminal/protocol.go, sessionUpdate), never
- * as a `sessions` list. The literals are the ones the daemon's own golden tests
- * produce (TestServerMsgSessionFrameWireShape and TestServerMsgProjectEventFrameWireShape
- * in terminal/protocol_test.go). The daemon omits `sessionId` for a project-level change.
- */
-const DAEMON_SESSION_FRAME =
-	'{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1","sessionId":"s1","eventType":"session_updated"}}';
-const DAEMON_PROJECT_FRAME =
-	'{"ch":"sessions","type":"snapshot","session":{"seq":8,"projectId":"p1","eventType":"pr_updated"}}';
+		it("reports a project-level change, which has no session id", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_PROJECT_FRAME);
+			expect(onSessionUpdate.mock.calls).toEqual([[{ seq: 8, projectId: "p1", eventType: "pr_updated" }]]);
+			expect(onSessionUpdate.mock.calls[0][0].sessionId).toBeUndefined();
+		});
 
-describe("MuxClient session frames", () => {
-	beforeEach(() => {
-		FakeSocket.instances = [];
-		vi.useFakeTimers();
-		vi.stubGlobal("WebSocket", FakeSocket);
-	});
+		it("reports one update per frame, in order", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive(DAEMON_SESSION_FRAME);
+			socket.receive(DAEMON_PROJECT_FRAME);
+			expect(onSessionUpdate.mock.calls.map(([u]) => u.seq)).toEqual([7, 8]);
+		});
 
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.unstubAllGlobals();
-	});
-
-	function subscribed() {
-		const onSessionUpdate = vi.fn();
-		const mux = new MuxClient(config, { onSessionUpdate });
-		mux.connect();
-		const socket = FakeSocket.instances[FakeSocket.instances.length - 1];
-		socket.open();
-		mux.subscribeSessions();
-		return { onSessionUpdate, socket };
-	}
-
-	it("reports the change the daemon sends for a session", () => {
-		const { onSessionUpdate, socket } = subscribed();
-		socket.receive(DAEMON_SESSION_FRAME);
-		expect(onSessionUpdate.mock.calls).toEqual([
-			[{ seq: 7, projectId: "p1", sessionId: "s1", eventType: "session_updated" }],
-		]);
-	});
-
-	it("reports a project-level change, which has no session id", () => {
-		const { onSessionUpdate, socket } = subscribed();
-		socket.receive(DAEMON_PROJECT_FRAME);
-		expect(onSessionUpdate.mock.calls).toEqual([[{ seq: 8, projectId: "p1", eventType: "pr_updated" }]]);
-		expect(onSessionUpdate.mock.calls[0][0].sessionId).toBeUndefined();
-	});
-
-	it("reports one update per frame, in order", () => {
-		const { onSessionUpdate, socket } = subscribed();
-		socket.receive(DAEMON_SESSION_FRAME);
-		socket.receive(DAEMON_PROJECT_FRAME);
-		expect(onSessionUpdate.mock.calls.map(([u]) => u.seq)).toEqual([7, 8]);
-	});
-
-	it("drops a sessions frame it cannot read", () => {
-		const { onSessionUpdate, socket } = subscribed();
-		socket.receive('{"ch":"sessions","type":"snapshot"}');
-		socket.receive('{"ch":"sessions","type":"snapshot","session":{"projectId":"p1","eventType":"session_updated"}}');
-		socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":"7","projectId":"p1","eventType":"session_updated"}}');
-		socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"eventType":"session_updated"}}');
-		socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1"}}');
-		expect(onSessionUpdate).not.toHaveBeenCalled();
+		it("drops a sessions frame it cannot read", () => {
+			const { onSessionUpdate, socket } = subscribed();
+			socket.receive('{"ch":"sessions","type":"snapshot"}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"projectId":"p1","eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":"7","projectId":"p1","eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"eventType":"session_updated"}}');
+			socket.receive('{"ch":"sessions","type":"snapshot","session":{"seq":7,"projectId":"p1"}}');
+			expect(onSessionUpdate).not.toHaveBeenCalled();
+		});
 	});
 });

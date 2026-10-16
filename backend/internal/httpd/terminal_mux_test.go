@@ -172,8 +172,9 @@ func TestMuxSubscribeFrame(t *testing.T) {
 		{"typed frame subscribes", `{"ch":"subscribe","type":"subscribe","topics":["sessions","notifications"]}`, 1},
 		// The frame mobile sent before it carried type. The daemon routes on type
 		// and drops it with no error. It is deliberately not accepted: no build
-		// ever sent it (nothing calls subscribeSessions), so accepting it would
-		// heal no client and would loosen the one check every other channel obeys.
+		// ever sent it (subscribeSessions had no caller when this test was
+		// written), so accepting it would heal no client and would loosen the one
+		// check every other channel obeys.
 		{"frame without type is ignored", `{"ch":"subscribe","topics":["sessions","notifications"]}`, 0},
 	}
 	for _, tt := range tests {
