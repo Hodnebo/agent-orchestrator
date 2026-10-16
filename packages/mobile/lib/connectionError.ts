@@ -8,6 +8,7 @@
 // debug the wrong thing.
 
 // Type-only, so erased at runtime: this module stays free of native imports.
+import type { Endpoint } from "./endpoints";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
@@ -225,6 +226,50 @@ export function describeConnectionFailure(
 				showLocalNetworkHint: false,
 			};
 	}
+}
+
+/**
+ * Copy for a scanned code none of whose endpoints answered.
+ *
+ * The phone races every endpoint the code carries, so naming only the first
+ * one (the LAN address) misreports what was tried. And a code with no tunnel
+ * in it — shown by the desktop before remote access was ready — can only ever
+ * work on the machine's own network: telling someone on mobile data to check
+ * their Wi-Fi, without saying the code itself is the limit, sends them to
+ * debug the wrong thing. Seen in the field from a photographed code.
+ */
+export function describeUnreachableCode(
+	endpoints: readonly Endpoint[],
+	platform: "ios" | "android" | string,
+): ConnectionErrorCopy {
+	const local = endpoints.find((e) => e.kind === "lan") ?? endpoints[0];
+	const base = describeConnectionFailure("unreachable", {
+		host: local?.host ?? "",
+		port: local ? String(local.port) : "",
+		platform,
+	});
+	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
+		// Every path failed, the internet one included, so neither Wi-Fi nor the
+		// Local Network permission explains it.
+		return {
+			...base,
+			hint: "Make sure Orchestrator is running on that machine.",
+			message:
+				"Couldn't reach your machine on this network or over the internet. " +
+				"Make sure Orchestrator is running there with Connect Mobile on, then try again.",
+			showLocalNetworkHint: false,
+		};
+	}
+	const viaTailscale = endpoints.some((e) => e.kind === "tailscale");
+	return {
+		...base,
+		title: "This code only works nearby",
+		hint: "Scan a new code once remote access has started.",
+		message:
+			`${local ? `Reached nothing at ${local.host}:${local.port}. ` : ""}` +
+			`This code has no remote address, so it only works on the same Wi-Fi as that machine${viaTailscale ? " or over Tailscale" : ""}. ` +
+			"To connect from anywhere, open Connect Mobile there, wait until it no longer says the code works on this network only, then scan it again.",
+	};
 }
 
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */

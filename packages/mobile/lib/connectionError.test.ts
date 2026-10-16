@@ -3,6 +3,7 @@ import {
 	classifyConnectionFailure,
 	daemonDetail,
 	describeConnectionFailure,
+	describeUnreachableCode,
 	isDesktopUnreachable,
 	isLocalNetworkHost,
 	isUnreachableError,
@@ -184,6 +185,37 @@ describe("describeConnectionFailure", () => {
 			const d = describeConnectionFailure("auth", target({ platform: "ios", host: "192.168.1.5" }));
 			expect(d.showLocalNetworkHint).toBe(false);
 		});
+	});
+});
+
+// The field report: a code photographed before remote access was ready held
+// only LAN and Tailscale addresses, and the phone on mobile data was told to
+// check its Wi-Fi with nothing saying the code itself was the limit.
+describe("describeUnreachableCode", () => {
+	const lan = { kind: "lan" as const, host: "192.168.88.7", port: 3011, secure: false };
+	const tailscale = { kind: "tailscale" as const, host: "100.72.46.7", port: 3011, secure: false };
+	const tunnel = { kind: "tunnel" as const, host: "abc.trycloudflare.com", port: 443, secure: true };
+
+	it("says a code without a remote address only works nearby", () => {
+		const copy = describeUnreachableCode([lan, tailscale], "ios");
+		expect(copy.title).toBe("This code only works nearby");
+		expect(copy.message).toContain("Reached nothing at 192.168.88.7:3011.");
+		expect(copy.message).toContain("no remote address");
+		expect(copy.message).toContain("or over Tailscale");
+		expect(copy.message).toContain("no longer says the code works on this network only");
+		// Still possibly at home with the Local Network prompt denied.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("leaves Tailscale out when the code has no tailnet address", () => {
+		expect(describeUnreachableCode([lan], "android").message).not.toContain("Tailscale");
+	});
+
+	it("does not blame Wi-Fi when the internet path failed too", () => {
+		const copy = describeUnreachableCode([lan, tunnel], "ios");
+		expect(copy.message).toContain("over the internet");
+		expect(copy.message).not.toMatch(/same Wi-Fi/);
+		expect(copy.showLocalNetworkHint).toBe(false);
 	});
 });
 
