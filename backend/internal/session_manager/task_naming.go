@@ -166,15 +166,16 @@ func (m *Manager) completeNamedWorktree(ctx context.Context, info ports.Workspac
 	}
 	if rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
 		for i, step := range rec.ProvisionSteps {
-			if step.ID == domain.SessionProvisionStepWorktree && step.Status != domain.SessionProvisionStepDone {
-				steps := slices.Clone(rec.ProvisionSteps)
-				now := m.clock()
-				steps[i].Status, steps[i].EndedAt = domain.SessionProvisionStepDone, &now
-				if err := m.store.SetSessionProvisionSteps(ctx, rec.ID, steps, now); err != nil {
-					return err
-				}
-				break
+			if step.ID != domain.SessionProvisionStepWorktree || step.Status == domain.SessionProvisionStepDone {
+				continue
 			}
+			steps := slices.Clone(rec.ProvisionSteps)
+			now := m.clock()
+			steps[i].Status, steps[i].EndedAt = domain.SessionProvisionStepDone, &now
+			if err := m.store.SetSessionProvisionSteps(ctx, rec.ID, steps, now); err != nil {
+				return err
+			}
+			break
 		}
 	}
 	return m.completeTaskNaming(ctx, info)

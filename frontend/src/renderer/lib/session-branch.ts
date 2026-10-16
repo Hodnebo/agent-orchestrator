@@ -12,6 +12,7 @@ export function sessionBranchPresentation(session?: WorkspaceSession): { branch?
 	return {
 		branch: unfinished ? undefined : session?.branch,
 		naming: Boolean(unfinished && session?.provisionState !== "failed" && !session?.isTerminated
-			&& session?.activity?.state !== "exited" && session?.statusReadiness !== "unavailable"),
+			&& (session?.provisionState === "provisioning"
+				|| (session?.activity?.state !== "exited" && session?.statusReadiness !== "unavailable"))),
 	};
 }
