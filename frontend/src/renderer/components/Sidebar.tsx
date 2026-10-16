@@ -21,7 +21,7 @@ import {
 	CalendarClock,
 	ChevronRight,
 	Download,
-	FileText,
+	File,
 	Folder,
 	FolderOpen,
 	LogIn,
@@ -1034,7 +1034,7 @@ export function Sidebar({
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isArtifacts}
-							icon={<FileText aria-hidden="true" />}
+							icon={<File aria-hidden="true" />}
 							label={t("artifacts.title")}
 							onClick={selection.goArtifacts}
 							tooltip={isCollapsed ? t("artifacts.title") : undefined}

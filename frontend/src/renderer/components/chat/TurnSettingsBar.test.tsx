@@ -517,6 +517,22 @@ describe("ACP session config options", () => {
 		},
 	);
 
+	it("shows Copilot's Agent and Plan as Plan Mode and keeps AO's approval control", async () => {
+		// The daemon removes Autopilot and allow_all from Copilot's catalog.
+		const uri = "https://agentclientprotocol.com/protocol/session-modes#";
+		const copilotModes: ChatConfigOption = {
+			id: "mode", name: "Mode", category: "mode", type: "select", currentValue: `${uri}agent`,
+			choices: [{ value: `${uri}agent`, name: "Agent" }, { value: `${uri}plan`, name: "Plan" }],
+		};
+		expect(hasProviderPermissionMode([copilotModes])).toBe(false);
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} settings={{}} onChangeConfigOption={onChange} configOptions={[copilotModes]} />);
+		await user.click(screen.getByRole("button", { name: "Model mode for the next turn" }));
+		await user.click(screen.getByRole("switch", { name: "Plan Mode" }));
+		expect(onChange).toHaveBeenLastCalledWith("mode", { value: `${uri}plan` });
+	});
+
 	it("toggles a menu row from the keyboard with Enter and keeps the menu open", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
