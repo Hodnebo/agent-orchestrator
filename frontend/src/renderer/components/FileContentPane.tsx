@@ -300,7 +300,7 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	const mediaKind = source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && (detail.binary || /\.svg$/i.test(path)) && (scope === "combined" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const renderedAvailable = canRenderMarkdown(path, detail);
@@ -329,7 +329,7 @@ export function FileContentPane({
 			source={source}
 			markdownEditing={editing && renderedAvailable}
 			mediaKind={mediaKind}
-			version={detail.mediaVersion ?? (detail.fileFingerprint || detail.size)}
+			version={detail.mediaVersion ?? (mediaKind === "image" ? query.dataUpdatedAt : detail.fileFingerprint || detail.size)}
 		/>
 	);
 	const beginEditing = () => {

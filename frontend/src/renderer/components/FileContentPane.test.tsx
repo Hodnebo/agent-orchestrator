@@ -64,6 +64,24 @@ describe("FileContentPane", () => {
 		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
 	});
 
+	it("previews a workspace SVG while keeping its source editable", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "diagram.svg", status: "unmodified", additions: 0, deletions: 0, size: 6, binary: false, deleted: false, content: "<svg/>", contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "svg-1" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="diagram.svg" sessionId="sess-1" split={false} />);
+		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("/preview/files/diagram.svg?raw=true"));
+		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+		expect(screen.getByRole("textbox", { name: "Edit diagram.svg" })).toHaveValue("<svg/>");
+	});
+
+	it("refreshes a workspace image after a same-size replacement", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "logo.png", status: "unmodified", additions: 0, deletions: 0, size: 100, binary: true, imageMediaType: "image/png", deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "same-metadata" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="logo.png" sessionId="sess-1" split={false} />);
+		const image = await screen.findByRole("img", { name: "logo.png" });
+		const previousSrc = image.getAttribute("src");
+		const client = subscribeMock.mock.calls[0]![1] as QueryClient;
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByRole("img", { name: "logo.png" })).not.toHaveAttribute("src", previousSrc));
+	});
+
 	it.each([{ commitSha: "abc" }, { scope: "staged" as const }, { scope: "committed" as const }])("does not substitute live media for a historical view %j", async (options) => {
 		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "clip.mp4", status: "modified", additions: 0, deletions: 0, size: 100, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false } });
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="clip.mp4" sessionId="sess-1" split={false} {...options} />);
