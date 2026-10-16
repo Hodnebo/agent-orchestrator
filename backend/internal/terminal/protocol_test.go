@@ -85,6 +85,25 @@ func TestServerMsgSessionFrameWireShape(t *testing.T) {
 	}
 }
 
+// A project-level change (a PR event, say) has no session: the daemon omits
+// sessionId rather than sending an empty string. packages/mobile/lib/mux.test.ts
+// pins this literal and the one above.
+func TestServerMsgProjectEventFrameWireShape(t *testing.T) {
+	msg := serverMsg{
+		Ch:      chSessions,
+		Type:    msgSnapshot,
+		Session: &sessionUpdate{Seq: 8, ProjectID: "p1", EventType: "pr_updated"},
+	}
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"ch":"sessions","type":"snapshot","session":{"seq":8,"projectId":"p1","eventType":"pr_updated"}}`
+	if string(raw) != want {
+		t.Fatalf("wire shape:\n got %s\nwant %s", raw, want)
+	}
+}
+
 func TestServerMsgOmitsEmptyOptionalFields(t *testing.T) {
 	raw, err := json.Marshal(serverMsg{Ch: chTerminal, ID: "t1", Type: msgOpened})
 	if err != nil {
