@@ -54,6 +54,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -429,6 +430,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"

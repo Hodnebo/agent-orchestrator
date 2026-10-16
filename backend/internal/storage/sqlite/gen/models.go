@@ -12,6 +12,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+type AgentAccount struct {
+	ID        string
+	Provider  string
+	Home      string
+	Email     string
+	Plan      string
+	CreatedAt time.Time
+}
+
+type AgentAccountDefault struct {
+	Provider  string
+	AccountID string
+}
+
 type AgentInstallJob struct {
 	Target              string
 	Status              string
@@ -692,6 +706,13 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+}
+
+type SessionAgentAccount struct {
+	SessionID string
+	Provider  string
+	AccountID string
+	BoundAt   time.Time
 }
 
 type SessionArtifactVersion struct {
