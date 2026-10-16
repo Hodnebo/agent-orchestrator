@@ -138,3 +138,36 @@ func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
 		}
 	}
 }
+
+func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
+	input := []ports.ChatConfigOption{{
+		ID:      "mode",
+		Current: ports.ChatConfigOptionValue{Select: "yolo"},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "default", Name: "Default"},
+			{Value: "auto_edit", Name: "Auto Edit"},
+			{Value: "yolo", Name: "YOLO"},
+		},
+	}}
+	got := permissionConfigOptions(domain.HarnessAgy, input)
+	want := []struct {
+		mode domain.PermissionMode
+		name string
+	}{
+		{domain.PermissionModeDefault, "Use agent permissions"},
+		{domain.PermissionModeAcceptEdits, "Accept edits"},
+		{domain.PermissionModeAuto, "Auto-approve"},
+	}
+	for i, choice := range got[0].Choices {
+		if choice.PermissionMode != want[i].mode || choice.Name != want[i].name {
+			t.Fatalf("choice %q = (%q, %q), want (%q, %q)", choice.Value, choice.PermissionMode, choice.Name, want[i].mode, want[i].name)
+		}
+	}
+	settings, _ := settingsFromConfigOptions(domain.ConversationSettings{}, got)
+	if settings.ApprovalMode != domain.PermissionModeAuto {
+		t.Fatalf("settings approval = %q, want auto for yolo", settings.ApprovalMode)
+	}
+	if input[0].Choices[2].Name != "YOLO" {
+		t.Fatal("mutated provider catalog")
+	}
+}
