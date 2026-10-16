@@ -55,6 +55,22 @@ describe("FileContentPane", () => {
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
+	it.each(["recording.mp4", "voice.mp3"])("streams a current workspace media file %s in the Files view", async (path) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path, status: "added", additions: 0, deletions: 0, size: 100_000_000, binary: true, deleted: false, content: "", contentTruncated: true, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const media = await screen.findByLabelText(path);
+		expect(media).toHaveAttribute("src", expect.stringContaining(`/api/v1/sessions/sess-1/preview/files/${path}?raw=true`));
+		expect(media).toHaveAttribute("controls");
+		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
+	});
+
+	it.each([{ commitSha: "abc" }, { scope: "staged" as const }, { scope: "committed" as const }])("does not substitute live media for a historical view %j", async (options) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "clip.mp4", status: "modified", additions: 0, deletions: 0, size: 100, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="clip.mp4" sessionId="sess-1" split={false} {...options} />);
+		await waitFor(() => expect(document.querySelector("code")).toBeInTheDocument());
+		expect(screen.queryByLabelText("clip.mp4")).not.toBeInTheDocument();
+	});
+
 	it("shows readable contents while the syntax grammar is still loading and watches a standalone file", async () => {
 		highlightReadyMock.mockReturnValue(false);
 		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "README.md", status: "unmodified", additions: 0, deletions: 0, size: 8, binary: false, deleted: false, content: "read now", contentTruncated: false, diff: "", diffTruncated: false } });

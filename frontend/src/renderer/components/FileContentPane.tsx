@@ -22,6 +22,7 @@ import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { fileMediaKind, type FileMediaKind } from "../lib/file-media";
 import { rememberedFileDisplayMode, useUiStore, type FileDisplayMode } from "../stores/ui-store";
 import { isAbsoluteFileReference } from "../lib/workspace-file-path";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
@@ -36,6 +37,7 @@ import {
 	type FileAnnotationModel,
 } from "./WorkspaceDiffView";
 import { ReadOnlyFileView } from "./ReadOnlyFileView";
+import { FileMediaPreview } from "./FileMediaPreview";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { AoDiffFile } from "./diffs/AoDiffFile";
 import { AO_PIERRE_FILES_REVIEW_CSS } from "./diffs/pierreTheme";
@@ -144,7 +146,7 @@ export function FileContentPane({
 		refetchOnWindowFocus: true,
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
-	const canReadLiveText = Boolean(path) && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "unstaged" || scope === "untracked");
 	const liveText = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
@@ -297,14 +299,18 @@ export function FileContentPane({
 	}
 
 	const detail = query.data;
+	// A historical/staged view must never show the current worktree's media.
+	const mediaKind = source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "unstaged" || scope === "untracked"))
+		? fileMediaKind(path) : undefined;
+	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const renderedAvailable = canRenderMarkdown(path, detail);
-	const hasDisplayModeChoice = !singleView && (detail.status !== "unmodified" || renderedAvailable);
+	const hasDisplayModeChoice = !singleView && !mediaOnly && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
 	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
 	const displayDetail = newerLiveText ? { ...detail, content: liveText.data!.content, size: liveText.data!.size, fileFingerprint: liveText.data!.revision } : detail;
 	const editable = !newerLiveText && detail.editable && Boolean(detail.fileFingerprint) && !(source.kind === "artifact" && source.readOnly);
 	const effectiveMode =
-		(detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
+		mediaOnly || (detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
 	const fileView = (
@@ -322,6 +328,8 @@ export function FileContentPane({
 			hostId={hostId}
 			source={source}
 			markdownEditing={editing && renderedAvailable}
+			mediaKind={mediaKind}
+			version={detail.mediaVersion ?? (detail.fileFingerprint || detail.size)}
 		/>
 	);
 	const beginEditing = () => {
@@ -521,13 +529,14 @@ function artifactOriginOf(source: FilesSource): string | undefined {
 	}
 }
 
-function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource }) {
+function CompleteFileView({ annotation, commitSha, detail, editing, markdownEditing = false, mediaKind, onContentReady, onEditChange, onRevealLineConsumed, revealLine, scope, sessionId, hostId, source, version }: { annotation: FileAnnotationModel; commitSha?: string; detail: WorkspaceFileDetail; editing: boolean; markdownEditing?: boolean; mediaKind?: FileMediaKind; onContentReady?: () => void; onEditChange: (content: string) => void; onRevealLineConsumed?: (requestKey: number) => void; revealLine?: { line: number; requestKey: number }; scope: WorkspaceDiffScope; sessionId: string; hostId?: string; source: FilesSource; version: number | string }) {
 	const { t } = useTranslation();
-	const needsRevision = source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
+	const needsRevision = !mediaKind && source.kind !== "artifact" && (detail.deleted || detail.contentTruncated) && !detail.imageMediaType;
 	const revision = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ commitSha, path: detail.path, scope, sessionId, hostId, side: detail.deleted ? "before" : "after", source, workspaceVersion: detail.workspaceVersion }),
 		enabled: needsRevision,
 	});
+	if (mediaKind && !editing) return <FileMediaPreview hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} version={version} />;
 	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (needsRevision && revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
 	if (needsRevision && revision.data) {

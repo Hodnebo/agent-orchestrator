@@ -66,6 +66,51 @@ describe("ArtifactFileView", () => {
 
 	const RAW_URL = "http://ao-preview-artifact.abc123.localhost:3001/notes.txt?raw=true";
 
+	it.each([
+		["screenshot.png", "img"],
+		["animation.GIF", "img"],
+		["recording.mp4", "video"],
+		["recording.webm", "video"],
+		["voice.mp3", "audio"],
+		["voice.wav", "audio"],
+	])("previews %s as media without reading it as text", async (path, tag) => {
+		const rawUrl = `http://ao-preview-artifact.abc123.localhost:3001/${path}?raw=true`;
+		fetchMock.mockResolvedValue(new Response(null, { headers: { "Content-Length": "104857600" } }));
+
+		renderWithQuery(<ArtifactFileView artifactName={path} path={path} rawUrl={rawUrl} sessionId="sess-1" />);
+
+		const media = await screen.findByLabelText(path);
+		expect(media.tagName.toLowerCase()).toBe(tag);
+		expect(media).toHaveAttribute("src", expect.stringContaining(`${rawUrl}&v=`));
+		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(rawUrl, { method: "HEAD" });
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag !== "img") {
+			expect(media).toHaveAttribute("controls");
+			expect(media).toHaveAttribute("preload", "metadata");
+			expect(media).not.toHaveAttribute("autoplay");
+		}
+	});
+
+	it("previews SVGs as images while keeping their text source editable", async () => {
+		const content = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+		fetchMock.mockResolvedValue(new Response(content));
+		renderWithQuery(<ArtifactFileView artifactName="diagram.svg" path="diagram.svg" rawUrl={RAW_URL} sessionId="sess-1" />);
+		expect(await screen.findByLabelText("diagram.svg")).toHaveAttribute("src", expect.stringContaining(RAW_URL));
+		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+		expect(screen.queryByLabelText("diagram.svg")).not.toBeInTheDocument();
+		expect(document.querySelector("code")).toHaveTextContent(content);
+		expect(fetchMock).toHaveBeenCalledWith(RAW_URL);
+	});
+
+	it("shows a retry action when media fails to load or decode", async () => {
+		fetchMock.mockResolvedValue(new Response(null));
+		renderWithQuery(<ArtifactFileView artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" />);
+		fireEvent.error(await screen.findByLabelText("clip.mp4"));
+		expect(screen.getByText("Unable to load this file.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(screen.getByLabelText("clip.mp4")).toBeInTheDocument();
+	});
+
 	it("fetches a .txt artifact through its rawUrl and renders its content", async () => {
 		fetchMock.mockResolvedValue(new Response("hello world", { status: 200 }));
 

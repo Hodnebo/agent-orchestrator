@@ -5,6 +5,7 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { fileMediaKind } from "../lib/file-media";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -39,6 +40,8 @@ export type WorkspaceFilesResponse = Omit<components["schemas"]["ListWorkspaceFi
 	refreshing?: boolean;
 };
 export type WorkspaceFileDetail = Omit<components["schemas"]["WorkspaceFileResponse"], "editable" | "fileFingerprint" | "workspaceVersion"> & {
+	/** HTTP validator for streamed artifacts, so an unchanged refetch keeps playing. */
+	mediaVersion?: string;
 	editable?: boolean;
 	previousPath?: string;
 	compareMode?: WorkspaceCompareMode;
@@ -153,9 +156,15 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 // form, a workspace-relative path of the same name can never resolve there.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	const response = await fetch(rawUrl);
+	// SVG keeps its editable text source as well as its image preview.
+	const media = fileMediaKind(path) && !/\.svg$/i.test(path);
+	// Native media elements stream the body themselves, including range requests
+	// when seeking. Only fetch metadata here; text limits do not apply to media.
+	const response = media ? await fetch(rawUrl, { method: "HEAD" }) : await fetch(rawUrl);
 	if (!response.ok) throw new Error(errorMessage);
-	const { binary, bytes, content, size, truncated } = await readArtifactTextResponse(response);
+	const { binary, bytes, content, size, truncated } = media
+		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
+		: await readArtifactTextResponse(response);
 	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
 	return {
@@ -169,6 +178,7 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		diffTruncated: false,
 		editable,
 		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
+		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,
 		size,
