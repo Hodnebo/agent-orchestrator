@@ -32,6 +32,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/aoagents/agent-orchestrator/backend/pkg/tasknaming"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/agentbrowser"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/agentbrowser/host"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/notificationoutbox"
@@ -69,6 +70,17 @@ var workerCapabilities = []string{
 }
 
 func main() {
+	// Shared Chat drivers re-exec this binary to own their provider process.
+	// Handle that internal command before requiring Cloud worker bootstrap.
+	if len(os.Args) > 1 && os.Args[1] == "chat-host" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := tasknaming.RunProviderHost(ctx, os.Args[2:]); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// The worker runs itself as the agent browser's service (agentbrowser.Service).
 	if len(os.Args) > 1 && os.Args[1] == agentbrowser.HostCommand {
 		host.Main(os.Args[2:])

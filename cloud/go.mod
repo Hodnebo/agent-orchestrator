@@ -46,4 +46,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/aoagents/agent-orchestrator/backend => github.com/Untrivial-ai/agent-orchestrator/backend v0.0.0-20261016184420-31f03c78adb3
+replace github.com/aoagents/agent-orchestrator/backend => github.com/Untrivial-ai/agent-orchestrator/backend v0.0.0-20261016202139-f11d649d4d5a
