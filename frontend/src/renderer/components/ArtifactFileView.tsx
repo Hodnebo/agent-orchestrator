@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
+import { isSvgPath } from "../lib/image-files";
 
-// Mirrors FileContentPane's own canRenderMarkdown extension check: a markdown
-// artifact should open already rendered, the same way GitHub opens a README,
-// rather than making the reader click over to the "Rendered" tab themselves.
+// Mirrors FileContentPane's own canRenderMarkdown/canRenderSvg extension checks:
+// a markdown or SVG artifact should open already rendered, the same way GitHub
+// opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) ? "rendered" : "file";
+	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) ? "rendered" : "file";
 }
 
 /**

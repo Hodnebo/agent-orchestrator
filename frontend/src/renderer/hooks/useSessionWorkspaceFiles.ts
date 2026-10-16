@@ -5,6 +5,7 @@ import type { components } from "../../api/schema";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { isRasterImagePath } from "../lib/image-files";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -155,6 +156,11 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 	if (!rawUrl) throw new Error(errorMessage);
 	const response = await fetch(rawUrl);
 	if (!response.ok) throw new Error(errorMessage);
+	// An image renders from rawUrl in an <img>, so its bytes aren't read here.
+	if (isRasterImagePath(path)) {
+		void response.body?.cancel();
+		return artifactImageDetail(sessionId, path, response);
+	}
 	const { binary, bytes, content, size, truncated } = await readArtifactTextResponse(response);
 	// Only a complete text file can be edited: the save sends it back whole.
 	const editable = !binary && !truncated;
@@ -172,6 +178,29 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		path,
 		sessionId,
 		size,
+		status: "unmodified",
+		workspaceVersion: "",
+	};
+}
+
+function artifactImageDetail(sessionId: string, path: string, response: Response): WorkspaceFileDetail {
+	const contentType = response.headers.get("content-type") ?? "";
+	const size = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+	return {
+		additions: 0,
+		binary: true,
+		content: "",
+		contentTruncated: false,
+		deleted: false,
+		deletions: 0,
+		diff: "",
+		diffTruncated: false,
+		editable: false,
+		fileFingerprint: "",
+		imageMediaType: contentType.startsWith("image/") ? contentType : "image",
+		path,
+		sessionId,
+		size: Number.isFinite(size) ? size : 0,
 		status: "unmodified",
 		workspaceVersion: "",
 	};
