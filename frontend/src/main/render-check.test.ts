@@ -278,14 +278,17 @@ describe("checkRender", () => {
 });
 
 describe("CONTENT_HEIGHT_SCRIPT", () => {
-	const measure = (documentElement: { scrollHeight: number; clientHeight: number; rectHeight: number }) =>
-		new Function("document", `return ${CONTENT_HEIGHT_SCRIPT}`)({
-			documentElement: {
-				scrollHeight: documentElement.scrollHeight,
-				clientHeight: documentElement.clientHeight,
-				getBoundingClientRect: () => ({ height: documentElement.rectHeight }),
+	const measure = (documentElement: { scrollHeight: number; clientHeight: number; rectHeight: number }, innerHeight = documentElement.clientHeight) =>
+		new Function("document", "window", `return ${CONTENT_HEIGHT_SCRIPT}`)(
+			{
+				documentElement: {
+					scrollHeight: documentElement.scrollHeight,
+					clientHeight: documentElement.clientHeight,
+					getBoundingClientRect: () => ({ height: documentElement.rectHeight }),
+				},
 			},
-		});
+			{ innerHeight },
+		);
 
 	it("reports a short page's own height, not the viewport's", () => {
 		expect(measure({ scrollHeight: 800, clientHeight: 800, rectHeight: 300 })).toBe(300);
@@ -293,6 +296,11 @@ describe("CONTENT_HEIGHT_SCRIPT", () => {
 
 	it("reports a tall page's scroll height", () => {
 		expect(measure({ scrollHeight: 1500, clientHeight: 800, rectHeight: 1500 })).toBe(1500);
+	});
+
+	it("includes the horizontal scrollbar gutter without growing again after the frame fits", () => {
+		expect(measure({ scrollHeight: 300, clientHeight: 72, rectHeight: 300 }, 80)).toBe(308);
+		expect(measure({ scrollHeight: 300, clientHeight: 300, rectHeight: 300 }, 308)).toBe(308);
 	});
 
 	it("rounds a fractional height up", () => {

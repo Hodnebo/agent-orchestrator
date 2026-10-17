@@ -72,7 +72,7 @@
   var last;
   function report() {
     var r = document.documentElement;
-    var h = Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
+    var h = Math.ceil((r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height) + (window.innerHeight - r.clientHeight));
     if (h === last) return;
     last = h;
     window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: h } }, "*");
