@@ -348,8 +348,19 @@ func ConfigureWorkerGit(
 	}
 	if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
 		if _, err := runner.Run(ctx, workspace, nil, "checkout", "--no-track", "-B", branch, remote); err != nil {
-			return fmt.Errorf("%w: %s exists on the repository but could not be checked out from origin/%s: %v",
-				ErrSessionBranchSwitch, branch, branch, err)
+			if !GeneratedSessionBranch(sessionID, branch) {
+				return fmt.Errorf("%w: %s exists on the repository but could not be checked out from origin/%s: %v",
+					ErrSessionBranchSwitch, branch, branch, err)
+			}
+			// The session's own generated branch, pushed before its sandbox
+			// was re-created: start it at HEAD as sessions always did, and
+			// tell the worker, rather than stop a session nobody asked to
+			// continue that branch.
+			if _, fallbackErr := runner.Run(ctx, workspace, nil, "checkout", "-B", branch); fallbackErr != nil {
+				return fmt.Errorf("configure worker Git repository: %w", fallbackErr)
+			}
+			return fmt.Errorf("%w: %s could not continue from origin/%s and starts from the default branch: %v",
+				ErrSessionBranchFellBack, branch, branch, err)
 		}
 		return nil
 	}
@@ -363,6 +374,23 @@ func ConfigureWorkerGit(
 // branch: its existing local branch, or the commits already pushed to it, so
 // the session must not start on a branch cut from somewhere else.
 var ErrSessionBranchSwitch = errors.New("the session branch could not be checked out")
+
+// ErrSessionBranchFellBack is not a failure: the session's own generated
+// branch could not continue its pushed commits and started from the default
+// branch instead. The worker logs it and carries on.
+var ErrSessionBranchFellBack = errors.New("the session branch started from the default branch")
+
+// GeneratedSessionBranch reports whether branch is the one the control plane
+// generates for this session, <prefix>/<first 8 characters of its id>, as
+// opposed to a branch someone asked the session to continue.
+func GeneratedSessionBranch(sessionID, branch string) bool {
+	id := strings.TrimSpace(sessionID)
+	if len(id) < 8 {
+		return false
+	}
+	prefix, short, ok := strings.Cut(strings.TrimSpace(branch), "/")
+	return ok && prefix != "" && !strings.Contains(short, "/") && short == id[:8]
+}
 
 // ErrSessionBranchIsBase means an additional repository's base branch has the
 // session branch's name, so the session works on that repository at its base

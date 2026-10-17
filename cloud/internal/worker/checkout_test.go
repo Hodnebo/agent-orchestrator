@@ -327,6 +327,57 @@ func TestConfigureWorkerGitFailsWhenLocalChangesBlockRemoteBranch(t *testing.T) 
 	}
 }
 
+// The session's own generated branch, pushed before its sandbox was
+// re-created, starts from the default branch when local files block
+// continuing it: the session was not asked to continue that branch, so it
+// starts as sessions always did and the worker only logs it.
+func TestConfigureWorkerGitFallsBackForTheGeneratedBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	if err := os.WriteFile(filepath.Join(pusher, "README.md"), []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "commit", "-qam", "remote edit")
+	gitRun(t, pusher, "push", "-q", "origin", "HEAD:refs/heads/ao/1234abcd")
+
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+		filepath.Join(home, ".ao"), "https://cp.example.com", "1234abcd-0000-4000-8000-000000000000", "ao/1234abcd")
+	if !errors.Is(err, ErrSessionBranchFellBack) || errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchFellBack", err)
+	}
+	head, err := exec.Command("git", "-C", workspace, "symbolic-ref", "--short", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(head)) != "ao/1234abcd" {
+		t.Fatalf("HEAD is on %q (%v), want the generated branch", head, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(content) != "local edit\n" {
+		t.Fatalf("local change lost: %q, %v", content, err)
+	}
+}
+
+func TestGeneratedSessionBranch(t *testing.T) {
+	id := "1234abcd-0000-4000-8000-000000000000"
+	for branch, want := range map[string]bool{
+		"ao/1234abcd": true, "team/1234abcd": true, "ao/1234abce": false,
+		"feature/x": false, "1234abcd": false, "ao/x/1234abcd": false, "": false,
+	} {
+		if got := GeneratedSessionBranch(id, branch); got != want {
+			t.Fatalf("GeneratedSessionBranch(%q) = %v, want %v", branch, got, want)
+		}
+	}
+	if GeneratedSessionBranch("short", "ao/short") {
+		t.Fatal("a session id shorter than 8 characters matched")
+	}
+}
+
 // A restarted worker whose agent left HEAD on another branch switches back to
 // the session branch as it is, instead of resetting it to that HEAD.
 func TestConfigureWorkerGitRestartKeepsSessionBranchCommits(t *testing.T) {

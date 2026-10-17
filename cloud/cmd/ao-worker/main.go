@@ -689,7 +689,10 @@ func prepareWorkspace(
 		if err := worker.ConfigureWorkerGit(
 			ctx, worker.ExecGitRunner{}, workspace, dataDir, publicURL,
 			bootstrap.SessionID, bootstrap.Launch.Branch,
-		); err != nil {
+		); errors.Is(err, worker.ErrSessionBranchFellBack) {
+			logger.Warn("session branch could not continue its pushed commits; started from the default branch",
+				"branch", bootstrap.Launch.Branch, "error", err)
+		} else if err != nil {
 			return fmt.Errorf("configure repository tooling: %w", err)
 		}
 		// Multi-repo dev kit: clone any additional repositories alongside the
