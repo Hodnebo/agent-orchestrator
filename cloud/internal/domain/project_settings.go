@@ -557,7 +557,9 @@ func SessionBranchProblem(name, defaultBranch, prefix string, repositoryBases []
 		}
 	}
 	lower := strings.ToLower(name)
-	if lower == "head" || strings.HasSuffix(lower, "_head") {
+	// git gives HEAD and the *_HEAD pseudo-refs (FETCH_HEAD, ORIG_HEAD) their
+	// meaning only as single-component names; feature/table_head is fine.
+	if !strings.Contains(lower, "/") && (lower == "head" || strings.HasSuffix(lower, "_head")) {
 		return SessionBranchInvalidName
 	}
 	for _, refPrefix := range refLikeBranchPrefixes {

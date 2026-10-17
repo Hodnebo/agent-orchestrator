@@ -139,6 +139,11 @@ func (s *Store) RestoreSession(
 	orgID, sessionID string,
 ) error {
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		// Serialize with session creates (createSessionTx takes the same lock)
+		// so a restore and a create cannot both take one requested branch.
+		if err := lockOrgTx(ctx, tx, orgID); err != nil {
+			return err
+		}
 		// Restore reverses a delete, so it is only valid on a TERMINATED session.
 		// Gating on is_terminated=true (with the row lock this UPDATE takes) makes
 		// restore idempotent: once the first restore un-terminates the session, a
@@ -173,6 +178,7 @@ func (s *Store) RestoreSession(
 				 AND other.id <> restored.id
 				 AND other.is_terminated = false
 				 AND lower(other.branch) = lower(restored.branch)
+				 AND `+sessionHoldsBranchSQL("other")+`
 				WHERE restored.id = $1 AND restored.org_id = $2
 				ORDER BY other.created_at LIMIT 1`,
 				sessionID, orgID,

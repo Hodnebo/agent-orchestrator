@@ -689,9 +689,8 @@ func prepareWorkspace(
 		if err := worker.ConfigureWorkerGit(
 			ctx, worker.ExecGitRunner{}, workspace, dataDir, publicURL,
 			bootstrap.SessionID, bootstrap.Launch.Branch,
-		); errors.Is(err, worker.ErrSessionBranchFellBack) {
-			logger.Warn("session branch could not continue its pushed commits; started from the default branch",
-				"branch", bootstrap.Launch.Branch, "error", err)
+		); errors.Is(err, worker.ErrSessionBranchFellBack) || errors.Is(err, worker.ErrSessionBranchStashed) {
+			logger.Warn("session branch checkout needed a fallback", "branch", bootstrap.Launch.Branch, "error", err)
 		} else if err != nil {
 			return fmt.Errorf("configure repository tooling: %w", err)
 		}
@@ -777,6 +776,13 @@ func prepareReusedWorkspace(
 			logger.Warn("checkout reuse: could not move the session branch to the latest remote commits", "error", err)
 		}
 		reuse.AdoptedNow, reuse.BranchCreated, reuse.AdoptedAt = false, false, ""
+	}
+	// A branch the session was asked to continue must hold its pushed
+	// commits; the session's own generated branch may start fresh.
+	if !worker.GeneratedSessionBranch(bootstrap.SessionID, bootstrap.Launch.Branch) {
+		if err := worker.CheckoutContinuesRemoteBranch(ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch); err != nil {
+			return err
+		}
 	}
 	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, true)
 	return nil

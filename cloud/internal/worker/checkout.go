@@ -341,10 +341,17 @@ func ConfigureWorkerGit(
 	// the default branch, which would hide the remote work and fail every push.
 	// Only a new branch starts at HEAD.
 	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := runner.Run(ctx, workspace, nil, "checkout", branch); err == nil {
+			return nil
+		} else if stashErr := stashBeforeSessionBranch(ctx, runner, workspace, sessionID, branch); stashErr != nil {
+			return fmt.Errorf("%w: switch to %s: %v", ErrSessionBranchSwitch, branch, err)
+		}
+		// The agent left uncommitted changes on another branch that block the
+		// switch back: they are kept in a session-named stash.
 		if _, err := runner.Run(ctx, workspace, nil, "checkout", branch); err != nil {
 			return fmt.Errorf("%w: switch to %s: %v", ErrSessionBranchSwitch, branch, err)
 		}
-		return nil
+		return fmt.Errorf("%w: uncommitted changes that blocked switching back to %s were stashed", ErrSessionBranchStashed, branch)
 	}
 	if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
 		if _, err := runner.Run(ctx, workspace, nil, "checkout", "--no-track", "-B", branch, remote); err != nil {
@@ -374,6 +381,21 @@ func ConfigureWorkerGit(
 // branch: its existing local branch, or the commits already pushed to it, so
 // the session must not start on a branch cut from somewhere else.
 var ErrSessionBranchSwitch = errors.New("the session branch could not be checked out")
+
+// stashBeforeSessionBranch stashes tracked and untracked changes under a
+// session-named message so the checkout can switch back to the session branch.
+func stashBeforeSessionBranch(ctx context.Context, runner GitRunner, dir, sessionID, branch string) error {
+	message := "ao-session " + sessionID + ": changes found before switching back to " + branch +
+		" at " + time.Now().UTC().Format(time.RFC3339)
+	_, err := runner.Run(ctx, dir, nil,
+		"-c", "user.name="+cloudGitAuthorName, "-c", "user.email="+cloudGitAuthorEmail,
+		"stash", "push", "--include-untracked", "--message", message)
+	return err
+}
+
+// ErrSessionBranchStashed is not a failure: changes that blocked switching back
+// to the session branch were stashed under a session-named message.
+var ErrSessionBranchStashed = errors.New("changes were stashed to switch back to the session branch")
 
 // ErrSessionBranchFellBack is not a failure: the session's own generated
 // branch could not continue its pushed commits and started from the default

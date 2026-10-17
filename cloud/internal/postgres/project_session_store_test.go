@@ -126,6 +126,18 @@ func TestCreateSessionRefusesABranchInUseOrARepositoryBase(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT is_terminated FROM ao_sessions WHERE id = $1`, first.ID).Scan(&terminated); err != nil || !terminated {
 		t.Fatalf("a refused restore left the session terminated = %v (%v)", terminated, err)
 	}
+	// ao kill only marks the session's sandboxes deleted; its branch is free
+	// for the next spawn before teardown finishes.
+	var sandboxes int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_sandboxes WHERE session_id = $1`, second.ID).Scan(&sandboxes); err != nil || sandboxes == 0 {
+		t.Fatalf("the session has %d sandboxes (%v), want at least one", sandboxes, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'deleted' WHERE session_id = $1`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create("feature/shared"); err != nil {
+		t.Fatalf("a killed session still holds its branch: %v", err)
+	}
 	if _, err := admin.Exec(ctx,
 		`UPDATE ao_projects SET config = config || '{"repos":[{"url":"https://github.com/acme/julian","branch":"develop"}]}'::jsonb WHERE id = $1`,
 		fixture.projectID,

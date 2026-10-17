@@ -251,7 +251,8 @@ func TestSessionBranchProblemSaysWhy(t *testing.T) {
 		"ORIG_HEAD":         SessionBranchInvalidName,
 		"MERGE_HEAD":        SessionBranchInvalidName,
 		"head":              SessionBranchInvalidName,
-		"feature/AUTO_HEAD": SessionBranchInvalidName,
+		"feature/AUTO_HEAD": "",
+		"fix/table_head":    "",
 		"-x":                SessionBranchInvalidName,
 		"a..b":              SessionBranchInvalidName,
 	} {

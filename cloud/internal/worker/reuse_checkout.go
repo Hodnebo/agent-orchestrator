@@ -346,10 +346,21 @@ func AdvanceAdoptedCheckout(ctx context.Context, runner GitRunner, workspace, br
 	if target != "" && created && strings.TrimSpace(adoptedAt) != "" {
 		head, headErr := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
 		status, statusErr := runner.Run(ctx, workspace, nil, "status", "--porcelain", "--untracked-files=no")
-		if headErr == nil && statusErr == nil && strings.TrimSpace(head) == strings.TrimSpace(adoptedAt) &&
+		targetSHA, targetErr := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", target+"^{commit}")
+		if headErr == nil && statusErr == nil && targetErr == nil && strings.TrimSpace(head) == strings.TrimSpace(adoptedAt) &&
 			strings.TrimSpace(status) == "" {
-			_, err := runner.Run(ctx, workspace, nil, "checkout", "--quiet", "--no-track", "-B", branch, target)
-			return err
+			// update-ref with the old value is an atomic compare-and-swap: a
+			// commit that landed since the check above makes it fail, and the
+			// branch then only fast-forwards below. read-tree then brings the
+			// clean working tree from the adopted commit to the target.
+			from, to := strings.TrimSpace(adoptedAt), strings.TrimSpace(targetSHA)
+			if _, err := runner.Run(ctx, workspace, nil, "update-ref", "refs/heads/"+branch, to, from); err == nil {
+				if _, err := runner.Run(ctx, workspace, nil, "read-tree", "-m", "-u", from, to); err != nil {
+					_, _ = runner.Run(ctx, workspace, nil, "update-ref", "refs/heads/"+branch, from, to)
+					return err
+				}
+				return nil
+			}
 		}
 	}
 	if target == "" {
@@ -360,6 +371,22 @@ func AdvanceAdoptedCheckout(ctx context.Context, runner GitRunner, workspace, br
 	}
 	_, err = runner.Run(ctx, workspace, nil, "merge", "--ff-only", "--quiet", target)
 	return err
+}
+
+// CheckoutContinuesRemoteBranch reports an ErrSessionBranchSwitch error when
+// origin has branch but the checkout's HEAD does not contain its commits: a
+// session asked to continue that branch would otherwise work, and fail every
+// push, on a branch started somewhere else.
+func CheckoutContinuesRemoteBranch(ctx context.Context, runner GitRunner, workspace, branch string) error {
+	remote := remoteBranchRef(ctx, runner, workspace, strings.TrimSpace(branch))
+	if remote == "" {
+		return nil
+	}
+	if _, err := runner.Run(ctx, workspace, nil, "merge-base", "--is-ancestor", remote, "HEAD"); err != nil {
+		return fmt.Errorf("%w: %s exists on the repository but the checkout does not contain its commits; the template's checkout may hold changes that block switching to it",
+			ErrSessionBranchSwitch, branch)
+	}
+	return nil
 }
 
 // ReusedCheckoutGitEnvironment scopes AO's git setup to the worker's process

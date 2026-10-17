@@ -1437,14 +1437,36 @@ func checkRequestedBranchTx(
 			return err
 		}
 	}
+	// The main repository's GitHub default branch is protected too: the
+	// project's default branch is editable and can differ from it.
+	var mainName, mainDefault string
+	switch err := tx.QueryRow(ctx,
+		`SELECT repository.full_name, repository.default_branch
+		FROM ao_projects project
+		JOIN ao_github_repositories repository
+		  ON repository.github_repository_id = project.github_repository_id
+		WHERE project.org_id = $1 AND project.id = $2`,
+		orgID, projectID,
+	).Scan(&mainName, &mainDefault); {
+	case err == nil:
+		if mainDefault = strings.TrimSpace(mainDefault); mainDefault != "" && !strings.EqualFold(mainDefault, strings.TrimSpace(defaultBranch)) {
+			bases = append(bases, mainDefault)
+			if _, known := baseRepository[strings.ToLower(mainDefault)]; !known {
+				baseRepository[strings.ToLower(mainDefault)] = mainName
+			}
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
 	if reason := domain.SessionBranchProblem(branch, defaultBranch, prefix, bases); reason != "" {
 		return &BranchRefusedError{Reason: reason, Branch: branch, Repository: baseRepository[strings.ToLower(branch)]}
 	}
 	var sessionID, sessionName string
 	err := tx.QueryRow(ctx,
-		`SELECT id::text, display_name FROM ao_sessions
-		WHERE org_id = $1 AND project_id = $2 AND is_terminated = false AND lower(branch) = lower($3)
-		ORDER BY created_at LIMIT 1`,
+		`SELECT id::text, display_name FROM ao_sessions s
+		WHERE s.org_id = $1 AND s.project_id = $2 AND s.is_terminated = false AND lower(s.branch) = lower($3)
+		  AND `+sessionHoldsBranchSQL("s")+`
+		ORDER BY s.created_at LIMIT 1`,
 		orgID, projectID, branch,
 	).Scan(&sessionID, &sessionName)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1454,4 +1476,14 @@ func checkRequestedBranchTx(
 		return err
 	}
 	return &BranchRefusedError{Reason: BranchReasonInUse, Branch: branch, SessionID: sessionID, SessionName: sessionName}
+}
+
+// sessionHoldsBranchSQL keeps a session (the given alias) out of the live
+// sessions holding a branch once it was killed: `ao kill` only marks its
+// sandboxes deleted, and is_terminated flips after the reconciler tears them
+// down, so the documented kill-then-spawn on that branch would otherwise be
+// refused until teardown finishes. A session with no sandbox yet is starting.
+func sessionHoldsBranchSQL(alias string) string {
+	return `(NOT EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id)
+		OR EXISTS (SELECT 1 FROM ao_sandboxes sb WHERE sb.org_id = ` + alias + `.org_id AND sb.session_id = ` + alias + `.id AND sb.desired_state <> 'deleted'))`
 }

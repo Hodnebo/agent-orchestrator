@@ -412,6 +412,48 @@ func TestConfigureWorkerGitRestartKeepsSessionBranchCommits(t *testing.T) {
 	}
 }
 
+// A restart whose switch back to the session branch is blocked by changes the
+// agent left on another branch stashes them under a session-named message and
+// switches back, keeping both the branch's commits and the changes.
+func TestConfigureWorkerGitRestartStashesChangesThatBlockTheSessionBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	configure := func() error {
+		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+	}
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, workspace, "add", "WORK.md")
+	gitRun(t, workspace, "commit", "-qm", "session work")
+	work := gitOutput(t, workspace, "rev-parse", "HEAD")
+	gitRun(t, workspace, "checkout", "-q", "main")
+	// An untracked file on main that the session branch tracks blocks the switch.
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("left on main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := configure(); !errors.Is(err, ErrSessionBranchStashed) {
+		t.Fatalf("restart = %v, want ErrSessionBranchStashed", err)
+	}
+	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "ao/session-1" {
+		t.Fatalf("branch = %q, want ao/session-1", branch)
+	}
+	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != work {
+		t.Fatalf("restart moved the session branch to %s, want %s", head, work)
+	}
+	if stashes := gitOutput(t, workspace, "stash", "list"); !strings.Contains(stashes, "ao-session session-1: changes found before switching back to ao/session-1") {
+		t.Fatalf("stash list = %q", stashes)
+	}
+}
+
 func TestEnsureWorkspaceReviewBaseRepairsLegacyRootFallback(t *testing.T) {
 	repo := initReviewBaseRepository(t)
 	root := gitOutput(t, repo, "rev-parse", "HEAD")
@@ -681,5 +723,34 @@ func TestCheckoutKeepsAnEmptyRepositorySnapshot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".git", ProjectSnapshotMarker)); !os.IsNotExist(err) {
 		t.Fatalf("marker still present (err=%v)", err)
+	}
+}
+
+// A reused checkout asked to continue a pushed branch must contain its commits.
+func TestCheckoutContinuesRemoteBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	if err := os.WriteFile(filepath.Join(pusher, "README.md"), []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "commit", "-qam", "remote edit")
+	gitRun(t, pusher, "push", "-q", "origin", "HEAD:refs/heads/feature/x")
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	gitRun(t, workspace, "fetch", "-q", "origin")
+	gitRun(t, workspace, "checkout", "-q", "-b", "feature/x")
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "feature/x"); !errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("a branch without the pushed commits = %v, want ErrSessionBranchSwitch", err)
+	}
+	gitRun(t, workspace, "reset", "-q", "--hard", "origin/feature/x")
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "feature/x"); err != nil {
+		t.Fatalf("a branch on the pushed commits = %v", err)
+	}
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "never-pushed"); err != nil {
+		t.Fatalf("a branch not on the remote = %v", err)
 	}
 }

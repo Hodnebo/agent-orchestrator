@@ -111,7 +111,8 @@ func handlePullRequestBridgeRequest(
 	// The branch must be the session's work, never a repository's base: a push
 	// of HEAD to the base would land the work there directly.
 	if strings.EqualFold(input.Branch, input.Base) ||
-		(checkout.Main && strings.EqualFold(input.Branch, strings.TrimSpace(launch.DefaultBranch))) ||
+		(checkout.Main && (strings.EqualFold(input.Branch, strings.TrimSpace(launch.DefaultBranch)) ||
+			branchIsRepositoryBase(ctx, checkout.Path, "", input.Branch))) ||
 		(!checkout.Main && branchIsRepositoryBase(ctx, checkout.Path, checkout.Branch, input.Branch)) {
 		writeBridgeError(w, http.StatusBadRequest, "refusing to push "+input.Branch+": it is the base branch of "+checkout.Name+"; commit on the session branch instead")
 		return
