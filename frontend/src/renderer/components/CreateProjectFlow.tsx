@@ -1771,7 +1771,7 @@ function CloudProjectCard({
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("repositories")}
 						>
-							{t("createProject.cloudUseRepositories", { defaultValue: "Use a repository instead" })}
+							{t("createProject.cloudUseRepositories", { defaultValue: "Use a repo instead" })}
 						</button>
 					</div>
 				) : (
@@ -1832,12 +1832,12 @@ function CloudProjectCard({
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("standalone")}
 						>
-							{t("createProject.cloudStartWithoutRepository", { defaultValue: "No repository? Start without one" })}
+							{t("createProject.cloudStartWithoutRepository", { defaultValue: "Start without a repo" })}
 						</button>
 						{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
 							<button
 								type="button"
-								className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+								className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
 								disabled={isCreating || githubOAuthBusy}
 								onClick={() => void connectGitHub()}
 							>

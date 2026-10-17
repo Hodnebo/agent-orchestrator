@@ -2882,7 +2882,7 @@ describe("CreateProjectFlow project import validation", () => {
 			{ wrapper: CloudTestProviders },
 		);
 		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
-		await user.click(await screen.findByRole("button", { name: "No repository? Start without one" }));
+		await user.click(await screen.findByRole("button", { name: "Start without a repo" }));
 		expect(screen.queryByRole("button", { name: /^Connect repository/ })).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("Project name"), "Platform template");
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
