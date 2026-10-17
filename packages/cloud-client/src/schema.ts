@@ -2270,7 +2270,7 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. The project's default branch and session prefix are refused with invalid_branch. */
+            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. A name that breaks git's branch rules or reads as another ref, the project's default branch, the session prefix, and an additional repository's base branch are refused with 422 invalid_branch; a branch a live session of the project already works on is refused with 409 branch_in_use. The error's details carry the reason and, for branch_in_use, the session id. */
             branch?: string;
         };
         ChatMessageInput: {

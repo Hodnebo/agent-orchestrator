@@ -160,6 +160,30 @@ func (s *Store) RestoreSession(
 			// one-active-orchestrator unique index) surfaces as ErrConflict.
 			return normalizeConstraintError(err)
 		}
+		if tag.RowsAffected() == 1 {
+			// A requested branch is one live session's at a time: a session
+			// that took over this one's branch while it was deleted keeps it.
+			var otherID, otherName, branch string
+			err := tx.QueryRow(ctx,
+				`SELECT other.id::text, other.display_name, restored.branch
+				FROM ao_sessions restored
+				JOIN ao_sessions other
+				  ON other.org_id = restored.org_id
+				 AND other.project_id = restored.project_id
+				 AND other.id <> restored.id
+				 AND other.is_terminated = false
+				 AND lower(other.branch) = lower(restored.branch)
+				WHERE restored.id = $1 AND restored.org_id = $2
+				ORDER BY other.created_at LIMIT 1`,
+				sessionID, orgID,
+			).Scan(&otherID, &otherName, &branch)
+			if err == nil {
+				return &BranchRefusedError{Reason: BranchReasonInUse, Branch: branch, SessionID: otherID, SessionName: otherName}
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 		if tag.RowsAffected() == 0 {
 			// Either the session does not exist, or it is already active (a restore
 			// is already in progress, or it was never deleted). Restoring an

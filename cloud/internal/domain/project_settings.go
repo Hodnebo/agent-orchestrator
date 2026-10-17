@@ -513,26 +513,74 @@ func ProjectSessionPrefix(raw json.RawMessage) (string, error) {
 	return settings.SessionPrefix, nil
 }
 
-// ValidSessionBranch reports whether name can be a requested session branch.
-// It must follow git's branch-name rules (git check-ref-format --branch), so
-// it never reaches git as an option or as a ref git would refuse. It must not
-// be the project's default branch, which a worker would push to directly, or
-// the session prefix, whose ref would conflict with every generated
-// <prefix>/<short id> branch.
-func ValidSessionBranch(name, defaultBranch, prefix string) bool {
-	if len(name) > 255 || name == "@" || name == "HEAD" || name == defaultBranch || name == prefix ||
-		strings.HasPrefix(name, "-") || strings.HasSuffix(name, ".") ||
+// Reasons SessionBranchProblem refuses a requested session branch.
+const (
+	// SessionBranchInvalidName: the name breaks git's branch-name rules or
+	// reads as another kind of ref (refs/..., origin/..., FETCH_HEAD).
+	SessionBranchInvalidName = "invalid_name"
+	// SessionBranchDefault: the project's default branch, which a worker
+	// would push to directly.
+	SessionBranchDefault = "default_branch"
+	// SessionBranchPrefix: the session prefix itself, whose ref would
+	// conflict with every generated <prefix>/<short id> branch.
+	SessionBranchPrefix = "session_prefix"
+	// SessionBranchRepositoryBase: the base branch of one of the project's
+	// additional repositories, which a worker would push to directly there.
+	SessionBranchRepositoryBase = "repository_base"
+)
+
+// refLikeBranchPrefixes are names git would read as another kind of ref, or
+// that make "git push origin <name>" ambiguous.
+var refLikeBranchPrefixes = []string{"refs/", "heads/", "remotes/", "tags/", "origin/"}
+
+// SessionBranchProblem returns why name cannot be a requested session branch,
+// or "" when it can. It must follow git's branch-name rules (git
+// check-ref-format --branch), so it never reaches git as an option or as a
+// ref git would refuse, and must not read as another kind of ref. It must not
+// be the project's default branch, the session prefix, or any of
+// repositoryBases (the additional repositories' base branches), compared
+// without case so a case-insensitive client cannot alias them. A name under
+// the prefix (<prefix>/<id>) stays allowed, so a generated branch can be
+// resumed.
+func SessionBranchProblem(name, defaultBranch, prefix string, repositoryBases []string) string {
+	if len(name) > 255 || name == "@" || strings.HasPrefix(name, "-") || strings.HasSuffix(name, ".") ||
 		strings.Contains(name, "..") || strings.Contains(name, "@{") ||
 		strings.ContainsAny(name, " ~^:?*[\\\x7f") ||
 		strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 }) {
-		return false
+		return SessionBranchInvalidName
 	}
 	// An empty component is an empty name or a leading, trailing, or doubled
 	// slash.
 	for _, component := range strings.Split(name, "/") {
 		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
-			return false
+			return SessionBranchInvalidName
 		}
 	}
-	return true
+	lower := strings.ToLower(name)
+	if lower == "head" || strings.HasSuffix(lower, "_head") {
+		return SessionBranchInvalidName
+	}
+	for _, refPrefix := range refLikeBranchPrefixes {
+		if strings.HasPrefix(lower, refPrefix) {
+			return SessionBranchInvalidName
+		}
+	}
+	if strings.EqualFold(name, strings.TrimSpace(defaultBranch)) {
+		return SessionBranchDefault
+	}
+	if strings.EqualFold(name, strings.TrimSpace(prefix)) {
+		return SessionBranchPrefix
+	}
+	for _, base := range repositoryBases {
+		if base = strings.TrimSpace(base); base != "" && strings.EqualFold(name, base) {
+			return SessionBranchRepositoryBase
+		}
+	}
+	return ""
+}
+
+// ValidSessionBranch reports whether name can be a requested session branch
+// of a project with no additional repositories (SessionBranchProblem).
+func ValidSessionBranch(name, defaultBranch, prefix string) bool {
+	return SessionBranchProblem(name, defaultBranch, prefix, nil) == ""
 }

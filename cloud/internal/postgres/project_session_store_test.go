@@ -89,6 +89,56 @@ func TestCreateSessionKeepsRequestedBranch(t *testing.T) {
 	}
 }
 
+// A requested branch is one live session's at a time, and never an additional
+// repository's base branch; a terminated session releases its branch, and a
+// session whose branch was taken over while it was deleted is not restored.
+func TestCreateSessionRefusesABranchInUseOrARepositoryBase(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	create := func(branch string) (domain.Session, error) {
+		t.Helper()
+		return store.CreateSession(ctx, principal, fixture.orgID, "branch-use-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Branch use",
+			Prompt: "hello", Provider: "docker", Branch: branch,
+		})
+	}
+	first, err := create("feature/shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = create("Feature/Shared")
+	var refused *BranchRefusedError
+	if !errors.Is(err, ErrBranchInUse) || !errors.As(err, &refused) || refused.SessionID != first.ID {
+		t.Fatalf("second session on the branch: err = %v, want ErrBranchInUse naming %s", err, first.ID)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true WHERE id = $1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := create("feature/shared")
+	if err != nil {
+		t.Fatalf("a terminated session's branch was not released: %v", err)
+	}
+	if err := store.RestoreSession(ctx, principal, fixture.orgID, first.ID); !errors.Is(err, ErrBranchInUse) {
+		t.Fatalf("restore over %s's branch: err = %v, want ErrBranchInUse", second.ID, err)
+	}
+	var terminated bool
+	if err := admin.QueryRow(ctx, `SELECT is_terminated FROM ao_sessions WHERE id = $1`, first.ID).Scan(&terminated); err != nil || !terminated {
+		t.Fatalf("a refused restore left the session terminated = %v (%v)", terminated, err)
+	}
+	if _, err := admin.Exec(ctx,
+		`UPDATE ao_projects SET config = config || '{"repos":[{"url":"https://github.com/acme/julian","branch":"develop"}]}'::jsonb WHERE id = $1`,
+		fixture.projectID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err = create("Develop")
+	if !errors.As(err, &refused) || refused.Reason != domain.SessionBranchRepositoryBase || refused.Repository != "acme/julian" ||
+		!errors.Is(err, ErrInvalidBranch) {
+		t.Fatalf("an additional repository's base branch: err = %v, want repository_base for acme/julian", err)
+	}
+}
+
 func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 	store, _, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

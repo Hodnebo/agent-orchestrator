@@ -662,7 +662,8 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, `AO Cloud orchestration commands:
   ao spawn --name NAME --prompt TEXT [--agent AGENT] [--mode standard|trusted] [--branch BRANCH]
     (--agent defaults to the project's configured worker agent; --branch
-    continues a branch that already exists on the remote)
+    continues a branch that already exists on the remote, and fails with
+    branch_in_use while another live worker holds it)
   ao list [--json] [--all]
   ao send SESSION_ID MESSAGE
   ao report MESSAGE
