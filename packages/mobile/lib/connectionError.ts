@@ -260,15 +260,35 @@ export function describeUnreachableCode(
 			showLocalNetworkHint: false,
 		};
 	}
-	const viaTailscale = endpoints.some((e) => e.kind === "tailscale");
+	// Tailscale is a remote path too, just not a public one: it works from any
+	// network once both devices are on the tailnet. What the code lacks is the
+	// public tunnel, which is the only path that needs nothing on the phone.
+	const tailnet = endpoints.find((e) => e.kind === "tailscale");
+	const rescan =
+		"To connect from anywhere, open Connect Mobile on that machine, wait for the code to update with remote access, then scan it again.";
+	if (tailnet) {
+		const tried = local && local !== tailnet
+			? `Reached nothing at ${local.host}:${local.port} or over Tailscale at ${tailnet.host}:${tailnet.port}. `
+			: `Reached nothing over Tailscale at ${tailnet.host}:${tailnet.port}. `;
+		return {
+			...base,
+			title: "This code has no public tunnel",
+			hint: "Connect Tailscale on both devices, or scan a new code.",
+			message:
+				tried +
+				"This code has no public tunnel, so away from that machine's network it only works over Tailscale. " +
+				"Make sure Tailscale is connected on this phone and that machine. " +
+				rescan,
+		};
+	}
 	return {
 		...base,
 		title: "This code only works nearby",
 		hint: "Scan a new code once remote access has started.",
 		message:
 			`${local ? `Reached nothing at ${local.host}:${local.port}. ` : ""}` +
-			`This code has no remote address, so it only works on the same Wi-Fi as that machine${viaTailscale ? " or over Tailscale" : ""}. ` +
-			"To connect from anywhere, open Connect Mobile there, wait until it no longer says the code works on this network only, then scan it again.",
+			"This code has no public tunnel, so it only works on the same Wi-Fi as that machine. " +
+			rescan,
 	};
 }
 

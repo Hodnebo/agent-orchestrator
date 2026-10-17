@@ -644,6 +644,36 @@ test("labels a LAN-only code while remote access is still starting", async () =>
 	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access is still starting/i);
 });
 
+// Tailscale reaches this machine from another network once both devices are
+// on the tailnet, so a code carrying one must not be called "this network only".
+test("keeps Tailscale as the remote path while the public tunnel is missing", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.88.7", port: 3011, secure: false },
+		{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	const note = screen.getByTestId("mobile-local-only");
+	expect(note).toHaveTextContent(/No public tunnel yet/);
+	expect(note).toHaveTextContent(/only over Tailscale/);
+	expect(note).not.toHaveTextContent(/this network only/i);
+});
+
+test("keeps Tailscale as the remote path when remote access failed", async () => {
+	mobileStatus.endpoints = [{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false }];
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/No public tunnel — remote access couldn't start.*only over Tailscale/);
+});
+
 test("drops the label once the code carries the tunnel", async () => {
 	mobileStatus.endpoints = [
 		{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
@@ -668,7 +698,7 @@ test("says a LAN-only code stays local when remote access failed", async () => {
 	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access couldn't start/i);
 });
 
-test("reports why a code cannot reach this machine from elsewhere", () => {
+test("reports why a code has no public tunnel", () => {
 	const lan = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
 	const starting = { supported: true, running: true, ready: false, lastError: "" };
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBe("starting");

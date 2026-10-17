@@ -196,19 +196,30 @@ describe("describeUnreachableCode", () => {
 	const tailscale = { kind: "tailscale" as const, host: "100.72.46.7", port: 3011, secure: false };
 	const tunnel = { kind: "tunnel" as const, host: "abc.trycloudflare.com", port: 443, secure: true };
 
-	it("says a code without a remote address only works nearby", () => {
+	it("names Tailscale as the remote path when the code has no public tunnel", () => {
 		const copy = describeUnreachableCode([lan, tailscale], "ios");
-		expect(copy.title).toBe("This code only works nearby");
-		expect(copy.message).toContain("Reached nothing at 192.168.88.7:3011.");
-		expect(copy.message).toContain("no remote address");
-		expect(copy.message).toContain("or over Tailscale");
-		expect(copy.message).toContain("no longer says the code works on this network only");
+		expect(copy.title).toBe("This code has no public tunnel");
+		expect(copy.message).toContain("Reached nothing at 192.168.88.7:3011 or over Tailscale at 100.72.46.7:3011.");
+		expect(copy.message).toContain("only works over Tailscale");
+		expect(copy.message).toContain("wait for the code to update with remote access");
+		expect(copy.message).not.toMatch(/no remote address|same Wi-Fi/);
 		// Still possibly at home with the Local Network prompt denied.
 		expect(copy.showLocalNetworkHint).toBe(true);
 	});
 
-	it("leaves Tailscale out when the code has no tailnet address", () => {
-		expect(describeUnreachableCode([lan], "android").message).not.toContain("Tailscale");
+	it("keeps Tailscale as the remote path when it is the only endpoint", () => {
+		const copy = describeUnreachableCode([tailscale], "ios");
+		expect(copy.title).toBe("This code has no public tunnel");
+		expect(copy.message).toContain("Reached nothing over Tailscale at 100.72.46.7:3011.");
+		expect(copy.message).toContain("Make sure Tailscale is connected");
+		expect(copy.showLocalNetworkHint).toBe(false);
+	});
+
+	it("says a LAN-only code works only on the same Wi-Fi", () => {
+		const copy = describeUnreachableCode([lan], "android");
+		expect(copy.title).toBe("This code only works nearby");
+		expect(copy.message).toContain("no public tunnel");
+		expect(copy.message).not.toContain("Tailscale");
 	});
 
 	it("does not blame Wi-Fi when the internet path failed too", () => {
