@@ -123,7 +123,36 @@ func repositoriesPromptNote(launch worker.LaunchContext, workspace string) strin
 		}
 		b.WriteString("Commit in each repository you change and open one pull request per repository with AO_PULL_REQUEST_HELP, passing \"repository\" for any repository other than the main one; mention the related pull requests in each description. A repository missing from disk could not be cloned (for example it is outside this session's GitHub access); continue with the others.")
 	}
+	b.WriteString(repositoryInstructionsNote(checkouts))
 	return b.String()
+}
+
+// repositoryInstructionFiles are the agent instruction files a repository may
+// keep at its root. Coding agents load them only from the folder they start
+// in, so a session that spans repositories names every one it finds.
+var repositoryInstructionFiles = []string{"AGENTS.md", "CLAUDE.md"}
+
+// repositoryInstructionsNote lists each checkout's instruction files and asks
+// the agent to read and follow them before working in that repository; empty
+// when no checkout has any.
+func repositoryInstructionsNote(checkouts []worker.RepoCheckout) string {
+	var lines []string
+	for _, checkout := range checkouts {
+		var files []string
+		for _, name := range repositoryInstructionFiles {
+			path := filepath.Join(checkout.Path, name)
+			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+				files = append(files, path)
+			}
+		}
+		if len(files) > 0 {
+			lines = append(lines, fmt.Sprintf("- %s: %s", checkout.Name, strings.Join(files, ", ")))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nEach repository's own instructions apply when you work in it. Before you read, change or run anything in a repository, read its instruction files below and follow them there:\n\n" + strings.Join(lines, "\n") + "\n"
 }
 
 // claudeAdditionalDirectoriesKey records, in Claude's settings, which

@@ -336,3 +336,44 @@ func TestParentAgentDirectoryIsRefusedWhenUnsafe(t *testing.T) {
 		}
 	})
 }
+
+// Agents load instruction files only from the folder they start in, so a
+// multi-repository session names every repository's AGENTS.md and CLAUDE.md
+// and asks the agent to follow them in that repository.
+func TestRepositoriesPromptNoteNamesEachRepositorysInstructions(t *testing.T) {
+	workspace, launch := multiRepoWorkspace(t)
+	root := filepath.Dir(workspace)
+	for _, file := range []string{
+		filepath.Join(root, "alice", "AGENTS.md"),
+		filepath.Join(root, "voice-calling-ai", "AGENTS.md"),
+		filepath.Join(root, "voice-calling-ai", "CLAUDE.md"),
+	} {
+		if err := os.WriteFile(file, []byte("rules\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	note := repositoriesPromptNote(launch, workspace)
+	for _, want := range []string{
+		"read its instruction files below and follow them there",
+		"- alice: " + filepath.Join(root, "alice", "AGENTS.md"),
+		"- voice-calling-ai: " + filepath.Join(root, "voice-calling-ai", "AGENTS.md") + ", " + filepath.Join(root, "voice-calling-ai", "CLAUDE.md"),
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note lacks %q:\n%s", want, note)
+		}
+	}
+	if strings.Contains(note, "- julian:") {
+		t.Fatalf("a repository without instruction files was listed:\n%s", note)
+	}
+	bare, bareLaunch := multiRepoWorkspace(t)
+	if strings.Contains(repositoriesPromptNote(bareLaunch, bare), "instruction files") {
+		t.Fatal("a session without instruction files got the instructions note")
+	}
+	single := t.TempDir()
+	if err := os.WriteFile(filepath.Join(single, "AGENTS.md"), []byte("rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if note := repositoriesPromptNote(worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice"}, single); note != "" {
+		t.Fatalf("a single-repo session got a note: %q", note)
+	}
+}
