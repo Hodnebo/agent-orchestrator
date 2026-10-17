@@ -180,5 +180,6 @@ func ResolveWorkingDirectory(
 	}
 	return record("adopted", ReuseDecision{
 		Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash, BranchCreated: created,
+		AdoptedAt: adoptedCommit(ctx, runner, dir, branch, created),
 	})
 }

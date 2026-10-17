@@ -333,23 +333,41 @@ func ConfigureWorkerGit(
 			return fmt.Errorf("configure worker Git repository: %w", err)
 		}
 	}
-	// A branch that already exists on the remote is continued from its commits.
-	// When local files block that switch (for example agent configuration
-	// written before the clone), the session still starts, cut at HEAD as
-	// before; pushing the branch then fails until it merges origin/<branch>. A
-	// restarted worker already has the local branch and stays on it.
-	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
-		if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
-			if _, err := runner.Run(ctx, workspace, nil, "checkout", "--no-track", "-B", branch, remote); err == nil {
-				return nil
-			}
+	// A restarted worker already has the local branch: it switches to it as it
+	// is, so the agent's commits on it survive even when HEAD was left on
+	// another branch. A branch that already exists on the remote is continued
+	// from its commits; when local files block that switch the session stops
+	// with ErrSessionBranchSwitch instead of quietly starting the branch from
+	// the default branch, which would hide the remote work and fail every push.
+	// Only a new branch starts at HEAD.
+	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := runner.Run(ctx, workspace, nil, "checkout", branch); err != nil {
+			return fmt.Errorf("%w: switch to %s: %v", ErrSessionBranchSwitch, branch, err)
 		}
+		return nil
 	}
-	if _, err := runner.Run(ctx, workspace, nil, "checkout", "-B", branch); err != nil {
+	if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
+		if _, err := runner.Run(ctx, workspace, nil, "checkout", "--no-track", "-B", branch, remote); err != nil {
+			return fmt.Errorf("%w: %s exists on the repository but could not be checked out from origin/%s: %v",
+				ErrSessionBranchSwitch, branch, branch, err)
+		}
+		return nil
+	}
+	if _, err := runner.Run(ctx, workspace, nil, "checkout", "-b", branch); err != nil {
 		return fmt.Errorf("configure worker Git repository: %w", err)
 	}
 	return nil
 }
+
+// ErrSessionBranchSwitch means the checkout could not be put on the session's
+// branch: its existing local branch, or the commits already pushed to it, so
+// the session must not start on a branch cut from somewhere else.
+var ErrSessionBranchSwitch = errors.New("the session branch could not be checked out")
+
+// ErrSessionBranchIsBase means an additional repository's base branch has the
+// session branch's name, so the session works on that repository at its base
+// without checking out or pushing the session branch there.
+var ErrSessionBranchIsBase = errors.New("the session branch is this repository's base branch")
 
 // remoteBranchRef returns refs/remotes/origin/<branch> when the checkout has
 // that remote-tracking branch, and "" otherwise.
@@ -604,8 +622,11 @@ type ExtraRepoOptions struct {
 // without touching its git configuration. It then puts the checkout on the
 // session branch: an existing local branch is kept (the agent's commits on it
 // survive), a branch already pushed to origin is checked out from there (a
-// restored sandbox), and otherwise the branch starts from the repository's
-// branch. A folder holding anything else is left untouched and reported.
+// restored sandbox, or a session continuing a branch), and otherwise the
+// branch starts from the repository's branch. A session branch named like the
+// repository's base branch is never checked out there: the checkout stays at
+// its base and ErrSessionBranchIsBase is returned. A folder holding anything
+// else is left untouched and reported.
 // adopted reports that an existing user checkout was adopted, so the caller
 // must apply ReusedCheckoutGitEnvironment to the worker's process.
 func PrepareExtraRepo(
@@ -639,6 +660,9 @@ func PrepareExtraRepo(
 			return false, fmt.Errorf("fetch the existing checkout: %w", err)
 		}
 		base := extraRepoBaseBranch(ctx, runner, dest, repo.Branch)
+		if sessionBranchIsBase(branch, base) {
+			return true, sessionBranchIsBaseError(ctx, runner, dest, branch, base)
+		}
 		if branch != "" {
 			// Adoption continues origin/<branch> when it was pushed and
 			// otherwise starts the branch from base; this repository was
@@ -662,6 +686,9 @@ func PrepareExtraRepo(
 	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, opts.Token, opts.DataDir); err != nil {
 		return false, err
 	}
+	if base := extraRepoBaseBranch(ctx, runner, dest, repo.Branch); sessionBranchIsBase(branch, base) {
+		return false, sessionBranchIsBaseError(ctx, runner, dest, branch, base)
+	}
 	if branch != "" {
 		if _, err := runner.Run(ctx, dest, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
 			args := []string{"checkout", "-B", branch}
@@ -674,6 +701,30 @@ func PrepareExtraRepo(
 		}
 	}
 	return false, EnsureWorkspaceReviewBase(ctx, runner, dest, extraRepoBaseBranch(ctx, runner, dest, repo.Branch))
+}
+
+// sessionBranchIsBase reports whether the session branch has the name of a
+// repository's base branch, where a session must never push.
+func sessionBranchIsBase(branch, base string) bool {
+	branch, base = strings.TrimSpace(branch), strings.TrimSpace(base)
+	return branch != "" && base != "" && strings.EqualFold(branch, base)
+}
+
+// sessionBranchIsBaseError keeps an additional repository at its base branch,
+// with its review base recorded, and reports ErrSessionBranchIsBase so the
+// caller says why it is not on the session branch.
+func sessionBranchIsBaseError(ctx context.Context, runner GitRunner, dest, branch, base string) error {
+	if err := EnsureWorkspaceReviewBase(ctx, runner, dest, base); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s; it stays on %s and the session does not push to it", ErrSessionBranchIsBase, branch, base)
+}
+
+// SessionBranchIsBase reports whether branch is the base branch of the
+// checkout at dir (configured is the project's branch for it, if any), so
+// nothing pushes the session's work straight onto that base.
+func SessionBranchIsBase(ctx context.Context, runner GitRunner, dir, configured, branch string) bool {
+	return sessionBranchIsBase(branch, extraRepoBaseBranch(ctx, runner, dir, configured))
 }
 
 // remoteBranchExists reports whether origin has branch as a fetched

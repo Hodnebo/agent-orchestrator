@@ -502,7 +502,7 @@ func run(logger *slog.Logger) error {
 		for {
 			err := workingDirectoryErr
 			if err == nil {
-				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, reuse, adoptStandaloneFolder, userWorkspace)
+				err = prepareWorkspace(runCtx, logger, client, bootstrap, workspace, dataDir, publicURL, &reuse, adoptStandaloneFolder, userWorkspace)
 			}
 			if err == nil {
 				break
@@ -653,7 +653,7 @@ func prepareWorkspace(
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
-	reuse worker.ReuseDecision,
+	reuse *worker.ReuseDecision,
 	adoptExistingFolder bool,
 	userWorkspace bool,
 ) error {
@@ -742,14 +742,16 @@ func resolveReusedWorkspace(
 // prepareReusedWorkspace refreshes an adopted checkout: it writes the session
 // git tooling, fetches with the session's checkout grant, moves a just-adopted
 // branch up to the fetched base, and clones any extra repositories beside it
-// exactly as for a fresh checkout.
+// exactly as for a fresh checkout. The move happens once: the decision is
+// cleared after it, so a startup retry (the session reopened after a later
+// step failed) never moves the user's branch again.
 func prepareReusedWorkspace(
 	ctx context.Context,
 	logger *slog.Logger,
 	client *client,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir, publicURL string,
-	reuse worker.ReuseDecision,
+	reuse *worker.ReuseDecision,
 ) error {
 	checkoutGrant, err := client.checkoutGrant(ctx)
 	if err != nil {
@@ -767,10 +769,11 @@ func prepareReusedWorkspace(
 	if reuse.AdoptedNow {
 		if err := worker.AdvanceAdoptedCheckout(
 			ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch, bootstrap.Launch.DefaultBranch,
-			reuse.BranchCreated,
+			reuse.BranchCreated, reuse.AdoptedAt,
 		); err != nil {
 			logger.Warn("checkout reuse: could not move the session branch to the latest remote commits", "error", err)
 		}
+		reuse.AdoptedNow, reuse.BranchCreated, reuse.AdoptedAt = false, false, ""
 	}
 	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, true)
 	return nil
@@ -821,6 +824,14 @@ func cloneExtraRepos(
 			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
 			Token: token, DataDir: dataDir, Adopt: userWorkspace,
 		})
+		if errors.Is(err, worker.ErrSessionBranchIsBase) {
+			// The repository is ready at its base branch; the session works
+			// there without a branch of its own and never pushes to it.
+			logger.Warn("multi-repo: the session branch is this repository's base branch; it stays checked out at its base and AO will not push to it",
+				"repo", checkout.URL, "branch", launch.Branch, "error", err)
+			adoptedAny = adoptedAny || adopted
+			continue
+		}
 		if err != nil {
 			logger.Warn("multi-repo: additional repository is unavailable (non-fatal)", "repo", checkout.URL, "error", err)
 			continue
