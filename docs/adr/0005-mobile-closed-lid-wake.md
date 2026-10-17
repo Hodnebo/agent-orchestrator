@@ -141,6 +141,6 @@ open the lid, stop all old wake sessions and unload its registration before
 opting in again. Retain any unfinished legacy recovery journal under
 `~/.ao/wake` until recovery has completed.
 
-The desktop Stay Awake extension uses protocol 3; see
+The desktop Stay Awake extension uses protocol 5; see
 [ADR 0006](0006-desktop-awake.md) for desktop ownership, optional effects,
 upgrade handling and outstanding acceptance work.
