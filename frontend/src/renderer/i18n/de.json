@@ -2573,7 +2573,7 @@
 	"chat.startup.failed": "Einrichtung der Sitzung fehlgeschlagen",
 	"chat.startup.step.fetch": "Neuesten Code abrufen",
 	"chat.startup.step.worktree": "Arbeitsbereich vorbereiten",
-	"chat.startup.step.naming": "Branch benennen",
+	"chat.startup.step.worktreeDone": "Arbeitsbereich erstellt",
 	"chat.startup.step.setup": "Setup-Skript ausführen",
 	"chat.startup.step.agent": "{{agent}} wird vorbereitet",
 	"chat.startup.status.pending": "Ausstehend",
