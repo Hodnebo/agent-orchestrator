@@ -205,6 +205,7 @@ var shippedMigrations = map[int64]string{
 	200: "0200_session_artifact_version_source.sql",
 	201: "0201_agent_accounts.sql",
 	202: "0202_account_transitions.sql",
+	206: "0206_awake.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
