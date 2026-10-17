@@ -33,7 +33,7 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 	const element = () => registry.resolve(String(request.ref ?? ""));
 	switch (request.op) {
 		case "ping":
-			return { url: document.location?.href ?? "", title: document.title };
+			return { url: document.location?.href ?? "", title: document.title, visibility: document.visibilityState };
 		case "snapshot": {
 			const result = buildSnapshot(document, registry, { interactive: request.interactive === true });
 			return { snapshot: result.snapshot, refs: result.refs, truncated: result.truncated };

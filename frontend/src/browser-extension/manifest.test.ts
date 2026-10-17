@@ -18,14 +18,13 @@ describe("extension manifest", () => {
 		expect(HOST_NAME).toBe("dev.ao.browser_bridge");
 	});
 
-	it("asks only for what Chrome mode needs, with site access and debugger optional", () => {
+	it("asks only for what Chrome mode needs and never declares content scripts", () => {
 		expect(manifest.manifest_version).toBe(3);
-		expect(manifest.permissions).not.toContain("debugger");
-		expect(manifest.permissions).not.toContain("cookies");
-		expect(manifest.permissions).not.toContain("history");
-		expect(manifest.optional_permissions).toEqual(["debugger"]);
-		expect(manifest.optional_host_permissions).toEqual(["<all_urls>"]);
-		expect(manifest).not.toHaveProperty("host_permissions");
+		expect([...manifest.permissions].sort()).toEqual(
+			["debugger", "nativeMessaging", "scripting", "storage", "tabGroups", "tabs", "webNavigation", "webRequest"].sort(),
+		);
+		expect(manifest.host_permissions).toEqual(["<all_urls>"]);
+		// Content runs only in tabs an approved session owns, injected on demand.
 		expect(manifest).not.toHaveProperty("content_scripts");
 	});
 });

@@ -33,6 +33,8 @@ export function groupColor(sessionId: string): string {
 export class SessionTabRegistry {
 	private sessions = new Map<string, SessionTabs>();
 	private loaded?: Promise<void>;
+	/** Tabs this registry is creating; their grouping is not a user hand-off. */
+	private readonly creating = new Set<number>();
 
 	constructor(private readonly chrome: ChromeApi) {}
 
@@ -119,14 +121,26 @@ export class SessionTabRegistry {
 		}
 		const tab = await this.chrome.tabs.create({ url: url ?? "about:blank", active: false, windowId });
 		if (tab.id === undefined) throw new BridgeError("BROWSER_TARGET_UNAVAILABLE", "Chrome did not create a tab");
+		this.creating.add(tab.id);
+		try {
+			return await this.adopt(session, tab, windowId!);
+		} finally {
+			// Chrome reports the grouping asynchronously; let that event pass.
+			const id = tab.id;
+			setTimeout(() => this.creating.delete(id), 1_000);
+		}
+	}
+
+	private async adopt(session: SessionTabs, tab: Tab & { id?: number }, windowId: number): Promise<ActiveTab> {
+		const tabId = tab.id!;
 		let groupId = session.groupId;
 		try {
 			groupId = await this.chrome.tabs.group(
-				groupId !== undefined ? { tabIds: tab.id, groupId } : { tabIds: tab.id, createProperties: { windowId } },
+				groupId !== undefined ? { tabIds: tabId, groupId } : { tabIds: tabId, createProperties: { windowId } },
 			);
 		} catch {
 			// The old group is gone (closed or in another window): start a new one.
-			groupId = await this.chrome.tabs.group({ tabIds: tab.id, createProperties: { windowId } });
+			groupId = await this.chrome.tabs.group({ tabIds: tabId, createProperties: { windowId } });
 		}
 		if (groupId !== session.groupId) {
 			await this.chrome.tabGroups.update(groupId, { title: groupTitle(session.sessionId), color: groupColor(session.sessionId), collapsed: false });
@@ -134,10 +148,10 @@ export class SessionTabRegistry {
 		session.groupId = groupId;
 		session.windowId = windowId;
 		const logicalId = `t${session.nextTab++}`;
-		session.tabs[logicalId] = tab.id;
+		session.tabs[logicalId] = tabId;
 		session.activeTabId = logicalId;
 		await this.save();
-		return { logicalId, tabId: tab.id, tab };
+		return { logicalId, tabId, tab };
 	}
 
 	async select(session: SessionTabs, logicalId: string): Promise<ActiveTab> {
@@ -219,7 +233,7 @@ export class SessionTabRegistry {
 			await this.save();
 			return;
 		}
-		if (!owner && groupId >= 0) {
+		if (!owner && groupId >= 0 && !this.creating.has(tabId)) {
 			// Dragged into an AO group: the user handed the tab to the agent.
 			const session = [...this.sessions.values()].find((candidate) => candidate.groupId === groupId);
 			if (!session) return;
