@@ -3206,11 +3206,12 @@
 	"settings.agentAccounts.aoUsage": "{{tokens}} tokens no AO, últimos 30 dias",
 	"settings.agentAccounts.extraUsage": "Uso extra {{used}} de {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Conta",
-	"settings.agentAccounts.moved": "Movida para {{email}}",
+	"settings.agentAccounts.moved": "Movido de {{from}} para {{to}}",
 	"settings.agentAccounts.loading": "Carregando contas…",
 	"settings.agentAccounts.stopAndMoveTitle": "Parar o turno e mover?",
 	"settings.agentAccounts.stopAndMoveDescription": "O agente está trabalhando ou aguardando a renovação de um limite. O AO para este turno e retoma a conversa em {{email}}.",
 	"settings.agentAccounts.stopAndMove": "Parar e mover",
 	"settings.agentAccounts.switching": "Trocando para {{email}}…",
+	"settings.agentAccounts.switchingAccount": "Trocando de conta",
 	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior."
 }

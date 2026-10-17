@@ -332,7 +332,7 @@ func (m *Manager) CancelInterfaceTransition(ctx context.Context, id domain.Sessi
 		domain.SessionInterfaceTransitionCancelled,
 		transition.NativeConversationID,
 		"TRANSITION_CANCELLED",
-		"The interface switch was cancelled.",
+		transitionDetail(transition, "TRANSITION_CANCELLED", "The interface switch was cancelled."),
 		m.clock(),
 	)
 	if err != nil {
@@ -418,14 +418,15 @@ func (m *Manager) runInterfaceTransition(
 		}
 		if errors.Is(cause, context.Canceled) && !sourceStopped {
 			_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionCancelled,
-				"TRANSITION_CANCELLED", "The interface switch was cancelled.")
+				"TRANSITION_CANCELLED", transitionDetail(transition, "TRANSITION_CANCELLED", "The interface switch was cancelled."))
 			return
 		}
 		if sourceStopped {
 			m.rollbackInterfaceTransition(transition, sourceRuntimeHandle, modeChanged, accountStarting, code, cause)
 			return
 		}
-		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code, cause.Error())
+		_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code,
+			transitionDetail(transition, code, cause.Error()))
 	}
 
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionPreflighting, "", ""); err != nil {
@@ -1853,4 +1854,24 @@ func interfaceTransitionErrorCode(err error) string {
 	default:
 		return "TARGET_PREFLIGHT_FAILED"
 	}
+}
+
+// transitionDetail words a failure for the user. An account move keeps its
+// mode, so the shared texts about interfaces, and the "Cancel request and
+// switch" action the account switch does not offer, are replaced.
+func transitionDetail(transition domain.SessionInterfaceTransition, code, detail string) string {
+	if !transition.AccountMove() {
+		return detail
+	}
+	switch code {
+	case "DRAIN_QUIESCENCE_UNVERIFIED":
+		return "AO could not confirm that the terminal was idle, so the agent stays on its current account. Try again when it is idle."
+	case "DRAIN_DECISION_PENDING":
+		return "The agent is waiting for an answer in the terminal, so it stays on its current account. Answer it, then try again."
+	case "TRANSITION_CANCELLED":
+		return "The account switch was cancelled. The agent stays on its current account."
+	case "SESSION_CHANGED":
+		return "The session changed before the account switch could start. Try again."
+	}
+	return detail
 }

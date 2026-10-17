@@ -3206,11 +3206,12 @@
 	"settings.agentAccounts.aoUsage": "{{tokens}} jetons dans AO, 30 derniers jours",
 	"settings.agentAccounts.extraUsage": "Utilisation supplémentaire {{used}} sur {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Compte",
-	"settings.agentAccounts.moved": "Déplacée vers {{email}}",
+	"settings.agentAccounts.moved": "Déplacé de {{from}} vers {{to}}",
 	"settings.agentAccounts.loading": "Chargement des comptes…",
 	"settings.agentAccounts.stopAndMoveTitle": "Arrêter le tour et déplacer ?",
 	"settings.agentAccounts.stopAndMoveDescription": "L'agent travaille ou attend la réinitialisation d'une limite. AO arrête ce tour et reprend la conversation sur {{email}}.",
 	"settings.agentAccounts.stopAndMove": "Arrêter et déplacer",
 	"settings.agentAccounts.switching": "Passage à {{email}}…",
+	"settings.agentAccounts.switchingAccount": "Changement de compte",
 	"settings.agentAccounts.switchFailed": "Le changement a échoué. L'agent reste sur son compte précédent."
 }

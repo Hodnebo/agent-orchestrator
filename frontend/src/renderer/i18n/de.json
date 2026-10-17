@@ -3159,11 +3159,12 @@
 	"settings.agentAccounts.aoUsage": "{{tokens}} Tokens in AO, letzte 30 Tage",
 	"settings.agentAccounts.extraUsage": "Zusätzliche Nutzung {{used}} von {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Konto",
-	"settings.agentAccounts.moved": "Zu {{email}} verschoben",
+	"settings.agentAccounts.moved": "Von {{from}} zu {{to}} verschoben",
 	"settings.agentAccounts.loading": "Konten werden geladen…",
 	"settings.agentAccounts.stopAndMoveTitle": "Durchgang beenden und verschieben?",
 	"settings.agentAccounts.stopAndMoveDescription": "Der Agent arbeitet oder wartet auf das Zurücksetzen eines Limits. AO beendet diesen Durchgang und setzt die Unterhaltung mit {{email}} fort.",
 	"settings.agentAccounts.stopAndMove": "Beenden und verschieben",
 	"settings.agentAccounts.switching": "Wechsel zu {{email}}…",
+	"settings.agentAccounts.switchingAccount": "Konto wird gewechselt",
 	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto."
 }

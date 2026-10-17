@@ -3159,11 +3159,12 @@
 	"settings.agentAccounts.aoUsage": "AO で {{tokens}} トークン（過去 30 日）",
 	"settings.agentAccounts.extraUsage": "追加使用量 {{used}} / {{limit}}",
 	"settings.agentAccounts.sessionAccount": "アカウント",
-	"settings.agentAccounts.moved": "{{email}} に移動しました",
+	"settings.agentAccounts.moved": "{{from}} から {{to}} に移動しました",
 	"settings.agentAccounts.loading": "アカウントを読み込み中…",
 	"settings.agentAccounts.stopAndMoveTitle": "ターンを止めて移動しますか？",
 	"settings.agentAccounts.stopAndMoveDescription": "エージェントは作業中か、制限のリセットを待っています。AO はこのターンを止め、{{email}} で会話を再開します。",
 	"settings.agentAccounts.stopAndMove": "停止して移動",
 	"settings.agentAccounts.switching": "{{email}} に切り替え中…",
+	"settings.agentAccounts.switchingAccount": "アカウントを切り替え中",
 	"settings.agentAccounts.switchFailed": "切り替えに失敗しました。エージェントは以前のアカウントのままです。"
 }

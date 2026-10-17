@@ -3140,11 +3140,12 @@
 	"settings.agentAccounts.aoUsage": "{{tokens}} tokens in AO, last 30 days",
 	"settings.agentAccounts.extraUsage": "Extra usage {{used}} of {{limit}}",
 	"settings.agentAccounts.sessionAccount": "Account",
-	"settings.agentAccounts.moved": "Moved to {{email}}",
+	"settings.agentAccounts.moved": "Moved from {{from}} to {{to}}",
 	"settings.agentAccounts.loading": "Loading accounts…",
 	"settings.agentAccounts.stopAndMoveTitle": "Stop the turn and move?",
 	"settings.agentAccounts.stopAndMoveDescription": "The agent is working or waiting for a limit to reset. AO stops this turn and resumes the conversation on {{email}}.",
 	"settings.agentAccounts.stopAndMove": "Stop and move",
 	"settings.agentAccounts.switching": "Switching to {{email}}…",
+	"settings.agentAccounts.switchingAccount": "Switching account",
 	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account."
 }

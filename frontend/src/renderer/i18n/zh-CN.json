@@ -3141,11 +3141,12 @@
 	"settings.agentAccounts.aoUsage": "AO 中 {{tokens}} 个 token，最近 30 天",
 	"settings.agentAccounts.extraUsage": "额外用量 {{used}} / {{limit}}",
 	"settings.agentAccounts.sessionAccount": "账户",
-	"settings.agentAccounts.moved": "已移至 {{email}}",
+	"settings.agentAccounts.moved": "已从 {{from}} 移至 {{to}}",
 	"settings.agentAccounts.loading": "正在加载账户…",
 	"settings.agentAccounts.stopAndMoveTitle": "停止本轮并移动？",
 	"settings.agentAccounts.stopAndMoveDescription": "代理正在工作或等待限额重置。AO 会停止本轮，并在 {{email}} 上继续对话。",
 	"settings.agentAccounts.stopAndMove": "停止并移动",
 	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
+	"settings.agentAccounts.switchingAccount": "正在切换账号",
 	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。"
 }

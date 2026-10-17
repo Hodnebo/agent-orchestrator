@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -279,5 +280,21 @@ func TestAccountTransitionRecoveryStopsAnUncommittedTarget(t *testing.T) {
 	}
 	if accounts.boundTo("session-1") != "device-claude" {
 		t.Fatal("recovery moved the binding")
+	}
+}
+
+// TestAccountMoveFailuresSpeakOfTheAccount pins the wording an account move
+// shows: never "interface", and never an action the account switch hides.
+func TestAccountMoveFailuresSpeakOfTheAccount(t *testing.T) {
+	move := domain.SessionInterfaceTransition{SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeTUI, TargetAccountID: "acct-b"}
+	for _, code := range []string{"DRAIN_QUIESCENCE_UNVERIFIED", "DRAIN_DECISION_PENDING", "TRANSITION_CANCELLED", "SESSION_CHANGED"} {
+		got := transitionDetail(move, code, "The source interface was left untouched; choose Cancel request and switch")
+		if strings.Contains(got, "interface") || strings.Contains(got, "Cancel request") || !strings.Contains(got, "account") {
+			t.Fatalf("%s: %q", code, got)
+		}
+	}
+	modeSwitch := domain.SessionInterfaceTransition{SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeChat}
+	if got := transitionDetail(modeSwitch, "TRANSITION_CANCELLED", "The interface switch was cancelled."); got != "The interface switch was cancelled." {
+		t.Fatalf("interface switch detail changed: %q", got)
 	}
 }

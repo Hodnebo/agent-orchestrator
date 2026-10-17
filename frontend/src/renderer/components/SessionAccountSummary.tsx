@@ -1,7 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountProviderFor, useAgentAccountActions, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -18,6 +18,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const accounts = useAgentAccounts();
 	const current = useSessionAgentAccounts(provider ? session.id : undefined);
 	const actions = useAgentAccountActions();
+	const label = useAgentAccountLabel();
 	const { transition } = useSessionInterfaceTransitionStatus(provider ? session.id : undefined);
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
@@ -36,10 +37,9 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	const currentId = current.data?.[provider];
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
-	const name = (id: string | undefined) => {
-		const option = options.find((candidate) => candidate.id === id);
-		return option?.email || t("settings.agentAccounts.thisComputer");
-	};
+	// "Moved from … to …" answers the move; the next message makes it history.
+	const messagedSinceMove = Boolean(accountMove && session.lastUserMessageAt &&
+		Date.parse(session.lastUserMessageAt) > Date.parse(accountMove.updatedAt));
 
 	const move = async (accountId: string, stopTurn = false) => {
 		if (accountId === currentId) return;
@@ -59,9 +59,9 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 	};
 
 	const status = moving
-		? t("settings.agentAccounts.switching", { email: name(accountMove?.targetAccountId) })
-		: settledPhase === "completed" && accountMove?.targetAccountId === currentId
-			? t("settings.agentAccounts.moved", { email: name(currentId) })
+		? t("settings.agentAccounts.switching", { email: label(accountMove?.targetAccountId) })
+		: settledPhase === "completed" && accountMove?.targetAccountId === currentId && !messagedSinceMove
+			? t("settings.agentAccounts.moved", { from: label(accountMove?.sourceAccountId), to: label(currentId) })
 			: settledPhase === "failed" || settledPhase === "recovery_required"
 				? accountMove?.errorDetail || t("settings.agentAccounts.switchFailed")
 				: message;
@@ -83,7 +83,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open
 			title={t("settings.agentAccounts.stopAndMoveTitle")}
-			description={t("settings.agentAccounts.stopAndMoveDescription", { email: name(confirming) })}
+			description={t("settings.agentAccounts.stopAndMoveDescription", { email: label(confirming) })}
 			confirmLabel={t("settings.agentAccounts.stopAndMove")}
 			onConfirm={() => void move(confirming, true)}
 			onOpenChange={(open) => { if (!open) setConfirming(null); }}

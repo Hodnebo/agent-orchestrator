@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransition";
@@ -30,8 +31,19 @@ export async function fetchAgentAccounts(refresh = false) {
 }
 
 /** Every account with its limits. The daemon reuses a reading for five minutes. */
-export function useAgentAccounts() {
-	return useQuery({ queryKey: agentAccountsQueryKey, queryFn: () => fetchAgentAccounts(), refetchInterval: 60_000 });
+export function useAgentAccounts(enabled = true) {
+	return useQuery({ queryKey: agentAccountsQueryKey, queryFn: () => fetchAgentAccounts(), refetchInterval: 60_000, enabled });
+}
+
+/** Names an account in status text: "This computer" for the computer's own
+ * login, so a move reads clearly even when two accounts share an email. */
+export function useAgentAccountLabel(enabled = true) {
+	const { t } = useTranslation();
+	const accounts = useAgentAccounts(enabled);
+	return (id: string | undefined) => {
+		const account = accounts.data?.find((candidate) => candidate.id === id);
+		return account && !account.device && account.email ? account.email : t("settings.agentAccounts.thisComputer");
+	};
 }
 
 export function useAgentAccountUsage(days = 30) {
