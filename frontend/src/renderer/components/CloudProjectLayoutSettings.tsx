@@ -211,7 +211,6 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 					<p>{startsIn === "parent"
 						? t("settings.cloudProject.agentStartsInParentHint", { defaultValue: "Starts in the folder that holds every repository, such as ~/work. Falls back to the main repository when there is no shared folder." })
 						: t("settings.cloudProject.agentStartsInRepositoryHint", { defaultValue: "Starts in the main repository, with access to the others." })}</p>
-					<p>{t("settings.cloudProject.agentStartsInFixedHint", { defaultValue: "Applies to new sessions." })}</p>
 				</>}>
 				<SettingsOptionMenu<CloudCpAgentStartsIn>
 					aria-label={t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })}
