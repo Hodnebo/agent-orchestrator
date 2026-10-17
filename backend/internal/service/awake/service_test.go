@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -358,6 +359,74 @@ func TestBoundRequestsExpireWithoutFreshPolicyRenewal(t *testing.T) {
 		t.Fatal("fresh binding did not renew native deadline")
 	}
 }
+func TestIdleOwnersCannotExtendClosedLidDeadline(t *testing.T) {
+	for _, idleMode := range []string{"indefinite", "duration"} {
+		for _, bound := range []bool{true, false} {
+			for _, idleFirst := range []bool{true, false} {
+				name := fmt.Sprintf("%s/bound=%t/idleFirst=%t", idleMode, bound, idleFirst)
+				t.Run(name, func(t *testing.T) {
+					s, _, h, bindings, now := fixture(t)
+					idle := domain.StartAwakeRequest{Scope: "ao", Mode: idleMode}
+					if idleMode == "duration" {
+						idle.DurationSeconds = 3600
+					}
+					lid := domain.StartAwakeRequest{Mode: "duration", DurationSeconds: 30, LidClosed: true}
+					expiresAfter := 30 * time.Second
+					if bound {
+						lid = domain.StartAwakeRequest{Scope: "session", SessionID: "work", Mode: "indefinite", LidClosed: true}
+						expiresAfter = 15 * time.Second
+					}
+					if idleFirst {
+						start(t, s, idle)
+						start(t, s, lid)
+					} else {
+						start(t, s, lid)
+						start(t, s, idle)
+					}
+					if !h.lid || !h.deadline.Equal(now.Add(expiresAfter)) {
+						t.Fatalf("idle owner extended closed-lid permission: lid=%t deadline=%v", h.lid, h.deadline)
+					}
+					// Capture the native boundary without further policy reconciliation.
+					// PolicyTests.swift exercises continued sequence renewal against this
+					// fixed deadline, including renewals after it has already expired.
+					*now = now.Add(120 * time.Second)
+					bindings.alive = false
+					tick(t, s)
+					if !h.active || h.lid {
+						t.Fatal("healthy reconciliation did not preserve idle-only ownership")
+					}
+					if idleMode == "indefinite" && !h.deadline.IsZero() {
+						t.Fatal("remaining indefinite idle owner stayed bounded")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestAutomaticLidRuleDeadlineSurvivesIdleOwner(t *testing.T) {
+	for _, idleMode := range []string{"indefinite", "duration"} {
+		t.Run(idleMode, func(t *testing.T) {
+			s, _, h, bindings, now := fixture(t)
+			idle := domain.StartAwakeRequest{Mode: idleMode}
+			if idleMode == "duration" {
+				idle.DurationSeconds = 3600
+			}
+			start(t, s, idle)
+			bindings.agent = true
+			rule := domain.AwakeRule{ID: "work", Name: "Agent work", Enabled: true, LidClosed: true, Match: "all", Conditions: []domain.AwakeCondition{{Kind: "agent_activity"}}}
+			if err := s.UpdateRules(context.Background(), []domain.AwakeRule{rule}); err != nil {
+				t.Fatal(err)
+			}
+			*now = now.Add(5 * time.Second)
+			tick(t, s)
+			if !h.lid || !h.deadline.Equal(now.Add(15*time.Second)) {
+				t.Fatalf("idle owner extended automatic lid permission: lid=%t deadline=%v", h.lid, h.deadline)
+			}
+		})
+	}
+}
+
 func TestMissingDownloadHeartbeatIsNotCompletion(t *testing.T) {
 	s, _, h, _, now := fixture(t)
 	if err := s.Downloads([]string{"one"}); err != nil {

@@ -570,8 +570,10 @@ func (s *Service) reconcile(ctx context.Context) error {
 	count := 0
 	unknownBinding := false
 	lid := false
-	indefinite := false
-	var latest time.Time
+	// One native lease carries every contribution. Bound the entire aggregate
+	// by its earliest finite deadline so independent sequence renewal cannot
+	// preserve stale lid permission or policy effects from a shorter owner.
+	var earliest time.Time
 	for i := range s.doc.Sessions {
 		source := &s.doc.Sessions[i]
 		if source.EndedAt != nil {
@@ -624,12 +626,8 @@ func (s *Service) reconcile(ctx context.Context) error {
 			}
 			finite = true
 		}
-		if finite {
-			if deadline.After(latest) {
-				latest = deadline
-			}
-		} else {
-			indefinite = true
+		if finite && (earliest.IsZero() || deadline.Before(earliest)) {
+			earliest = deadline
 		}
 	}
 	previousRules := s.activeRules
@@ -647,8 +645,8 @@ func (s *Service) reconcile(ctx context.Context) error {
 			count++
 			lid = lid || r.LidClosed
 			fresh := now.Add(15 * time.Second)
-			if fresh.After(latest) {
-				latest = fresh
+			if earliest.IsZero() || fresh.Before(earliest) {
+				earliest = fresh
 			}
 		}
 	}
@@ -685,20 +683,17 @@ func (s *Service) reconcile(ctx context.Context) error {
 		}
 		return nil
 	}
-	if indefinite {
-		latest = time.Time{}
-	}
 	if err := s.host.ConfigureEffects(s.doc.Settings); err != nil {
 		return err
 	}
 	if err := s.host.SetProtection(s.doc.Settings.StopBatteryPercent); err != nil {
 		return err
 	}
-	if err := s.host.ConfigureIdle(latest, s.doc.Settings.DisplayAwake); err != nil {
+	if err := s.host.ConfigureIdle(earliest, s.doc.Settings.DisplayAwake); err != nil {
 		s.reason = "native_failed"
 		return err
 	}
-	if err := s.host.SetDeadline(latest); err != nil {
+	if err := s.host.SetDeadline(earliest); err != nil {
 		s.reason = "lease_failed"
 		return err
 	}

@@ -29,9 +29,14 @@ Finite deadlines use Go's monotonic clock after creation and a native monotonic
 remaining deadline after first observation. A request bound to a session,
 application PID/start identity, download, or automatic rule carries a native
 maximum deadline fifteen seconds after its latest successful policy check.
-This prevents the independent lease-renewal goroutine extending stale bindings
-if the policy loop stalls. Unchanged native sequences still expire after sixty
-seconds, as in ADR 0005.
+The single aggregate native lease takes the earliest finite contribution deadline,
+even when an unrelated idle-only request is indefinite or has a later deadline.
+This conservatively expires all aggregate ownership if policy reconciliation
+stalls, rather than letting independent sequence renewals extend stale closed-lid
+permission or other policy effects. Healthy reconciliation refreshes valid bound
+contributions and removes expired ones; remaining idle-only ownership continues
+with its own deadline (or no deadline when indefinite). Unchanged native sequences
+still expire after sixty seconds, as in ADR 0005.
 
 Application exit and PID reuse end an app request. Failed probes provide neither
 positive ownership nor proof of termination. Download heartbeats expire after

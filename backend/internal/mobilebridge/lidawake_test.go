@@ -360,4 +360,22 @@ func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
 	if lease.LidClosed == nil || *lease.LidClosed || !lease.DisplayAwake || lease.ExpiresAt == nil || lease.StopBatteryPercent != 30 || lease.LowPowerBatteryPercent != 40 || !lease.LowPowerOnSeriousHeat || !lease.MuteAudio || !lease.RestoreDisplay || !lease.DarkenKeyboard || len(lease.PauseApps) != 1 {
 		t.Fatalf("policy lost in native lease: %+v", lease)
 	}
+	// Policy reconciliation stops here, while the independent lease writer keeps
+	// advancing its sequence. It must never move the policy-owned expiry.
+	for i := 0; i < 8; i++ {
+		previous := lease.Sequence
+		if err := l.renew(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(directory, "leases/desktop.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, &lease); err != nil {
+			t.Fatal(err)
+		}
+		if lease.Sequence != previous+1 || lease.ExpiresAt == nil || *lease.ExpiresAt != float64(end.UnixMilli())/1000 {
+			t.Fatalf("sequence renewal changed the policy deadline: %+v", lease)
+		}
+	}
 }
