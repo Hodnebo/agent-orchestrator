@@ -21,7 +21,7 @@
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} démarre. Les messages sont envoyés dans l’ordre",
+	"chat.startup.queuePlaceholder": "Ajoutez un message pendant que {{agent}} se prépare",
 	"chat.projectSetup.succeeded": "Configuration terminée",
 	"chat.projectSetup.succeededIn": "Configuration terminée en {{duration}}",
 	"chat.projectSetup.timedOut": "L'étape {{step}} de configuration a dépassé le délai",

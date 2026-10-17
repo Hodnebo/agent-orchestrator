@@ -21,7 +21,7 @@
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",
+	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",
 	"chat.projectSetup.succeeded": "セットアップが完了しました",
 	"chat.projectSetup.succeededIn": "セットアップが {{duration}} で完了しました",
 	"chat.projectSetup.timedOut": "セットアップのステップ {{step}} がタイムアウトしました",

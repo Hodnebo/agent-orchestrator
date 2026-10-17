@@ -21,7 +21,7 @@
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} startet. Nachrichten werden der Reihe nach gesendet",
+	"chat.startup.queuePlaceholder": "Folgenachricht einreihen, während {{agent}} startet",
 	"chat.projectSetup.succeeded": "Setup abgeschlossen",
 	"chat.projectSetup.succeededIn": "Setup in {{duration}} abgeschlossen",
 	"chat.projectSetup.timedOut": "Setup-Schritt {{step}} hat das Zeitlimit überschritten",

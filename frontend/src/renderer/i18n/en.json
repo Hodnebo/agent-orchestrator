@@ -21,7 +21,7 @@
 	"chat.annotationReferences": "Referenced chat annotations",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
-	"chat.startup.queuePlaceholder": "{{agent}} is starting. Messages send in order",
+	"chat.startup.queuePlaceholder": "Queue a follow-up while {{agent}} gets ready",
 	"chat.projectSetup.succeeded": "Setup finished",
 	"chat.projectSetup.succeededIn": "Setup finished in {{duration}}",
 	"chat.projectSetup.timedOut": "Setup step {{step}} timed out",
