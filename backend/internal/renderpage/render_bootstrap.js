@@ -22,7 +22,7 @@
   var showScrollbar = "html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}";
   // Reflow is a reader choice, so it overrides the page's fixed widths and nowrap.
   var wrapCSS = "html,body,body *{min-width:0!important;max-width:100%!important;box-sizing:border-box!important;overflow-wrap:anywhere!important;text-wrap-mode:wrap!important}" +
-    "table{width:100%!important;table-layout:fixed!important}colgroup,col,th,td{width:auto!important}";
+    "table{width:100%!important;table-layout:fixed!important}colgroup,col,th,td{width:auto!important}img,video{height:auto!important}";
   function setDisplay(nextMode, nextScrollable, nextWrapContent) {
     if (nextMode !== undefined) mode = nextMode;
     if (nextScrollable !== undefined) scrollable = nextScrollable === true;

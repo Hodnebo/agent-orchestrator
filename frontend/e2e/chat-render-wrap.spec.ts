@@ -168,5 +168,25 @@ for (const width of [390, 1440]) {
 		await expect.poll(async () => (await overflow(inline)).wrapper).toBeGreaterThan(0);
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		expect(renderLoads).toBe(2);
+
+		const image = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="blue"/></svg>')}`;
+		await inlineRoot.locator(".report").evaluate((report, src) => {
+			report.insertAdjacentHTML("beforeend", `<img src="${src}" width="1200" height="600" alt="Chart with HTML dimensions">
+<img src="${src}" style="width:1200px;height:600px" alt="Chart with CSS dimensions">
+<video poster="${src}" width="1200" height="600" style="height:600px"></video>`);
+		}, image);
+		const media = inlineRoot.locator("img,video");
+		const mediaSizes = () => media.evaluateAll((elements) => elements.map((element) => {
+			const { width, height } = element.getBoundingClientRect();
+			return { width, height };
+		}));
+		const authoredSizes = Array.from({ length: 3 }, () => ({ width: 1200, height: 600 }));
+		await expect.poll(mediaSizes).toEqual(authoredSizes);
+		await wrap.click();
+		await expect.poll(async () => (await mediaSizes()).every(({ width, height }) =>
+			width > 0 && width < 1200 && Math.abs(width / height - 2) < 0.01,
+		)).toBe(true);
+		await wrap.click();
+		await expect.poll(mediaSizes).toEqual(authoredSizes);
 	});
 }
