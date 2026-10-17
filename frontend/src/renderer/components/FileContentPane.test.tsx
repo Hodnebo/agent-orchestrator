@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -62,6 +62,32 @@ describe("FileContentPane", () => {
 		expect(media).toHaveAttribute("src", expect.stringContaining(`/api/v1/sessions/sess-1/preview/files/${path}?raw=true`));
 		expect(media).toHaveAttribute("controls");
 		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
+	});
+
+	it.each(["recording.mp4", "voice.wav"])("preserves playback on an unchanged refetch and reloads a same-size replacement of %s", async (path) => {
+		const detail = { sessionId: "sess-1", path, status: "unmodified", additions: 0, deletions: 0, size: 1000, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "media-before" };
+		getMock.mockResolvedValue({ data: detail });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const player = await screen.findByLabelText<HTMLMediaElement>(path);
+		const src = player.getAttribute("src");
+		player.currentTime = 12;
+		const client = subscribeMock.mock.calls[0]![1];
+		// A focus refetch gets a new load timestamp even when its file is unchanged.
+		const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+		onTestFinished(() => now.mockRestore());
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(screen.getByLabelText(path)).toBe(player);
+		expect(player).toHaveAttribute("src", src);
+		expect(player.currentTime).toBe(12);
+
+		getMock.mockResolvedValue({ data: { ...detail, fileFingerprint: "media-after" } });
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByLabelText(path)).not.toBe(player));
+		const replacement = screen.getByLabelText<HTMLMediaElement>(path);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(replacement).not.toHaveAttribute("src", src);
+		expect(replacement.currentTime).toBe(0);
 	});
 
 	it("previews a workspace SVG while keeping its source editable", async () => {
