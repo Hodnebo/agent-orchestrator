@@ -75,7 +75,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
-import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 export type CreateProjectInput = {
 	path: string;
@@ -1398,11 +1397,7 @@ function CloudProjectCard({
 	// prefix appear only when that provider is coder.
 	const offering = useCloudOffering();
 	const offersSandboxChoice = offering.offersProviderChoice;
-	// With more than one provider the project may pick its own; it starts on
-	// the org default.
-	const [chosenProvider, setChosenProvider] = useState("");
-	const effectiveSandboxProvider =
-		offersSandboxChoice && offering.providers.includes(chosenProvider) ? chosenProvider : offering.defaultProvider;
+	const effectiveSandboxProvider = offering.defaultProvider;
 	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
 	// A project is either made from repositories (one main repository plus any
 	// additional ones every session clones beside it) or standalone: no
@@ -1410,6 +1405,10 @@ function CloudProjectCard({
 	// counterpart of a local standalone agent).
 	const [projectSource, setProjectSource] = useState<"repositories" | "standalone">("repositories");
 	const standalone = projectSource === "standalone";
+	const chooseProjectSource = (source: "repositories" | "standalone") => {
+		setProjectSource(source);
+		setSubmitError(null);
+	};
 	const [standaloneName, setStandaloneName] = useState("");
 	const standaloneNameTrimmed = standaloneName.trim();
 	const standaloneNameInvalid = standalone && (standaloneNameTrimmed === "" || [...standaloneNameTrimmed].length > 120);
@@ -1744,48 +1743,6 @@ function CloudProjectCard({
 			) : null}
 
 			<div className={cn(onboardingPanelBodyClass, "pt-4")}>
-				{/* What the project is made from: repositories, or none at all. */}
-				<Tabs
-					value={projectSource}
-					onValueChange={(value) => {
-						setProjectSource(value === "standalone" ? "standalone" : "repositories");
-						setSubmitError(null);
-					}}
-				>
-					<TabsList aria-label={t("createProject.cloudSource", { defaultValue: "Project source" })} className="self-start">
-						<TabsTrigger value="repositories" disabled={isCreating}>
-							{t("createProject.cloudFromRepositories", { defaultValue: "From repositories" })}
-						</TabsTrigger>
-						<TabsTrigger value="standalone" disabled={isCreating}>
-							{t("createProject.cloudStandalone", { defaultValue: "Without a repository" })}
-						</TabsTrigger>
-					</TabsList>
-				</Tabs>
-
-				{/* Where the project's sessions run, when the org has a choice. */}
-				{offersSandboxChoice ? (
-					<div className="space-y-2">
-						<Label className={onboardingFormLabelClass}>
-							{t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
-						</Label>
-						<SearchablePicker
-							ariaLabel={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
-							placeholder={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
-							searchPlaceholder={t("createProject.cloudSandbox", { defaultValue: "Sandbox" })}
-							disabled={isCreating}
-							value={effectiveSandboxProvider}
-							options={offering.providers.map((provider) => ({
-								value: provider,
-								label: t(`createProject.sandboxProvider.${provider}`, { defaultValue: provider }),
-							}))}
-							onChange={(provider) => {
-								setChosenProvider(provider);
-								setSubmitError(null);
-							}}
-						/>
-					</div>
-				) : null}
-
 				{standalone ? (
 					<div className="flex flex-col gap-2 text-sm">
 						<Label htmlFor="cloudStandaloneName" className={onboardingFormLabelClass}>
@@ -1808,6 +1765,14 @@ function CloudProjectCard({
 								defaultValue: "Sessions start in an empty folder with no repository to clone. Use a sandbox template that sets up its own code, or add Setup scripts in the project's settings.",
 							})}
 						</p>
+						<button
+							type="button"
+							className="self-start text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+							disabled={isCreating}
+							onClick={() => chooseProjectSource("repositories")}
+						>
+							{t("createProject.cloudUseRepositories", { defaultValue: "Use a repository instead" })}
+						</button>
 					</div>
 				) : (
 				<div className="space-y-2">
@@ -1860,16 +1825,26 @@ function CloudProjectCard({
 							}}
 						/>
 					)}
-					{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
+					<div className="flex items-center justify-between gap-3">
 						<button
 							type="button"
-							className="ml-auto block text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-							disabled={isCreating || githubOAuthBusy}
-							onClick={() => void connectGitHub()}
+							className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+							disabled={isCreating}
+							onClick={() => chooseProjectSource("standalone")}
 						>
-							{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
+							{t("createProject.cloudStartWithoutRepository", { defaultValue: "No repository? Start without one" })}
 						</button>
-					) : null}
+						{appConnected && (githubAppRepos.data?.length ?? 0) > 0 ? (
+							<button
+								type="button"
+								className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+								disabled={isCreating || githubOAuthBusy}
+								onClick={() => void connectGitHub()}
+							>
+								{t("createProject.reconnectGitHub", { defaultValue: "Reconnect GitHub" })}
+							</button>
+						) : null}
+					</div>
 
 					{/* While GitHub is open in the browser: what to do there, and a way out. */}
 					{githubOAuthBusy ? (

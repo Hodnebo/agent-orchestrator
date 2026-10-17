@@ -2522,11 +2522,11 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
 		});
 
-		it("an org on both picks the sandbox, starting on its Settings default", async () => {
+		it("an org on both gets no sandbox choice and creates on its Settings default", async () => {
 			cloudMocks.providers = ["freestyle", "coder"];
 			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
 			const user = await openCloudRepo();
-			expect(screen.getByRole("combobox", { name: "Sandbox" })).toHaveTextContent("Instant");
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
 			expect(screen.queryByRole("combobox", { name: "Template" })).not.toBeInTheDocument();
 			await user.click(screen.getByRole("button", { name: "Create" }));
 			await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
@@ -2535,28 +2535,12 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(config).not.toHaveProperty("coder");
 		});
 
-		it("an org on both can choose Coder for one project without changing its default", async () => {
-			cloudMocks.providers = ["freestyle", "coder"];
-			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
-			const user = await openCloudRepo();
-			await user.click(screen.getByRole("combobox", { name: "Sandbox" }));
-			await user.click(await screen.findByRole("option", { name: "Dev workspace (Coder)" }));
-			await user.click(await screen.findByRole("combobox", { name: "Template" }));
-			await user.click(await screen.findByRole("option", { name: "Dev kit" }));
-			await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
-			await user.click(screen.getByRole("button", { name: "Create" }));
-			await waitFor(() => expect(cloudMocks.createGitHubProject).toHaveBeenCalled());
-			const config = cloudMocks.createGitHubProject.mock.calls[0][1].config;
-			expect(config.sandboxProvider).toBe("coder");
-			expect(config.coder.templateId).toBe("tpl-1");
-		});
-
 		it("an org on both whose Settings default is Coder gets the template picker and creates on Coder", async () => {
 			cloudMocks.providers = ["freestyle", "coder"];
 			cloudMocks.coderDefault = true;
 			cloudMocks.coderTemplates = [{ id: "tpl-1", name: "dev-kit", displayName: "Dev kit" }];
 			const user = await openCloudRepo();
-			expect(screen.getByRole("combobox", { name: "Sandbox" })).toHaveTextContent("Dev workspace (Coder)");
+			expect(screen.queryByRole("combobox", { name: "Sandbox" })).not.toBeInTheDocument();
 			await user.click(await screen.findByRole("combobox", { name: "Template" }));
 			await user.click(await screen.findByRole("option", { name: "Dev kit" }));
 			await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
@@ -2898,7 +2882,7 @@ describe("CreateProjectFlow project import validation", () => {
 			{ wrapper: CloudTestProviders },
 		);
 		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
-		await user.click(await screen.findByRole("tab", { name: "Without a repository" }));
+		await user.click(await screen.findByRole("button", { name: "No repository? Start without one" }));
 		expect(screen.queryByRole("button", { name: /^Connect repository/ })).not.toBeInTheDocument();
 		await user.type(screen.getByLabelText("Project name"), "Platform template");
 		await user.click(await screen.findByRole("combobox", { name: "Template" }));
