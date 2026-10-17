@@ -157,7 +157,7 @@ func (m *cardSummarizer) arm(id domain.SessionID, st *cardState) {
 		return
 	}
 	urgent := st.first || st.final
-	if !urgent && !(st.running && len(st.evidence) > 0) {
+	if !urgent && (!st.running || len(st.evidence) == 0) {
 		return
 	}
 	if st.timer != nil {

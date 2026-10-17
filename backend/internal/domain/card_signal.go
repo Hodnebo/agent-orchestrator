@@ -10,8 +10,9 @@ const (
 	CardSignalActivity CardSignalKind = "activity"
 	// CardSignalAssistant is the text of an assistant message.
 	CardSignalAssistant CardSignalKind = "assistant"
-	// CardSignalTurnStarted and CardSignalTurnCompleted bracket one agent turn.
-	CardSignalTurnStarted   CardSignalKind = "turn_started"
+	// CardSignalTurnStarted marks the beginning of an agent turn.
+	CardSignalTurnStarted CardSignalKind = "turn_started"
+	// CardSignalTurnCompleted marks the end of an agent turn.
 	CardSignalTurnCompleted CardSignalKind = "turn_completed"
 )
 

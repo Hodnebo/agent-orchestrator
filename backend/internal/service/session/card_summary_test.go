@@ -63,7 +63,11 @@ func (c *summaryCommander) RunBackgroundTask(_ context.Context, _ domain.Session
 	c.mu.Unlock()
 	n := c.inFlight.Add(1)
 	defer c.inFlight.Add(-1)
-	for p := c.peak.Load(); n > p && !c.peak.CompareAndSwap(p, n); p = c.peak.Load() {
+	for {
+		p := c.peak.Load()
+		if n <= p || c.peak.CompareAndSwap(p, n) {
+			break
+		}
 	}
 	return c.reply(call, prompt)
 }
