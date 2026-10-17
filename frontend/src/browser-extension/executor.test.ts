@@ -120,7 +120,12 @@ class FakeChrome {
 				group: async ({ tabIds, groupId, createProperties }) => {
 					const id = groupId ?? self.nextGroup++;
 					if (!self.groups.has(id)) self.groups.set(id, { id, windowId: createProperties?.windowId ?? 1 });
-					for (const tabId of Array.isArray(tabIds) ? tabIds : [tabIds]) self.tabs.get(tabId)!.groupId = id;
+					for (const tabId of Array.isArray(tabIds) ? tabIds : [tabIds]) {
+						self.tabs.get(tabId)!.groupId = id;
+						// Chrome reports the grouping as a tab update, possibly before
+						// the caller has recorded the tab.
+						self.events.tabsUpdated.fire(tabId, { groupId: id }, self.tabs.get(tabId));
+					}
 					return id;
 				},
 				ungroup: async (ids) => {

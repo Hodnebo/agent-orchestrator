@@ -21,6 +21,7 @@ import { normalizeAgentURL, originOf } from "./urls";
 const ACT_VERBS = new Set(["click", "dblclick", "focus", "hover", "fill", "type", "check", "uncheck"]);
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const POSTCONDITION_POLL_MS = 150;
+const CONTENT_TIMEOUT_MS = 15_000;
 export const POLICY_KEY = "aoSitePolicy";
 
 type FrameSelection = { logicalTabId: string; frameId: number; parentFrameId: number; ref: string };
@@ -212,12 +213,25 @@ export class Executor {
 	}
 
 	private async content(page: ActiveTab, ctx: Context, request: Record<string, unknown>, frameId = this.frameFor(ctx, page)): Promise<unknown> {
+		const dialog = this.deps.trusted.pendingDialog(page.tabId);
+		if (dialog) {
+			throw new BridgeError("BROWSER_DIALOG_OPEN", `A ${dialog.type} dialog is open; answer it with \`ao browser dialog accept|dismiss\``);
+		}
 		const message = { aoBridge: 1, ...request };
-		const send = () => this.deps.chrome.tabs.sendMessage(page.tabId, message, { frameId }) as Promise<ContentResponse | undefined>;
+		// A page blocked by a dialog never answers; do not hang the command.
+		const limit = (typeof request.timeoutMs === "number" ? request.timeoutMs : 0) + CONTENT_TIMEOUT_MS;
+		const send = () =>
+			Promise.race([
+				this.deps.chrome.tabs.sendMessage(page.tabId, message, { frameId }) as Promise<ContentResponse | undefined>,
+				sleep(limit).then(() => {
+					throw new BridgeError("BROWSER_PAGE_UNRESPONSIVE", "The page did not respond (is a dialog open, or is the page hung?)");
+				}),
+			]);
 		let response: ContentResponse | undefined;
 		try {
 			response = await send();
-		} catch {
+		} catch (error) {
+			if (error instanceof BridgeError) throw error;
 			response = undefined;
 		}
 		if (!response) {
@@ -254,6 +268,26 @@ export class Executor {
 
 	private useTrustedInput(ctx: Context, page: ActiveTab): boolean {
 		return ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url);
+	}
+
+	/**
+	 * Chrome drops trusted input to hidden pages, so show the agent's tab in
+	 * its window (without focusing the window) and wait until it is visible.
+	 */
+	private async showTab(ctx: Context, page: ActiveTab): Promise<void> {
+		if (!page.tab.active) await this.deps.chrome.tabs.update(page.tabId, { active: true });
+		const deadline = Date.now() + 2_000;
+		for (;;) {
+			const state = (await this.content(page, ctx, { op: "ping" }, 0)) as { visibility?: string };
+			if (state.visibility !== "hidden") return;
+			if (Date.now() >= deadline) {
+				throw new BridgeError(
+					"BROWSER_TAB_HIDDEN",
+					"Chrome is hiding the AO tab (is its window minimized?); trusted input needs the tab on screen",
+				);
+			}
+			await sleep(50, ctx.signal);
+		}
 	}
 
 	// --- navigation and tabs ----------------------------------------------
@@ -399,11 +433,13 @@ export class Executor {
 				const beforeNavigations = this.navigationCounts.get(page.tabId) ?? 0;
 				const before = { tabId: page.logicalId, url: sanitizeBrowserURL(page.tab.url ?? "") };
 				const alreadySatisfied = postcondition ? await this.postconditionHoldsNow(ctx, page, postcondition) : false;
-				const result = await this.elementAction(ctx, verb, candidate.ref, value !== undefined ? { text: value } : {});
+				const result = (await this.elementAction(ctx, verb, candidate.ref, value !== undefined ? { text: value } : {})) as Record<string, unknown>;
 				dispatched = true;
-				const observed = postcondition
-					? await this.observePostcondition(ctx, page, postcondition, beforeNavigations, beforeSnapshot, alreadySatisfied)
-					: undefined;
+				const observed = !postcondition
+					? undefined
+					: postcondition.kind === "dialog" && result.dialogOpened === true
+						? { status: "satisfied", kind: "dialog", dialog: result.dialog }
+						: await this.observePostcondition(ctx, page, postcondition, beforeNavigations, beforeSnapshot, alreadySatisfied);
 				const after = await this.refreshed(page);
 				const navigated = (this.navigationCounts.get(page.tabId) ?? 0) > beforeNavigations;
 				return {
@@ -515,25 +551,29 @@ export class Executor {
 				case "click":
 				case "dblclick":
 					if (trusted) {
-						await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), { clicks: action === "dblclick" ? 2 : 1, human: args.human === true });
-						value = { clicked: true };
+						await this.showTab(ctx, page);
+						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
+							clicks: action === "dblclick" ? 2 : 1,
+							human: args.human === true,
+						});
+						value = { clicked: true, ...input };
 					} else {
 						value = await this.content(page, ctx, { op: "click", ref, clicks: action === "dblclick" ? 2 : 1 });
 					}
 					break;
 				case "hover":
 					if (trusted) {
-						await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true);
-						value = { hovered: true };
+						await this.showTab(ctx, page);
+						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true)) };
 					} else {
 						value = await this.content(page, ctx, { op: "hover", ref });
 					}
 					break;
 				case "type":
 					if (trusted) {
+						await this.showTab(ctx, page);
 						await this.content(page, ctx, { op: "focus", ref });
-						await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""));
-						value = { typed: true };
+						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""))) };
 					} else {
 						value = await this.content(page, ctx, { op: "type", ref, text: args.text });
 					}
@@ -548,9 +588,12 @@ export class Executor {
 
 	private async press(ctx: Context, key: string): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
-			if (this.useTrustedInput(ctx, page)) await this.deps.trusted.press(page.tabId, key);
-			else await this.content(page, ctx, { op: "press", key });
-			return { pressed: key, ...this.result(await this.refreshed(page)) };
+			let input = {};
+			if (this.useTrustedInput(ctx, page)) {
+				await this.showTab(ctx, page);
+				input = await this.deps.trusted.press(page.tabId, key);
+			} else await this.content(page, ctx, { op: "press", key });
+			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
 		});
 	}
 
@@ -559,10 +602,11 @@ export class Executor {
 			if (!this.useTrustedInput(ctx, page)) {
 				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}
+			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
 			const to = await this.point(ctx, page, targetRef);
-			await this.deps.trusted.drag(page.tabId, from, to, human);
-			return { dragged: true, ...this.result(await this.refreshed(page)) };
+			const input = await this.deps.trusted.drag(page.tabId, from, to, human);
+			return { dragged: true, ...input, ...this.result(await this.refreshed(page)) };
 		});
 	}
 
@@ -641,7 +685,7 @@ export class Executor {
 	private async screenshot(ctx: Context, annotate: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			// captureVisibleTab captures the window's active tab.
-			if (!page.tab.active) await this.deps.chrome.tabs.update(page.tabId, { active: true });
+			await this.showTab(ctx, page);
 			let items: Annotation[] = [];
 			let dpr = 1;
 			if (annotate) {

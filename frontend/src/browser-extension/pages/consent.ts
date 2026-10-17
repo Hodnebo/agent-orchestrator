@@ -1,5 +1,4 @@
 import { chromeApi } from "../chrome-api";
-import { SITE_ACCESS } from "../consent";
 
 const chrome = chromeApi();
 const sessionId = new URLSearchParams(location.search).get("session") ?? "";
@@ -12,22 +11,7 @@ const trusted = document.getElementById("trusted") as HTMLInputElement;
 async function decide(allowed: boolean): Promise<void> {
 	allow.disabled = deny.disabled = true;
 	try {
-		let useTrusted = trusted.checked;
-		if (allowed) {
-			// Must run inside the click: Chrome only shows permission prompts
-			// for a user gesture.
-			const granted = await chrome.permissions.request({
-				origins: SITE_ACCESS.origins,
-				...(useTrusted ? { permissions: ["debugger"] } : {}),
-			});
-			if (!granted) {
-				error.textContent = "Chrome permission was not granted, so the agent cannot work. Allow again to retry.";
-				allow.disabled = deny.disabled = false;
-				return;
-			}
-			if (useTrusted) useTrusted = await chrome.permissions.contains({ permissions: ["debugger"] });
-		}
-		await chrome.runtime.sendMessage({ type: "ao-consent-decision", sessionId, allow: allowed, trusted: useTrusted });
+		await chrome.runtime.sendMessage({ type: "ao-consent-decision", sessionId, allow: allowed, trusted: allowed && trusted.checked });
 		window.close();
 	} catch (cause) {
 		error.textContent = String(cause);
