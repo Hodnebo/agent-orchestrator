@@ -1,0 +1,26 @@
+$ ao instructions show --json
+{
+  "body": "- Keep replies to the user to one or two lines.\n- Ask before committing or opening a PR.",
+  "revision": 3,
+  "updatedAt": "2026-10-16T20:57:53.751767Z",
+  "protectedLines": [
+    "- Keep replies to the user to one or two lines.",
+    "- Ask before committing or opening a PR."
+  ],
+  "removedLines": []
+}
+
+# 1. A normal worker (acme-notes-2) tries to plant an instruction:
+$ AO_SESSION_ID=acme-notes-2 ao instructions set --file evil.md
+Only dreaming can change instructions from inside a session. Ask the user to edit them on the Automations page. (INSTRUCTIONS_READ_ONLY) [request Dhruvs-MacBook-Pro.local/7hFtF5T3ef-000118]
+exit=1
+
+# 2. The dream session (standalone-1) tries to drop the line the user saved:
+$ AO_SESSION_ID=standalone-1 ao instructions set --revision 3 --file drop.md
+Keep every line the user saved, word for word. Put these back: - Ask before committing or opening a PR. (INSTRUCTIONS_LINES_REMOVED) [request Dhruvs-MacBook-Pro.local/7hFtF5T3ef-000120]
+exit=1
+
+# 3. The dream session saves against a stale revision:
+$ AO_SESSION_ID=standalone-1 ao instructions set --revision 1 --file drop.md
+The instructions changed after you read them. Read them again and redo your edit. (INSTRUCTIONS_CHANGED) [request Dhruvs-MacBook-Pro.local/7hFtF5T3ef-000122]
+exit=1
