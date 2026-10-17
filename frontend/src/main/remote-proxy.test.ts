@@ -8,6 +8,7 @@ import {
 	type Http2SecureServer, type Http2Server, type Http2ServerRequest, type Http2ServerResponse, type ServerHttp2Session,
 } from "node:http2";
 import { WebSocketServer, createWebSocketStream, type WebSocket } from "ws";
+import * as agentViewer from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
 import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
 
@@ -136,7 +137,9 @@ describe("startRemoteProxy", () => {
 		expect(await request(raw)).toBe(200);
 	});
 
-	it("keeps an app preview's origin across dev-server and proxy restarts", async () => {
+	it("keeps an app preview's origin across restarts with the same preview port", async () => {
+		// Port contention permits a different origin; isolate stable-port URL mapping.
+		vi.spyOn(agentViewer, "listenOnStablePort").mockResolvedValue(44000);
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		const entry = { label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" };
 		proxy = await startRemoteProxy(entry);
