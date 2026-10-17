@@ -197,6 +197,22 @@ for (const width of [390, 1440]) {
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		expect(renderLoads).toBe(2);
 
+		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(originalHeight);
+		const fittedHeight = await inline.evaluate((frame) => frame.getBoundingClientRect().height);
+		await inlineRoot.locator(".report").evaluate((report) => { report.style.minHeight = "100vh"; });
+		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(fittedHeight + scrollbarHeight);
+		const settledHeights = await inline.evaluate(async (frame) => {
+			const heights = [];
+			for (let i = 0; i < 10; i++) {
+				await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+				heights.push(frame.getBoundingClientRect().height);
+			}
+			return heights;
+		});
+		expect(settledHeights).toEqual(Array.from({ length: 10 }, () => fittedHeight + scrollbarHeight));
+		await inlineRoot.locator(".report").evaluate((report) => { report.style.minHeight = ""; });
+		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(fittedHeight);
+
 		const image = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="blue"/></svg>')}`;
 		await inlineRoot.locator(".report").evaluate((report, src) => {
 			report.insertAdjacentHTML("beforeend", `<img src="${src}" width="1200" height="600" alt="Chart with HTML dimensions">
