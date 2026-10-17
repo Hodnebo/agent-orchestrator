@@ -76,7 +76,12 @@ describe("ArtifactFileView", () => {
 		["voice.wav", "audio"],
 	])("previews %s as media without reading it as text", async (path, tag) => {
 		const rawUrl = `http://ao-preview-artifact.abc123.localhost:3001/${path}?raw=true`;
-		fetchMock.mockResolvedValue(new Response(null, { headers: { "Content-Length": "104857600" } }));
+		const cancel = vi.fn();
+		const response = new Response(new ReadableStream({ cancel }), { headers: { "Content-Length": "104857600" } });
+		// The daemon's preview/files route only registers GET, including for media.
+		fetchMock.mockImplementation((_url, init?: RequestInit) => Promise.resolve(
+			init?.method && init.method !== "GET" ? new Response(null, { status: 405 }) : response,
+		));
 
 		renderWithQuery(<ArtifactFileView artifactName={path} path={path} rawUrl={rawUrl} sessionId="sess-1" />);
 
@@ -84,7 +89,8 @@ describe("ArtifactFileView", () => {
 		expect(media.tagName.toLowerCase()).toBe(tag);
 		const contentUrl = `http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/${path}?source=artifact&raw=true`;
 		expect(media).toHaveAttribute("src", expect.stringContaining(`${contentUrl}&v=`));
-		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl, { method: "HEAD" });
+		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
+		expect(cancel).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
 		if (tag !== "img") {
 			expect(media).toHaveAttribute("controls");

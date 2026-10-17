@@ -160,8 +160,9 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
 	if (!contentUrl) throw new Error(errorMessage);
 	const media = fileMediaKind(path);
-	// Native media elements stream and seek themselves; only read metadata here.
-	const response = media ? await fetch(contentUrl, { method: "HEAD" }) : await fetch(contentUrl);
+	// The artifact route only supports GET; media elements stream their own body.
+	const response = await fetch(contentUrl);
+	if (media) void response.body?.cancel();
 	if (!response.ok) throw new Error(errorMessage);
 	const { binary, bytes, content, size, truncated } = media
 		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
