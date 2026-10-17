@@ -424,6 +424,11 @@ let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	// Keep vibrancy and the native background in sync after window/renderer
+	// lifecycle changes, as well as theme updates.
+	if (process.platform === "darwin") {
+		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	}
 	if (windowTranslucent) {
 		mainWindow.setBackgroundColor("#00000000");
 		return;
@@ -789,8 +794,8 @@ async function createWindowInternal(): Promise<void> {
 						titleBarStyle: "hiddenInset" as const,
 						// Window transparency: an opaque window keeps Chromium's compositor
 						// opaque, hiding the vibrancy view. Transparent windows still paint
-						// the theme colour via setBackgroundColor unless the Developer Mode
-						// window transparency flag is on.
+						// the theme colour via setBackgroundColor unless window transparency
+						// is enabled in Appearance.
 						transparent: true,
 						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
@@ -1035,11 +1040,14 @@ async function createWindowInternal(): Promise<void> {
 
 	const syncWindowChrome = () => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
+		syncNativeWindowBackground();
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
 	mainWindow.on("resize", syncWindowChrome);
+	mainWindow.on("show", syncWindowChrome);
+	mainWindow.on("restore", syncWindowChrome);
 	shellWebContents.on("did-finish-load", syncWindowChrome);
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
@@ -1047,6 +1055,7 @@ async function createWindowInternal(): Promise<void> {
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
+		syncNativeWindowBackground();
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -1083,9 +1092,6 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
-		// Vibrancy belongs to the closed window. The shell of a recreated window
-		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
-		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -2388,7 +2394,6 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	mainWindow.setVibrancy(enabled ? "under-window" : null);
 	syncNativeWindowBackground();
 });
 
