@@ -164,10 +164,6 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
-	if request.Branch != "" && !validBranchName(request.Branch) {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Branch name is invalid.")
-		return
-	}
 	// The project's configured worker agent (config.worker.agent) is authoritative
 	// for orchestrator-spawned workers: the harness must match what was chosen at
 	// project creation regardless of what the orchestrator asks for. Some agents
@@ -293,27 +289,6 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(child, nil)})
-}
-
-// validBranchName applies git's branch-name rules (git check-ref-format
-// --branch), so a requested branch can never reach git as an option or as a
-// ref git would refuse.
-func validBranchName(name string) bool {
-	if len(name) > 255 || name == "@" || name == "HEAD" ||
-		strings.HasPrefix(name, "-") || strings.HasSuffix(name, ".") ||
-		strings.Contains(name, "..") || strings.Contains(name, "@{") ||
-		strings.ContainsAny(name, " ~^:?*[\\\x7f") ||
-		strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 }) {
-		return false
-	}
-	// An empty component is an empty name or a leading, trailing, or doubled
-	// slash.
-	for _, component := range strings.Split(name, "/") {
-		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Server) sendWorkerChildMessage(w http.ResponseWriter, r *http.Request) {

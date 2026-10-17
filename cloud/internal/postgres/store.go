@@ -15,6 +15,7 @@ var (
 	ErrForbidden            = errors.New("forbidden")
 	ErrConflict             = errors.New("conflict")
 	ErrInvalid              = errors.New("invalid")
+	ErrInvalidBranch        = errors.New("invalid session branch")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")

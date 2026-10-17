@@ -745,6 +745,7 @@ func prepareReusedWorkspace(
 	if reuse.AdoptedNow {
 		if err := worker.AdvanceAdoptedCheckout(
 			ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch, bootstrap.Launch.DefaultBranch,
+			reuse.BranchCreated,
 		); err != nil {
 			logger.Warn("checkout reuse: could not move the session branch to the latest remote commits", "error", err)
 		}

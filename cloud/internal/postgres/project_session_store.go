@@ -715,8 +715,9 @@ func createSessionTx(
 		}
 	}
 	var projectConfig json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Session{}, ErrNotFound
 		}
@@ -742,6 +743,9 @@ func createSessionTx(
 	prefix, err := domain.ProjectSessionPrefix(projectConfig)
 	if err != nil {
 		return domain.Session{}, ErrInvalid
+	}
+	if input.Branch != "" && !domain.ValidSessionBranch(input.Branch, defaultBranch, prefix) {
+		return domain.Session{}, ErrInvalidBranch
 	}
 	err = scanSession(tx.QueryRow(
 		ctx,

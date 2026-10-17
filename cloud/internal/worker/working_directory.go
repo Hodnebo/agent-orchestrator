@@ -167,9 +167,11 @@ func ResolveWorkingDirectory(
 	if err != nil || want == "" || NormalizeRemoteURL(strings.TrimSpace(origin)) != want {
 		return ReuseDecision{}, fmt.Errorf("%w: %s is a checkout of a different repository", ErrWorkingDirectoryUnusable, dir)
 	}
-	stash, err := adoptExistingCheckout(ctx, runner, dir, sessionID, branch, defaultBranch)
+	stash, created, err := adoptExistingCheckout(ctx, runner, dir, sessionID, branch, defaultBranch)
 	if err != nil {
 		return ReuseDecision{}, fmt.Errorf("%w: %s: %v", ErrWorkingDirectoryUnusable, dir, err)
 	}
-	return record("adopted", ReuseDecision{Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash})
+	return record("adopted", ReuseDecision{
+		Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash, BranchCreated: created,
+	})
 }

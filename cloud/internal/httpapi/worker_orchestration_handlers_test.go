@@ -286,27 +286,21 @@ func TestCreateWorkerChildPassesRequestedBranch(t *testing.T) {
 	}
 }
 
-// A branch git would reject, or read as an option, never reaches a sandbox.
-func TestCreateWorkerChildRejectsInvalidBranch(t *testing.T) {
+// The store refuses a branch it cannot use; the orchestrator gets a specific
+// error rather than a generic constraint violation.
+func TestCreateWorkerChildReportsInvalidBranch(t *testing.T) {
 	t.Parallel()
-	for _, branch := range []string{
-		"-f", "HEAD", "@", "/lead", "trail/", "a//b", "a..b", "end.", "x.lock", "dir/.hidden",
-		"has space", "tab\there", "a~1", "a^", "a:b", "a?", "a*", "a[b", `a\b`, "a@{1}",
-		strings.Repeat("b", 256),
-	} {
-		store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
-		srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
-		encoded, err := json.Marshal(map[string]string{"displayName": "resume", "prompt": "work", "branch": branch})
-		if err != nil {
-			t.Fatal(err)
-		}
+	store := &stubChildStore{
+		credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: postgres.ErrInvalidBranch,
+	}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
 
-		rec := httptest.NewRecorder()
-		srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, string(encoded)))
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"work","branch":"main"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
 
-		if rec.Code != http.StatusUnprocessableEntity || store.created {
-			t.Errorf("branch %q: status = %d, created = %v; want 422 and no child", branch, rec.Code, store.created)
-		}
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid_branch") {
+		t.Fatalf("status = %d, body = %s; want 422 invalid_branch", rec.Code, rec.Body.String())
 	}
 }
 

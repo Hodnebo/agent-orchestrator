@@ -30,7 +30,11 @@ ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--
   asks for a specific branch, or to resume work a stopped worker already
   pushed (`ao list --all` shows each worker's branch). A branch that already
   exists on the remote is checked out with its commits; a new name starts from
-  the default branch. Omit it for ordinary tasks.
+  the default branch. It cannot be the project's default branch. Omit it for
+  ordinary tasks. To resume another worker's branch, `ao kill` that worker
+  first so the two never share the branch, and if it already opened a pull
+  request, tell the new worker to run `ao claim-pr <number>` instead of
+  opening another one.
 
 Prints `spawned <session-id> (<status>)`. The worker provisions its own
 sandbox, checks out the project repository on a fresh branch (or the

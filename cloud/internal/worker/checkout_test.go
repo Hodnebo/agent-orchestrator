@@ -289,6 +289,42 @@ func TestConfigureWorkerGitContinuesRemoteBranch(t *testing.T) {
 	}
 }
 
+// Local changes that block switching to the remote branch do not stop the
+// worker: the branch is cut at HEAD as before and the changes are kept.
+func TestConfigureWorkerGitFallsBackWhenLocalChangesBlockRemoteBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	if err := os.WriteFile(filepath.Join(pusher, "README.md"), []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "commit", "-qam", "remote edit")
+	gitRun(t, pusher, "push", "-q", "origin", "HEAD:refs/heads/feature/x")
+
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := gitOutput(t, workspace, "rev-parse", "HEAD")
+	if err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x"); err != nil {
+		t.Fatalf("ConfigureWorkerGit: %v", err)
+	}
+	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "feature/x" {
+		t.Fatalf("branch = %q, want feature/x", branch)
+	}
+	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != base {
+		t.Fatalf("HEAD = %s, want the cloned base %s", head, base)
+	}
+	if content, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(content) != "local edit\n" {
+		t.Fatalf("local change lost: %q, %v", content, err)
+	}
+}
+
 func TestEnsureWorkspaceReviewBaseRepairsLegacyRootFallback(t *testing.T) {
 	repo := initReviewBaseRepository(t)
 	root := gitOutput(t, repo, "rev-parse", "HEAD")
