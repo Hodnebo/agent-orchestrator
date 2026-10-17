@@ -71,6 +71,27 @@ const tabs = [
 ];
 
 describe("SessionInspectorShellView", () => {
+  it("lets side chat own its scrolling and composer padding", () => {
+    render(<SessionInspectorShellView
+      activeView="sideChat" ariaLabel="Session inspector" browserPoppedOut={false}
+      sideChatView={<div data-testid="side-slot" />} tabs={tabs} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("side-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
+  });
+  it("renders the artifacts view under its own tab", () => {
+    const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
+    render(<SessionInspectorShellView
+      activeView="artifacts" ariaLabel="Session inspector" browserPoppedOut={false}
+      artifactsView={<div data-testid="artifacts-slot" />}
+      tabs={withArtifacts} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("artifacts-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+  });
   it("preserves the tab semantics, responsive labels, badge, and host slots", () => {
     const onViewChange = vi.fn();
     const { rerender } = render(
@@ -184,12 +205,24 @@ describe("portable inspector presentations", () => {
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
+  it("omits the PR/artifacts section entirely when no title is given", () => {
+    render(
+      <SessionInspectorSummaryView
+        activity={<div>activity</div>}
+        activityTitle="Activity"
+      />,
+    );
+
+    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+  });
+
   it("renders PR facts and host-owned actions from a neutral view model", () => {
     render(
       <InspectorPullRequestCardView
+        countNounLabel={(count, noun) => `${count} ${noun}s`}
         externalLink={ExternalLink}
         mergeAction={<button type="button">Merge</button>}
-        viewLabel="View PR"
+        openLabel="Open PR #12"
         pr={{
           additions: 4,
           author: "ada",
@@ -215,15 +248,14 @@ describe("portable inspector presentations", () => {
         }}
       />,
     );
-    const title = screen.getByText("Portable inspector");
-    expect(screen.queryByText("open", { exact: true })).not.toBeInTheDocument();
-    expect(screen.getByText("feature → main")).toBeInTheDocument();
-    expect(title.parentElement).toContainElement(screen.getByText("#12"));
-    expect(screen.queryByText("@ada")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Portable inspector" }),
+    ).toHaveAttribute("href", "https://example.com/pull/12");
+    expect(
+      screen.getByRole("link", { name: "Open PR #12" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ready to merge")).toHaveClass("text-success");
     expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View PR" })).toHaveAttribute("href", "https://example.com/pull/12");
-    expect(screen.getAllByRole("link")).toHaveLength(1);
   });
 
   it("renders timeline events with current-state marker treatment", () => {

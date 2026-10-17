@@ -138,6 +138,8 @@ type SCMPRObservation struct {
 	// branch lives in. It matches the base repo for same-repo PRs and differs
 	// for PRs opened from a fork, so branch-prefix attribution can ignore forks.
 	HeadRepo string
+	// BaseRepo is the provider's current full name of the base repository.
+	BaseRepo string
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
 	// HeadSHA is the current head commit SHA for the PR.
@@ -155,10 +157,6 @@ type SCMPRObservation struct {
 	// AuthorAvatarURL is the provider-hosted profile image URL for the PR author.
 	// It is optional because not every provider or historical record supplies one.
 	AuthorAvatarURL string
-	// DiscussionCommentCount counts top-level PR conversation comments.
-	DiscussionCommentCount int
-	// DiscussionCommenters contains distinct authors from the latest PR conversation comments.
-	DiscussionCommenters []string
 	// BaseSHA is the current base branch SHA when the provider supplies it.
 	BaseSHA string
 	// MergeCommitSHA is the merge commit SHA when the PR has one.

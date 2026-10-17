@@ -25,6 +25,12 @@ type PRFacts struct {
 	TargetBranch   string
 	HeadSHA        string
 	UpdatedAt      time.Time
+	// StateChangedAt, CIChangedAt and LastReviewAt are when the lifecycle
+	// state, the CI result and the newest review last changed. Unlike
+	// UpdatedAt, none of them advance on an unchanged poll; zero is unknown.
+	StateChangedAt time.Time
+	CIChangedAt    time.Time
+	LastReviewAt   time.Time
 	// ExternalApproved and ExternalChangesRequested are the human review
 	// verdicts AO did not author. Review above aggregates AO's own provider
 	// reviews with everyone else's, so it cannot say whose turn the
@@ -63,19 +69,17 @@ type PullRequest struct {
 	// renames or transfers.
 	ProviderID string
 
-	SourceBranch           string
-	TargetBranch           string
-	HeadSHA                string
-	Title                  string
-	Additions              int
-	Deletions              int
-	ChangedFiles           int
-	Author                 string
-	AuthorAvatarURL        string
-	DiscussionCommentCount int
-	DiscussionCommenters   []string
-	BaseSHA                string
-	MergeCommitSHA         string
+	SourceBranch    string
+	TargetBranch    string
+	HeadSHA         string
+	Title           string
+	Additions       int
+	Deletions       int
+	ChangedFiles    int
+	Author          string
+	AuthorAvatarURL string
+	BaseSHA         string
+	MergeCommitSHA  string
 
 	ProviderState            string
 	ProviderMergeable        string

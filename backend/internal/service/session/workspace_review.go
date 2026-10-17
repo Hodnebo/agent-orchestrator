@@ -150,6 +150,33 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 	}
 	parts := []string{string(files.SessionID), files.CompareBaseSHA, files.CompareBaseRef, string(files.CompareMode), strconv.FormatBool(files.Truncated)}
 	for _, file := range files.Files {
+		if file.Status != WorkspaceFileUnmodified {
+			parts = append(parts, file.FileFingerprint)
+		}
+	}
+	for _, section := range sections {
+		for _, file := range *section {
+			parts = append(parts, file.FileFingerprint)
+		}
+	}
+	files.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
+	return files
+}
+
+func finalizeWorkspaceManifest(manifest WorkspaceManifest) WorkspaceManifest {
+	for i := range manifest.Files {
+		manifest.Files[i].Editable = workspaceFileEditable(manifest.Files[i].Size, manifest.Files[i].Binary, manifest.Files[i].Status == WorkspaceFileDeleted)
+		manifest.Files[i].FileFingerprint = summaryFingerprint(manifest.Files[i])
+	}
+	sections := []*[]WorkspaceFileSummary{&manifest.Sections.Staged, &manifest.Sections.Unstaged, &manifest.Sections.Untracked, &manifest.Sections.Committed}
+	for _, section := range sections {
+		for i := range *section {
+			(*section)[i].Editable = workspaceFileEditable((*section)[i].Size, (*section)[i].Binary, (*section)[i].Status == WorkspaceFileDeleted)
+			(*section)[i].FileFingerprint = summaryFingerprint((*section)[i])
+		}
+	}
+	parts := []string{string(manifest.SessionID), manifest.CompareBaseSHA, manifest.CompareBaseRef, string(manifest.CompareMode), strconv.FormatBool(manifest.Truncated)}
+	for _, file := range manifest.Files {
 		parts = append(parts, file.FileFingerprint)
 	}
 	for _, section := range sections {
@@ -157,14 +184,8 @@ func finalizeWorkspaceFiles(files WorkspaceFiles) WorkspaceFiles {
 			parts = append(parts, file.FileFingerprint)
 		}
 	}
-	for _, commit := range files.Commits {
-		parts = append(parts, commit.SHA)
-		for _, file := range commit.Files {
-			parts = append(parts, file.FileFingerprint)
-		}
-	}
-	files.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
-	return files
+	manifest.WorkspaceVersion = hashWorkspaceReviewValue(parts...)
+	return manifest
 }
 
 func finalizeWorkspaceFileDetail(detail WorkspaceFileDetail) WorkspaceFileDetail {
@@ -210,7 +231,7 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 	if input.ContextLines < 0 || input.ContextLines > 20 {
 		return WorkspaceDiffs{}, apierr.Invalid("INVALID_WORKSPACE_DIFF_CONTEXT", "contextLines must be between 0 and 20", nil)
 	}
-	current, err := s.ListWorkspaceFiles(ctx, id)
+	current, err := s.workspaceDiffManifest(ctx, id, input.WorkspaceVersion)
 	if err != nil {
 		return WorkspaceDiffs{}, err
 	}
@@ -222,7 +243,11 @@ func (s *Service) GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, in
 		if scope != WorkspaceDiffCommitted {
 			return WorkspaceDiffs{}, apierr.Invalid("WORKSPACE_COMMIT_SCOPE_REQUIRED", "commitSha requires the committed scope", nil)
 		}
-		commit, err := workspaceCommit(current, commitSHA)
+		history, err := s.ListWorkspaceFiles(ctx, id)
+		if err != nil {
+			return WorkspaceDiffs{}, err
+		}
+		commit, err := workspaceCommit(history, commitSHA)
 		if err != nil {
 			return WorkspaceDiffs{}, err
 		}
@@ -408,27 +433,44 @@ func (s *Service) getWorkspaceFileRevision(ctx context.Context, id domain.Sessio
 	if side != WorkspaceBlobBefore && side != WorkspaceBlobAfter {
 		return WorkspaceFileRevision{}, apierr.Invalid("INVALID_WORKSPACE_REVISION_SIDE", "side must be before or after", nil)
 	}
-	target, err := s.resolveWorkspaceFileTarget(ctx, id, rawPath)
+	// Unversioned live text reads are independent of Git comparison metadata.
+	// Snapshot-fenced and historical reads retain the complete validation path.
+	fastWorktree := side == WorkspaceBlobAfter && strings.TrimSpace(rawCommitSHA) == "" && workspaceVersion == "" && (resolvedScope == WorkspaceDiffCombined || resolvedScope == WorkspaceDiffUnstaged || resolvedScope == WorkspaceDiffUntracked)
+	target, err := s.resolveWorkspaceFileTargetWithCompare(ctx, id, rawPath, !fastWorktree)
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
-	current, err := s.ListWorkspaceFiles(ctx, id)
-	if err != nil {
-		return WorkspaceFileRevision{}, err
+	var current WorkspaceManifest
+	if !fastWorktree {
+		current, err = s.workspaceDiffManifest(ctx, id, workspaceVersion)
+		if err != nil {
+			return WorkspaceFileRevision{}, err
+		}
 	}
 	if workspaceVersion != "" && workspaceVersion != current.WorkspaceVersion {
 		return WorkspaceFileRevision{}, apierr.Conflict("WORKSPACE_SNAPSHOT_STALE", "Workspace changed while the file revision was loading", map[string]any{"workspaceVersion": current.WorkspaceVersion})
 	}
 	commitSHA := strings.TrimSpace(rawCommitSHA)
 	if commitSHA != "" {
-		commit, err := workspaceCommit(current, commitSHA)
+		history, err := s.ListWorkspaceFiles(ctx, id)
+		if err != nil {
+			return WorkspaceFileRevision{}, err
+		}
+		commit, err := workspaceCommit(history, commitSHA)
 		if err != nil {
 			return WorkspaceFileRevision{}, err
 		}
 		commitSHA = commit.SHA
 	}
 	result := WorkspaceFileRevision{SessionID: id, Path: joinWorkspaceRelative(target.prefix, target.rel), Side: side, WorkspaceVersion: current.WorkspaceVersion, Encoding: "utf-8"}
-	data, size, exists, truncated, err := workspaceRevisionBytes(ctx, target, resolvedScope, side, commitSHA)
+	var data []byte
+	var size int64
+	var exists, truncated bool
+	if fastWorktree {
+		data, size, exists, truncated, err = readWorktreeRevision(target.root, target.rel)
+	} else {
+		data, size, exists, truncated, err = workspaceRevisionBytes(ctx, target, resolvedScope, side, commitSHA)
+	}
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
@@ -14,10 +14,16 @@ import { TooltipProvider } from "./ui/tooltip";
 const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
 
 vi.mock("./settings/HarnessSettingsSection", () => ({
-	HarnessSettingsSection: (props: { focusAgentId?: string; titleHidden?: boolean }) => {
+	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
 		harnessSettingsSectionMock(props);
 		return <div data-testid="harness-settings-section" />;
 	},
+}));
+
+// The real section reads the cloud gate and /me; here it only marks where the
+// General page places it.
+vi.mock("./settings/DefaultCloudSandboxRow", () => ({
+	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
 }));
 
 const {
@@ -45,6 +51,7 @@ const {
 	getTelemetryPolicy,
 	setTelemetryEvents,
 	onTelemetryPolicy,
+	isMacPlatform,
 	isWindowsPlatform,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
@@ -74,6 +81,7 @@ const {
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
+	isMacPlatform: vi.fn(() => false),
 	isWindowsPlatform: vi.fn(() => true),
 }));
 
@@ -87,7 +95,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
-	return { ...actual, isWindowsPlatform };
+	return { ...actual, isMacPlatform, isWindowsPlatform };
 });
 
 vi.mock("../lib/bridge", () => ({
@@ -95,6 +103,13 @@ vi.mock("../lib/bridge", () => ({
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
+		remotes: { list: vi.fn(async () => []) },
+		cliLink: {
+			setEnabled: vi.fn(async () => undefined),
+			inspect: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			link: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+			unlink: vi.fn(async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" })),
+		},
 		updateSettings: {
 			get: getUpdate,
 			set: setUpdate,
@@ -119,12 +134,16 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string) {
+vi.mock("../lib/cloud-session", () => ({
+	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+}));
+
+function renderForm(section: GlobalSettingsSection = "all", focusAgentId?: string, hostId?: string) {
 	const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={qc}>
 			<TooltipProvider>
-				<GlobalSettingsForm focusAgentId={focusAgentId} section={section} />
+				<GlobalSettingsForm focusAgentId={focusAgentId} hostId={hostId} section={section} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -158,6 +177,7 @@ beforeEach(async () => {
 		getTelemetryPolicy,
 		setTelemetryEvents,
 		onTelemetryPolicy,
+		isMacPlatform,
 		isWindowsPlatform,
 	]) {
 		m.mockReset();
@@ -201,23 +221,46 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
+		isMacPlatform.mockReturnValue(true);
+		const user = userEvent.setup();
+		renderForm("general");
+		const appearance = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
+		const transparency = within(appearance).getByRole("switch", { name: "Window transparency" });
+		await user.click(transparency);
+		expect(window.localStorage.getItem("ao.windowTranslucency")).toBe("true");
+		const developerMode = screen.getByRole("switch", { name: "Developer mode" });
+		await user.click(developerMode);
+		await user.click(developerMode);
+		expect(transparency).toHaveAttribute("aria-checked", "true");
+		expect(useUiStore.getState().windowTranslucency).toBe(true);
+	});
+
+	it("hides window transparency on platforms without native vibrancy", async () => {
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Window transparency" })).not.toBeInTheDocument();
+	});
+
 	it("propagates a Harness focus target through the settings catalog", async () => {
 		renderForm("harness", "cursor");
 
 		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: true });
+		// Headings that repeat the page title are now hidden by SettingsSection, not this flag.
+		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: false });
 	});
 
 	it("keeps Browser in its dedicated settings page", async () => {
 		renderForm("general");
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(document.querySelector('[data-section="browserProfiles"]')).not.toBeInTheDocument();
+		expect(document.querySelector('[data-section="remoteHosts"]')).not.toBeInTheDocument();
 	});
 
 	it("keeps download history inside the Browser settings page", async () => {
@@ -232,7 +275,10 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		expect(await screen.findByText("Updates")).toBeInTheDocument();
+		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
+		// Its sections are "Version" and "Preferences" ("Updates" is the page title).
+		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
@@ -248,19 +294,55 @@ describe("GlobalSettingsForm", () => {
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.developerMode")).toBe("true");
 		expect(setMacDifferentialUpdates).toHaveBeenCalledWith(true);
-		await user.click(screen.getByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
 	});
 
-	it("offers Remote hosts as a switch right below Developer Mode and persists it", async () => {
+	// Admins pick the org's cloud sandbox without turning on Developer Mode or
+	// the preview Cloud toggle, which builds that force cloud leave off.
+	it("shows the default cloud sandbox outside Developer mode", async () => {
+		renderForm("general");
+		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
+		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
+	});
+
+	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
 		const user = userEvent.setup();
-		renderForm();
-		const developerMode = await screen.findByRole("switch", { name: "Developer mode" });
-		const remoteHosts = screen.getByRole("switch", { name: "Remote hosts (experimental)" });
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Side chats" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
+		expect(useUiStore.getState().sideChats).toBe(true);
+	});
+
+	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Diagnostics" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = await screen.findByRole("switch", { name: "Diagnostics" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.diagnostics")).toBe("true");
+		expect(useUiStore.getState().diagnostics).toBe(true);
+	});
+
+	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
+		const user = userEvent.setup();
+		useUiStore.getState().setDeveloperMode(true);
+		renderForm("remoteHosts");
+		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
 		expect(remoteHosts).toHaveAttribute("aria-checked", "false");
-		// "Underneath Developer Mode": the next switch in document order.
-		expect(developerMode.compareDocumentPosition(remoteHosts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(screen.getAllByRole("switch").indexOf(remoteHosts)).toBe(screen.getAllByRole("switch").indexOf(developerMode) + 1);
+		expect(screen.queryByRole("switch", { name: "Developer mode" })).not.toBeInTheDocument();
 
 		await user.click(remoteHosts);
 		expect(window.localStorage.getItem("ao.remoteHosts")).toBe("true");
@@ -273,7 +355,7 @@ describe("GlobalSettingsForm", () => {
 		useUiStore.getState().setDeveloperMode(true);
 		renderForm();
 
-		await user.click(await screen.findByLabelText("Updates channel"));
+		await user.click(await screen.findByLabelText("Updates channel", {}, { timeout: 5_000 }));
 		await user.click(await screen.findByRole("menuitem", { name: "Feature Releases" }));
 		expect(await screen.findByText("No live feature releases.")).toBeInTheDocument();
 		expect(featListBuilds).toHaveBeenCalled();
@@ -419,7 +501,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves the updates channel while automatic updates are disabled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -431,7 +513,9 @@ describe("GlobalSettingsForm", () => {
 				expect.objectContaining({ channel: "nightly", enabled: false, nightlyAck: true, feature: null }),
 			),
 		);
-		expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable");
+		// The installed build stays the stable one: no nightly stamp under the version.
+		expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
+		expect(screen.queryByText(/^1\.4\.0-nightly/)).toBeNull();
 		expect(await screen.findByText(/Nightly updates daily and may be unstable or cause data loss/i)).toBeInTheDocument();
 	});
 
@@ -462,7 +546,7 @@ describe("GlobalSettingsForm", () => {
 
 	it("auto-saves when automatic updates are toggled", async () => {
 		renderForm();
-		await userEvent.click(await screen.findByRole("switch", { name: "Automatic Updates" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));
 		await waitFor(() =>
 			expect(setUpdate).toHaveBeenCalledWith(expect.objectContaining({ enabled: false, channel: "latest" })),
 		);
@@ -471,22 +555,22 @@ describe("GlobalSettingsForm", () => {
 
 	it("hides the nightly warning on the stable channel", async () => {
 		renderForm();
-		await screen.findByText("Updates");
+		await screen.findByRole("heading", { name: "Version" });
 		expect(screen.queryByText(/Nightly updates daily and may be unstable or cause data loss/i)).not.toBeInTheDocument();
 	});
 
 	it("shows the current app version", async () => {
 		renderForm();
 		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Stable"));
 	});
 
-	it("shows the installed Nightly channel separately from the selected update feed", async () => {
+	it("shows the installed Nightly build separately from the selected update feed", async () => {
 		getVersion.mockResolvedValue("1.4.0-nightly.202608271030");
 		renderForm();
-		// The badge labels which channel is installed, so it uses the short name;
-		// "(Pre-release)" belongs in the picker where the choice is made.
-		await waitFor(() => expect(screen.getByTestId("installed-update-channel")).toHaveTextContent("Nightly"));
+		// The channel badge is gone (it repeated the channel picker); an installed
+		// nightly is identified by its full stamp under the base version.
+		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
+		expect(await screen.findByText("1.4.0-nightly.202608271030")).toBeInTheDocument();
 	});
 
 	it("shows a repeated timeout once and keeps manual retry available", async () => {
@@ -543,7 +627,8 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		expect(statusLine).toHaveClass("min-h-5");
+		// The slot keeps one description line while the button owns the feedback.
+		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
 		await waitFor(() => expect(button).toBeEnabled(), { timeout: 1_500 });
@@ -826,7 +911,7 @@ describe("GlobalSettingsForm", () => {
 		});
 		renderForm();
 
-		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" });
+		const returnBtn = await screen.findByRole("button", { name: "Return to Stable" }, { timeout: 5_000 });
 		await userEvent.click(returnBtn);
 
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));

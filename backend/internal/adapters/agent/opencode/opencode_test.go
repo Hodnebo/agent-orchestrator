@@ -21,12 +21,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithEnv(t *testing.T) {
 	clearOpenCodeAuthEnv(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -39,12 +39,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithAuthFile(t *testing.T) {
 		}
 	}`)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -52,12 +52,12 @@ func TestOpenCodeLocalAuthStatusUnknownWithEmptyAuthFile(t *testing.T) {
 	clearOpenCodeAuthEnv(t)
 	writeOpenCodeAuthFile(t, `{}`)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -89,12 +89,12 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithActiveDBAccount(t *testing.T) {
 	})
 	t.Setenv("OPENCODE_DATA_DIR", dataDir)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -123,12 +123,12 @@ func TestOpenCodeLocalAuthStatusDBAccountOverridesEmptyAuthFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
 	}
 }
 
@@ -157,12 +157,46 @@ func TestOpenCodeLocalAuthStatusAuthorizedWithControlDBAccount(t *testing.T) {
 	})
 	t.Setenv("XDG_DATA_HOME", dataHome)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	if status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusAuthorized)
+	}
+}
+
+func TestOpenCodeLocalAuthStatusWithV2Credential(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		active int
+		value  string
+		want   ports.AgentAuthStatus
+	}{
+		{"active credential", 1, `{"key":"test"}`, ports.AgentAuthStatusAuthorized},
+		{"inactive credential", 0, `{"key":"test"}`, ports.AgentAuthStatusUnknown},
+		{"empty credential", 1, "", ports.AgentAuthStatusUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clearOpenCodeAuthEnv(t)
+			dataDir := writeOpenCodeDB(t, func(db *sql.DB) {
+				if _, err := db.Exec(`CREATE TABLE credential (active integer, value text)`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`INSERT INTO credential (active, value) VALUES (?, ?)`, tt.active, tt.value); err != nil {
+					t.Fatal(err)
+				}
+			})
+			t.Setenv("OPENCODE_DATA_DIR", dataDir)
+
+			status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status != tt.want {
+				t.Fatalf("status = %q, want %q", status, tt.want)
+			}
+		})
 	}
 }
 
@@ -202,12 +236,12 @@ func TestOpenCodeLocalAuthStatusUnknownWithEmptyDBAccounts(t *testing.T) {
 	})
 	t.Setenv("OPENCODE_DATA_DIR", dataDir)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -258,12 +292,12 @@ func TestOpenCodeLocalAuthStatusUnknownWhenMissing(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	status, ok, err := opencodeLocalAuthStatus(context.Background())
+	status, err := opencodeAuthStatusWithoutCLI(context.Background(), t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
+	if status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -302,6 +336,14 @@ func writeOpenCodeAuthFile(t *testing.T, content string) {
 	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// opencodeAuthStatusWithoutCLI runs the production auth check with an
+// opencode executable that cannot start, so only stored credentials and the
+// environment can answer.
+func opencodeAuthStatusWithoutCLI(ctx context.Context, t *testing.T) (ports.AgentAuthStatus, error) {
+	t.Helper()
+	return (&Plugin{resolvedBinary: filepath.Join(t.TempDir(), "opencode")}).AuthStatus(ctx)
 }
 
 func clearOpenCodeAuthEnv(t *testing.T) {
@@ -404,7 +446,8 @@ func TestResolveOpenCodeBinaryContextCanceled(t *testing.T) {
 }
 
 func TestGetLaunchCommandBuildsArgv(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -421,7 +464,7 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--agent", "ao-sess-1",
 		"--prompt", "-fix this",
@@ -444,7 +487,8 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 }
 
 func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -456,7 +500,7 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 	}
 
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
-	want := []string{"env", "OPENCODE_CONFIG=" + configPath, "opencode", "--agent", "ao-sess-2"}
+	want := []string{"env", "OPENCODE_CONFIG=" + configPath, binary, "--agent", "ao-sess-2"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -474,6 +518,7 @@ func TestGetLaunchCommandSystemPromptFileConfig(t *testing.T) {
 }
 
 func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	tests := []struct {
 		name       string
 		permission ports.PermissionMode
@@ -527,6 +572,7 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 // own it: the reviewer harness passes its read-only policy there. A launch
 // prefix setting the same variable would replace that policy at exec time.
 func TestGetLaunchCommandNeverSetsInlineConfigContent(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	for _, mode := range []ports.PermissionMode{
 		ports.PermissionModeDefault, ports.PermissionModeAcceptEdits,
 		ports.PermissionModeAuto, ports.PermissionModeBypassPermissions,
@@ -575,12 +621,13 @@ func TestGetConfigSpecReportsModel(t *testing.T) {
 }
 
 func TestGetLaunchCommandForwardsModel(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Model: "  anthropic/claude-sonnet  "}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"opencode", "--model", "anthropic/claude-sonnet"}; !reflect.DeepEqual(cmd, want) {
+	if want := []string{binary, "--model", "anthropic/claude-sonnet"}; !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
@@ -731,6 +778,40 @@ func TestGetAgentHooksRefusesToClobberForeignFile(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, foreign) {
 		t.Fatalf("foreign file modified by refused install: %q", got)
+	}
+}
+
+func TestGetAgentHooksRemovesOnlyManagedV2Plugin(t *testing.T) {
+	tests := []struct {
+		name       string
+		v2Body     string
+		wantExists bool
+	}{
+		{name: "managed", v2Body: "// agent-orchestrator: managed opencode-v2 activity plugin\n", wantExists: false},
+		{name: "foreign", v2Body: "export default { id: 'user-v2-path' }\n", wantExists: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			v2Path := filepath.Join(workspace, ".opencode", "plugins", "ao-activity-v2.ts")
+			if err := os.MkdirAll(filepath.Dir(v2Path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(v2Path, []byte(tt.v2Body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := os.Stat(v2Path)
+			if tt.wantExists && err != nil {
+				t.Fatalf("foreign v2 plugin removed: %v", err)
+			}
+			if !tt.wantExists && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("managed v2 plugin survived: %v", err)
+			}
+		})
 	}
 }
 
@@ -888,7 +969,8 @@ func TestUninstallHooksLeavesForeignFile(t *testing.T) {
 }
 
 func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
@@ -903,7 +985,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		t.Fatal("ok = false, want true")
 	}
 	want := []string{
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",
 	}
@@ -916,7 +998,8 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 }
 
 func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 	promptFile := filepath.Join(t.TempDir(), "system.md")
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
@@ -936,7 +1019,7 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	configPath := filepath.Join(filepath.Dir(promptFile), "opencode.json")
 	want := []string{
 		"env", "OPENCODE_CONFIG=" + configPath,
-		"opencode",
+		binary,
 		"--agent", "ao-sess-1",
 		"--session", "ses_abc123",
 	}
@@ -961,7 +1044,8 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 // resume argv (mirroring GetLaunchCommand's --prompt), or the resumed session
 // would sit idle with no work to act on.
 func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "opencode"}
+	binary := versionBinary(t, "echo 1.18.33\n")
+	plugin := New()
 
 	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
@@ -977,7 +1061,7 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 		t.Fatal("ok = false, want true")
 	}
 	want := []string{
-		"opencode",
+		binary,
 		"--dangerously-skip-permissions",
 		"--session", "ses_abc123",
 		"--prompt", "review the new commit",
@@ -1081,6 +1165,7 @@ func contains(values []string, needle string) bool {
 // to a project policy and the native flag is an alias of --auto, which still
 // enforces explicit denies, so the rule rides the agent, which outranks both.
 func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
+	versionBinary(t, "echo 1.18.33\n")
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {

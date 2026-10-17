@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +114,17 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	rec.Revision = f.sessions[rec.ID].Revision + 1
 	f.sessions[rec.ID] = rec
 	return nil
+}
+
+func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.Metadata.ArtifactDir = artifactDir
+	rec.OutputType = outputType
+	f.sessions[id] = rec
+	return true, nil
 }
 
 func (f *fakeStore) UpdateSessionFromActivitySignal(_ context.Context, rec domain.SessionRecord, expected int64) (bool, error) {
@@ -774,7 +786,7 @@ func TestRuntimeObservation_ConfirmedDeathIsSuppressedDuringSessionMutation(t *t
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeDead, Workload: ports.ProbeFailed}); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("runtime observation mutated session during exclusive operation: got %+v, want %+v", got, rec)
 	}
 }
@@ -786,7 +798,7 @@ func TestRuntimeObservation_FailedProbeDoesNotMutate(t *testing.T) {
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeFailed, Workload: ports.ProbeFailed}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("failed probe should not persist a state, got %+v", st.sessions["mer-1"])
 	}
 }
@@ -820,7 +832,7 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("original supervisor observation resurrected exited session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -834,7 +846,7 @@ func TestRuntimeObservation_StaleLaunchIsIgnored(t *testing.T) {
 	if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{Runtime: ports.ProbeAlive, Workload: ports.ProbeDead, LaunchID: "launch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("stale launch observation mutated session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -846,7 +858,7 @@ func TestActivity_InvalidIsIgnored(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: false, State: domain.ActivityIdle}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatal("invalid signal must not mutate")
 	}
 }
@@ -1215,7 +1227,7 @@ func TestActivity_StaleUserPromptDoesNotResumeExitedWorkload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("stale prompt resumed exited workload: %+v", got)
 	}
 }
@@ -1242,6 +1254,33 @@ func TestActivity_CurrentChatControllerResumesExitedWorkload(t *testing.T) {
 	}
 }
 
+func TestActivity_LivenessProbeResumesExitedWorkload(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Activity.State = domain.ActivityExited
+	rec.Metadata.RuntimeLaunchID = "launch-2"
+	st.sessions["mer-1"] = rec
+	signalAt := time.Unix(123, 0).UTC()
+
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid:     true,
+		State:     domain.ActivityIdle,
+		Event:     "liveness-probe",
+		Timestamp: signalAt,
+		LaunchID:  "launch-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := st.sessions["mer-1"]
+	if got.IsTerminated || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("liveness probe did not reconcile exited workload: %+v", got)
+	}
+	if !got.Activity.LastActivityAt.Equal(signalAt) {
+		t.Fatalf("last activity = %v, want %v", got.Activity.LastActivityAt, signalAt)
+	}
+}
+
 func TestActivity_StaleLaunchSignalIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
@@ -1251,7 +1290,7 @@ func TestActivity_StaleLaunchSignalIsIgnored(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityExited, LaunchID: "launch-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("stale process exit mutated session: %+v", st.sessions["mer-1"])
 	}
 }
@@ -1328,7 +1367,7 @@ func TestActivity_CancelledLaunchReleasesAndRejectsEarlySignal(t *testing.T) {
 	if err := <-signalDone; err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("cancelled launch signal mutated durable state: %+v", got)
 	}
 }
@@ -1696,6 +1735,38 @@ func TestActivity_StopWithoutCurrentPromptNeverPairsWithPriorTurn(t *testing.T) 
 	}
 }
 
+func TestActivity_AgyTUIStopRetainsCheckpointForNativeHistoryReplay(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Harness = domain.HarnessAgy
+	rec.Mode = domain.SessionModeTUI
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	rec.Metadata.LatestUserPrompt = "prior Chat prompt"
+	rec.Metadata.LatestUserPromptAt = time.Unix(122, 0).UTC()
+	rec.Metadata.LatestAssistantUpdate = "prior Chat answer"
+	rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointComplete
+	rec.Metadata.ConversationCheckpointGeneration = "old-chat-generation"
+	rec.Metadata.ConversationCheckpointNativeID = "native-current"
+	store.sessions[rec.ID] = rec
+
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop",
+		LaunchID: "launch-current", AgentSessionID: "native-current",
+		LatestAssistantUpdate: "TUI answer without a prompt-boundary hook",
+	}); err != nil {
+		t.Fatalf("ApplyActivitySignal stop: %v", err)
+	}
+	got := store.sessions[rec.ID].Metadata
+	if got.LatestUserPrompt != rec.Metadata.LatestUserPrompt ||
+		got.LatestAssistantUpdate != rec.Metadata.LatestAssistantUpdate ||
+		got.ConversationCheckpointState != rec.Metadata.ConversationCheckpointState ||
+		got.ConversationCheckpointUnsettled {
+		t.Fatalf("Agy Stop changed the trusted checkpoint or marked it unsettled: %+v", got)
+	}
+}
+
 func TestActivity_NonBoundaryEventCannotReplaceConversationCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
 	rec := working("mer-1")
@@ -1885,7 +1956,7 @@ func TestActivity_OldRuntimeGenerationCannotReplaceConversationCheckpoint(t *tes
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("old generation mutated current checkpoint: got %+v, want %+v", got, rec)
 	}
 }
@@ -1913,8 +1984,57 @@ func TestActivity_UntaggedTUIHookCannotMutateLaunchedRuntime(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("untagged callback mutated launched runtime: got %+v, want %+v", got, rec)
+	}
+}
+
+func TestActivity_SideHeadlessClaudeRunCannotHijackTUIIdentity(t *testing.T) {
+	m, store, _ := newManager()
+	rec := working("mer-1")
+	rec.Mode = domain.SessionModeTUI
+	rec.Harness = domain.HarnessClaudeCode
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-main"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	rec.Metadata.NativeTranscriptPath = "/claude/projects/wt/native-main.jsonl"
+	store.sessions[rec.ID] = rec
+
+	// A summarizer's `claude -p` in the same worktree inherits AO_SESSION_ID and
+	// the current AO_RUNTIME_LAUNCH_ID, so the generation fence accepts it. Its
+	// sdk-cli entrypoint proves it is not the interactive runtime AO launched:
+	// its identity must not replace the main conversation and its SessionEnd
+	// must not mark the live session exited (#6454).
+	side := []ports.ActivitySignal{
+		{Event: "session-start", LaunchID: "launch-current", AgentSessionID: "native-side",
+			TranscriptPath: "/claude/projects/wt/native-side.jsonl", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-current",
+			AgentSessionID: "native-side", LatestUserPrompt: "Summarize this agent result", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-current",
+			AgentSessionID: "native-side", LatestAssistantUpdate: "one line", NativeEntrypoint: "sdk-cli"},
+		{Valid: true, State: domain.ActivityExited, Event: "session-end", LaunchID: "launch-current",
+			AgentSessionID: "native-side", NativeEntrypoint: "sdk-cli"},
+	}
+	for _, s := range side {
+		s.Timestamp = time.Now().Add(time.Hour)
+		if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+			t.Fatalf("ApplyActivitySignal(%s): %v", s.Event, err)
+		}
+	}
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
+		t.Fatalf("headless side run mutated TUI session: got %+v, want %+v", got, rec)
+	}
+
+	// The interactive runtime's own hooks keep their existing semantics.
+	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-current",
+		AgentSessionID: "native-main-cleared", NativeEntrypoint: "cli", Timestamp: time.Now().Add(2 * time.Hour),
+	}); err != nil {
+		t.Fatalf("ApplyActivitySignal(cli): %v", err)
+	}
+	got := store.sessions[rec.ID]
+	if got.Metadata.AgentSessionID != "native-main-cleared" || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("interactive runtime hook rejected: id=%q state=%q", got.Metadata.AgentSessionID, got.Activity.State)
 	}
 }
 
@@ -1939,7 +2059,7 @@ func TestActivity_LaunchTaggedTUIStopAfterChatEpochCannotMutateSession(t *testin
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late TUI Stop mutated Chat owner: got %+v, want %+v", got, rec)
 	}
 }
@@ -1966,7 +2086,7 @@ func TestActivity_UntaggedTUIStopAfterChatEpochCannotMutateSession(t *testing.T)
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.sessions[rec.ID]; got != rec {
+	if got := store.sessions[rec.ID]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("untagged late TUI Stop mutated Chat owner: got %+v, want %+v", got, rec)
 	}
 }
@@ -2028,7 +2148,7 @@ func TestActivity_LateSourceSignalAfterStopConfirmationIsFenced(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late source signal mutated stopped session: got %+v, want %+v", got, rec)
 	}
 	if calls := store.acknowledgements(); len(calls) != 0 {
@@ -2060,7 +2180,7 @@ func TestActivity_LateSourceSignalAfterTargetActivationIsFenced(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ApplyActivitySignal: %v", err)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("late source signal mutated target owner: got %+v, want %+v", got, rec)
 	}
 	if calls := store.acknowledgements(); len(calls) != 0 {
@@ -2092,7 +2212,7 @@ func TestActivity_StaleGenerationPromptSubmitDoesNotAcknowledgeAgentSwitch(t *te
 	if calls := store.acknowledgements(); len(calls) != 0 {
 		t.Fatalf("stale generation produced acknowledgement calls: %+v", calls)
 	}
-	if got := store.session(rec.ID); got != rec {
+	if got := store.session(rec.ID); !reflect.DeepEqual(got, rec) {
 		t.Fatalf("stale generation mutated session: got %+v, want %+v", got, rec)
 	}
 }
@@ -2268,11 +2388,17 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		Activity:     domain.Activity{State: domain.ActivityExited},
 		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
 	}
+	rec := st.sessions["mer-1"]
+	rec.CleanupGeneration = 7
+	st.sessions[rec.ID] = rec
 	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
+		t.Fatalf("restored cleanup generation = %d, want 8", got)
 	}
 	if usage.reactivateCalls != 1 || usage.reactivateID != "mer-1" ||
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {
@@ -3788,137 +3914,6 @@ func TestPRObservation_DedupPersistsAcrossPRs(t *testing.T) {
 	}
 }
 
-func TestApplyReviewBatchSuppressedByJITGuardIsNotDelivered(t *testing.T) {
-	// The worker is working at ApplyReviewBatch's entry guard (read #1) but a
-	// permission dialog stores blocked before sendOnce's just-in-time re-read
-	// (read #2). The nudge must be SUPPRESSED, and the outcome must be
-	// ReviewDeliveryNoop — NOT Sent — so the caller does not stamp the run
-	// delivered and the changes-requested feedback re-fires once unblocked.
-	st := newFakeStore()
-	st.sessions["mer-1"] = working("mer-1")
-	bst := &blockOnNthGetStore{fakeStore: st, id: "mer-1", flipAt: 2}
-	msg := &fakeMessenger{}
-	m := New(bst, msg)
-	result := ReviewResult{
-		RunID: "run-1", BatchID: "batch-1", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1",
-		TargetSHA: "sha1", Verdict: domain.VerdictChangesRequested, Body: "fix the bug",
-	}
-
-	outcome, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-1", []ReviewResult{result})
-	if err != nil {
-		t.Fatalf("ApplyReviewBatch: %v", err)
-	}
-	if outcome != ReviewDeliveryNoop {
-		t.Fatalf("outcome = %q, want no_op (suppressed nudge must not be stamped delivered)", outcome)
-	}
-	if len(msg.msgs) != 0 {
-		t.Fatalf("nudge pasted into a session that went blocked before send: %v", msg.msgs)
-	}
-	if st.signatures[result.PRURL] != "" {
-		t.Fatal("suppressed nudge must not persist a sendOnce signature (it re-fires next observation)")
-	}
-}
-
-func TestApplyReviewBatchSendsCombinedAndDedups(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = working("mer-1")
-	msg := &fakeMessenger{}
-	m := New(st, msg)
-	results := []ReviewResult{
-		{RunID: "run-2", BatchID: "batch-1", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/2", TargetSHA: "sha2", Verdict: domain.VerdictChangesRequested, Body: "fix tests", GithubReviewID: "102"},
-		{RunID: "run-1", BatchID: "batch-1", WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Verdict: domain.VerdictChangesRequested, Body: "fix auth", GithubReviewID: "101"},
-	}
-
-	outcome, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-1", results)
-	if err != nil {
-		t.Fatalf("ApplyReviewBatch: %v", err)
-	}
-	if outcome != ReviewDeliverySent || len(msg.msgs) != 1 {
-		t.Fatalf("outcome/messages = %q/%v, want sent once", outcome, msg.msgs)
-	}
-	got := msg.msgs[0]
-	for _, want := range []string{
-		"submitted 2 review(s) requesting changes",
-		"PR: https://github.com/o/r/pull/1",
-		"GitHub review: 101",
-		"Review body:\nfix auth",
-		"PR: https://github.com/o/r/pull/2",
-		"GitHub review: 102",
-		"Review body:\nfix tests",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("batch nudge missing %q: %q", want, got)
-		}
-	}
-	if st.signatures["https://github.com/o/r/pull/1"] == "" {
-		t.Fatal("batch nudge did not persist signature on anchor PR")
-	}
-
-	outcome, err = m.ApplyReviewBatch(ctx, "mer-1", "batch-1", results)
-	if err != nil {
-		t.Fatalf("repeat ApplyReviewBatch: %v", err)
-	}
-	if outcome != ReviewDeliverySent || len(msg.msgs) != 1 {
-		t.Fatalf("repeat should suppress duplicate send, outcome=%q msgs=%v", outcome, msg.msgs)
-	}
-}
-
-func TestApplyReviewBatchNoopsWithoutDeliverableResults(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = working("mer-1")
-	msg := &fakeMessenger{}
-	m := New(st, msg)
-
-	outcome, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-1", nil)
-	if err != nil {
-		t.Fatalf("ApplyReviewBatch: %v", err)
-	}
-	if outcome != ReviewDeliveryNoop || len(msg.msgs) != 0 || st.signatureWrites != 0 {
-		t.Fatalf("empty batch should no-op, outcome=%q msgs=%v signatureWrites=%d", outcome, msg.msgs, st.signatureWrites)
-	}
-}
-
-func TestApplyReviewBatchNoopsWhenWorkerCannotBeNudged(t *testing.T) {
-	tests := []struct {
-		name   string
-		result ReviewResult
-		rec    domain.SessionRecord
-	}{
-		{
-			name:   "terminated worker",
-			result: ReviewResult{RunID: "run-1", PRURL: "pr1", Verdict: domain.VerdictChangesRequested},
-			rec:    func() domain.SessionRecord { r := working("mer-1"); r.IsTerminated = true; return r }(),
-		},
-		{
-			name:   "worker waiting input",
-			result: ReviewResult{RunID: "run-1", PRURL: "pr1", Verdict: domain.VerdictChangesRequested},
-			rec: func() domain.SessionRecord {
-				r := working("mer-1")
-				r.Activity.State = domain.ActivityWaitingInput
-				return r
-			}(),
-		},
-		{
-			name:   "worker agent exited",
-			result: ReviewResult{RunID: "run-1", PRURL: "pr1", Verdict: domain.VerdictChangesRequested},
-			rec:    func() domain.SessionRecord { r := working("mer-1"); r.Activity.State = domain.ActivityExited; return r }(),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, st, msg := newManager()
-			st.sessions["mer-1"] = tt.rec
-			outcome, err := m.ApplyReviewBatch(ctx, "mer-1", "batch-1", []ReviewResult{tt.result})
-			if err != nil {
-				t.Fatalf("ApplyReviewBatch: %v", err)
-			}
-			if outcome != ReviewDeliveryNoop || len(msg.msgs) != 0 || st.signatureWrites != 0 {
-				t.Fatalf("non-nudgeable worker should no-op, outcome=%q msgs=%v signatureWrites=%d", outcome, msg.msgs, st.signatureWrites)
-			}
-		})
-	}
-}
-
 func TestApplyTrackerFacts_TerminalStateMarksTerminated(t *testing.T) {
 	for _, state := range []domain.NormalizedIssueState{domain.IssueDone, domain.IssueCancelled} {
 		t.Run(string(state), func(t *testing.T) {
@@ -3955,7 +3950,7 @@ func TestApplyTrackerFacts_TerminalStateIsSuppressedDuringSessionMutation(t *tes
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", o); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if got := st.sessions["mer-1"]; got != rec {
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("tracker observation mutated session during exclusive operation: got %+v, want %+v", got, rec)
 	}
 }
@@ -4022,7 +4017,7 @@ func TestApplyTrackerFacts_AssigneeChangedIsLogOnly(t *testing.T) {
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", o); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("assignee-only change must not mutate the session row, got %+v", st.sessions["mer-1"])
 	}
 	if len(msg.msgs) != 0 {
@@ -4128,7 +4123,7 @@ func TestApplyTrackerFacts_NotFetchedIsNoop(t *testing.T) {
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", ports.TrackerObservation{Fetched: false}); err != nil {
 		t.Fatalf("ApplyTrackerFacts: %v", err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("not-fetched observation must not mutate state")
 	}
 	if len(msg.msgs) != 0 {
@@ -4203,7 +4198,7 @@ func TestActivity_SameStateRepeatAfterReceiptIsNoOp(t *testing.T) {
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityActive}); err != nil {
 		t.Fatal(err)
 	}
-	if st.sessions["mer-1"] != before {
+	if !reflect.DeepEqual(st.sessions["mer-1"], before) {
 		t.Fatalf("same-state repeat after receipt must not rewrite: %+v", st.sessions["mer-1"])
 	}
 }

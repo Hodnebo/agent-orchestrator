@@ -194,6 +194,9 @@ func sessionHookFlags(t *testing.T) []string {
 		"-c", `hooks.SessionStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"session-start") + `,timeout=5}]}]`,
 		"-c", `hooks.UserPromptSubmit=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"user-prompt-submit") + `,timeout=5}]}]`,
 		"-c", `hooks.PermissionRequest=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"permission-request") + `,timeout=5}]}]`,
+		"-c", `hooks.PostToolUse=[{matcher="^(spawn_agent|collaborationspawn_agent)$",hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"post-tool-use") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-start") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-stop") + `,timeout=5}]}]`,
 		"-c", `hooks.Stop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"stop") + `,timeout=5}]}]`,
 	}
 }
@@ -667,6 +670,11 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 			Type:        ports.ConfigFieldString,
 			Description: "Model override passed to `codex --model`.",
 		},
+		{
+			Key:         "effort",
+			Type:        ports.ConfigFieldString,
+			Description: "Reasoning effort override passed to `codex -c model_reasoning_effort`.",
+		},
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
 		t.Fatalf("config fields\nwant: %#v\n got: %#v", want, spec.Fields)
@@ -1100,7 +1108,7 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 	}
 	joined := strings.Join(override, " ")
 	for _, want := range []string{
-		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.Stop=",
+		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.PostToolUse=", "hooks.SubagentStart=", "hooks.SubagentStop=", "hooks.Stop=",
 		"notice.hide_rate_limit_model_nudge=true",
 		`projects={`,
 	} {

@@ -338,8 +338,11 @@ type restListPull struct {
 		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"base"`
 	User struct {
 		Login     string `json:"login"`
@@ -360,6 +363,7 @@ func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
 		Closed:            closed,
 		SourceBranch:      pull.Head.Ref,
 		HeadRepo:          pull.Head.Repo.FullName,
+		BaseRepo:          pull.Base.Repo.FullName,
 		TargetBranch:      pull.Base.Ref,
 		HeadSHA:           pull.Head.SHA,
 		Title:             pull.Title,
@@ -391,7 +395,6 @@ func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
-comments(last:30){ totalCount nodes{ author{ login } } }
 createdAt updatedAt mergedAt closedAt
 author{ login avatarUrl }
 mergeCommit{ oid }
@@ -496,7 +499,6 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 	if urlAlias == strings.TrimSpace(prURL) {
 		urlAlias = ""
 	}
-	discussion, _ := pr["comments"].(map[string]any)
 	obs := ports.SCMObservation{
 		Fetched:  true,
 		Provider: ref.Repo.Provider,
@@ -520,8 +522,6 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			ChangedFiles:             int(num(pr["changedFiles"])),
 			Author:                   authorLogin(pr["author"]),
 			AuthorAvatarURL:          authorAvatarURL(pr["author"]),
-			DiscussionCommentCount:   int(num(discussion["totalCount"])),
-			DiscussionCommenters:     discussionCommenters(discussion),
 			BaseSHA:                  str(pr["baseRefOid"]),
 			MergeCommitSHA:           mergeCommitOID(pr),
 			ProviderState:            str(pr["state"]),
@@ -544,22 +544,6 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 	}
 	obs.Mergeability = mergeabilityObservation(providerMergeable, providerMergeState, ci, review, draft)
 	return obs
-}
-
-func discussionCommenters(connection map[string]any) []string {
-	nodes, _ := connection["nodes"].([]any)
-	seen := make(map[string]bool, len(nodes))
-	var commenters []string
-	for i := len(nodes) - 1; i >= 0; i-- {
-		node, _ := nodes[i].(map[string]any)
-		author, _ := node["author"].(map[string]any)
-		login := strings.TrimSpace(str(author["login"]))
-		if login != "" && !seen[strings.ToLower(login)] {
-			seen[strings.ToLower(login)] = true
-			commenters = append(commenters, login)
-		}
-	}
-	return commenters
 }
 
 func ciSummaryFromRollupState(pr map[string]any) domain.CIState {

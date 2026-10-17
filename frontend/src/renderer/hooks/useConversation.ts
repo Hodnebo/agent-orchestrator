@@ -12,16 +12,22 @@
 import {
 	type InfiniteData,
 	type QueryClient,
+	infiniteQueryOptions,
 	useInfiniteQuery,
+	useIsMutating,
 	useMutation,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { clientForSessionHost } from "../lib/host-clients";
+import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
 	ActivityKind,
 	ApprovalMode,
@@ -56,13 +62,17 @@ type WireMessage = components["schemas"]["ConversationMessageResponse"];
 type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
+type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
 
 export interface ConversationSendInput {
 	text: string;
 	attachments?: WireImageContent[];
 	resources?: WireResourceContent[];
+	excerpts?: WireExcerptReference[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
+	/** The user's one-click "continue" after stopping a turn. */
+	continuation?: boolean;
 }
 
 interface ConversationSendMutationInput {
@@ -86,16 +96,16 @@ interface ConversationEditMutationInput extends ConversationRetryMutationInput {
 
 export const conversationQueryRoot = ["conversation"] as const;
 
-export function conversationQueryKey(sessionId: string) {
-	return [...conversationQueryRoot, sessionId] as const;
+export function conversationQueryKey(sessionId: string, hostId?: string) {
+	return hostId ? (["remote-conversation", hostId, sessionId] as const) : ([...conversationQueryRoot, sessionId] as const);
 }
 
-export function conversationModelsQueryKey(sessionId: string) {
-	return ["conversation-models", sessionId] as const;
+export function conversationModelsQueryKey(sessionId: string, hostId?: string) {
+	return hostId ? (["remote-conversation-models", hostId, sessionId] as const) : (["conversation-models", sessionId] as const);
 }
 
-export function conversationConfigOptionsQueryKey(sessionId: string) {
-	return ["conversation-config-options", sessionId] as const;
+export function conversationConfigOptionsQueryKey(sessionId: string, hostId?: string) {
+	return hostId ? (["remote-conversation-config-options", hostId, sessionId] as const) : (["conversation-config-options", sessionId] as const);
 }
 
 const conversationDispatchTrackingQueryKey = ["conversation-dispatch-tracking"] as const;
@@ -119,7 +129,15 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A continue after a stop, drawn as a marker while it is sent. */
+	continuation?: boolean;
 	createdAt: string;
+	/** A hibernated send is acknowledged locally while the provider wakes. */
+	backgroundWake?: boolean;
+	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
+	queued?: boolean;
+	/** Excerpts are rendered inside the optimistic user message bubble. */
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision"> & { conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -234,8 +252,8 @@ function releaseConversationDispatch(
 	);
 }
 
-export function conversationSkillsQueryKey(sessionId: string) {
-	return ["conversation-skills", sessionId] as const;
+export function conversationSkillsQueryKey(sessionId: string, hostId?: string) {
+	return hostId ? (["remote-conversation-skills", hostId, sessionId] as const) : (["conversation-skills", sessionId] as const);
 }
 
 const conversationProviderCatalogEpochs = new WeakMap<QueryClient, Map<string, number>>();
@@ -254,21 +272,22 @@ function advanceConversationProviderCatalogEpoch(queryClient: QueryClient, sessi
 }
 
 /** Drop provider-owned catalogs so a handoff cannot keep showing the outgoing controller's options. */
-export function clearConversationProviderCatalogs(queryClient: QueryClient, sessionId: string) {
-	advanceConversationProviderCatalogEpoch(queryClient, sessionId);
-	queryClient.removeQueries({ queryKey: conversationModelsQueryKey(sessionId) });
-	queryClient.removeQueries({ queryKey: conversationConfigOptionsQueryKey(sessionId) });
-	queryClient.removeQueries({ queryKey: conversationSkillsQueryKey(sessionId) });
+export function clearConversationProviderCatalogs(queryClient: QueryClient, sessionId: string, hostId?: string) {
+	advanceConversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId, hostId));
+	queryClient.removeQueries({ queryKey: conversationModelsQueryKey(sessionId, hostId) });
+	queryClient.removeQueries({ queryKey: conversationConfigOptionsQueryKey(sessionId, hostId) });
+	queryClient.removeQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
 /** Refetch provider-owned catalogs after the target controller owns the session again. */
-export function invalidateConversationProviderCatalogs(queryClient: QueryClient, sessionId: string) {
-	void queryClient.invalidateQueries({ queryKey: conversationModelsQueryKey(sessionId) });
-	void queryClient.invalidateQueries({ queryKey: conversationConfigOptionsQueryKey(sessionId) });
-	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId) });
+export function invalidateConversationProviderCatalogs(queryClient: QueryClient, sessionId: string, hostId?: string) {
+	void queryClient.invalidateQueries({ queryKey: conversationModelsQueryKey(sessionId, hostId) });
+	void queryClient.invalidateQueries({ queryKey: conversationConfigOptionsQueryKey(sessionId, hostId) });
+	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
 const CONVERSATION_PAGE_SIZE = 200;
+const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
@@ -290,31 +309,51 @@ export interface ConversationQueryResult {
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
 	error?: string;
+	refreshError?: string;
 	hasOlder: boolean;
 	isLoadingOlder: boolean;
 	loadOlder: () => void;
 }
 
-export function useConversation(sessionId: string | undefined): ConversationQueryResult {
-	const query = useInfiniteQuery({
-		queryKey: conversationQueryKey(sessionId ?? ""),
-		enabled: Boolean(sessionId),
+async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+	});
+	if (error) throw error;
+	return toSnapshot(data as WireSnapshot);
+}
+
+/** Refresh only the live page; refetching an infinite query downloads all older history. */
+export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
+	let latest: ConversationSnapshot;
+	try {
+		latest = await fetchConversationPage(sessionId, hostId);
+	} catch (error) {
+		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		throw error;
+	}
+	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
+		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
+		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
+		const priorLive = previous.pages[0];
+		const slidOut = latest.oldestSequence > priorLive.oldestSequence
+			? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
+			: [];
+		const slidTurnIds = new Set(slidOut.map((item) => item.turnId));
+		const live = slidOut.length
+			? mergeConversationPages([latest, { ...priorLive, items: slidOut, turns: priorLive.turns.filter((turn) => slidTurnIds.has(turn.id)) }]) ?? latest
+			: latest;
+		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
+	});
+}
+
+export function conversationQueryOptions(sessionId: string, hostId?: string) {
+	return infiniteQueryOptions({
+		queryKey: conversationQueryKey(sessionId, hostId),
 		initialPageParam: undefined as number | undefined,
-		queryFn: async ({ pageParam }) => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation", {
-				params: {
-					path: { sessionId: sessionId as string },
-					query: {
-						beforeSequence: pageParam,
-						limit: CONVERSATION_PAGE_SIZE,
-					},
-				},
-			});
-			if (error) throw error;
-			return toSnapshot(data as WireSnapshot);
-		},
+		queryFn: ({ pageParam }) => fetchConversationPage(sessionId, hostId, pageParam),
 		getNextPageParam: (page) => (page.hasMoreBefore ? page.oldestSequence : undefined),
-		select: (data) => mergeConversationPages(data.pages),
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
 		// instead of explaining why there is no conversation. Only genuinely
@@ -325,8 +364,34 @@ export function useConversation(sessionId: string | undefined): ConversationQuer
 			return attempt < 2;
 		},
 	});
+}
 
-	if (query.error) {
+function selectConversationPages(data: InfiniteData<ConversationSnapshot>) {
+	return mergeConversationPages(data.pages);
+}
+
+export function useConversation(sessionId: string | undefined, hostId?: string): ConversationQueryResult {
+	const queryClient = useQueryClient();
+	const refreshError = useQuery({
+		queryKey: remoteConversationRefreshErrorKey(sessionId ?? "", hostId ?? ""),
+		queryFn: async () => false,
+		initialData: false,
+		enabled: false,
+	}).data;
+	const query = useInfiniteQuery({
+		...conversationQueryOptions(sessionId ?? "", hostId),
+		enabled: Boolean(sessionId),
+		select: selectConversationPages,
+	});
+	useEffect(() => {
+		if (!hostId || !sessionId) return;
+		const timer = window.setInterval(() => {
+			void refreshRemoteConversation(queryClient, sessionId, hostId).catch(() => {});
+		}, 2_000);
+		return () => window.clearInterval(timer);
+	}, [hostId, queryClient, sessionId]);
+
+	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
 		// The session is currently owned by Terminal UI (or its Chat controller is
 		// absent). A deliberate interface switch can change that later, but this
@@ -351,6 +416,7 @@ export function useConversation(sessionId: string | undefined): ConversationQuer
 
 	return {
 		snapshot: query.data,
+		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
@@ -361,8 +427,10 @@ export function useConversation(sessionId: string | undefined): ConversationQuer
 }
 
 /** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined) {
+export function useConversationCommands(sessionId: string | undefined, hostId?: string) {
 	const queryClient = useQueryClient();
+	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
+	const stateKey = (targetSessionId: string) => sessionUiKey(targetSessionId, hostId);
 	const trackedDispatches = useQuery({
 		queryKey: conversationDispatchTrackingQueryKey,
 		queryFn: async (): Promise<ConversationDispatchTrackingBySession> => ({}),
@@ -389,12 +457,13 @@ export function useConversationCommands(sessionId: string | undefined) {
 		gcTime: Number.POSITIVE_INFINITY,
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
-	const trackedDispatch = sessionId ? trackedDispatches[sessionId] : undefined;
+	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
-			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(targetSessionId) });
+			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
+			else await queryClient.invalidateQueries({ queryKey: conversationQueryKey(targetSessionId) });
 		},
-		[queryClient],
+		[hostId, queryClient],
 	);
 	const invalidate = useCallback(() => {
 		if (sessionId) {
@@ -413,19 +482,35 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
-			addConversationLocalEcho(queryClient, variables.targetSessionId, {
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+				conversationQueryKey(variables.targetSessionId, hostId),
+			);
+			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
+			const turnActive = current?.pages.some((page) =>
+				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
+			) ?? false;
+			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
+				continuation: variables.input.continuation,
+				excerpts: variables.input.excerpts?.map((excerpt) => ({
+					conversationId: excerpt.conversationId,
+					text: excerpt.text,
+					messageId: excerpt.messageId,
+					revision: excerpt.revision,
+				})),
 				createdAt: new Date().toISOString(),
+				backgroundWake,
+				queued: turnActive && !backgroundWake,
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
 				(current = {}) => {
-					const tracked = current[variables.targetSessionId];
+					const tracked = current[stateKey(variables.targetSessionId)];
 					if (tracked && tracked.requestId !== variables.clientMessageId) return current;
 					return {
 						...current,
-						[variables.targetSessionId]: {
+						[stateKey(variables.targetSessionId)]: {
 							operation: "send",
 							requestId: variables.clientMessageId,
 							state: "pending",
@@ -439,7 +524,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			clientMessageId,
 			input,
 		}: ConversationSendMutationInput) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/messages",
 				{
 					params: { path: { sessionId: targetSessionId } },
@@ -457,7 +542,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			if (acceptedTurnId) {
 				acceptConversationLocalEcho(
 					queryClient,
-					variables.targetSessionId,
+					stateKey(variables.targetSessionId),
 					variables.clientMessageId,
 					acceptedTurnId,
 				);
@@ -468,7 +553,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 					// further Enter presses with no error.
 					releaseConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						stateKey(variables.targetSessionId),
 						variables.clientMessageId,
 					);
 				} else {
@@ -476,7 +561,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 					// turn locally visible as pending until that exact durable row arrives.
 					acceptConversationDispatch(
 						queryClient,
-						variables.targetSessionId,
+						stateKey(variables.targetSessionId),
 						variables.clientMessageId,
 						acceptedTurnId,
 					);
@@ -487,12 +572,12 @@ export function useConversationCommands(sessionId: string | undefined) {
 				// renderer can wait to observe. Release only this request's sentinel.
 				releaseConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					stateKey(variables.targetSessionId),
 					variables.clientMessageId,
 				);
 				releaseConversationLocalEcho(
 					queryClient,
-					variables.targetSessionId,
+					stateKey(variables.targetSessionId),
 					variables.clientMessageId,
 				);
 			}
@@ -505,12 +590,12 @@ export function useConversationCommands(sessionId: string | undefined) {
 		onError: (_error, variables) => {
 			releaseConversationDispatch(
 				queryClient,
-				variables.targetSessionId,
+				stateKey(variables.targetSessionId),
 				variables.clientMessageId,
 			);
 			releaseConversationLocalEcho(
 				queryClient,
-				variables.targetSessionId,
+				stateKey(variables.targetSessionId),
 				variables.clientMessageId,
 			);
 		},
@@ -518,7 +603,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const resolve = useMutation({
 		mutationFn: async (input: { requestId: string; decisionId: string }) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve",
 				{
 					params: {
@@ -530,9 +615,10 @@ export function useConversationCommands(sessionId: string | undefined) {
 					body: { decisionId: input.decisionId },
 				},
 			);
-			if (error) throw error;
+			if (error && !(hostId && apiErrorCode(error) === "CHAT_REQUEST_NOT_PENDING")) throw error;
 		},
-		onSuccess: invalidate,
+		onSettled: hostId ? invalidate : undefined,
+		onSuccess: hostId ? undefined : invalidate,
 	});
 
 	const resolveInput = useMutation({
@@ -541,7 +627,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			action: "accept" | "decline" | "cancel";
 			content?: Record<string, unknown>;
 		}) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve",
 				{
 					params: {
@@ -553,14 +639,15 @@ export function useConversationCommands(sessionId: string | undefined) {
 					body: { action: input.action, content: input.content },
 				},
 			);
-			if (error) throw error;
+			if (error && !(hostId && apiErrorCode(error) === "CHAT_REQUEST_NOT_PENDING")) throw error;
 		},
-		onSuccess: invalidate,
+		onSettled: hostId ? invalidate : undefined,
+		onSuccess: hostId ? undefined : invalidate,
 	});
 
 	const interrupt = useMutation({
 		mutationFn: async ({ targetSessionId }: ConversationSessionMutationInput) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/interrupt",
 				{ params: { path: { sessionId: targetSessionId } } },
 			);
@@ -573,9 +660,11 @@ export function useConversationCommands(sessionId: string | undefined) {
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
 
+	const resumingAgent = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", sessionId] }) > 0;
 	const resume = useMutation({
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: async () => {
-			const { data, error, response } = await apiClient.POST(
+			const { data, error, response } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/resume-agent",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -587,7 +676,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		},
 		onSuccess: () => {
 			invalidate();
-			void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		},
 	});
 
@@ -607,7 +696,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 	 */
 	const compact = useMutation({
 		mutationFn: async () => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/compact",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -621,7 +710,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const chooseSettings = useMutation({
 		mutationFn: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
-			const { data, error } = await apiClient.PATCH(
+			const { data, error } = await clientForSessionHost(hostId).PATCH(
 				"/api/v1/sessions/{sessionId}/conversation/settings",
 				{
 					params: { path: { sessionId: targetSessionId } },
@@ -634,7 +723,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		// Confirm from the daemon's response before enabling Remember. A background
 		// snapshot refetch can be slow; it must not expose the previous permission.
 		onSuccess: async (settings, { targetSessionId }) => {
-			const queryKey = conversationQueryKey(targetSessionId);
+			const queryKey = conversationQueryKey(targetSessionId, hostId);
 			await queryClient.cancelQueries({ queryKey });
 			if (settings) {
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(queryKey, (current) =>
@@ -669,7 +758,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 	 */
 	const steer = useMutation({
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -685,7 +774,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const promoteQueuedTurn = useMutation({
 		mutationFn: async (turnId: string) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/steer",
 				{
 					params: {
@@ -701,7 +790,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const cancelQueuedTurn = useMutation({
 		mutationFn: async (turnId: string) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/cancel",
 				{
 					params: {
@@ -716,7 +805,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const editQueuedTurn = useMutation({
 		mutationFn: async ({ turnId, text, ...options }: { turnId: string; text: string } & QueuedMessageEditOptions) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",
 				{
 					params: {
@@ -733,7 +822,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const reorderQueuedTurns = useMutation({
 		mutationFn: async (turnIds: string[]) => {
-			const { error } = await apiClient.POST(
+			const { error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/queue/reorder",
 				{
 					params: {
@@ -746,7 +835,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		},
 		onMutate: async (turnIds) => {
 			if (!sessionId) return;
-			const queryKey = conversationQueryKey(sessionId);
+			const queryKey = conversationQueryKey(sessionId, hostId);
 			await queryClient.cancelQueries({ queryKey });
 			const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
 			if (previous) {
@@ -759,38 +848,16 @@ export function useConversationCommands(sessionId: string | undefined) {
 		},
 		onError: (_error, _turnIds, context) => {
 			if (!sessionId || !context?.previous) return;
-			queryClient.setQueryData(conversationQueryKey(sessionId), context.previous);
+			queryClient.setQueryData(conversationQueryKey(sessionId, hostId), context.previous);
 		},
 		onSettled: () => {
 			invalidate();
 		},
 	});
 
-	/**
-	 * Restart the tool servers.
-	 *
-	 * Worth offering because a server that failed to start is not a transient blip the
-	 * agent will retry: it will simply never call those tools, and nothing in the
-	 * timeline says so. Refused mid-turn, which is why the control is disabled rather
-	 * than allowed to fail.
-	 */
-	const reloadMcp = useMutation({
-		mutationFn: async () => {
-			const { data, error } = await apiClient.POST(
-				"/api/v1/sessions/{sessionId}/conversation/mcp/reload",
-				{
-					params: { path: { sessionId: sessionId as string } },
-				},
-			);
-			if (error) throw error;
-			return data;
-		},
-		onSuccess: invalidate,
-	});
-
 	const rollback = useMutation({
 		mutationFn: async (turnId: string) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
 				{
 					params: {
@@ -806,7 +873,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 
 	const retryTurn = useMutation({
 		mutationFn: async ({ targetSessionId, sourceTurnId }: ConversationRetryMutationInput) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/retry",
 				{
 					params: {
@@ -821,17 +888,17 @@ export function useConversationCommands(sessionId: string | undefined) {
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					stateKey(variables.targetSessionId),
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+				releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+			releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
 		},
 	});
 
@@ -842,7 +909,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			requestId,
 			text,
 		}: ConversationEditMutationInput) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/edit",
 				{
 					params: {
@@ -858,23 +925,23 @@ export function useConversationCommands(sessionId: string | undefined) {
 			if (data?.turnId) {
 				acceptConversationDispatch(
 					queryClient,
-					variables.targetSessionId,
+					stateKey(variables.targetSessionId),
 					variables.requestId,
 					data.turnId,
 				);
 			} else {
-				releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+				releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
 			}
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
-			releaseConversationDispatch(queryClient, variables.targetSessionId, variables.requestId);
+			releaseConversationDispatch(queryClient, stateKey(variables.targetSessionId), variables.requestId);
 		},
 	});
 
 	const activateBranch = useMutation({
 		mutationFn: async (branchId: string) => {
-			const { data, error } = await apiClient.POST(
+			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/branches/{branchId}/activate",
 				{
 					params: {
@@ -893,22 +960,22 @@ export function useConversationCommands(sessionId: string | undefined) {
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
 				(current = {}) => {
-					const tracked = current[sessionId];
+					const tracked = current[stateSessionId as string];
 					if (tracked?.state !== "accepted" || tracked.turnId !== turnId) return current;
 					const next = { ...current };
-					delete next[sessionId];
+					delete next[stateSessionId as string];
 					return next;
 				},
 			);
 		},
-		[queryClient, sessionId],
+		[queryClient, sessionId, stateSessionId],
 	);
 	const acknowledgeLocalEcho = useCallback(
 		(turnId: string) => {
 			if (!sessionId) return;
-			releaseConversationLocalEcho(queryClient, sessionId, undefined, turnId);
+			releaseConversationLocalEcho(queryClient, stateSessionId as string, undefined, turnId);
 		},
-		[queryClient, sessionId],
+		[queryClient, sessionId, stateSessionId],
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
@@ -919,22 +986,31 @@ export function useConversationCommands(sessionId: string | undefined) {
 		send: (input: string | ConversationSendInput) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 			const clientMessageId = (typeof input === "string" ? undefined : input.clientMessageId) ?? crypto.randomUUID();
+			const normalizedInput: ConversationSendInput = typeof input === "string"
+				? { text: input }
+				: {
+					...input,
+					text: input.text.trim() || (input.excerpts?.length
+						? `Use the attached ${input.excerpts.length} chat excerpt(s) as context`
+						: input.text),
+				};
 			// React cannot disable the composer until its next render. Claim the
 			// session in the shared registry synchronously so two Enter events in the
 			// same tick cannot both cross the transport boundary.
-			if (!claimConversationDispatch(queryClient, sessionId, clientMessageId, "send")) {
+			if (!claimConversationDispatch(queryClient, stateSessionId as string, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
+			recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
-				input: typeof input === "string" ? { text: input } : input,
+				input: normalizedInput,
 			});
 		},
 		pendingAcceptedTurnId:
 			trackedDispatch?.state === "accepted" ? trackedDispatch.turnId : undefined,
 		acknowledgeAcceptedTurn,
-		localEchos: sessionId ? localEchosBySession[sessionId] ?? [] : [],
+		localEchos: stateSessionId ? localEchosBySession[stateSessionId] ?? [] : [],
 		acknowledgeLocalEcho,
 		resolve: (requestId: string, decisionId: string) => resolve.mutate({ requestId, decisionId }),
 		resolveInput: (
@@ -944,7 +1020,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		) => resolveInput.mutateAsync({ requestId, action, content }),
 		interrupt: () => interrupt.mutate({ targetSessionId: sessionId as string }),
 		resumeAgent: () => resume.mutateAsync(),
-		resumingAgent: resume.isPending,
+		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
@@ -971,7 +1047,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 			retry: (turnId: string) => {
 				if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 				const requestId = crypto.randomUUID();
-				if (!claimConversationDispatch(queryClient, sessionId, requestId, "retry", turnId)) {
+				if (!claimConversationDispatch(queryClient, stateSessionId as string, requestId, "retry", turnId)) {
 					return Promise.reject(new Error("Conversation work is already being sent for this session."));
 				}
 				return retryTurn.mutateAsync({
@@ -997,7 +1073,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		editMessage: async (turnId: string, text: string, clientMessageId?: string): Promise<ChatEditOutcome> => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 			const requestId = clientMessageId ?? crypto.randomUUID();
-			if (!claimConversationDispatch(queryClient, sessionId, requestId, "edit", turnId)) {
+			if (!claimConversationDispatch(queryClient, stateSessionId as string, requestId, "edit", turnId)) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
 			try {
@@ -1026,6 +1102,7 @@ export function useConversationCommands(sessionId: string | undefined) {
 		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
+				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
 				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
@@ -1063,13 +1140,6 @@ export function useConversationCommands(sessionId: string | undefined) {
 		 * answer is a property of the driver, not of the moment.
 		 */
 		steerUnsupported: apiErrorCode(steer.error) === "CHAT_STEER_UNSUPPORTED",
-		reloadMcpServers: () => reloadMcp.mutateAsync(),
-		reloadingMcpServers: reloadMcp.isPending,
-		mcpReloadUnsupported: apiErrorCode(reloadMcp.error) === "CHAT_MCP_RELOAD_UNSUPPORTED",
-		mcpReloadError:
-			reloadMcp.error && apiErrorCode(reloadMcp.error) !== "CHAT_MCP_RELOAD_UNSUPPORTED"
-				? apiErrorMessage(reloadMcp.error)
-				: undefined,
 		busy:
 			trackedDispatch?.state === "pending" ||
 			(send.isPending && sendTargetsCurrentSession) ||
@@ -1166,15 +1236,15 @@ function editNonAcceptance(error: unknown): ChatEditOutcome | undefined {
  * session is open: the catalog depends on the account's entitlements, which the
  * provider knows and AO does not.
  */
-export function useConversationModels(sessionId: string | undefined, enabled: boolean) {
+export function useConversationModels(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const query = useQuery({
-		queryKey: conversationModelsQueryKey(sessionId ?? ""),
+		queryKey: conversationModelsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
 		// The catalog changes on the scale of provider releases, not turns.
 		staleTime: 5 * 60 * 1000,
 		retry: false,
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET(
+			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/models",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -1200,9 +1270,9 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
  * the effort choices, for example). The daemon therefore returns the complete
  * catalog after every mutation and that response replaces the cache atomically.
  */
-export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean) {
+export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
-	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "");
+	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
 	// Set for as long as a selection is being written. Cancelling in-flight reads
 	// only closes half the race — without also holding the poll, the interval can
 	// start a fresh read mid-write whose pre-change catalog lands after the
@@ -1217,7 +1287,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// visible without coupling them to conversation history polling.
 		refetchInterval: writing ? false : CONFIG_OPTIONS_POLL_INTERVAL_MS,
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET(
+			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/config-options",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -1240,12 +1310,12 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			optionId: string;
 			value: ChatConfigOptionValue;
 		}) => {
-			const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionId as string);
+			const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId));
 			// A read already in flight when the user picked would otherwise land
 			// after this mutation's setQueryData and put the pre-change catalog
 			// back, reverting the picker to the old value until the next poll.
 			await queryClient.cancelQueries({ queryKey });
-			const { data, error } = await apiClient.PATCH(
+			const { data, error } = await clientForSessionHost(hostId).PATCH(
 				"/api/v1/sessions/{sessionId}/conversation/config-options/{configId}",
 				{
 					params: {
@@ -1264,7 +1334,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			};
 		},
 		onSuccess: ({ controllerEpoch, options }) => {
-			if (controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionId as string)) {
+			if (controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) {
 				return;
 			}
 			queryClient.setQueryData(queryKey, options);
@@ -1292,9 +1362,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * from a failure — with no skills, `/` has to stay an ordinary character rather than
  * opening an empty menu.
  */
-export function useConversationSkills(sessionId: string | undefined, enabled: boolean) {
+export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const query = useQuery({
-		queryKey: conversationSkillsQueryKey(sessionId ?? ""),
+		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
 		// Polling also keeps Codex project skills current without introducing a
@@ -1316,7 +1386,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 				: SKILLS_POLL_INTERVAL_MS,
 		retry: false,
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET(
+			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
 				{
 					params: { path: { sessionId: sessionId as string } },
@@ -1338,18 +1408,21 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
  * The endpoint caps itself, and `truncated` is respected rather than presented as a
  * complete list.
  */
-export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean) {
+export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const query = useQuery({
-		queryKey: ["workspace-file-paths", sessionId ?? ""],
+		queryKey: hostId ? ["remote-workspace-file-paths", hostId, sessionId ?? ""] : ["workspace-file-paths", sessionId ?? ""],
 		enabled: Boolean(sessionId) && enabled,
 		// The agent edits files as it works, so this goes stale; refetched on demand
 		// rather than polled, since a mention menu that is a minute out of date is
 		// still useful and polling every session would not be.
 		staleTime: 30 * 1000,
+		// Local file changes arrive through the workspace event subscription below.
+		// Remote sessions use their owning daemon instead of the local event stream.
+		refetchInterval: hostId ? 30 * 1000 : false,
 		retry: false,
 		queryFn: async () => {
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/workspace/files", {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: sessionId as string } },
 			});
 			if (error) throw error;
@@ -1364,9 +1437,9 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		},
 	});
 	useEffect(() => {
-		if (!sessionId || !enabled) return;
+		if (!sessionId || !enabled || hostId) return;
 		return subscribeWorkspaceFileChanges(sessionId, queryClient);
-	}, [enabled, queryClient, sessionId]);
+	}, [enabled, hostId, queryClient, sessionId]);
 	return {
 		paths: query.data?.paths ?? [],
 		truncated: query.data?.truncated ?? false,
@@ -1381,18 +1454,18 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  * paths in the message it sends, which is how an image reaches an agent whose
  * conversation carries text: the same thing spawn does for the opening brief.
  */
-export function useStageAttachments(sessionId: string | undefined) {
+export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
 		async (attachments: { mimeType: string; data: string }[]): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
-			const { data, error } = await apiClient.POST("/api/v1/sessions/{sessionId}/attachments", {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				body: { attachments },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
 		},
-		[sessionId],
+		[hostId, sessionId],
 	);
 }
 
@@ -1412,6 +1485,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",
@@ -1448,7 +1522,12 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			? {
 					authMode: wire.account.authMode || undefined,
 					planLabel: wire.account.planLabel || undefined,
-					reauthRequiredAt: wire.account.reauthRequiredAt ?? undefined,
+					authenticationState: wire.account.authenticationState,
+						authVerifiedAt: wire.account.authVerifiedAt ?? undefined,
+						lastAuthFailureAt: wire.account.lastAuthFailureAt ?? undefined,
+						lastAuthFailureReason: wire.account.lastAuthFailureReason || undefined,
+						authFailureId: wire.account.authFailureId || undefined,
+						reauthRequiredAt: wire.account.reauthRequiredAt ?? undefined,
 					reauthReason: wire.account.reauthReason || undefined,
 				}
 			: undefined,
@@ -1578,6 +1657,7 @@ function applyQueuedTurnOrderToPages(
 export function mergeConversationPages(pages: ConversationSnapshot[]): ConversationSnapshot | undefined {
 	const live = pages[0];
 	if (!live) return undefined;
+	if (pages.length === 1) return live;
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();
@@ -1613,9 +1693,18 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			mimeType: item.mimeType || undefined,
 			uri: item.uri || undefined,
 			name: item.name || undefined,
+			text: item.text || undefined,
+			sourceConversationId: item.sourceConversationId || undefined,
+			sourceMessageId: item.sourceMessageId || undefined,
+			sourceRevision: item.sourceRevision ?? undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
+		continuation: wire.continuation || undefined,
 		streaming: wire.streaming,
+		senderSessionId: wire.senderSessionId,
+		senderProjectId: wire.senderProjectId,
+		senderDisplayName: wire.senderDisplayName,
+		clientMessageId: wire.clientMessageId,
 		createdAt: wire.createdAt,
 	};
 }

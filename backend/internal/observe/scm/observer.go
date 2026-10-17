@@ -166,6 +166,14 @@ type Config struct {
 	// host. Without a matching identity, new automatic attachments are disabled;
 	// existing attachments continue to refresh and explicit claims still work.
 	ScopedIdentityResolver ports.ScopedIdentityResolver
+	// BranchStates refreshes sessions' local commit and push facts on this
+	// tick. Nil skips it.
+	BranchStates BranchStateReconciler
+}
+
+// BranchStateReconciler reads every live session's branch facts from git.
+type BranchStateReconciler interface {
+	ReconcileBranchStates(ctx context.Context) error
 }
 
 // ObserverCache stores provider ETags and review polling timestamps in memory.
@@ -235,7 +243,7 @@ type Observer struct {
 	logger *slog.Logger
 	// credentialsChecked records whether an optional provider credential gate ran.
 	credentialsChecked bool
-	// disabled is set after the credential gate reports unavailable credentials.
+	// disabled is set while the credential gate reports unavailable credentials.
 	disabled bool
 	// scopedIdentityResolver resolves the authenticated identity per provider key.
 	scopedIdentityResolver ports.ScopedIdentityResolver
@@ -246,12 +254,14 @@ type Observer struct {
 	rateLimitUntil map[string]time.Time
 	// Cache holds bounded in-memory provider ETags and review poll timestamps.
 	Cache ObserverCache
+	// branchStates refreshes local branch facts on each tick.
+	branchStates BranchStateReconciler
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -274,9 +284,9 @@ func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Obser
 // up front. That way the "scm observer disabled: provider credentials
 // unavailable" warning is emitted on a fresh daemon even if discoverSubjects
 // has no subjects yet (which would otherwise short-circuit Poll before
-// checkCredentials). checkCredentials is guarded by credentialsChecked, so the
-// wrap stays once-per-process; a transient error there simply defers the check
-// to the next tick.
+// checkCredentials). The wrapper runs once per process; a failed credential
+// verdict is retried by Poll when subjects become available, while a successful
+// verdict is cached.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 	var credentialGate sync.Once
 	poll := func(ctx context.Context) error {
@@ -343,8 +353,12 @@ func (o *Observer) Poll(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if o.disabled {
-		return nil
+	// Branch facts are local git reads, so they run before, and never depend
+	// on, the provider credential gate below.
+	if o.branchStates != nil {
+		if err := o.branchStates.ReconcileBranchStates(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			o.logger.Warn("scm observer: branch state reconcile failed", "err", err)
+		}
 	}
 	subjects, sessionRepos, err := o.discoverSubjects(ctx)
 	if err != nil {
@@ -1081,7 +1095,12 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// Head eligibility includes the registered origin and every configured
 			// fetch and push URL, limited to the scanned base's provider and host.
 			// Reject unconfigured or deleted heads before matching branch ownership.
-			eligible := candidatesForHeadRepo(byRepo[repoKey], pr.HeadRepo)
+			headRepo := pr.HeadRepo
+			// Same-repo PR: the head is the listed repo, even if it was renamed.
+			if pr.BaseRepo != "" && strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
+				headRepo = repoFullName(repo)
+			}
+			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
@@ -1771,8 +1790,6 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ChangedFiles:             obs.PR.ChangedFiles,
 		Author:                   obs.PR.Author,
 		AuthorAvatarURL:          obs.PR.AuthorAvatarURL,
-		DiscussionCommentCount:   obs.PR.DiscussionCommentCount,
-		DiscussionCommenters:     obs.PR.DiscussionCommenters,
 		BaseSHA:                  obs.PR.BaseSHA,
 		MergeCommitSHA:           obs.PR.MergeCommitSHA,
 		ProviderState:            obs.PR.ProviderState,
@@ -1830,7 +1847,7 @@ func observationFromLocal(repo ports.SCMRepo, pr domain.PullRequest, checks []do
 		Provider:     firstNonEmpty(pr.Provider, repo.Provider),
 		Host:         firstNonEmpty(pr.Host, repo.Host),
 		Repo:         firstNonEmpty(pr.Repo, repoFullName(repo)),
-		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, DiscussionCommentCount: pr.DiscussionCommentCount, DiscussionCommenters: pr.DiscussionCommenters, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
+		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
 		CI:           ciObservationFromLocal(pr, checks),
 		Review:       ports.SCMReviewObservation{Decision: string(pr.Review)},
 		Mergeability: mergeabilityObservationFromLocal(pr),

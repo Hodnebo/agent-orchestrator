@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -37,6 +38,17 @@ var ErrAgentBinaryIdentityUnknown = errors.New("agent: binary identity unknown")
 // keep the last catalog and retry once the agent reports a login.
 var ErrAgentModelDiscoverySignInRequired = errors.New("agent: sign-in required to list models")
 
+// ErrAgentModelDiscoveryCredentialRejected marks a discovery failure caused by
+// the provider definitively rejecting the agent's credential. The catalog
+// service reports it as an auth problem so clients can offer a login instead
+// of a raw provider error.
+var ErrAgentModelDiscoveryCredentialRejected = errors.New("agent: credential rejected while listing models")
+
+// ErrAgentModelDiscoveryCredentialExpired marks a discovery failure caused by
+// a stored login whose access token expired while a refresh token remains.
+// The agent CLI renews such a login on its next run; it is not a sign-out.
+var ErrAgentModelDiscoveryCredentialExpired = errors.New("agent: stored login expired while listing models")
+
 // AgentAuthStatus describes the result of a short local auth probe for an
 // installed agent. It is advisory only: credentials, quota, selected model
 // availability, or CLI state can still fail at session spawn/model-call time.
@@ -59,6 +71,93 @@ const (
 	// configured instead, and must never render as a ready state.
 	AgentAuthStatusConfigured AgentAuthStatus = "configured"
 )
+
+// HasCredential reports whether a check found a credential, verified or only
+// configured.
+func (s AgentAuthStatus) HasCredential() bool {
+	return s == AgentAuthStatusAuthorized || s == AgentAuthStatusConfigured
+}
+
+// AuthEvidence collects what an authentication check relied on, so readiness
+// can say why a harness reads as signed in. Adapters record through
+// RecordAuthEvidence; without a collector in the context it does nothing.
+type AuthEvidence struct {
+	mu          sync.Mutex
+	identity    domain.AgentAccountIdentity
+	diagnostics []domain.AgentAuthDiagnostic
+}
+
+type authEvidenceKey struct{}
+
+// WithAuthEvidence returns a context that collects authentication evidence.
+func WithAuthEvidence(ctx context.Context) (context.Context, *AuthEvidence) {
+	evidence := &AuthEvidence{}
+	return context.WithValue(ctx, authEvidenceKey{}, evidence), evidence
+}
+
+// RecordAuthEvidence records what made a check succeed. A later record
+// replaces an earlier one, so adapters record at the point they decide.
+func RecordAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = identity
+	evidence.mu.Unlock()
+}
+
+// AddAuthEvidence fills fields the recorded evidence leaves empty, such as
+// an email learned after the deciding file or variable was recorded.
+func AddAuthEvidence(ctx context.Context, identity domain.AgentAccountIdentity) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	evidence.identity = evidence.identity.Merge(identity)
+	evidence.mu.Unlock()
+}
+
+// Identity returns the recorded evidence.
+func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
+	if e == nil {
+		return domain.AgentAccountIdentity{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.identity
+}
+
+// RecordAuthDiagnostic retains an adapter-authored check outcome, including
+// unsuccessful attempts. Never pass raw errors, credential values or CLI output.
+func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
+	evidence, ok := ctx.Value(authEvidenceKey{}).(*AuthEvidence)
+	if !ok || evidence == nil {
+		return
+	}
+	evidence.mu.Lock()
+	defer evidence.mu.Unlock()
+	if len(evidence.diagnostics) < 64 {
+		evidence.diagnostics = append(evidence.diagnostics, diagnostic)
+	}
+}
+
+// Diagnostics returns an independent snapshot of the recorded check outcomes.
+func (e *AuthEvidence) Diagnostics() []domain.AgentAuthDiagnostic {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]domain.AgentAuthDiagnostic(nil), e.diagnostics...)
+}
+
+// AgentAuthDiagnosticsChecker adds the signed-in account and evidence from the
+// same check as the verdict, so neither needs a second probe.
+type AgentAuthDiagnosticsChecker interface {
+	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
 
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
@@ -106,6 +205,29 @@ type AgentLaunchAuthValidator interface {
 // binary can be checked without constructing a real session launch command.
 type AgentBinaryResolver interface {
 	ResolveBinary(ctx context.Context) (path string, err error)
+}
+
+// AgentRuntimeLaunchEnv augments a terminal launch after its generation has
+// been assigned. Native reporters can then carry that generation in their
+// own protocol identity. Implementations only modify the supplied environment.
+type AgentRuntimeLaunchEnv interface {
+	AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, sessionID domain.SessionID, launchID string)
+}
+
+// AgentNativeSessionResolver is an optional capability for adapters whose
+// lifecycle protocol reports a process-local correlation id rather than the
+// durable conversation id accepted by their resume command.
+type AgentNativeSessionResolver interface {
+	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
+}
+
+// NativeSessionResolveConfig identifies one supervised agent launch. DataDir
+// and the two AO ids locate adapter-owned launch metadata without trusting a
+// provider-supplied path.
+type NativeSessionResolveConfig struct {
+	DataDir   string
+	SessionID domain.SessionID
+	LaunchID  string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -172,6 +294,19 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
+// whose native conversation files live in interface-specific storage roots.
+// Session Manager calls it only after the source controller is stopped.
+type AgentInterfaceHandoffStorageBridge interface {
+	PrepareInterfaceHandoffStorage(
+		ctx context.Context,
+		session SessionRef,
+		from, to domain.SessionMode,
+		nativeConversationID string,
+		env map[string]string,
+	) error
+}
+
 // ModelSelectionMode tells clients how to render an agent's model control.
 type ModelSelectionMode string
 
@@ -200,10 +335,14 @@ const (
 
 // AgentModelInfo is one model or mode that an adapter reports as selectable.
 type AgentModelInfo struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
-	Provider  string `json:"provider,omitempty"`
-	IsDefault bool   `json:"isDefault,omitempty"`
+	// ContextWindow and Inputs are populated only from provider catalog metadata.
+	// Zero/nil means unknown, not an inferred capability.
+	ContextWindow int64    `json:"contextWindow,omitempty"`
+	Inputs        []string `json:"inputs,omitempty"`
+	ID            string   `json:"id"`
+	Label         string   `json:"label"`
+	Provider      string   `json:"provider,omitempty"`
+	IsDefault     bool     `json:"isDefault,omitempty"`
 	// Efforts are the reasoning levels this specific model accepts, in the
 	// provider's own ascending order. Empty means the model takes no effort
 	// setting, which is a real answer rather than a missing one — Sonnet 4.5
@@ -211,14 +350,24 @@ type AgentModelInfo struct {
 	// must render no effort control at all rather than an empty one.
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// LastUsedAt is the latest activity of a session in scope whose current model
+	// is this model. It is derived from session history on every read, never
+	// stored on the cached catalog, and absent for a model no session ran.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.
 type AgentModelCatalog struct {
-	AgentID          string               `json:"agentId"`
-	SelectionMode    ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
-	Models           []AgentModelInfo     `json:"models"`
-	CustomModelEntry CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
+	// Providers includes reported provider IDs even when they currently have no models.
+	Providers []string `json:"providers,omitempty"`
+	// ConfiguredProviders names providers with credential configuration observed
+	// during discovery. Presence is not proof of authorization; absence is unknown.
+	// Only provider IDs are exposed, never credential values or source paths.
+	ConfiguredProviders []string             `json:"configuredProviders,omitempty"`
+	AgentID             string               `json:"agentId"`
+	SelectionMode       ModelSelectionMode   `json:"selectionMode" enum:"catalog,text,mode"`
+	Models              []AgentModelInfo     `json:"models"`
+	CustomModelEntry    CustomModelEntryMode `json:"customModelEntry" enum:"none,direct,configured"`
 	// AllowCustom is retained for compatibility and is true only for direct entry.
 	AllowCustom bool   `json:"allowCustom"`
 	Source      string `json:"source"`
@@ -242,7 +391,19 @@ type AgentModelCatalog struct {
 	RefreshRecommended bool   `json:"refreshRecommended,omitempty"`
 	Stale              bool   `json:"stale"`
 	Warning            string `json:"warning,omitempty"`
+	// WarningCode classifies Warning when it is an authentication problem, so
+	// clients can offer the agent's login instead of showing provider text.
+	// auth_required: the agent is signed out or its credential was rejected.
+	// auth_expired: a stored login's access token expired; the agent CLI
+	// renews it on its next run.
+	WarningCode string `json:"warningCode,omitempty" enum:"auth_required,auth_expired"`
 }
+
+// Model catalog warning codes.
+const (
+	ModelCatalogWarningAuthRequired = "auth_required"
+	ModelCatalogWarningAuthExpired  = "auth_expired"
+)
 
 // CachedAgentModelCatalog is the persistence record used by the model-catalog
 // service. CatalogJSON contains a serialized AgentModelCatalog.
@@ -285,6 +446,12 @@ type AgentModelDiscoveryRequest struct {
 	Binary     string
 	WorkingDir string
 	Env        map[string]string
+	// CredentialType names a cloud credential kind (e.g. "anthropic_api_key")
+	// when discovery must reflect the models a *cloud* session's pushed
+	// credential can run rather than the local machine's own auth. Adapters that
+	// gate their catalog on provider presence (opencode) honor it; others ignore
+	// it. Empty for ordinary local, project-scoped discovery.
+	CredentialType string
 }
 
 // AgentModelDiscoverer isolates CLI execution and discovery-input
@@ -323,6 +490,14 @@ type AgentExitDetector interface {
 // detection takes precedence over the fallback text patterns.
 type AgentPromptReadinessProvider interface {
 	PromptReadinessHints(ctx context.Context, cfg LaunchConfig) (PromptReadinessHints, error)
+}
+
+// AgentAfterStartPromptBuilder is an optional capability for interactive
+// adapters that need to combine launch-only context with the first user turn.
+// AO calls it exactly once per after-start delivery and sends the returned
+// value only after the runtime is ready.
+type AgentAfterStartPromptBuilder interface {
+	BuildAfterStartPrompt(ctx context.Context, cfg LaunchConfig) (string, error)
 }
 
 // TerminalActivityDetector derives activity only from authoritative terminal UI markers.
@@ -459,6 +634,10 @@ type ActiveTurnSteerer interface {
 // Session Manager can bridge its typed metadata onto a SessionRef without
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
+
+// MetadataKeySessionMode is the SessionRef.Metadata key that carries the
+// current session mode (e.g. "chat" or "tui").
+const MetadataKeySessionMode = "sessionMode"
 
 // MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
 // carrying a session's human title and one-line summary. They are the shared

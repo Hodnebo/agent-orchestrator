@@ -51,6 +51,7 @@ var codexActivityHooks = []activityHook{
 	{"UserPromptSubmit", "user-prompt-submit", ""},
 	{"PermissionRequest", "permission-request", ""},
 	{"Stop", "stop", ""},
+	{"Interrupt", "interrupt", ""},
 }
 
 var cursorActivityHooks = []activityHook{
@@ -146,6 +147,7 @@ func installCursorActivityHooks(binary, workspace string) error {
 	}); err != nil {
 		return fmt.Errorf("install Cursor activity hooks: %w", err)
 	}
+	excludeFromGit(workspace, ".cursor/hooks.json")
 	return nil
 }
 

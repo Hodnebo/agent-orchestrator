@@ -13,23 +13,60 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// codexAuthenticationWithAccount adds the identity of the account a
+// structured Codex verdict checked, when it found that account signed in.
+func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	observation, record, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
+	if handled && record.Snapshot.ID != "" && (observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationConfigured) {
+		observation.Account = codexAccountIdentity(record)
+		observation.Diagnostics = append(observation.Diagnostics, domain.NewAgentAuthDiagnostic("codex_account", "account_context"))
+	}
+	return observation, handled
+}
+
+func codexAccountIdentity(record codexAccountRecord) *domain.AgentAccountIdentity {
+	var identity domain.AgentAccountIdentity
+	if record.Snapshot.AccountEmail != nil {
+		identity.Email = *record.Snapshot.AccountEmail
+	}
+	switch record.Snapshot.AuthMethod {
+	case domain.CodexAuthMethodChatGPT:
+		identity.Method = domain.AgentAccountMethodAccount
+	case domain.CodexAuthMethodAPIKey:
+		identity.Method = domain.AgentAccountMethodAPIKey
+	}
+	if record.Snapshot.Capacity.Plan != nil {
+		identity.Plan = *record.Snapshot.Capacity.Plan
+	}
+	return identity.Sanitized()
+}
+
 // Service integration.
 func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	observation, _, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
+	return observation, handled
+}
+
+// structuredCodexAuthenticationRecord also returns the account record the
+// verdict is about; it is zero when no account was checked.
+func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, codexAccountRecord, bool) {
+	none := codexAccountRecord{}
 	if agentID != string(domain.HarnessCodex) || s.codexAccounts == nil || s.codexAccounts.factory == nil {
-		return domain.AgentAuthenticationObservation{}, false
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
+		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("codex_account", "account_store_unavailable"))
 		// Account management is optional for ordinary Codex use. When AO's
 		// local account store cannot answer safely, fall back to the native
 		// readiness path instead of treating that as proof Codex is signed out.
-		return domain.AgentAuthenticationObservation{}, false
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if purpose == domain.AgentReadinessPurposeLaunch {
 		s.codexAccounts.mu.Lock()
 		verified := s.codexAccounts.reconciliation.Status == domain.CodexDeviceReconciliationVerified
 		s.codexAccounts.mu.Unlock()
 		if !verified {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 	}
 	id := s.codexAccounts.activeAccountID()
@@ -39,26 +76,28 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		credentialPresent := s.codexAccounts.deviceCredentialPresent
 		s.codexAccounts.mu.Unlock()
 		if !reconciled || credentialPresent {
-			return uncheckedAuthentication(), true
+			observation := uncheckedAuthentication()
+			observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("codex_account", "account_sync_pending")}
+			return observation, none, true
 		}
-		return successfulAuthentication(s.codexAccounts.now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "Sign in to Codex or add an account in Settings."), true
+		return successfulAuthentication(s.codexAccounts.now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "Sign in to Codex or add an account in Settings."), none, true
 	}
 	record, ok := s.codexAccounts.catalog.record(id)
 	if !ok {
-		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckInconclusive, "The active Codex account is unavailable."), true
+		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckInconclusive, "The active Codex account is unavailable."), none, true
 	}
 	result, err := s.codexAccounts.ensureAuthentication(ctx, record, purpose)
 	if err != nil {
-		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), true
+		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), none, true
 	}
 	record, ok = s.codexAccounts.catalog.record(id)
 	if !ok {
-		return domain.AgentAuthenticationObservation{}, false
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if purpose == domain.AgentReadinessPurposeLaunch && result.State == domain.AgentAuthenticationAuthorized && record.Snapshot.AuthMethod == domain.CodexAuthMethodChatGPT {
 		capabilities := s.codexAccounts.detectCapabilities(ctx)
 		if capabilities.CapacityRead.State != domain.CodexCapabilitySupported {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		// Launch readiness uses a protected provider call. account/read is only
 		// local metadata discovery and cannot prove that the server accepts the
@@ -66,24 +105,24 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		s.codexAccounts.capacity.invalidate(record.Snapshot.ID, false)
 		_, capacityErr := s.codexAccounts.capacity.ensureOne(ctx, record, capabilities, true)
 		if capacityErr != nil {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		latest, ok := s.codexAccounts.catalog.record(record.Snapshot.ID)
 		if !ok {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		verified, reauthenticationRequired := s.codexAccounts.authenticationVerification(record.Snapshot.ID)
 		if reauthenticationRequired {
-			return latest.Snapshot.Authentication, true
+			return latest.Snapshot.Authentication, latest, true
 		}
 		if !verified {
 			// Offline, timeout, and provider failures are not evidence that the
 			// account is signed out. Let native launch readiness remain advisory.
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
-		return latest.Snapshot.Authentication, true
+		return latest.Snapshot.Authentication, latest, true
 	}
-	return result, true
+	return result, record, true
 }
 
 // CachedCodexAccounts returns the current in-memory view without native work.
@@ -433,6 +472,26 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account setup did not complete", map[string]any{
 		"reasonCode": failure.reason, "retryable": failure.retryable,
 	})
+}
+
+// reconcileCodexDeviceCredentialForRecheck matches the device Codex credential
+// before an explicit authentication recheck, e.g. after a login in the Harness
+// settings terminal, which runs `codex login` outside AO's account login flow.
+// Codex readiness answers from the last device reconciliation, and nothing else
+// re-runs it after such a login, so without this the recheck kept reporting the
+// pre-login state (no device credential, or a previous credential's "sign in
+// again" evidence) until something else reconciled or the app restarted. A
+// changed credential is matched to its account; an unchanged one keeps its
+// evidence. Best-effort: account management is optional for ordinary Codex use,
+// so failures leave the recheck unchanged.
+func (s *Service) reconcileCodexDeviceCredentialForRecheck(ctx context.Context) {
+	if s.codexAccounts == nil {
+		return
+	}
+	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
+		return
+	}
+	_ = s.codexAccounts.reconcileGlobalWithPolicy(ctx, true)
 }
 
 // EnsureCodexDeviceAccountReconciled conclusively identifies the canonical
