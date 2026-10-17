@@ -1743,8 +1743,49 @@ function daemonLaunchEnv(): NodeJS.ProcessEnv {
 	return process.env;
 }
 
+// `npm run dev` builds resources/acp-runtime in predev, but a cache cleaner or a
+// plain `electron .` launch can leave it missing and every chat resume then fails
+// with "entrypoint ... no such file". Rebuild it here. The script is idempotent
+// and a no-op when the runtime is intact. Dev only: a packaged runtime is signed.
+async function repairDevAcpRuntime(): Promise<void> {
+	if (app.isPackaged || process.env.AO_ACP_RUNTIME_DIR) return;
+	const runtimeDir = path.join(app.getAppPath(), "resources", "acp-runtime");
+	const adapter = path.join(
+		runtimeDir,
+		"node_modules",
+		"@agentclientprotocol",
+		"claude-agent-acp",
+		"dist",
+		"index.js",
+	);
+	if (existsSync(adapter)) return;
+	const script = path.join(app.getAppPath(), "scripts", "build-acp-runtime.mjs");
+	if (!existsSync(script)) return;
+	console.warn(`[ao] ACP runtime missing at ${runtimeDir}; rebuilding`);
+	await new Promise<void>((resolve) => {
+		const child = spawn(process.execPath, [script], {
+			cwd: app.getAppPath(),
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+			stdio: "inherit",
+		});
+		child.once("error", (err) => {
+			console.error("[ao] ACP runtime rebuild failed to start:", err);
+			resolve();
+		});
+		child.once("exit", (code) => {
+			if (code !== 0) console.error(`[ao] ACP runtime rebuild exited with ${code}`);
+			resolve();
+		});
+	});
+}
+
 async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	if (daemonProcess) {
+		return daemonStatus;
+	}
+
+	await repairDevAcpRuntime();
+	if (startEpoch !== daemonStartEpoch) {
 		return daemonStatus;
 	}
 
