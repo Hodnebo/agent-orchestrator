@@ -2579,6 +2579,7 @@
 	"chat.image.copyFailed": "无法复制图片",
 	"chat.image.saveFailed": "无法保存图片",
 	"chat.render.expand": "放大页面",
+	"chat.render.wrapContent": "内容自动换行",
 	"chat.render.viewSource": "查看源代码",
 	"chat.render.save": "保存页面",
 	"chat.render.saveError": "无法保存页面。",

@@ -2597,6 +2597,7 @@
 	"chat.image.copyFailed": "Bild konnte nicht kopiert werden",
 	"chat.image.saveFailed": "Bild konnte nicht gespeichert werden",
 	"chat.render.expand": "Seite vergrößern",
+	"chat.render.wrapContent": "Inhalt umbrechen",
 	"chat.render.viewSource": "Quelltext anzeigen",
 	"chat.render.save": "Seite speichern",
 	"chat.render.saveError": "Die Seite konnte nicht gespeichert werden.",

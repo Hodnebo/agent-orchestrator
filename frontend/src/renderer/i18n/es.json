@@ -2637,6 +2637,7 @@
 	"chat.image.copyFailed": "No se pudo copiar la imagen",
 	"chat.image.saveFailed": "No se pudo guardar la imagen",
 	"chat.render.expand": "Ampliar página",
+	"chat.render.wrapContent": "Ajustar contenido",
 	"chat.render.viewSource": "Ver código fuente",
 	"chat.render.save": "Guardar página",
 	"chat.render.saveError": "No se pudo guardar la página.",

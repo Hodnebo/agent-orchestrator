@@ -2605,6 +2605,7 @@
 	"chat.image.copyFailed": "Couldn’t copy image",
 	"chat.image.saveFailed": "Couldn’t save image",
 	"chat.render.expand": "Expand page",
+	"chat.render.wrapContent": "Wrap content",
 	"chat.render.viewSource": "View source",
 	"chat.render.save": "Save page",
 	"chat.render.saveError": "Could not save the page.",
