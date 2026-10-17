@@ -1004,7 +1004,10 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						className={cn(
 							compactSummary
 								? "activity-row-label shrink-0 text-[11.5px] font-normal text-muted-foreground group-hover/activity:text-foreground"
-								: "min-w-0 truncate font-medium",
+								: activity.activityKind === "system"
+									? // System notices carry advice the user must read, so they wrap instead of truncating.
+										"min-w-0 whitespace-normal wrap-anywhere font-medium"
+									: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
 						)}

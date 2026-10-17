@@ -354,6 +354,22 @@ describe("ActivityRow", () => {
 		expect(screen.getByText("outcome unknown")).toBeInTheDocument();
 		expect(screen.queryByText("failed")).not.toBeInTheDocument();
 	});
+
+	it("wraps system notices instead of truncating their advice", () => {
+		const notice = "Cline returned no response. Check the selected provider's credits and sign-in, then retry.";
+		render(
+			<ActivityRow
+				activity={{
+					kind: "activity", id: "empty-turn", sequence: 1, revision: 0,
+					createdAt: "2026-08-23T00:00:00Z", activityKind: "system",
+					status: "completed", summary: notice,
+				}}
+			/>,
+		);
+		const title = screen.getByTitle(notice);
+		expect(title).not.toHaveClass("truncate");
+		expect(title).toHaveClass("whitespace-normal");
+	});
 });
 
 describe("HumanMessage", () => {
