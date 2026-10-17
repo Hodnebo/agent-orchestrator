@@ -1,7 +1,11 @@
 package workerexec
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -52,5 +56,50 @@ func TestCodexSessionFallsBackToTheLastErrorNotification(t *testing.T) {
 	own := &codexTurnError{Message: "context window exceeded"}
 	if got := session.reason(own); got != own {
 		t.Fatalf("reason(own) = %+v, want the turn's own error", got)
+	}
+}
+
+// The worker checks a requested model against the models this Codex lists for
+// its sign-in, across pages, by id and by model name.
+func TestCodexListedModelsReadsEveryPage(t *testing.T) {
+	requestReader, requestWriter := io.Pipe()
+	responseReader, responseWriter := io.Pipe()
+	defer requestReader.Close()
+	defer requestWriter.Close()
+	defer responseReader.Close()
+	defer responseWriter.Close()
+	conn := newCodexRPC(requestWriter, responseReader)
+	go func() {
+		reader := bufio.NewReader(requestReader)
+		pages := []string{
+			`{"data":[{"id":"gpt-6-luna","model":"gpt-6-luna"}],"nextCursor":"page-2"}`,
+			`{"data":[{"id":"terra-preset","model":"gpt-5.6-terra"}]}`,
+		}
+		for index := range pages {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var request struct {
+				ID     int64  `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(line, &request) != nil || request.Method != "model/list" {
+				return
+			}
+			_, _ = responseWriter.Write([]byte(fmt.Sprintf(`{"id":%d,"result":%s}`+"\n", request.ID, pages[index])))
+		}
+	}()
+	listed, ok := codexListedModels(context.Background(), conn)
+	if !ok {
+		t.Fatal("model list unavailable")
+	}
+	for _, model := range []string{"gpt-6-luna", "terra-preset", "gpt-5.6-terra"} {
+		if !listed[model] {
+			t.Fatalf("%s is not listed: %v", model, listed)
+		}
+	}
+	if listed["gpt-5.6-sol"] {
+		t.Fatal("an unlisted model was listed")
 	}
 }

@@ -234,6 +234,45 @@ type codexTurnError struct {
 	CodexErrorInfo    json.RawMessage `json:"codexErrorInfo"`
 }
 
+// codexListedModels returns the models this Codex lists for its current
+// sign-in (model/list, hidden ones included), by id and by model name. ok is
+// false when the list is unavailable, so the requested model is used as is.
+func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, bool) {
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	listed := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		params := map[string]any{"includeHidden": true}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		var result struct {
+			Data []struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"data"`
+			NextCursor *string `json:"nextCursor"`
+		}
+		if err := conn.request(listCtx, "model/list", params, &result); err != nil {
+			return nil, false
+		}
+		for _, model := range result.Data {
+			if id := strings.TrimSpace(model.ID); id != "" {
+				listed[id] = true
+			}
+			if name := strings.TrimSpace(model.Model); name != "" {
+				listed[name] = true
+			}
+		}
+		if result.NextCursor == nil || *result.NextCursor == "" {
+			break
+		}
+		cursor = *result.NextCursor
+	}
+	return listed, len(listed) > 0
+}
+
 // codexTurnErrorMaxLen bounds the provider text a failed turn shows.
 const codexTurnErrorMaxLen = 600
 
@@ -424,7 +463,18 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 		"sandboxPolicy": codexTurnSandbox(sandbox),
 	}
 	if turn.Model != "" {
-		turnParams["model"] = turn.Model
+		// The desktop's model list comes from the local Codex, which may sign
+		// in differently: a ChatGPT login cannot run every API model, and
+		// Codex fails such a turn with a 400. Run a model this Codex does not
+		// list on its default instead, and say so.
+		if listed, ok := codexListedModels(ctx, conn); ok && !listed[turn.Model] {
+			notice := fmt.Sprintf("AO: %s is not available with the Codex sign-in this session uses, so this turn runs on Codex's default model. Pick a model from Codex's list to choose another.\n\n", turn.Model)
+			if err := publish(Output{Stream: "stdout", Text: notice, ItemID: "ao-model-notice-" + turn.ID}); err != nil {
+				return err
+			}
+		} else {
+			turnParams["model"] = turn.Model
+		}
 	}
 	if turn.ReasoningEffort != "" {
 		turnParams["effort"] = turn.ReasoningEffort
