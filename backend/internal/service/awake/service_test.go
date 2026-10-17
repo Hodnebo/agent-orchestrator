@@ -262,6 +262,80 @@ func TestSafetyLatchRequiresExplicitFreshRearm(t *testing.T) {
 		t.Fatal("explicit safe rearm did not recover")
 	}
 }
+func TestSafetyLatchSaveRetriesBeforeRestart(t *testing.T) {
+	for _, thermalOnRetry := range []string{"critical", "nominal"} {
+		t.Run(thermalOnRetry, func(t *testing.T) {
+			s, store, h, bindings, now := fixture(t)
+			bindings.agent = true
+			rule := domain.AwakeRule{ID: "work", Name: "Agent work", Enabled: true, Match: "all", Conditions: []domain.AwakeCondition{{Kind: "agent_activity"}}}
+			if err := s.UpdateRules(context.Background(), []domain.AwakeRule{rule}); err != nil {
+				t.Fatal(err)
+			}
+			*now = now.Add(5 * time.Second)
+			tick(t, s)
+			if !h.active {
+				t.Fatal("matching persisted rule did not activate")
+			}
+			store.fail = true
+			h.observation.Thermal = "critical"
+			s.refresh(context.Background())
+			if err := s.reconcile(context.Background()); err == nil {
+				t.Fatal("failed safety save was not reported")
+			}
+			if state := s.Status(); state.Active || !state.Paused || state.Reason != "persistence_failed" {
+				t.Fatalf("failed save did not keep ownership stopped: %+v", state)
+			}
+			var persisted domain.AwakeDocument
+			if err := json.Unmarshal([]byte(store.document), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Paused || persisted.StopReason != "" {
+				t.Fatal("failed store unexpectedly persisted the latch")
+			}
+			store.fail = false
+			h.observation.Thermal = thermalOnRetry
+			*now = now.Add(5 * time.Second)
+			tick(t, s)
+			if err := json.Unmarshal([]byte(store.document), &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if !persisted.Paused || persisted.StopReason != "critical_heat" {
+				t.Fatal("storage recovery did not durably retry the safety latch")
+			}
+			if state := s.Status(); state.Active || state.Reason != "critical_heat" {
+				t.Fatalf("retry did not preserve the safety stop: %+v", state)
+			}
+			writes := store.writes
+			*now = now.Add(5 * time.Second)
+			tick(t, s)
+			if store.writes != writes {
+				t.Fatal("durable latch was saved again on an unchanged tick")
+			}
+			// No manual sessions: reconstruction cannot incidentally save the latch.
+			nextHost := &fakeHost{observation: h.observation}
+			nextHost.observation.Thermal = "nominal"
+			next, err := New(context.Background(), store, nextHost, bindings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next.now = s.now
+			for i := 0; i < 2; i++ {
+				*now = now.Add(5 * time.Second)
+				tick(t, next)
+			}
+			if state := next.Status(); state.Active || !state.Paused || state.Reason != "critical_heat" {
+				t.Fatalf("restart lost the acknowledgment latch: %+v", state)
+			}
+			if err := next.Resume(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if state := next.Status(); !state.Active || state.Paused || state.Reason != "" {
+				t.Fatalf("explicit Resume did not restore automatic ownership: %+v", state)
+			}
+		})
+	}
+}
+
 func TestStopAllSuppressesRulesButAllowsManualWake(t *testing.T) {
 	s, _, h, b, now := fixture(t)
 	b.agent = true

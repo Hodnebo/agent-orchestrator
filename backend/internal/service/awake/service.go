@@ -72,6 +72,9 @@ type Service struct {
 	networkCancel context.CancelFunc
 	agentCancel   context.CancelFunc
 	agentBusy     bool
+
+	// Reconciliation keeps failed document changes in memory; retry until durable.
+	reconcileSavePending bool
 }
 
 // ErrValidation identifies invalid wake requests.
@@ -125,7 +128,12 @@ func (s *Service) save(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.store.SaveAwake(ctx, string(data))
+	if err := s.store.SaveAwake(ctx, string(data)); err != nil {
+		return err
+	}
+	// Every successful save includes any pending reconciliation changes.
+	s.reconcileSavePending = false
+	return nil
 }
 
 // Status returns current wake state.
@@ -566,7 +574,7 @@ func (s *Service) safety() string {
 }
 func (s *Service) reconcile(ctx context.Context) error {
 	now := s.now()
-	changed := false
+	changed := s.reconcileSavePending
 	count := 0
 	unknownBinding := false
 	lid := false
@@ -662,6 +670,7 @@ func (s *Service) reconcile(ctx context.Context) error {
 	}
 	if changed {
 		if err := s.save(ctx); err != nil {
+			s.reconcileSavePending = true
 			s.host.Stop()
 			s.reason = "persistence_failed"
 			return err

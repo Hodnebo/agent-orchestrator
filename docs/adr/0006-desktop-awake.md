@@ -48,7 +48,9 @@ Activation requires matching observations spanning five seconds. Unknown or
 stale observations immediately withdraw automatic ownership. Active battery
 conditions have three percentage points of hysteresis. Operator pause and
 critical safety stops require explicit resumption; a manual request does not
-silently resume paused rules.
+silently resume paused rules. If a safety-latch save fails, ownership remains
+stopped and reconciliation retries the pending document write, even after
+observations recover. A successful save makes the acknowledgment latch durable.
 
 ## Native protocol and recovery
 
