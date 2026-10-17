@@ -35,7 +35,9 @@ export function useAwake(enabled = true, detailed = false) {
 			if (!data) throw new Error("Stay Awake status is unavailable");
 			return data;
 		},
-		refetchInterval: enabled ? 5_000 : false,
+		// Back off while the endpoint is failing (Stay Awake disabled at startup,
+		// daemon restarting) so every poll is not reported as a fresh API error.
+		refetchInterval: enabled ? (q) => (q.state.status === "error" ? 60_000 : 5_000) : false,
 		retry: false,
 	});
 	const mutation = useMutation<AwakeState, Error, Action>({

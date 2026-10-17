@@ -251,8 +251,9 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 	default:
 		return invalid("unknown awake session mode")
 	}
-	if len(s.doc.Sessions) >= 1000 {
-		return invalid("awake history is full; clear ended sessions first")
+	s.pruneEndedSessions()
+	if len(s.doc.Sessions) >= maxAwakeSessions {
+		return invalid("too many active awake sessions; end some first")
 	}
 	nativeGuard := false
 	for _, cap := range s.host.Capabilities() {
@@ -267,7 +268,7 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 		}
 	}
 	if req.LidClosed || nativeGuard {
-		if err := s.host.SetupLid(); err != nil {
+		if err := s.host.SetupLid(); err != nil && (req.LidClosed || !errors.Is(err, ErrLidHelperUpgrade)) {
 			return err
 		}
 	}
@@ -536,7 +537,7 @@ func (s *Service) UpdateRules(ctx context.Context, rules []domain.AwakeRule) err
 			}
 		}
 		if r.Enabled && (r.LidClosed || guard) {
-			if err := s.host.SetupLid(); err != nil {
+			if err := s.host.SetupLid(); err != nil && (r.LidClosed || !errors.Is(err, ErrLidHelperUpgrade)) {
 				return err
 			}
 		}
@@ -946,6 +947,27 @@ func (s *Service) runNetwork(ctx context.Context, task networkTask) {
 	if err := s.save(ctx); err != nil {
 		s.doc.Network.Outcome = "uncertain"
 	}
+}
+
+const maxAwakeSessions = 1000
+
+// pruneEndedSessions drops the oldest ended sessions once the document is at
+// capacity, so history never blocks a new request. Only active sessions count
+// toward the limit.
+func (s *Service) pruneEndedSessions() {
+	excess := len(s.doc.Sessions) - maxAwakeSessions + 1
+	if excess <= 0 {
+		return
+	}
+	kept := make([]domain.AwakeSession, 0, len(s.doc.Sessions))
+	for _, source := range s.doc.Sessions {
+		if excess > 0 && source.EndedAt != nil {
+			excess--
+			continue
+		}
+		kept = append(kept, source)
+	}
+	s.doc.Sessions = kept
 }
 
 // ClearHistory removes ended sessions while preserving replay protection.

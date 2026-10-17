@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -28,6 +29,7 @@ type HostAdapter struct {
 	observed           time.Time
 	native             *mobilebridge.LidAwake
 	nativeGuard        bool
+	nativeDegraded     atomic.Bool // registered helper needs an upgrade; idle wake uses caffeinate
 	lowPowerControl    bool
 	lowPowerAuthorized bool
 	lid                bool
@@ -54,7 +56,7 @@ func (h *HostAdapter) Supported() bool { return runtime.GOOS == "darwin" }
 
 // Active reports current native wake ownership.
 func (h *HostAdapter) Active() bool {
-	if h.nativeGuard {
+	if h.useNative() {
 		return h.native.WakeActive()
 	}
 	return h.control.Active()
@@ -62,7 +64,7 @@ func (h *HostAdapter) Active() bool {
 
 // Start starts a wake request.
 func (h *HostAdapter) Start() error {
-	if h.nativeGuard {
+	if h.useNative() {
 		return h.native.Start(false)
 	}
 	return h.control.Start()
@@ -73,15 +75,34 @@ func (h *HostAdapter) Stop() { h.control.Stop() }
 
 // ConfigureLid updates this owner's closed-lid policy.
 func (h *HostAdapter) ConfigureLid(on, setup bool) error {
-	if h.nativeGuard {
+	if h.useNative() {
 		h.lid = on
 		return h.native.ConfigurePolicy(on, h.display)
 	}
 	return h.control.ConfigureLid(on, setup)
 }
 
-// SetupLid registers the supported native coordinator.
-func (h *HostAdapter) SetupLid() error { return h.control.SetupLid() }
+// useNative reports whether wake requests go through the native coordinator.
+func (h *HostAdapter) useNative() bool { return h.nativeGuard && !h.nativeDegraded.Load() }
+
+// ErrLidHelperUpgrade marks a registered wake helper that must be upgraded
+// before the native coordinator can be used.
+var ErrLidHelperUpgrade = errors.New("registered wake helper needs an upgrade")
+
+// SetupLid registers the supported native coordinator. When an older helper is
+// registered, idle-only requests fall back to the unprivileged assertion path
+// until setup succeeds again; the returned error wraps ErrLidHelperUpgrade.
+func (h *HostAdapter) SetupLid() error {
+	err := h.control.SetupLid()
+	if mobilebridge.IsLidHelperUpgrade(err) {
+		h.nativeDegraded.Store(true)
+		return errors.Join(ErrLidHelperUpgrade, err)
+	}
+	if err == nil {
+		h.nativeDegraded.Store(false)
+	}
+	return err
+}
 
 // LidStatus reports lid support, ownership, and failure reason.
 func (h *HostAdapter) LidStatus() (bool, bool, string) { return h.control.LidStatus() }
@@ -89,7 +110,7 @@ func (h *HostAdapter) LidStatus() (bool, bool, string) { return h.control.LidSta
 // ConfigureIdle updates idle and display wake policy.
 func (h *HostAdapter) ConfigureIdle(deadline time.Time, display bool) error {
 	h.display = display
-	if h.nativeGuard {
+	if h.useNative() {
 		return h.native.ConfigurePolicy(h.lid, display)
 	}
 	return h.control.ConfigureIdle(deadline, display)

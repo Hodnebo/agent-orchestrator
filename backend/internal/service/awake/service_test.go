@@ -895,3 +895,38 @@ func TestNetworkRecoverySaveFailureRetainsBudgetAndRetriesClosure(t *testing.T) 
 		t.Fatal("unchanged connected polls rewrote the document")
 	}
 }
+
+func TestEndedSessionsNeverBlockNewRequests(t *testing.T) {
+	s, _, _, _, _ := fixture(t)
+	ended := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < maxAwakeSessions; i++ {
+		s.doc.Sessions = append(s.doc.Sessions, domain.AwakeSession{ID: fmt.Sprintf("old-%d", i), EndedAt: &ended})
+	}
+	start(t, s, domain.StartAwakeRequest{Scope: "ao", Mode: "indefinite"})
+	got := s.Status().Sessions
+	if len(got) != maxAwakeSessions || got[0].ID != "old-1" || got[len(got)-1].EndedAt != nil {
+		t.Fatalf("expected oldest ended session pruned and new one kept, got %d sessions", len(got))
+	}
+}
+
+func TestActiveSessionsStillCapped(t *testing.T) {
+	s, _, _, _, _ := fixture(t)
+	for i := 0; i < maxAwakeSessions; i++ {
+		s.doc.Sessions = append(s.doc.Sessions, domain.AwakeSession{ID: fmt.Sprintf("live-%d", i)})
+	}
+	if err := s.Start(context.Background(), domain.StartAwakeRequest{Scope: "ao", Mode: "indefinite"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected validation error at active cap, got %v", err)
+	}
+}
+
+func TestOldHelperOnlyBlocksLidRequests(t *testing.T) {
+	s, _, h, _, _ := fixture(t)
+	h.setupError = fmt.Errorf("%w: old helper", ErrLidHelperUpgrade)
+	start(t, s, domain.StartAwakeRequest{Scope: "ao", Mode: "indefinite"})
+	if !h.active {
+		t.Fatal("idle-only request should fall back when the helper needs an upgrade")
+	}
+	if err := s.Start(context.Background(), domain.StartAwakeRequest{Scope: "ao", Mode: "indefinite", LidClosed: true}); !errors.Is(err, ErrLidHelperUpgrade) {
+		t.Fatalf("closed-lid request must still report the upgrade, got %v", err)
+	}
+}

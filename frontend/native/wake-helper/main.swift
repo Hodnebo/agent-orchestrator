@@ -91,7 +91,10 @@ func power() -> (Bool?, Int?) {
         let percent = current.flatMap { current in maximum.flatMap { $0 > 0 ? current * 100 / $0 : nil } }
         return (state == kIOPSBatteryPowerValue, percent)
     }
-    return (nil, nil)
+    // The power sources were readable and none is an internal battery (a desktop
+    // Mac), so the machine is on wall power. Treating this as unknown would latch
+    // the battery_unknown safety stop forever with no way to resume.
+    return (false, nil)
 }
 
 func docked() -> Bool? {

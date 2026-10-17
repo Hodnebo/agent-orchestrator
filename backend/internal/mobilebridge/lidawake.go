@@ -24,6 +24,10 @@ import (
 const lidHelperVersion = 5
 const lidHelperLabel = "com.aoagents.mobile-wake"
 
+// IsLidHelperUpgrade reports whether err means the registered wake helper must be
+// upgraded before the native coordinator can be used.
+func IsLidHelperUpgrade(err error) bool { return errors.Is(err, errLidHelperUpgrade) }
+
 var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; open the lid, turn closed-lid wake off in every AO instance and wait for recovery to finish, then run in Terminal: launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake; turn closed-lid wake on again")
 
 // LidAwake is a lease client for the independent, launchd-owned coordinator.
@@ -246,7 +250,10 @@ func (l *LidAwake) renew() error {
 	l.sequence++
 	lease := lidLease{LowPowerBatteryPercent: l.lowPowerBatteryPercent, LowPowerOnSeriousHeat: l.lowPowerOnSeriousHeat, ID: l.id, PID: l.pid, Started: l.started, Sequence: l.sequence, WrittenAt: float64(time.Now().UnixMilli()) / 1000, LidClosed: l.requestedLid, DisplayAwake: l.displayAwake, StopBatteryPercent: l.stopBatteryPercent, MuteAudio: l.muteAudio, PauseApps: l.pauseApps, RestoreDisplay: l.restoreDisplay, DarkenKeyboard: l.darkenKeyboard}
 	if !l.deadline.IsZero() {
-		end := float64(l.deadline.UnixMilli()) / 1000
+		// The Go service retires finished owners on its own tick; give it
+		// that margin so the helper never drops the lease (and the lid
+		// override) before the surviving aggregate is renewed.
+		end := float64(l.deadline.Add(idleRenewalMargin).UnixMilli()) / 1000
 		lease.ExpiresAt = &end
 	}
 	data, err := json.Marshal(lease)

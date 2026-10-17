@@ -376,7 +376,7 @@ func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
 		if err := json.Unmarshal(data, &lease); err != nil {
 			t.Fatal(err)
 		}
-		if lease.Sequence != previous+1 || lease.ExpiresAt == nil || *lease.ExpiresAt != float64(end.UnixMilli())/1000 {
+		if lease.Sequence != previous+1 || lease.ExpiresAt == nil || *lease.ExpiresAt != float64(end.Add(idleRenewalMargin).UnixMilli())/1000 {
 			t.Fatalf("sequence renewal changed the policy deadline: %+v", lease)
 		}
 	}
