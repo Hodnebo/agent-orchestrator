@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { darkTheme, lightTheme } from "./theme";
+import { darkTheme, lightTheme, themeFor } from "./theme";
 
 let platformOS = "android";
 
@@ -29,6 +29,15 @@ describe("textSelectionColors", () => {
 		expect(alpha(String(colors.selectionColor))).toBeLessThan(0.5);
 		expect(colors.cursorColor).toBe(t.highlight);
 		expect(colors.selectionHandleColor).toBe(t.highlight);
+	});
+
+	it("uses a named theme's selection fill and highlight", () => {
+		const t = themeFor("dark", "github");
+		expect(t.highlight).not.toBe(t.accent);
+		platformOS = "android";
+		expect(textSelectionColors(t)).toEqual({ selectionColor: t.selection, cursorColor: t.highlight, selectionHandleColor: t.highlight });
+		platformOS = "ios";
+		expect(textSelectionColors(t)).toEqual({ selectionColor: t.highlight });
 	});
 
 	it("keeps the solid highlight on iOS, which tints the selection itself", () => {

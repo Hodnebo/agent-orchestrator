@@ -20,7 +20,7 @@ export type TextSelectionColors = {
  */
 export function textSelectionColors(t: Theme): TextSelectionColors {
 	if (Platform.OS === "android") {
-		return { selectionColor: t.accentBorder, cursorColor: t.highlight, selectionHandleColor: t.highlight };
+		return { selectionColor: t.selection, cursorColor: t.highlight, selectionHandleColor: t.highlight };
 	}
 	return { selectionColor: t.highlight };
 }
