@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 // Browser is one Chrome channel AO can register its native host with.
@@ -140,7 +139,7 @@ func (i Installer) Setup() (Status, error) {
 			continue
 		}
 		// The single file AO writes outside ~/.ao (see package doc).
-		if err := writeFileAtomic(browser.ManifestPath(), manifest, 0o644); err != nil {
+		if err := writeFileAtomic(browser.ManifestPath(), manifest, 0o600); err != nil {
 			return i.Status(), fmt.Errorf("register native host with %s: %w", browser.Name, err)
 		}
 	}
@@ -255,7 +254,7 @@ func (i Installer) install() error {
 	if err := writeFileAtomic(i.HostPath(), []byte(i.wrapperScript()), 0o700); err != nil {
 		return fmt.Errorf("write host wrapper: %w", err)
 	}
-	if _, err := extensionVersion(i.ExtensionSource); err != nil {
+	if !i.extensionBundled() {
 		// Registration still works; the status reports the missing bundle.
 		return nil
 	}
@@ -263,6 +262,11 @@ func (i Installer) install() error {
 		return fmt.Errorf("install extension: %w", err)
 	}
 	return nil
+}
+
+func (i Installer) extensionBundled() bool {
+	_, err := extensionVersion(i.ExtensionSource)
+	return err == nil
 }
 
 func (i Installer) wrapperScript() string {
@@ -312,7 +316,7 @@ func replaceDir(src, dst string) error {
 		}
 		target := filepath.Join(staging, rel)
 		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+			return os.MkdirAll(target, 0o700)
 		}
 		if !entry.Type().IsRegular() {
 			return nil
@@ -344,7 +348,7 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -373,8 +377,4 @@ func browsersUnder(base string, channels ...[2]string) []Browser {
 		out = append(out, Browser{Name: channel[0], UserDataDir: filepath.Join(base, filepath.FromSlash(channel[1]))})
 	}
 	return out
-}
-
-func trimNewline(value string) string {
-	return strings.TrimRight(value, "\r\n")
 }

@@ -3,6 +3,7 @@ import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
+import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
@@ -92,6 +93,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
+				<BrowserChromeSection />
 				<BrowserDownloadsSection />
 			</>
 		),

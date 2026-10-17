@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -145,11 +146,7 @@ func TestHostRelaysCommandsAndResults(t *testing.T) {
 }
 
 func asCommandError(err error, target *browserruntime.CommandError) bool {
-	value, ok := err.(browserruntime.CommandError)
-	if ok {
-		*target = value
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 func TestHostRejectsProtocolMismatch(t *testing.T) {

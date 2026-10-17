@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -230,11 +231,7 @@ func TestChromeE2E(t *testing.T) {
 }
 
 func errorAs(err error, target *browserruntime.CommandError) bool {
-	value, ok := err.(browserruntime.CommandError)
-	if ok {
-		*target = value
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 // clickConsent waits for the extension's consent window and clicks Allow
