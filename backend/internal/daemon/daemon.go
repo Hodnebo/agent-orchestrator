@@ -208,6 +208,11 @@ func Run() error {
 	}
 	browserAuthority := browsersvc.NewAuthority()
 	browserBroker := browserruntime.New(log, browserRuntimeToken)
+	chrome := newChromeMode(cfg, log)
+	var browserLifecycle sessionmanager.BrowserLifecycle = browserBroker
+	if chrome != nil {
+		browserLifecycle = chrome.lifecycle(browserBroker)
+	}
 
 	// Fail fast only if a daemon is genuinely still serving the recorded port.
 	// CheckStale confirms the run-file's PID is alive, but that alone is not
@@ -573,7 +578,7 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -715,6 +720,11 @@ func Run() error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	var browserChrome controllers.BrowserChromeService
+	if chrome != nil {
+		browserService.UseChrome(chrome.broker, chrome.targets, log)
+		browserChrome = chrome
+	}
 
 	// Standalone shell terminals: user-opened shells with no agent session
 	// behind them. They reuse the same runtime adapter (and therefore the same
@@ -986,6 +996,7 @@ func Run() error {
 			},
 		}),
 		Browser:                  browserService,
+		BrowserChrome:            browserChrome,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
@@ -1015,6 +1026,11 @@ func Run() error {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
 			}
 		}()
+	}
+	if chrome != nil {
+		if err := chrome.serve(ctx, cfg.RunFilePath); err != nil {
+			log.Warn("browser chrome: listener unavailable; Chrome mode disabled", "err", err)
+		}
 	}
 	var usageDone <-chan struct{}
 
