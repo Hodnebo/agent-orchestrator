@@ -438,6 +438,7 @@ func mountAwake(r chi.Router, c *controllers.AwakeController) {
 	r.Put("/api/v1/awake/settings", c.Settings)
 	r.Put("/api/v1/awake/rules", c.Rules)
 	r.Post("/api/v1/awake/low-power/authorize", c.AuthorizeLowPower)
+	r.Post("/api/v1/awake/low-power/revoke", c.RevokeLowPower)
 	r.Post("/api/v1/awake/stop", c.Stop)
 	r.Post("/api/v1/awake/resume", c.Resume)
 	r.Post("/api/v1/awake/recover", c.Recover)

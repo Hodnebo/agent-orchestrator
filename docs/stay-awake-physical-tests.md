@@ -51,17 +51,27 @@ Power Mode. Mobile access is not required. Other advanced UI is deferred in
    native write or earlier-boot journal must report recovery required. The Low
    Power Mode recovery button requires confirmation and ends desktop requests;
    verify it never alters another live owner's settings.
-9. Remove authorization only **after disabling Low Power Mode rules in every AO
-   instance, ending requests and confirming all owned changes restored**. Remove
-   only AO's rule: `sudo rm /etc/sudoers.d/ao-low-power-$(id -u)`, then
-   `sudo visudo -c`. If permission disappears during an owned change, AO must
-   retain its journal, report the restore failure and permit reauthorization;
-   it must never silently claim cleanup succeeded. Reauthorize, stop requests,
-   and retry recovery before removing the rule again.
+9. Use **Revoke authorization…** after disabling Low Power Mode policies in
+   other AO instances. Verify this instance saves both automation options as off
+   before prompting, restores AO-owned changes, and preserves normal awake
+   sessions. Another live power-policy owner or unresolved journal must refuse
+   removal. Cancel the administrator dialog: automation stays off, the grant
+   remains, and retry works. Approve it: only
+   `/etc/sudoers.d/ao-low-power-<uid>` disappears, permission reports off, and
+   repeated revocation is safe. Test concurrent authorize/revoke and attempts to
+   re-enable policies while pending; the coordinator must keep lid/thermal
+   monitoring responsive and cannot acquire new power claims during removal.
+   Interrupt the helper during the dialog on the test account: new power claims
+   must remain blocked until Revoke is completed again. Confirm reauthorization
+   works afterward. If the app cannot run, use only
+   `sudo rm -f /etc/sudoers.d/ao-low-power-$(id -u)` after owned changes restore,
+   then `sudo visudo -c`. Preserve journals if permission unexpectedly disappears;
+   reauthorize and recover before removing it again. This whole physical flow is
+   pending colleague validation; automated tests never execute a grant/removal.
 10. Test logout/login, normal quit, updater replacement and shutdown/reboot.
     Same-value or earlier-boot ambiguity must remain explicit. Preserve recovery
-    journals until the changes are reconciled. On upgrade from helper protocol 2
-    or 3, follow ADR 0006's lid-open/off/unload/re-enable instructions.
+    journals until the changes are reconciled. On upgrade from helper protocol 2,
+    3 or 4, follow ADR 0006's lid-open/off/unload/re-enable instructions.
 
 ## Core wake regression matrix
 

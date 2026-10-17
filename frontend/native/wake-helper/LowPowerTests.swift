@@ -38,6 +38,34 @@ final class FakePower: WakeLowPowerDriver {
         assert(syntax.0 == 0, syntax.1) // syntax check only; no installation
         let script = WakePowerCommands.run("/usr/bin/osacompile", ["-o", root.appendingPathComponent("authorize.scpt").path, "-e", WakePowerCommands.authorizationScript(501)])
         assert(script.0 == 0, script.1) // compile only; never execute the prompt/script
+        let revoke = WakePowerCommands.revocationScript(501)
+        assert(revoke == "do shell script \"/bin/rm -f /etc/sudoers.d/ao-low-power-501\" with administrator privileges")
+        assert(!revoke.contains("*") && !revoke.contains("pmset"))
+        assert(WakePowerCommands.rulePath(UInt32.max) == "/etc/sudoers.d/ao-low-power-4294967295")
+        let revokeSyntax = WakePowerCommands.run("/usr/bin/osacompile", ["-o", root.appendingPathComponent("revoke.scpt").path, "-e", revoke])
+        assert(revokeSyntax.0 == 0, revokeSyntax.1) // compile only; never remove a grant
+        try WakePowerCommands.withAuthorizationLock(root) {
+            do {
+                try WakePowerCommands.withAuthorizationLock(root) { assertionFailure("authorization lock was not exclusive") }
+            } catch { /* a coordinator cannot mutate power during revocation */ }
+        }
+        try WakePowerCommands.withAuthorizationLock(root) { } // release on scope exit
+        assert(!WakePowerCommands.revocationPending(root))
+        try write(true, WakePowerCommands.revocationMarker(root))
+        assert(WakePowerCommands.revocationPending(root))
+        // The barrier survives helper reconstruction until explicit retry.
+        assert(WakePowerCommands.revocationPending(root))
+        try FileManager.default.removeItem(at: WakePowerCommands.revocationMarker(root))
+        assert(!WakePowerCommands.revocationPending(root))
+        var revokeLease = WakeLease(id: UUID().uuidString, pid: 42, started: 99, sequence: 1, writtenAt: 100)
+        assert(mayRevokeLowPower([revokeLease], WakeLowPowerJournal()))
+        revokeLease.lowPowerBatteryPercent = 30
+        assert(!mayRevokeLowPower([revokeLease], WakeLowPowerJournal()))
+        revokeLease.lowPowerBatteryPercent = 0
+        revokeLease.lowPowerOnSeriousHeat = true
+        assert(!mayRevokeLowPower([revokeLease], WakeLowPowerJournal()))
+        let unresolved = WakeLowPowerJournal(claims: ["battery": WakeLowPowerClaim(boot: "one", phase: "applied", owners: [])])
+        assert(!mayRevokeLowPower([], unresolved))
         let url = root.appendingPathComponent("power.json")
         let driver = FakePower(); driver.url = url
         var power = try WakeLowPower(url: url, driver: driver, boot: "one")

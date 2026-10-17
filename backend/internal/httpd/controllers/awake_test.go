@@ -71,3 +71,18 @@ func TestAwakeLowPowerAuthorizationResult(t *testing.T) {
 		}
 	}
 }
+
+func (s *awakeHTTPStub) RevokeLowPower(context.Context) error { s.starts++; return s.err }
+func TestAwakeLowPowerRevocationResult(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+	}{{nil, http.StatusOK}, {awakesvc.ErrValidation, http.StatusBadRequest}, {errors.New("revocation canceled"), http.StatusInternalServerError}} {
+		svc := &awakeHTTPStub{err: tc.err}
+		w := httptest.NewRecorder()
+		(&AwakeController{Svc: svc}).RevokeLowPower(w, httptest.NewRequest(http.MethodPost, "/api/v1/awake/low-power/revoke", nil))
+		if w.Code != tc.status || svc.starts != 1 {
+			t.Fatalf("status=%d calls=%d", w.Code, svc.starts)
+		}
+	}
+}

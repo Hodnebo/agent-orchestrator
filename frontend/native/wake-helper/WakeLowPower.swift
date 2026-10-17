@@ -12,12 +12,31 @@ enum WakePowerCommands {
         let commands = ["-b", "-c"].flatMap { flag in [0, 1].map { "/usr/bin/pmset \(flag) lowpowermode \($0)" } }
         return "# AO Low Power Mode: fixed operations only\n" + commands.map { "#\(uid) ALL=(root) TIMEOUT=5s NOPASSWD: " + $0 }.joined(separator: "\n") + "\n"
     }
+    static func revocationMarker(_ directory: URL) -> URL { directory.appendingPathComponent("power-revocation.json") }
+    static func revocationPending(_ directory: URL) -> Bool {
+        var state = stat()
+        return lstat(revocationMarker(directory).path, &state) == 0 || errno != ENOENT
+    }
+    static func rulePath(_ uid: UInt32) -> String { "/etc/sudoers.d/ao-low-power-\(uid)" }
+    static func privilegedScript(_ shell: String) -> String {
+        let literal = shell.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
+        return "do shell script \"\(literal)\" with administrator privileges"
+    }
+    static func revocationScript(_ uid: UInt32) -> String {
+        privilegedScript("/bin/rm -f \(rulePath(uid))")
+    }
+    static func withAuthorizationLock<T>(_ directory: URL, _ action: () throws -> T) throws -> T {
+        let fd = open(directory.appendingPathComponent("power-authorization.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw NSError(domain: "authorization lock", code: 1) }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw NSError(domain: "authorization in progress", code: 1) }
+        return try action()
+    }
     static func authorizationScript(_ uid: UInt32) -> String {
         // uid is numeric, the rule is generated entirely from constants.
         let content = rule(uid).replacingOccurrences(of: "'", with: "'\\''")
-        let shell = "set -eu; d=$(/usr/bin/mktemp -d /private/tmp/ao-low-power.XXXXXX); trap '/bin/rm -rf \"$d\"' EXIT; /usr/bin/printf '%s' '\(content)' > \"$d/rule\"; /usr/sbin/visudo -c -f \"$d/rule\" >/dev/null; /usr/bin/install -S -o root -g wheel -m 0440 \"$d/rule\" /etc/sudoers.d/ao-low-power-\(uid)"
-        let literal = shell.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-        return "do shell script \"\(literal)\" with administrator privileges"
+        let shell = "set -eu; d=$(/usr/bin/mktemp -d /private/tmp/ao-low-power.XXXXXX); trap '/bin/rm -rf \"$d\"' EXIT; /usr/bin/printf '%s' '\(content)' > \"$d/rule\"; /usr/sbin/visudo -c -f \"$d/rule\" >/dev/null; /usr/bin/install -S -o root -g wheel -m 0440 \"$d/rule\" \(rulePath(uid))"
+        return privilegedScript(shell)
     }
     // Reject unreadable and High Power settings. Do not interpret them as off.
     static func parse(_ text: String) -> [String: Bool] {
@@ -63,13 +82,17 @@ enum WakePowerCommands {
         guard sysctlbyname("kern.bootsessionuuid", &bytes, &size, nil, 0) == 0 else { return "" }
         return String(cString: bytes)
     }
-    static func authorized() -> Bool {
+    static func authorizationInstalled() -> Bool {
         // An unrelated cached sudo password must not masquerade as the user's
         // explicit AO authorization, or keep it alive after this rule is removed.
         var state = stat()
-        let path = "/etc/sudoers.d/ao-low-power-\(getuid())"
+        let path = rulePath(getuid())
         guard lstat(path, &state) == 0, state.st_uid == 0,
             (state.st_mode & S_IFMT) == S_IFREG, (state.st_mode & 0o777) == 0o440 else { return false }
+        return true
+    }
+    static func authorized() -> Bool {
+        guard authorizationInstalled() else { return false }
         return ["-b", "-c"].allSatisfy { flag in
             ["0", "1"].allSatisfy { value in
                 run("/usr/bin/sudo", ["-n", "-l", "/usr/bin/pmset", flag, "lowpowermode", value]).0 == 0
@@ -174,4 +197,9 @@ struct WakeLowPower {
         } catch { reason = "low_power_recovery_failed" }
         return reason.isEmpty
     }
+}
+
+// Revocation never abandons an AO-owned change or another live owner's policy.
+func mayRevokeLowPower(_ leases: [WakeLease], _ journal: WakeLowPowerJournal) -> Bool {
+    journal.claims.isEmpty && !leases.contains { ($0.lowPowerBatteryPercent ?? 0) > 0 || $0.lowPowerOnSeriousHeat == true }
 }

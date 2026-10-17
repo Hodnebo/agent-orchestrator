@@ -74,7 +74,8 @@ type Service struct {
 	agentBusy     bool
 
 	// Reconciliation keeps failed document changes in memory; retry until durable.
-	reconcileSavePending bool
+	reconcileSavePending   bool
+	powerAuthorizationBusy bool
 }
 
 // ErrValidation identifies invalid wake requests.
@@ -431,6 +432,9 @@ func (s *Service) UpdateSettings(ctx context.Context, settings domain.AwakeSetti
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("stay awake is shutting down")
+	}
+	if s.powerAuthorizationBusy && (settings.LowPowerBatteryPercent != 0 || settings.LowPowerOnSeriousHeat) {
+		return invalid("wait for the Low Power Mode authorization action to finish")
 	}
 	supported := settings
 	if clearDeferredSettings(&supported) {
@@ -974,11 +978,16 @@ type agentRecovery interface {
 
 func (s *Service) capabilities() []domain.AwakeCapability {
 	result := s.host.Capabilities()
+	revocationPending := s.host.RecoveryReason() == "low_power_revocation_pending"
 	for i := range result {
 		switch result[i].ID {
 		case "audio", "keyboard", "display_restore", "pause_apps", "hotspot", "agent_reconnect", "browser_actions":
 			result[i].Available = false
 			result[i].Reason = "This control is deferred to a follow-up release."
+		}
+		if revocationPending && (result[i].ID == "low_power" || result[i].ID == "low_power_authorization") {
+			result[i].Available = false
+			result[i].Reason = "Complete Revoke authorization again before enabling or authorizing Low Power Mode."
 		}
 	}
 	return result
@@ -1089,6 +1098,17 @@ func (s *Service) ObserveStatus(ctx context.Context) domain.AwakeState {
 	return s.Status()
 }
 
+// finishPowerAuthorization refreshes permissions without holding the policy lock
+// across a macOS administrator dialog.
+func (s *Service) finishPowerAuthorization(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.powerAuthorizationBusy = false
+	if !s.closed {
+		s.refresh(ctx)
+	}
+}
+
 // AuthorizeLowPower requests explicit macOS consent without holding the policy lock.
 func (s *Service) AuthorizeLowPower(ctx context.Context) error {
 	authorizer, ok := s.host.(interface{ AuthorizeLowPower(context.Context) error })
@@ -1096,18 +1116,45 @@ func (s *Service) AuthorizeLowPower(ctx context.Context) error {
 		return invalid("this host cannot authorize Low Power Mode")
 	}
 	s.mu.Lock()
-	allowed := !s.closed
-	s.mu.Unlock()
-	if !allowed {
-		return errors.New("stay awake is shutting down")
+	if s.closed || s.powerAuthorizationBusy {
+		s.mu.Unlock()
+		return invalid("stay awake is shutting down or a power authorization action is in progress")
 	}
-	if err := authorizer.AuthorizeLowPower(ctx); err != nil {
-		return err
+	s.powerAuthorizationBusy = true
+	s.mu.Unlock()
+	defer s.finishPowerAuthorization(ctx)
+	return authorizer.AuthorizeLowPower(ctx)
+}
+
+// RevokeLowPower disables automation durably before restoring owned changes and
+// removing its account-specific grant. Cancellation never silently re-enables it.
+func (s *Service) RevokeLowPower(ctx context.Context) error {
+	revoker, ok := s.host.(interface{ RevokeLowPower(context.Context) error })
+	if !ok {
+		return invalid("this host cannot revoke Low Power Mode authorization")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed {
-		s.refresh(ctx)
+	if s.closed || s.powerAuthorizationBusy {
+		s.mu.Unlock()
+		return invalid("stay awake is shutting down or a power authorization action is in progress")
 	}
-	return nil
+	previous := clone(s.doc)
+	s.doc.Settings.LowPowerBatteryPercent = 0
+	s.doc.Settings.LowPowerOnSeriousHeat = false
+	if err := s.save(ctx); err != nil {
+		s.doc = previous
+		s.mu.Unlock()
+		return err
+	}
+	if err := s.reconcile(ctx); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.powerAuthorizationBusy = true
+	s.mu.Unlock()
+	defer s.finishPowerAuthorization(ctx)
+	if err := s.host.RequestRecovery(); err != nil {
+		return err
+	}
+	return revoker.RevokeLowPower(ctx)
 }

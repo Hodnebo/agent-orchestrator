@@ -6,7 +6,7 @@ import CoreGraphics
 import AppKit
 import Darwin
 
-let protocolVersion = 4
+let protocolVersion = 5
 let home = FileManager.default.homeDirectoryForCurrentUser
 let directory = home.appendingPathComponent(".ao/data/wake")
 let leasesDirectory = directory.appendingPathComponent("leases")
@@ -206,8 +206,29 @@ func serve() throws {
             active: false, reason: "low_power_recovery_failed", leases: [], blocked: ownership.journal.blocked), statusURL)
         throw error
     }
+    func reconcilePower(_ leases: [WakeLease], onBattery: Bool?, percent: Int?, thermal: String, force: Bool = false) -> Bool {
+        do {
+            return try WakePowerCommands.withAuthorizationLock(directory) {
+                if WakePowerCommands.revocationPending(directory) {
+                    lowPower.reason = "low_power_revocation_pending"
+                    return false
+                }
+                // After revocation, a new owner cannot create an uncertain claim
+                // for a command that authorization will necessarily reject.
+                if lowPower.journal.claims.isEmpty && leases.contains(where: { ($0.lowPowerBatteryPercent ?? 0) > 0 || $0.lowPowerOnSeriousHeat == true }) && !WakePowerCommands.authorizationInstalled() {
+                    lowPower.reason = "low_power_authorization_required"
+                    return false
+                }
+                return lowPower.reconcile(leases, onBattery: onBattery, percent: percent, thermal: thermal, force: force)
+            }
+        } catch {
+            // Keep lid/thermal monitoring running during a macOS approval dialog.
+            lowPower.reason = "low_power_authorization_in_progress"
+            return false
+        }
+    }
     defer {
-        let powerClean = lowPower.reconcile([], onBattery: nil, percent: nil, thermal: "unknown")
+        let powerClean = reconcilePower([], onBattery: nil, percent: nil, thermal: "unknown")
         _ = assertions.update(idle: false, display: false)
         _ = effects.reconcile([], owners: [])
         let clean = restore()
@@ -284,7 +305,7 @@ func serve() throws {
         case .critical: thermal = "critical"
         @unknown default: thermal = "unknown"
         }
-        let powerOK = lowPower.reconcile(accepted, onBattery: onBattery, percent: percent, thermal: thermal,
+        let powerOK = reconcilePower(accepted, onBattery: onBattery, percent: percent, thermal: thermal,
             force: forceRecovery && !accepted.contains { ($0.lowPowerBatteryPercent ?? 0) > 0 || $0.lowPowerOnSeriousHeat == true })
         if forceRecovery && effectsWanted.isEmpty && effectOK && powerOK { try? FileManager.default.removeItem(at: recoveryURL) }
         if !effectOK {
@@ -379,19 +400,59 @@ if CommandLine.arguments == [CommandLine.arguments[0], "probe"] {
     if let battery { object["onBattery"] = battery }
     if let percent { object["batteryPercent"] = percent }
     if let data = try? JSONSerialization.data(withJSONObject: object) { FileHandle.standardOutput.write(data) }
-} else if CommandLine.arguments == [CommandLine.arguments[0], "authorize-low-power"] {
+} else if CommandLine.arguments == [CommandLine.arguments[0], "authorize-low-power"] || CommandLine.arguments == [CommandLine.arguments[0], "revoke-low-power"] {
+    let revoking = CommandLine.arguments[1] == "revoke-low-power"
     var ok = false
     var detail = "Low Power Mode authorization is unavailable on this Mac."
     if supported && getuid() > 0 {
         do {
             try secureDirectory(directory)
-            let fd = open(directory.appendingPathComponent("power-authorization.lock").path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
-            guard fd >= 0 else { throw NSError(domain: "authorization lock", code: 1) }
-            defer { close(fd) }
-            guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw NSError(domain: "authorization in progress", code: 1) }
-            let result = WakePowerCommands.run("/usr/bin/osascript", ["-e", WakePowerCommands.authorizationScript(getuid())], timeout: 110)
-            ok = result.0 == 0 && WakePowerCommands.authorized()
-            detail = ok ? "" : "macOS authorization was canceled or could not be verified. Review permissions and retry."
+            if revoking {
+                // Recovery must run before taking the authorization lock. While
+                // the dialog is open, the coordinator cannot acquire new claims.
+                let until = ProcessInfo.processInfo.systemUptime + 10
+                repeat {
+                    do {
+                        try WakePowerCommands.withAuthorizationLock(directory) {
+                            let wall = Date().timeIntervalSince1970
+                            let status = try read(WakeStatus.self, statusURL)
+                            guard status.version == protocolVersion && abs(wall - status.updatedAt) < 5 else { throw NSError(domain: "helper upgrade required", code: 1) }
+                            let files = try FileManager.default.contentsOfDirectory(at: leasesDirectory, includingPropertiesForKeys: nil)
+                            let leases = files.filter { $0.pathExtension == "json" }.compactMap { try? read(WakeLease.self, $0) }
+                            var policy = WakePolicy()
+                            let live = policy.live(leases, now: ProcessInfo.processInfo.systemUptime, wall: wall, identity: processStart)
+                            let journal = try WakeLowPower(url: directory.appendingPathComponent("low-power.json")).journal
+                            guard mayRevokeLowPower(live, journal) else { throw NSError(domain: "power recovery pending", code: 1) }
+                            // Persist a barrier before launching the prompt. If this
+                            // process dies, no new power claim may race a late removal.
+                            try write(true, WakePowerCommands.revocationMarker(directory))
+                            let result = WakePowerCommands.run("/usr/bin/osascript", ["-e", WakePowerCommands.revocationScript(getuid())], timeout: 110)
+                            var state = stat()
+                            ok = result.0 == 0 && lstat(WakePowerCommands.rulePath(getuid()), &state) != 0 && errno == ENOENT
+                            detail = ok ? "" : "macOS revocation was canceled or removal could not be verified. Automation remains disabled."
+                            if result.0 == 0 || result.0 == 1 { _ = unlink(WakePowerCommands.revocationMarker(directory).path) }
+                            if WakePowerCommands.revocationPending(directory) {
+                                ok = false
+                                detail = "Revocation was interrupted or cleanup remains pending. Run Revoke authorization again before authorizing Low Power Mode. Automation remains disabled."
+                            }
+                        }
+                        break
+                    } catch {
+                        detail = "Disable Low Power Mode in other AO instances and resolve pending power recovery before revoking authorization. An older helper must be upgraded first."
+                        usleep(100_000)
+                    }
+                } while ProcessInfo.processInfo.systemUptime < until
+            } else {
+                try WakePowerCommands.withAuthorizationLock(directory) {
+                    if WakePowerCommands.revocationPending(directory) {
+                        detail = "Complete Revoke authorization again before authorizing Low Power Mode."
+                        return
+                    }
+                    let result = WakePowerCommands.run("/usr/bin/osascript", ["-e", WakePowerCommands.authorizationScript(getuid())], timeout: 110)
+                    ok = result.0 == 0 && WakePowerCommands.authorized()
+                    detail = ok ? "" : "macOS authorization was canceled or could not be verified. Review permissions and retry."
+                }
+            }
         } catch { detail = "Low Power Mode authorization is already running or its state directory is unavailable." }
     }
     let output = try! JSONSerialization.data(withJSONObject: ["ok": ok, "error": detail])

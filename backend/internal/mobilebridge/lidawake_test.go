@@ -150,6 +150,8 @@ func TestWakeSetupAcceptsDaemonParentAndReusesRegisteredBuild(t *testing.T) {
 			}{
 				{1, true},
 				{2, true},
+				{3, true},
+				{4, true}, // Before serialized, durable authorization revocation.
 				{lidHelperVersion + 1, true},
 				// A protocol-compatible older helper may still reject macOS 27.
 				{lidHelperVersion, false},

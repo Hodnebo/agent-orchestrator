@@ -18,7 +18,7 @@ type Action =
 	| { kind: "start"; request: Partial<AwakeStart> }
 	| { kind: "end"; id: string }
 	| { kind: "extend"; id: string; seconds: number }
-	| { kind: "stop" | "resume" | "recover" | "clearHistory" | "authorizeLowPower" }
+	| { kind: "stop" | "resume" | "recover" | "clearHistory" | "authorizeLowPower" | "revokeLowPower" }
 	| { kind: "settings"; settings: AwakeSettings }
 	| { kind: "rules"; rules: AwakeRule[] };
 
@@ -66,6 +66,8 @@ export function useAwake(enabled = true, detailed = false) {
 						});
 					case "authorizeLowPower":
 						return apiClient.POST("/api/v1/awake/low-power/authorize");
+					case "revokeLowPower":
+						return apiClient.POST("/api/v1/awake/low-power/revoke");
 					case "stop":
 						return apiClient.POST("/api/v1/awake/stop");
 					case "resume":

@@ -116,6 +116,7 @@ func (h *HostAdapter) Capabilities() []domain.AwakeCapability {
 		{ID: "lid", Available: lid, Reason: reason},
 		{ID: "display_awake", Available: core, Reason: "Display assertions require macOS."},
 		{ID: "low_power", Available: h.nativeGuard && lowPowerControl && lowPowerAuthorized && fresh, Reason: "Authorize Low Power Mode in Stay Awake settings first."},
+		{ID: "low_power_revocation", Available: h.nativeGuard, Reason: "Revocation requires the supported default desktop helper."},
 		{ID: "low_power_authorization", Available: h.nativeGuard && lowPowerControl && fresh, Reason: "Automatic Low Power Mode requires readable battery and charger power profiles on a supported Mac."},
 		{ID: "display_restore", Available: lid && lights && fresh, Reason: "Owned display brightness control requires compatible native APIs on macOS 26–27."},
 		{ID: "keyboard", Available: lid && keyboard && fresh, Reason: "Keyboard control requires compatible native APIs and a built-in backlight on macOS 26–27."},
@@ -254,6 +255,18 @@ func (h *HostAdapter) AuthorizeLowPower(ctx context.Context) error {
 	}
 	return h.runActionTimeout(ctx, "authorize-low-power", struct{}{}, 120*time.Second)
 }
+
+// RevokeLowPower ensures the coordinator participates in the permission lock.
+func (h *HostAdapter) RevokeLowPower(ctx context.Context) error {
+	if !h.nativeGuard {
+		return errors.New("revocation requires the default desktop installation")
+	}
+	if err := h.native.Setup(); err != nil {
+		return err
+	}
+	return h.runActionTimeout(ctx, "revoke-low-power", struct{}{}, 135*time.Second)
+}
+
 func (h *HostAdapter) runAction(ctx context.Context, action string, request any) error {
 	return h.runActionTimeout(ctx, action, request, 12*time.Second)
 }

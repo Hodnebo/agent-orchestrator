@@ -173,3 +173,30 @@ it("requires explicit Low Power Mode authorization and sends only the selected p
  fireEvent.click(screen.getByRole("switch", { name: "Low Power Mode on serious heat" }));
  expect(test.act).toHaveBeenCalledWith({ kind: "settings", settings: expect.objectContaining({ lowPowerOnSeriousHeat: true }) });
 });
+
+it("confirms authorization revocation and permits canceling before any request", () => {
+ test.state!.observation.lowPowerAuthorized = true;
+ test.state!.capabilities.push({ id: "low_power_revocation", available: true, reason: "" });
+ show();
+ fireEvent.click(screen.getByText("Battery and heat protection"));
+ const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+ try {
+  fireEvent.click(screen.getByRole("button", { name: "Revoke authorization…" }));
+  expect(test.act).not.toHaveBeenCalled();
+  confirm.mockReturnValue(true);
+  fireEvent.click(screen.getByRole("button", { name: "Revoke authorization…" }));
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Canceling leaves automation disabled"));
+  expect(test.act).toHaveBeenCalledWith({ kind: "revokeLowPower" });
+ } finally { confirm.mockRestore(); }
+});
+
+it("guides interrupted removal back to Revoke rather than generic recovery", () => {
+ test.state!.reason = "low_power_revocation_pending";
+ test.state!.capabilities.push({ id: "low_power_authorization", available: false, reason: "Complete revocation first" }, { id: "low_power_revocation", available: true, reason: "" });
+ show();
+ fireEvent.click(screen.getByText("Battery and heat protection"));
+ expect(screen.getByRole("button", { name: "Authorize…" })).toBeDisabled();
+ expect(screen.getByRole("button", { name: "Revoke authorization…" })).toBeEnabled();
+ expect(screen.getByText(/Authorization removal was interrupted/)).toBeInTheDocument();
+ expect(screen.queryByRole("button", { name: "Recover Low Power Mode" })).toBeNull();
+});

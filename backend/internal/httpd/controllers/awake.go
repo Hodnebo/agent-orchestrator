@@ -29,6 +29,7 @@ type AwakeService interface {
 	UpdateRules(context.Context, []domain.AwakeRule) error
 	Downloads([]string) error
 	AuthorizeLowPower(context.Context) error
+	RevokeLowPower(context.Context) error
 }
 
 // AwakeController serves desktop wake routes.
@@ -199,5 +200,12 @@ func (c *AwakeController) Observe(w http.ResponseWriter, r *http.Request) {
 func (c *AwakeController) AuthorizeLowPower(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.AuthorizeLowPower(r.Context()))
+	}
+}
+
+// RevokeLowPower disables automation and requests explicit permission removal.
+func (c *AwakeController) RevokeLowPower(w http.ResponseWriter, r *http.Request) {
+	if c.available(w, r) {
+		c.reply(w, r, c.Svc.RevokeLowPower(r.Context()))
 	}
 }

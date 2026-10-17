@@ -698,11 +698,15 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 					</SettingsRow>
                     <SettingsRow
                         label={t("awake.lowPowerPermission", "Low Power Mode authorization")}
-                        description={t("awake.lowPowerPermissionHelp", "Grants this account four fixed Low Power Mode commands. macOS asks for administrator approval once. Saved active policies may resume after approval.")}
+                        description={state?.reason === "low_power_revocation_pending" ? t("awake.revocationPending", "Authorization removal was interrupted. Complete Revoke authorization again before enabling or authorizing Low Power Mode.") : t("awake.lowPowerPermissionHelp", "Grants this account four fixed Low Power Mode commands. macOS asks for administrator approval once. Saved active policies may resume after approval. Disabling automation keeps this permission; use Revoke authorization to remove it.")}
                     >
                         {state?.observation.lowPowerAuthorized ? <span className="text-sm text-settings-muted">{t("awake.authorized", "Authorized")}</span> :
                         <Button variant="footer" disabled={awake.busy || !capability("low_power_authorization")?.available}
                             onClick={() => awake.act({ kind: "authorizeLowPower" })}>{t("awake.authorize", "Authorize…")}</Button>}
+                        <Button variant="footer" disabled={awake.busy || !capability("low_power_revocation")?.available}
+                            onClick={() => {
+                                if (window.confirm(t("awake.revokeLowPowerConfirm", "Disable Low Power Mode automation, restore AO-owned changes, and remove this account’s authorization? macOS will ask for administrator approval. Canceling leaves automation disabled. Other AO instances must disable their Low Power Mode policies first."))) awake.act({ kind: "revokeLowPower" });
+                            }}>{t("awake.revokeAuthorization", "Revoke authorization…")}</Button>
                     </SettingsRow>
                     <SettingsRow label={t("awake.lowPowerBattery", "Low Power Mode below battery percentage")}
                         description={capability("low_power")?.available ? t("awake.lowPowerBatteryHelp", "While an awake request is active. 0 disables this rule; otherwise 10–90%. Restores AO-owned changes after recovery or when the request ends.") : capabilityReason("low_power")}>
@@ -715,7 +719,7 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
                     <SettingsRow label={t("awake.lowPowerCurrent", "Current Low Power Mode")}>
                         <span className="text-sm text-settings-muted">{state?.observation.lowPowerMode ? t("common.on", "On") : t("common.off", "Off")}</span>
                     </SettingsRow>
-                    {state?.reason?.startsWith("low_power_") ? <SettingsRow label={t("awake.lowPowerRecovery", "Low Power Mode needs attention")}
+                    {state?.reason?.startsWith("low_power_") && state.reason !== "low_power_revocation_pending" && state.reason !== "low_power_authorization_in_progress" ? <SettingsRow label={t("awake.lowPowerRecovery", "Low Power Mode needs attention")}
                         description={t("awake.lowPowerRecoveryHelp", "End desktop wake requests and retry restoring AO-owned Low Power Mode changes. If permission was removed, authorize it again first.")}>
                         <Button variant="footer" disabled={awake.busy} onClick={() => {
                             if (window.confirm(t("awake.lowPowerRecoverConfirm", "End desktop wake requests and restore AO-owned Low Power Mode changes?"))) awake.act({ kind: "recover" });

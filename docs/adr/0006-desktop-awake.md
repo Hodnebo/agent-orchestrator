@@ -76,7 +76,7 @@ API. Core display-awake assertions and Low Power Mode are supported separately.
 
 ## Native protocol and recovery
 
-Protocol 4 extends the existing unprivileged launchd coordinator rather than
+Protocol 5 extends the existing unprivileged launchd coordinator rather than
 installing a second owner of the global clamshell control. Each desktop daemon
 has a lease separate from its mobile lease. Idle and display wake use
 process-owned IOPM assertions. Closed-lid ownership is independent of optional
@@ -85,15 +85,17 @@ closed-lid meaning. A coordinator watchdog terminates a stalled coordinator so
 launchd can replay its already-fsynced journals. Scratch/custom data directories
 cannot join or install this coordinator.
 
-A protocol-2 or protocol-3 registration is not silently replaced. Open the lid, disable
-closed-lid requests in every AO instance, wait for recovery, and run:
+A protocol-2, protocol-3 or protocol-4 registration is not silently replaced. Open
+the lid, end awake requests and disable Low Power Mode policies in every AO
+instance, allow owned changes to restore, and run:
 
 ```sh
 launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake
 ```
 
 Then enable the requested feature again. The same exact procedure is included
-in upgrade errors. Preserve unfinished recovery journals.
+in upgrade errors. Preserve unfinished recovery journals and complete pending
+Low Power Mode recovery after upgrade before revoking authorization.
 
 Below the configured battery threshold (minimum 10%), unknown native battery
 state, or critical thermal state, the helper latches affected leases and releases
@@ -139,6 +141,19 @@ settings controls in this version. Their presence in the API is not a claim that
 the desktop settings expose the complete original PR2 feature list.
 
 ## Low Power Mode and native acceptance
+
+**Revoke authorization…** durably disables both Low Power Mode policies, updates
+this owner's live lease, requests owned-change recovery, and then uses an
+administrator dialog to remove only the account's exact sudoers fragment.
+Canceling or failing removal leaves automation disabled. Another live power
+policy or unresolved journal blocks removal; user-owned power preferences remain
+untouched. The coordinator and authorization actions share a nonblocking power
+lock, so no new claim can race removal while lid/thermal monitoring continues.
+A fsynced revocation barrier survives a helper interruption; complete Revoke
+again before authorization or new power claims can resume.
+Protocol 5 is required for this locking guarantee; older registered helpers need
+the documented upgrade before revocation. Core awake sessions remain available.
+The uninstall FAQ documents the action and the manual fallback if AO cannot run.
 
 Automatic Low Power Mode uses an explicit macOS authorization step. It installs
 one root-owned sudoers fragment granting only four exact `pmset` on/off commands
