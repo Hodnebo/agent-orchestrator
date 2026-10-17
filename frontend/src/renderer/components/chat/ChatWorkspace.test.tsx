@@ -1937,11 +1937,13 @@ describe("ChatWorkspace timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={startingSnapshot("running")}
-				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("done").map((step) => step.id === "worktree" ? { ...step, status: "running", endedAt: undefined } : step) }}
+				session={{ ...chatSession, branch: "ao/mer-1/root", provisionState: "provisioning", provisionSteps: startingSteps("done").map((step) => step.id === "worktree" ? { ...step, status: "running", endedAt: undefined } : step) }}
 			/>,
 		);
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		expect(within(screen.getByTestId("session-startup")).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(screen.queryByText("ao/mer-1/root")).not.toBeInTheDocument();
 	});
 
 	it("waits for controller and provisioning readiness before enabling permission changes", () => {

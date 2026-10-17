@@ -65,6 +65,26 @@ export const aoBridge: AoBridge =
 				}
 			},
 			readText: async () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : ""),
+			writeImage: async (bytes: Uint8Array) => {
+				await navigator.clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(bytes)], { type: "image/png" }) })]);
+			},
+		},
+		chatImage: {
+			fetch: async (url: string) => {
+				const response = await fetch(url);
+				if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+				const blob = await response.blob();
+				return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+			},
+			save: async ({ name, bytes }: { name: string; bytes: Uint8Array }) => {
+				const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = name;
+				link.click();
+				setTimeout(() => URL.revokeObjectURL(url), 0);
+				return true;
+			},
 		},
 		daemon: {
 			getStatus: async () => ({
