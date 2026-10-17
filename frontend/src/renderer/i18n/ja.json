@@ -3147,6 +3147,7 @@
 	"settings.defaultSandbox.saveFailed": "デフォルトのサンドボックスを保存できませんでした。もう一度お試しください。",
 	"settings.agentAccounts.cliLogin": "CLI のログイン",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI のログイン",
+	"settings.agentAccounts.oauthToken": "OAuth トークン",
 	"settings.agentAccounts.removedAccount": "削除済みのアカウント",
 	"settings.agentAccounts.default": "新しいタスクの既定",
 	"settings.agentAccounts.makeDefault": "既定にする",

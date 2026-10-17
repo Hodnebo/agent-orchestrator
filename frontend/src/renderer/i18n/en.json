@@ -3128,6 +3128,7 @@
 	"settings.defaultSandbox.saveFailed": "Couldn't save the default sandbox. Try again.",
 	"settings.agentAccounts.cliLogin": "CLI login",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI login",
+	"settings.agentAccounts.oauthToken": "OAuth token",
 	"settings.agentAccounts.removedAccount": "a removed account",
 	"settings.agentAccounts.default": "Default for new tasks",
 	"settings.agentAccounts.makeDefault": "Make default",

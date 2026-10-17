@@ -3147,6 +3147,7 @@
 	"settings.defaultSandbox.saveFailed": "기본 샌드박스를 저장하지 못했습니다. 다시 시도하세요.",
 	"settings.agentAccounts.cliLogin": "CLI 로그인",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI 로그인",
+	"settings.agentAccounts.oauthToken": "OAuth 토큰",
 	"settings.agentAccounts.removedAccount": "삭제된 계정",
 	"settings.agentAccounts.default": "새 작업의 기본값",
 	"settings.agentAccounts.makeDefault": "기본값으로 설정",

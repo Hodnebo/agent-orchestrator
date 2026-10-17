@@ -155,8 +155,12 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 	const windows = account.limits?.windows ?? [];
 	const extra = account.limits?.extraUsage;
 	if (windows.length === 0 && !extra?.enabled) return null;
+	// One grid for every row, so bars and figures line up. The label keeps its
+	// width; the reset time gives way first, and the bar stays short.
 	return <div className="mt-3 space-y-2 text-xs">
-		{windows.map((window) => <LimitRow key={window.id} window={window} locale={i18n.language} />)}
+		{windows.length ? <div className="grid grid-cols-[auto_minmax(0,1fr)_3rem_auto] items-center gap-x-2 gap-y-2">
+			{windows.map((window) => <LimitRow key={window.id} window={window} locale={i18n.language} />)}
+		</div> : null}
 		{extra?.enabled && extra.usedCredits != null && extra.monthlyLimit != null ? <p className="text-muted-foreground tabular-nums">{t("settings.agentAccounts.extraUsage", {
 			used: new Intl.NumberFormat(i18n.language, { style: "currency", currency: extra.currency || "USD" }).format(extra.usedCredits),
 			limit: new Intl.NumberFormat(i18n.language, { style: "currency", currency: extra.currency || "USD" }).format(extra.monthlyLimit),
@@ -170,11 +174,12 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 	const value = formatPercentage(remaining, locale);
 	const reset = formatResetTime(window.resetsAt, locale);
 	const fill = remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : "bg-foreground/80";
-	return <div className="grid grid-cols-[minmax(0,1fr)_minmax(6rem,10rem)_auto] items-center gap-3">
-		<p className="min-w-0 truncate text-foreground">{window.label}{reset ? <span className="ml-2 text-muted-foreground" title={reset.full}>{t("settings.codexAccounts.capacityResets", { value: reset.visible })}</span> : null}</p>
+	return <>
+		<p className="whitespace-nowrap text-foreground">{window.label}</p>
+		<p className="min-w-0 truncate text-muted-foreground" title={reset?.full}>{reset ? t("settings.codexAccounts.capacityResets", { value: reset.visible }) : null}</p>
 		<div role="progressbar" aria-label={t("settings.codexAccounts.remainingForLimit", { label: window.label, value })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining} className="h-1.5 w-full overflow-hidden rounded-full bg-muted"><div className={`h-full rounded-full ${fill}`} style={{ width: `${remaining}%` }} /></div>
 		<p className="whitespace-nowrap text-right tabular-nums text-muted-foreground">{t("settings.codexAccounts.percentLeft", { value })}</p>
-	</div>;
+	</>;
 }
 
 function LoginTerminal({ login, note, pending, onCheck, onClose }: {

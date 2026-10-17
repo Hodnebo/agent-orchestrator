@@ -3147,6 +3147,7 @@
 	"settings.defaultSandbox.saveFailed": "Die Standard-Sandbox konnte nicht gespeichert werden. Versuche es erneut.",
 	"settings.agentAccounts.cliLogin": "CLI-Anmeldung",
 	"settings.agentAccounts.cliLoginOf": "{{provider}}-CLI-Anmeldung",
+	"settings.agentAccounts.oauthToken": "OAuth-Token",
 	"settings.agentAccounts.removedAccount": "ein entferntes Konto",
 	"settings.agentAccounts.default": "Standard für neue Aufgaben",
 	"settings.agentAccounts.makeDefault": "Als Standard festlegen",

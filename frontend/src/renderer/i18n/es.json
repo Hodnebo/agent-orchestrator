@@ -3194,6 +3194,7 @@
 	"settings.defaultSandbox.saveFailed": "No se pudo guardar el sandbox predeterminado. Inténtalo de nuevo.",
 	"settings.agentAccounts.cliLogin": "Inicio de sesión de la CLI",
 	"settings.agentAccounts.cliLoginOf": "Inicio de sesión de la CLI de {{provider}}",
+	"settings.agentAccounts.oauthToken": "Token de OAuth",
 	"settings.agentAccounts.removedAccount": "una cuenta eliminada",
 	"settings.agentAccounts.default": "Predeterminada para tareas nuevas",
 	"settings.agentAccounts.makeDefault": "Hacer predeterminada",

@@ -37,12 +37,15 @@ export function useAgentAccounts(enabled = true) {
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
 
-type AccountNameT = (key: "settings.agentAccounts.cliLoginOf", options: { provider: string }) => string;
+type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken", options?: { provider: string }) => string;
 
-/** An account's name: its email, or "Claude Code CLI login" for a CLI's own
- * login that reports none (a token login). */
+/** An account's name: its email. A Claude login without one is a
+ * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">, t: AccountNameT): string {
-	return account.email || t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+	if (account.email) return account.email;
+	return account.provider === "claude"
+		? t("settings.agentAccounts.oauthToken")
+		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */

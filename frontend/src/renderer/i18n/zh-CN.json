@@ -3129,6 +3129,7 @@
 	"settings.defaultSandbox.saveFailed": "无法保存默认沙盒。请重试。",
 	"settings.agentAccounts.cliLogin": "CLI 登录",
 	"settings.agentAccounts.cliLoginOf": "{{provider}} CLI 登录",
+	"settings.agentAccounts.oauthToken": "OAuth 令牌",
 	"settings.agentAccounts.removedAccount": "已删除的账号",
 	"settings.agentAccounts.default": "新任务的默认账户",
 	"settings.agentAccounts.makeDefault": "设为默认",
