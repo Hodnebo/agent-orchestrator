@@ -1767,7 +1767,7 @@ function CloudProjectCard({
 						</p>
 						<button
 							type="button"
-							className="self-start text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+							className="self-start text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("repositories")}
 						>
@@ -1828,7 +1828,7 @@ function CloudProjectCard({
 					<div className="flex items-center justify-between gap-3">
 						<button
 							type="button"
-							className="text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+							className="text-[12px] font-medium text-muted-foreground underline decoration-dotted decoration-muted-foreground/60 underline-offset-4 transition-colors hover:text-foreground hover:decoration-foreground disabled:opacity-50"
 							disabled={isCreating}
 							onClick={() => chooseProjectSource("standalone")}
 						>
