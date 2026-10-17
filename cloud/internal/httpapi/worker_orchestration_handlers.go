@@ -299,20 +299,17 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 // --branch), so a requested branch can never reach git as an option or as a
 // ref git would refuse.
 func validBranchName(name string) bool {
-	if len(name) > 255 || name == "" || name == "@" || name == "HEAD" ||
-		strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") ||
-		strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") ||
-		strings.Contains(name, "//") || strings.Contains(name, "..") || strings.Contains(name, "@{") ||
-		strings.ContainsAny(name, " ~^:?*[\\\x7f") {
+	if len(name) > 255 || name == "@" || name == "HEAD" ||
+		strings.HasPrefix(name, "-") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "..") || strings.Contains(name, "@{") ||
+		strings.ContainsAny(name, " ~^:?*[\\\x7f") ||
+		strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 }) {
 		return false
 	}
-	for _, r := range name {
-		if r < 0x20 {
-			return false
-		}
-	}
+	// An empty component is an empty name or a leading, trailing, or doubled
+	// slash.
 	for _, component := range strings.Split(name, "/") {
-		if strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
 			return false
 		}
 	}
