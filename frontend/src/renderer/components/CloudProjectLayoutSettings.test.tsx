@@ -69,7 +69,7 @@ it("saves where the agent starts on its own", async () => {
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 	await userEvent.click(await screen.findByRole("button", { name: "Agent starts in" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: "Folder with all repositories" }));
-	expect(screen.getByText(/reads a repository's own instructions/)).toBeInTheDocument();
+	expect(screen.getByText(/Falls back to the main repository/)).toBeInTheDocument();
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: { agentStartsIn: "parent" } });
@@ -140,7 +140,7 @@ it("surfaces the control plane's reason when a save is refused", async () => {
 it("shows a standalone project as having no repository", async () => {
 	mocks.get.mockResolvedValue({ project: project({ source: "standalone" }, "https://scratch.ao.local/p") });
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
-	expect(await screen.findByText(/This project has no repository/)).toBeInTheDocument();
+	expect(await screen.findByText(/No repository. Sessions start in an empty folder/)).toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Add a repository" })).toBeNull();
 	expect(screen.queryByRole("button", { name: "Agent starts in" })).toBeNull();
 	expect(mocks.listRepos).not.toHaveBeenCalled();

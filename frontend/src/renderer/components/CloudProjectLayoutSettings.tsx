@@ -90,10 +90,13 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 function SaveFooter({ dirty, saved, disabled, error }: { dirty: boolean; saved: boolean; disabled: boolean; error?: string }) {
 	const { t } = useTranslation();
 	return <>
-		{error ? <p role="alert" className="text-sm text-error">{error}</p> : null}
-		<div className="flex items-center justify-end gap-3 border-t border-border pt-4">
-			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{saved && !dirty ? t("settings.project.saved") : ""}</span>
-			<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
+		{/* Pinned to the bottom of the scrolling page so Save stays in view however long the page is. */}
+		<div className="sticky -bottom-(--size-modal-padding) z-[1] -mx-(--size-modal-padding) -mb-(--size-modal-padding) border-t border-border bg-card px-(--size-modal-padding) py-4">
+			{error ? <p role="alert" className="mb-3 text-sm text-error">{error}</p> : null}
+			<div className="flex items-center justify-end gap-3">
+				<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{saved && !dirty ? t("settings.project.saved") : ""}</span>
+				<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
+			</div>
 		</div>
 	</>;
 }
@@ -183,15 +186,15 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		{readOnly ? <p role="note" className="text-xs text-settings-label">{t("settings.cloudProject.layoutAdminOnly", { defaultValue: "Only organization owners and admins can change a project's repositories and layout." })}</p> : null}
 		{standalone ? (
 			<Field label={t("settings.cloudProject.repositories", { defaultValue: "Repositories" })}>
-				<p className="text-sm text-settings-muted">{t("settings.cloudProject.standaloneRepositories", { defaultValue: "This project has no repository. Its sessions start in an empty folder; a Setup script or the sandbox template can bring in code." })}</p>
+				<p className="text-sm text-settings-muted">{t("settings.cloudProject.standaloneRepositories", { defaultValue: "No repository. Sessions start in an empty folder." })}</p>
 			</Field>
 		) : <>
 			<Field label={t("settings.cloudProject.mainRepository", { defaultValue: "Main repository" })}
-				hint={t("settings.cloudProject.mainRepositoryHint", { defaultValue: "Set when the project was created. Sessions branch from it and the agent starts in it." })}>
+				hint={t("settings.cloudProject.mainRepositoryHint", { defaultValue: "Sessions branch from this repository." })}>
 				<p className="font-mono text-sm text-settings-label">{gitHubFullName(project.repositoryUrl) ?? project.repositoryUrl}</p>
 			</Field>
 			<Field label={t("settings.cloudProject.additionalRepositories", { defaultValue: "Additional repositories" })}
-				hint={t("settings.cloudProject.additionalRepositoriesHint", { defaultValue: "Sessions clone these beside the main repository and check out the session branch in every one, so one task can change them together and open a pull request in each. Changes apply to new sessions and to a running session the next time it restarts." })}>
+				hint={t("settings.cloudProject.additionalRepositoriesHint", { defaultValue: "Cloned beside the main repository, on the session branch. One task can change them all and open a pull request in each." })}>
 				<CloudAdditionalReposEditor
 					available={repos.data ?? []}
 					mainUrl={project.repositoryUrl}
@@ -206,9 +209,9 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			<Field label={t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })}
 				hint={<>
 					<p>{startsIn === "parent"
-						? t("settings.cloudProject.agentStartsInParentHint", { defaultValue: "The agent starts in the folder that holds every repository. This applies when the repositories share their own parent folder, such as a bring-your-own Coder working folder like ~/work/{repo}; otherwise the agent starts in the main repository. It reads a repository's own instructions (AGENTS.md, CLAUDE.md) only once it works there, so say which repository to start with in the project's instructions." })
-						: t("settings.cloudProject.agentStartsInRepositoryHint", { defaultValue: "The agent starts in the main repository and reads its instructions, with access to the other repositories beside it." })}</p>
-					<p>{t("settings.cloudProject.agentStartsInFixedHint", { defaultValue: "Applies to new sessions. A session keeps the folder it started in, so its conversation can always be resumed." })}</p>
+						? t("settings.cloudProject.agentStartsInParentHint", { defaultValue: "Starts in the folder that holds every repository, such as ~/work. Falls back to the main repository when there is no shared folder." })
+						: t("settings.cloudProject.agentStartsInRepositoryHint", { defaultValue: "Starts in the main repository, with access to the others." })}</p>
+					<p>{t("settings.cloudProject.agentStartsInFixedHint", { defaultValue: "Applies to new sessions." })}</p>
 				</>}>
 				<SettingsOptionMenu<CloudCpAgentStartsIn>
 					aria-label={t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })}
@@ -228,8 +231,8 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 				hint={workingDirectoryInvalid
 					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
 					: standalone
-						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "The folder this project's sessions start in, in your own Coder workspace, for example ~/work/scratch. Leave empty to use the default folder." })
-						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where this project's sessions check out the main repository in your own Coder workspace, for example ~/work/{repo}; the other repositories go beside it. Leave empty to use the folder set for your Coder connection." })}>
+						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "Where sessions start in your Coder workspace. Leave empty for the default." })
+						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty to use your Coder connection's folder." })}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
 					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone", { defaultValue: "~/work/scratch" }) : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}
@@ -278,10 +281,10 @@ function InstructionsForm({ project, readOnly, onSaveState }: LoadedProps) {
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
 		{readOnly ? <p role="note" className="text-xs text-settings-label">{t("settings.cloudProject.instructionsAdminOnly", { defaultValue: "Only organization owners and admins can change a project's instructions." })}</p> : null}
 		{box("cloudProjectAgentRules", t("settings.cloudProject.workerInstructions", { defaultValue: "Worker instructions" }),
-			t("settings.cloudProject.workerInstructionsHint", { defaultValue: "Added to the prompt of every worker session in this project, for example which repository to start in or how to run the dev stack." }),
+			t("settings.cloudProject.workerInstructionsHint", { defaultValue: "Added to every worker's prompt." }),
 			agentRules, setAgentRules)}
 		{box("cloudProjectOrchestratorRules", t("settings.cloudProject.orchestratorInstructions", { defaultValue: "Orchestrator instructions" }),
-			t("settings.cloudProject.orchestratorInstructionsHint", { defaultValue: "Added to the orchestrator's prompt, for example how to split work across the project's repositories." }),
+			t("settings.cloudProject.orchestratorInstructionsHint", { defaultValue: "Added to the orchestrator's prompt." }),
 			orchestratorRules, setOrchestratorRules)}
 		<div className="flex-1" />
 		<SaveFooter dirty={dirty} saved={savedAt} disabled={locked || tooLong}
