@@ -17,6 +17,7 @@ var (
 	ErrAgentAccountLoginUnknown     = errors.New("agent account sign-in not found")
 	ErrAgentAccountDeviceFixed      = errors.New("the computer's own login cannot be removed here")
 	ErrAgentAccountUnchanged        = errors.New("the session already uses this account")
+	ErrAgentAccountUnshared         = errors.New("the account's folder cannot link to this computer's history")
 )
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config

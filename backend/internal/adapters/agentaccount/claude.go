@@ -242,7 +242,7 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 }
 
 // Prepare links home's history and the user's own config to the computer's
-// Claude folder, and copies the user's settings and MCP servers into it.
+// Claude folder, and shares the user's settings and MCP servers into it.
 func (c *Claude) Prepare(home string) error {
 	if home == "" {
 		return nil
@@ -261,74 +261,83 @@ func (c *Claude) Prepare(home string) error {
 			errs = append(errs, linkShared(home, c.DeviceHome, filepath.Base(match), true, false))
 		}
 	}
-	errs = append(errs, c.copySettings(home), c.mergeGlobalConfig(home))
+	l := readLedger(home)
+	errs = append(errs, c.shareSettings(home, l), c.shareGlobalConfig(home, l), l.save())
 	return errors.Join(errs...)
 }
 
-// copySettings writes the user's settings.json into home without the keys that
-// would pick another login.
-func (c *Claude) copySettings(home string) error {
-	data, err := os.ReadFile(filepath.Join(c.DeviceHome, "settings.json"))
-	if errors.Is(err, os.ErrNotExist) {
+// shareSettings shares the user's settings.json into home, key by key and
+// env entry by env entry, without the keys that would pick another login.
+func (c *Claude) shareSettings(home string, l *ledger) error {
+	source, err := readObject(filepath.Join(c.DeviceHome, "settings.json"))
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, "settings.json")
+	account, err := readObject(path)
+	if err != nil {
+		return err // Claude's to repair; never overwrite it
+	}
+	dropLoginKeys(source)
+	changed := shareKeys(account, source, l.keys("settings.json", account, source), map[string]bool{"env": true})
+	if dropLoginKeys(account) {
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return fmt.Errorf("read %s: %w", filepath.Join(c.DeviceHome, "settings.json"), err)
-	}
-	for _, key := range claudeSettingsDropped {
-		delete(settings, key)
-	}
-	if env, ok := settings["env"].(map[string]any); ok {
-		for _, key := range claudeCredentialEnv {
-			delete(env, key)
-		}
-	}
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeIfChanged(filepath.Join(home, "settings.json"), append(out, '\n'))
+	return writeObject(path, account)
 }
 
-// mergeGlobalConfig carries the user's MCP servers and theme into home's
-// .claude.json, the file that also holds the account's own sign-in, so only
-// those keys are touched.
-func (c *Claude) mergeGlobalConfig(home string) error {
-	var device map[string]json.RawMessage
-	if data, err := os.ReadFile(c.DeviceConfig); err == nil {
-		_ = json.Unmarshal(data, &device)
+// dropLoginKeys removes the settings that pick a login or a key.
+func dropLoginKeys(settings map[string]json.RawMessage) bool {
+	dropped := false
+	for _, key := range claudeSettingsDropped {
+		if _, ok := settings[key]; ok {
+			delete(settings, key)
+			dropped = true
+		}
+	}
+	if raw, ok := settings["env"]; ok {
+		env := object(raw)
+		for _, key := range claudeCredentialEnv {
+			if _, ok := env[key]; ok {
+				delete(env, key)
+				dropped = true
+			}
+		}
+		settings["env"] = encode(env)
+	}
+	return dropped
+}
+
+// shareGlobalConfig shares the user's MCP servers, one by one, and theme into
+// home's .claude.json, the file that also holds the account's own sign-in, so
+// no other key is touched.
+func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
+	device, err := readObject(c.DeviceConfig)
+	if err != nil {
+		device = nil
+	}
+	source := map[string]json.RawMessage{}
+	for _, key := range []string{"mcpServers", "theme"} {
+		if value, ok := device[key]; ok {
+			source[key] = value
+		}
 	}
 	path := filepath.Join(home, ".claude.json")
-	account := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(path); err == nil {
-		// A corrupt file is Claude's to repair; never overwrite it.
-		if err := json.Unmarshal(data, &account); err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	account, err := readObject(path)
+	if err != nil {
+		return err // Claude's to repair; never overwrite it
 	}
-	changed := false
-	for _, key := range []string{"mcpServers", "theme"} {
-		if value, ok := device[key]; ok && string(account[key]) != string(value) {
-			account[key], changed = value, true
-		}
-	}
+	changed := shareKeys(account, source, l.keys(".claude.json", account, source), map[string]bool{"mcpServers": true})
 	if _, ok := account["hasCompletedOnboarding"]; !ok {
 		account["hasCompletedOnboarding"], changed = json.RawMessage("true"), true
 	}
 	if !changed {
 		return nil
 	}
-	out, err := json.MarshalIndent(account, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeIfChanged(path, append(out, '\n'))
+	return writeObject(path, account)
 }
 
 func (c *Claude) command(ctx context.Context, bin, home string, args ...string) *exec.Cmd {

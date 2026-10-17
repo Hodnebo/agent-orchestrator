@@ -3,6 +3,8 @@ package agentaccounts
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -47,7 +49,11 @@ func (m *memStore) AgentAccountUsageSince(context.Context, time.Time) ([]domain.
 }
 
 // fakeClaude reports who each folder is signed in as; "" is the device.
-type fakeClaude struct{ signedInAs map[string]string }
+// unshared makes every account folder fail to link.
+type fakeClaude struct {
+	signedInAs map[string]string
+	unshared   bool
+}
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
@@ -61,7 +67,12 @@ func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil
 }
 func (*fakeClaude) Logout(context.Context, string) error { return nil }
-func (*fakeClaude) Prepare(string) error                 { return nil }
+func (f *fakeClaude) Prepare(string) error {
+	if f.unshared {
+		return fmt.Errorf("%w: link projects: permission denied", ports.ErrAgentAccountUnshared)
+	}
+	return nil
+}
 func (*fakeClaude) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
@@ -131,5 +142,47 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	}
 	if err := svc.BindSession(ctx, "s3", domain.HarnessCodex, start.OperationID); !errors.Is(err, ports.ErrAgentAccountProviderMismatch) {
 		t.Fatalf("bind a Codex session to a Claude account: %v", err)
+	}
+}
+
+// TestAccountsRefuseAFolderThatCannotLink pins that an account whose folder
+// cannot link to the computer's history is never signed in, bound or moved to:
+// a session there would keep history of its own, and moves could not resume it.
+func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+		t.Fatalf("sign-in = %q, %v", status, err)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+
+	claude.unshared = true
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+		t.Fatalf("sign-in into a folder that cannot link: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, "claude")); len(entries) != 1 {
+		t.Fatalf("refused sign-in left its folder: %v", entries)
+	}
+	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+		t.Fatalf("bind to the default account: %v", err)
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, start.OperationID); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+		t.Fatalf("move to the account: %v", err)
+	}
+	// This computer's own login has no folder to link.
+	if err := svc.BindSession(ctx, "s2", domain.HarnessClaudeCode, "device-claude"); err != nil {
+		t.Fatalf("bind to this computer: %v", err)
 	}
 }

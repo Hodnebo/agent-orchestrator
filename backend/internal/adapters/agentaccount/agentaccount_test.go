@@ -2,9 +2,13 @@ package agentaccount
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func write(t *testing.T, path, data string) {
@@ -80,6 +84,100 @@ func TestClaudePrepareSharesHistoryNotLogin(t *testing.T) {
 	}
 	if global["mcpServers"] == nil || global["theme"] != "light" || global["oauthAccount"] != nil || global["hasCompletedOnboarding"] != true {
 		t.Fatalf("global config = %s", data)
+	}
+}
+
+// TestClaudePrepareKeepsChangesMadeOnTheAccount pins the ledger rule: a shared
+// key follows the computer until it is changed on the account, and then it is
+// the account's. Entries of env and mcpServers are shared one by one.
+func TestClaudePrepareKeepsChangesMadeOnTheAccount(t *testing.T) {
+	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
+	config := filepath.Join(t.TempDir(), ".claude.json")
+	write(t, filepath.Join(device, "settings.json"), `{"model":"opus","verbose":false,"cleanupPeriodDays":30,"env":{"FOO":"1","BAR":"1"}}`)
+	write(t, config, `{"mcpServers":{"m":{"command":"x"}},"theme":"light"}`)
+	c := &Claude{DeviceHome: device, DeviceConfig: config}
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+
+	// On the account: the model and one env entry change, an MCP server is
+	// added with `claude mcp add --scope user`, and the sign-in is saved.
+	write(t, filepath.Join(home, "settings.json"), `{"model":"haiku","verbose":false,"cleanupPeriodDays":30,"env":{"FOO":"1","BAR":"mine"},"statusLine":"s"}`)
+	write(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"m":{"command":"x"},"mine":{"command":"y"}},"theme":"light","oauthAccount":{"emailAddress":"b@example.com"},"hasCompletedOnboarding":true}`)
+	// On the computer: every shared value changes, one key goes, a server is added.
+	write(t, filepath.Join(device, "settings.json"), `{"model":"sonnet","verbose":true,"env":{"FOO":"2","BAR":"2"}}`)
+	write(t, config, `{"mcpServers":{"m":{"command":"x2"},"new":{"command":"z"}},"theme":"dark"}`)
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+
+	var settings struct {
+		Model             string            `json:"model"`
+		Verbose           bool              `json:"verbose"`
+		CleanupPeriodDays *int              `json:"cleanupPeriodDays"`
+		StatusLine        string            `json:"statusLine"`
+		Env               map[string]string `json:"env"`
+	}
+	data, _ := os.ReadFile(filepath.Join(home, "settings.json"))
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Model != "haiku" || !settings.Verbose || settings.CleanupPeriodDays != nil || settings.StatusLine != "s" ||
+		settings.Env["FOO"] != "2" || settings.Env["BAR"] != "mine" {
+		t.Fatalf("settings = %s", data)
+	}
+	var global struct {
+		MCPServers   map[string]map[string]string `json:"mcpServers"`
+		Theme        string                       `json:"theme"`
+		OAuthAccount map[string]string            `json:"oauthAccount"`
+	}
+	data, _ = os.ReadFile(filepath.Join(home, ".claude.json"))
+	if err := json.Unmarshal(data, &global); err != nil {
+		t.Fatal(err)
+	}
+	if global.MCPServers["m"]["command"] != "x2" || global.MCPServers["new"]["command"] != "z" || global.MCPServers["mine"]["command"] != "y" ||
+		global.Theme != "dark" || global.OAuthAccount["emailAddress"] != "b@example.com" {
+		t.Fatalf("global config = %s", data)
+	}
+
+	// A change set back to the computer's value, and a shared key deleted on
+	// the account, follow the computer again.
+	write(t, filepath.Join(home, "settings.json"), `{"model":"sonnet","env":{"FOO":"2","BAR":"mine"}}`)
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(device, "settings.json"), `{"model":"fable","verbose":true,"env":{"FOO":"2","BAR":"2"}}`)
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(home, "settings.json"))
+	settings.StatusLine = ""
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.Model != "fable" || !settings.Verbose {
+		t.Fatalf("settings after undo = %s", data)
+	}
+}
+
+// TestPrepareRefusesWhenItCannotLink pins that a folder whose history cannot be
+// linked is refused, not run with history of its own.
+func TestPrepareRefusesWhenItCannotLink(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user cannot write")
+	}
+	for name, prepare := range map[string]func(string) error{
+		"claude": (&Claude{DeviceHome: t.TempDir(), DeviceConfig: filepath.Join(t.TempDir(), ".claude.json")}).Prepare,
+		"codex":  (&Codex{DeviceHome: t.TempDir()}).Prepare,
+	} {
+		home := filepath.Join(t.TempDir(), "acct")
+		if err := os.Mkdir(home, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+		if err := prepare(home); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+			t.Fatalf("%s: Prepare = %v, want ErrAgentAccountUnshared", name, err)
+		}
 	}
 }
 

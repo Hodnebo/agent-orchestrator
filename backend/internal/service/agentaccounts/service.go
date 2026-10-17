@@ -260,8 +260,9 @@ func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider)
 		return LoginStart{}, fmt.Errorf("create account folder: %w", err)
 	}
 	// Linking first means the sign-in never creates a private copy of a shared folder.
-	if err := provider.Prepare(home); err != nil {
-		s.log.Warn("prepare account folder", "provider", p, "error", err)
+	if err := s.prepare(provider, home); err != nil {
+		_ = os.RemoveAll(home)
+		return LoginStart{}, err
 	}
 	argv, err := provider.LoginArgv(ctx)
 	if err != nil {
@@ -438,6 +439,13 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 		if err != nil {
 			return err
 		}
+		account, err := s.find(ctx, def)
+		if err != nil {
+			return err
+		}
+		if err := s.prepare(s.providers[p], account.Home); err != nil {
+			return err
+		}
 		return s.store.BindSessionAgentAccount(ctx, id, p, def, s.now())
 	}
 	account, err := s.pick(ctx, harness, accountID)
@@ -477,7 +485,27 @@ func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, account
 	if r == nil || !r.identity.SignedIn {
 		return domain.AgentAccount{}, ports.ErrAgentAccountSignedOut
 	}
+	if err := s.prepare(s.providers[p], account.Home); err != nil {
+		return domain.AgentAccount{}, err
+	}
 	return account, nil
+}
+
+// prepare sets up an account folder for a launch. A folder that cannot link
+// to the computer's history is refused: a session there would keep history of
+// its own, and a move could not resume it. Other trouble is only logged.
+func (s *Service) prepare(provider ports.AgentAccountProviderCLI, home string) error {
+	if home == "" {
+		return nil
+	}
+	err := provider.Prepare(home)
+	if errors.Is(err, ports.ErrAgentAccountUnshared) {
+		return err
+	}
+	if err != nil {
+		s.log.Warn("prepare account folder", "home", home, "error", err)
+	}
+	return nil
 }
 
 // SessionAccountID is the account a session uses for harness's provider, or
@@ -571,8 +599,10 @@ func (s *Service) launchEnv(ctx context.Context, id domain.SessionID, override d
 		if account.Device() {
 			continue
 		}
-		if err := provider.Prepare(account.Home); err != nil {
-			s.log.Warn("prepare account folder", "account", account.ID, "error", err)
+		// ponytail: a later link failure is only logged here, as this path cannot
+		// refuse the launch; binding and moves already refused it.
+		if err := s.prepare(provider, account.Home); err != nil {
+			errs = append(errs, err)
 		}
 		for key, value := range provider.LaunchEnv(account.Home) {
 			env[key] = value

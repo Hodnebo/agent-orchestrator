@@ -250,6 +250,10 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 	})
 }
 
+// agentAccountUnsharedMessage is shown when an account folder cannot link to
+// this computer's history; Windows allows the links only in Developer Mode.
+const agentAccountUnsharedMessage = "AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode."
+
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, ports.ErrAgentAccountUnknown):
@@ -258,6 +262,8 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "AGENT_ACCOUNT_LOGIN_NOT_FOUND", "Unknown or finished sign-in", nil)
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
+	case errors.Is(err, ports.ErrAgentAccountUnshared):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
 	case errors.Is(err, ports.ErrAgentAccountDeviceFixed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_DEVICE_FIXED", "This computer's own login is managed by its CLI, not AO", nil)
 	default:
