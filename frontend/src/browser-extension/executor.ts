@@ -172,7 +172,7 @@ export class Executor {
 				return this.screenshot(ctx, args.annotate === true);
 			case "network-start":
 				return this.withPage(ctx, async (page) =>
-					this.deps.network.start(ctx.sessionId, page.logicalId, page.tabId, Math.min(600, Math.max(1, Number(args.durationSeconds) || 60))),
+					this.deps.network.start(ctx.sessionId, page.logicalId, page.tabId, Math.min(300, Math.max(1, Number(args.durationSeconds) || 60))),
 				);
 			case "network-status":
 				return this.deps.network.status(ctx.sessionId, ctx.session.activeTabId);
