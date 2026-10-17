@@ -69,6 +69,19 @@ func templateCheckout(t *testing.T, upstream, dir, remote string) {
 	gitRun(t, dir, "remote", "set-url", "origin", remote)
 }
 
+// commitAndPush commits one new file on top of clone's HEAD and pushes it to
+// branch on origin, returning the pushed commit.
+func commitAndPush(t *testing.T, clone, branch, file string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(clone, file), []byte(file+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, clone, "add", file)
+	gitRun(t, clone, "commit", "-qm", file)
+	gitRun(t, clone, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	return gitOutput(t, clone, "rev-parse", "HEAD")
+}
+
 func TestFindExistingCheckoutMatchesNormalizedOrigin(t *testing.T) {
 	t.Parallel()
 	requireGit(t)
@@ -139,6 +152,44 @@ func TestResolveReusedCheckoutAdoptsCleanCheckout(t *testing.T) {
 		"https://github.com/acme/app", "session-1", "ao/session-1", "main")
 	if !restart.Reused || restart.AdoptedNow || restart.Workspace != checkout {
 		t.Fatalf("restart decision = %+v", restart)
+	}
+}
+
+// A session continuing a branch that already exists on the remote is adopted
+// onto that branch's commits, not onto a new branch from origin/<default>.
+func TestResolveReusedCheckoutContinuesRemoteBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	pushed := commitAndPush(t, pusher, "feature/x", "FEATURE.md")
+	checkout := filepath.Join(home, "work", "app")
+	templateCheckout(t, upstream, checkout, "https://github.com/acme/app.git")
+	configBefore, err := os.ReadFile(filepath.Join(checkout, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decision := ResolveReusedCheckout(context.Background(), ExecGitRunner{}, home,
+		filepath.Join(home, "repository"), filepath.Join(home, ".ao", "worker"),
+		"https://github.com/acme/app", "session-1", "feature/x", "main")
+	if !decision.Reused || !decision.AdoptedNow || decision.Workspace != checkout {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if branch := gitOutput(t, checkout, "symbolic-ref", "--short", "HEAD"); branch != "feature/x" {
+		t.Fatalf("branch = %q, want feature/x", branch)
+	}
+	if head := gitOutput(t, checkout, "rev-parse", "HEAD"); head != pushed {
+		t.Fatalf("HEAD = %s, want the pushed feature/x commit %s", head, pushed)
+	}
+	configAfter, err := os.ReadFile(filepath.Join(checkout, ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(configAfter) != string(configBefore) {
+		t.Fatalf("adoption rewrote the checkout's git config:\n%s", configAfter)
 	}
 }
 
@@ -296,7 +347,7 @@ func TestAdvanceAdoptedCheckoutFastForwardsOnly(t *testing.T) {
 	gitRun(t, other, "push", "-q", "origin", "main")
 	gitRun(t, checkout, "fetch", "-q", "origin")
 
-	if err := AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "main"); err != nil {
+	if err := AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "ao/session-1", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if head, base := gitOutput(t, checkout, "rev-parse", "HEAD"), gitOutput(t, checkout, "rev-parse", "origin/main"); head != base {
@@ -309,7 +360,64 @@ func TestAdvanceAdoptedCheckoutFastForwardsOnly(t *testing.T) {
 	gitRun(t, checkout, "add", "MINE.md")
 	gitRun(t, checkout, "commit", "-qm", "session work")
 	mine := gitOutput(t, checkout, "rev-parse", "HEAD")
-	_ = AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "main")
+	_ = AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "ao/session-1", "main")
+	if head := gitOutput(t, checkout, "rev-parse", "HEAD"); head != mine {
+		t.Fatalf("session work was rewritten: HEAD %s, want %s", head, mine)
+	}
+}
+
+// When the template cloned before the session's branch reached the remote,
+// adoption cuts the branch from origin/<default>; once the fetch brings the
+// remote branch in, the still-empty session branch moves onto it. Session
+// commits are never rewritten.
+func TestAdvanceAdoptedCheckoutContinuesRemoteBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	gitRun(t, pusher, "checkout", "-q", "-b", "feature/x")
+	if err := os.WriteFile(filepath.Join(pusher, "FEATURE.md"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "add", "FEATURE.md")
+	gitRun(t, pusher, "commit", "-qm", "feature work")
+	gitRun(t, pusher, "checkout", "-q", "main")
+	commitAndPush(t, pusher, "main", "MAIN.md") // main moves past feature/x's base
+
+	checkout := filepath.Join(home, "work", "app")
+	templateCheckout(t, upstream, checkout, "https://github.com/acme/app.git")
+	decision := ResolveReusedCheckout(context.Background(), ExecGitRunner{}, home,
+		filepath.Join(home, "repository"), filepath.Join(home, ".ao", "worker"),
+		"https://github.com/acme/app", "session-1", "feature/x", "main")
+	if !decision.AdoptedNow {
+		t.Fatalf("decision = %+v", decision)
+	}
+	gitRun(t, pusher, "push", "-q", "origin", "feature/x")
+	pushed := gitOutput(t, pusher, "rev-parse", "feature/x")
+	fetch := func() { gitRun(t, checkout, "fetch", "-q", upstream, "+refs/heads/*:refs/remotes/origin/*") }
+	fetch()
+
+	if err := AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "feature/x", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if head := gitOutput(t, checkout, "rev-parse", "HEAD"); head != pushed {
+		t.Fatalf("HEAD = %s, want the pushed feature/x commit %s", head, pushed)
+	}
+	if branch := gitOutput(t, checkout, "symbolic-ref", "--short", "HEAD"); branch != "feature/x" {
+		t.Fatalf("branch = %q, want feature/x", branch)
+	}
+
+	if err := os.WriteFile(filepath.Join(checkout, "MINE.md"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, checkout, "add", "MINE.md")
+	gitRun(t, checkout, "commit", "-qm", "session work")
+	mine := gitOutput(t, checkout, "rev-parse", "HEAD")
+	commitAndPush(t, pusher, "main", "LATER.md")
+	fetch()
+	_ = AdvanceAdoptedCheckout(context.Background(), ExecGitRunner{}, checkout, "feature/x", "main")
 	if head := gitOutput(t, checkout, "rev-parse", "HEAD"); head != mine {
 		t.Fatalf("session work was rewritten: HEAD %s, want %s", head, mine)
 	}

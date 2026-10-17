@@ -751,7 +751,7 @@ func createSessionTx(
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
 			auto_review_enabled
 		)
-		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
+		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
 			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
 		RETURNING `+sessionInsertReturning,
@@ -771,6 +771,7 @@ func createSessionTx(
 		agentConfigJSON,
 		prefix,
 		autoReview,
+		input.Branch,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)

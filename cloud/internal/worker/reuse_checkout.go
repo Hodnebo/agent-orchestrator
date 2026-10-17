@@ -199,8 +199,10 @@ func ResolveReusedCheckout(
 // adoptExistingCheckout puts an existing checkout on the session branch. A
 // checkout already on that branch is left as it is. Otherwise tracked
 // changes are stashed under a session-named message, and the branch is
-// created from origin/<defaultBranch> (or switched to, if it exists). Any
-// failure restores the stash and reports errCheckoutNotReusable.
+// switched to if it exists locally, or else created from origin/<branch> when
+// the remote already has it (a session continuing earlier work) and from
+// origin/<defaultBranch> otherwise. Any failure restores the stash and
+// reports errCheckoutNotReusable.
 func adoptExistingCheckout(ctx context.Context, runner GitRunner, dir, sessionID, branch, defaultBranch string) (string, error) {
 	branch = strings.TrimSpace(branch)
 	if branch == "" {
@@ -242,10 +244,10 @@ func adoptExistingCheckout(ctx context.Context, runner GitRunner, dir, sessionID
 		return stash, nil
 	}
 	base := "HEAD"
-	if defaultBranch = strings.TrimSpace(defaultBranch); defaultBranch != "" {
-		if _, err := runner.Run(ctx, dir, nil, "rev-parse", "--verify", "--quiet",
-			"refs/remotes/origin/"+defaultBranch+"^{commit}"); err == nil {
-			base = "refs/remotes/origin/" + defaultBranch
+	for _, candidate := range []string{branch, defaultBranch} {
+		if remote := remoteBranchRef(ctx, runner, dir, candidate); remote != "" {
+			base = remote
+			break
 		}
 	}
 	if _, err := runner.Run(ctx, dir, nil, "checkout", "--no-track", "-b", branch, base); err != nil {
@@ -287,20 +289,31 @@ func PrepareReusedCheckout(ctx context.Context, runner GitRunner, workspace stri
 	})
 }
 
-// AdvanceAdoptedCheckout fast-forwards a just-adopted session branch to the
-// freshly fetched origin/<defaultBranch>, so the session starts from the
-// latest base rather than the template's possibly stale clone. It never
-// merges or rewrites: a branch that is not strictly behind is left alone.
-func AdvanceAdoptedCheckout(ctx context.Context, runner GitRunner, workspace, defaultBranch string) error {
-	defaultBranch = strings.TrimSpace(defaultBranch)
-	if defaultBranch == "" {
-		return nil
+// AdvanceAdoptedCheckout moves a just-adopted session branch up to the freshly
+// fetched remote, so the session starts from the latest commits rather than
+// the template's possibly stale clone. A branch that already exists on the
+// remote is continued: the session branch fast-forwards to it or, when
+// adoption cut it from the default branch because the template cloned before
+// the branch was pushed, moves onto it, since it holds no work of its own yet.
+// Otherwise it fast-forwards to origin/<defaultBranch>. Commits that exist
+// only on the session branch are never rewritten.
+func AdvanceAdoptedCheckout(ctx context.Context, runner GitRunner, workspace, branch, defaultBranch string) error {
+	base := remoteBranchRef(ctx, runner, workspace, defaultBranch)
+	remote := remoteBranchRef(ctx, runner, workspace, branch)
+	if remote == "" || remote == base {
+		if base == "" {
+			return nil
+		}
+		_, err := runner.Run(ctx, workspace, nil, "merge", "--ff-only", "--quiet", base)
+		return err
 	}
-	upstream := "refs/remotes/origin/" + defaultBranch
-	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", upstream+"^{commit}"); err != nil {
-		return nil
+	if base != "" {
+		if _, err := runner.Run(ctx, workspace, nil, "merge-base", "--is-ancestor", "HEAD", base); err == nil {
+			_, err := runner.Run(ctx, workspace, nil, "checkout", "--quiet", "--no-track", "-B", strings.TrimSpace(branch), remote)
+			return err
+		}
 	}
-	_, err := runner.Run(ctx, workspace, nil, "merge", "--ff-only", "--quiet", upstream)
+	_, err := runner.Run(ctx, workspace, nil, "merge", "--ff-only", "--quiet", remote)
 	return err
 }
 

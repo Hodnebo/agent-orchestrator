@@ -3914,6 +3914,14 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Git branch for the worker. A branch that already exists on the
+            remote is continued from its commits; omitted, the control plane
+            names a new branch.
     ChatMessageInput:
       type: object
       additionalProperties: false

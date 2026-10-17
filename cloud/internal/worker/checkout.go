@@ -321,13 +321,22 @@ func ConfigureWorkerGit(
 		return err
 	}
 	helperPath := GitCredentialHelperPath(dataDir)
+	// The branch is cut at HEAD (the freshly cloned default branch) unless it
+	// already exists on the remote, in which case the session continues from its
+	// commits. A restarted worker already has the local branch and stays on it.
+	checkout := []string{"checkout", "-B", branch}
+	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
+			checkout = []string{"checkout", "--no-track", "-B", branch, remote}
+		}
+	}
 	commands := [][]string{
 		{"config", "--local", "--replace-all", "credential.helper", ""},
 		{"config", "--local", "--add", "credential.helper", helperPath},
 		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
 		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
 		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
+		checkout,
 	}
 	for _, command := range commands {
 		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
@@ -335,6 +344,19 @@ func ConfigureWorkerGit(
 		}
 	}
 	return nil
+}
+
+// remoteBranchRef returns refs/remotes/origin/<branch> when the checkout has
+// that remote-tracking branch, and "" otherwise.
+func remoteBranchRef(ctx context.Context, runner GitRunner, dir, branch string) string {
+	if branch = strings.TrimSpace(branch); branch == "" {
+		return ""
+	}
+	ref := "refs/remotes/origin/" + branch
+	if _, err := runner.Run(ctx, dir, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return ""
+	}
+	return ref
 }
 
 // writeWorkerGitTooling writes the session's git credential helper and gh

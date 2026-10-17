@@ -288,7 +288,7 @@ func pokeCheckpoint(ctx context.Context) {
 func runSpawn(ctx context.Context, c *client, args []string) error {
 	flags := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	var harness, name, prompt, mode, providerConnection string
+	var harness, name, prompt, mode, branch, providerConnection string
 	// Empty by default so the control plane can fill in the project's configured
 	// worker agent (config.worker.agent); an explicit value here still wins.
 	flags.StringVar(&harness, "harness", "", "agent harness (default: the project's configured worker agent)")
@@ -296,6 +296,10 @@ func runSpawn(ctx context.Context, c *client, args []string) error {
 	flags.StringVar(&name, "name", "", "child display name")
 	flags.StringVar(&prompt, "prompt", "", "initial child prompt")
 	flags.StringVar(&mode, "mode", "trusted", "standard or trusted")
+	flags.StringVar(
+		&branch, "branch", "",
+		"git branch for the worker; one that already exists on the remote is continued (default: a new branch)",
+	)
 	flags.StringVar(
 		&providerConnection, "sandbox-provider-connection", "",
 		"sandbox provider connection id",
@@ -316,6 +320,9 @@ func runSpawn(ctx context.Context, c *client, args []string) error {
 	}
 	body := map[string]any{
 		"harness": harness, "displayName": name, "prompt": prompt, "mode": mode,
+	}
+	if branch = strings.TrimSpace(branch); branch != "" {
+		body["branch"] = branch
 	}
 	if providerConnection != "" {
 		body["sandboxProviderConnectionId"] = providerConnection
@@ -600,8 +607,9 @@ func newIdempotencyKey() string {
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, `AO Cloud orchestration commands:
-  ao spawn --name NAME --prompt TEXT [--agent AGENT] [--mode standard|trusted]
-    (--agent defaults to the project's configured worker agent)
+  ao spawn --name NAME --prompt TEXT [--agent AGENT] [--mode standard|trusted] [--branch BRANCH]
+    (--agent defaults to the project's configured worker agent; --branch
+    continues a branch that already exists on the remote)
   ao list [--json] [--all]
   ao send SESSION_ID MESSAGE
   ao report MESSAGE

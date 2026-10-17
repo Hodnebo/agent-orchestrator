@@ -49,6 +49,32 @@ func TestCreateSessionReturnsCompleteSession(t *testing.T) {
 	}
 }
 
+// A requested branch becomes the session branch; without one the store still
+// generates <prefix>/<short id>.
+func TestCreateSessionKeepsRequestedBranch(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	create := func(branch string) domain.Session {
+		t.Helper()
+		session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+			"create-branch-"+uuid.NewString(), 10, domain.CreateSession{
+				ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Branch test",
+				Prompt: "hello", Provider: "docker", Branch: branch,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+	if got := create("feature/x").Branch; got != "feature/x" {
+		t.Fatalf("branch = %q, want feature/x", got)
+	}
+	generated := create("")
+	if want := "/" + generated.ID[:8]; !strings.HasSuffix(generated.Branch, want) || len(generated.Branch) == len(want) {
+		t.Fatalf("generated branch = %q, want <prefix>%s", generated.Branch, want)
+	}
+}
+
 func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 	store, _, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

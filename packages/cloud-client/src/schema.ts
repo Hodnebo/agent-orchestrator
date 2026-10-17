@@ -2159,6 +2159,8 @@ export interface components {
             deniedCommands?: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Git branch for the worker. A branch that already exists on the remote is continued from its commits; omitted, the control plane names a new branch. */
+            branch?: string;
         };
         ChatMessageInput: {
             text: string;

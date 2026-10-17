@@ -73,6 +73,7 @@ type createWorkerChildRequest struct {
 	Mode                        string   `json:"mode,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
+	Branch                      string   `json:"branch,omitempty"`
 }
 
 func (s *Server) listWorkerChildren(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +160,13 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
+	request.Branch = strings.TrimSpace(request.Branch)
 	if request.Mode == "" {
 		request.Mode = "trusted"
+	}
+	if request.Branch != "" && !validBranchName(request.Branch) {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Branch name is invalid.")
+		return
 	}
 	// The project's configured worker agent (config.worker.agent) is authoritative
 	// for orchestrator-spawned workers: the harness must match what was chosen at
@@ -276,6 +282,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		domain.CreateSession{
 			Kind: "worker", Harness: request.Harness, DisplayName: request.DisplayName,
 			Prompt: request.Prompt, Mode: request.Mode, DeniedCommands: request.DeniedCommands,
+			Branch:   request.Branch,
 			Provider: plan.Provider, SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile: plan.ResourceProfile, BootstrapContext: plan.BootstrapContext,
 			Release: s.release,
@@ -286,6 +293,30 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(child, nil)})
+}
+
+// validBranchName applies git's branch-name rules (git check-ref-format
+// --branch), so a requested branch can never reach git as an option or as a
+// ref git would refuse.
+func validBranchName(name string) bool {
+	if len(name) > 255 || name == "" || name == "@" || name == "HEAD" ||
+		strings.HasPrefix(name, "-") || strings.HasPrefix(name, "/") ||
+		strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "//") || strings.Contains(name, "..") || strings.Contains(name, "@{") ||
+		strings.ContainsAny(name, " ~^:?*[\\\x7f") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 {
+			return false
+		}
+	}
+	for _, component := range strings.Split(name, "/") {
+		if strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) sendWorkerChildMessage(w http.ResponseWriter, r *http.Request) {
