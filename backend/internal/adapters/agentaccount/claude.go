@@ -105,8 +105,12 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		}
 		return domain.AgentAccountIdentityCheck{}, fmt.Errorf("read claude auth status: %w", err)
 	}
+	// A subscription sign-in: claude.ai in the keychain, or the long-lived
+	// token from `claude setup-token` exported as CLAUDE_CODE_OAUTH_TOKEN (a
+	// CLI login started from such a shell). The token reports no email.
+	subscription := report.AuthMethod == "claude.ai" || report.AuthMethod == "oauth_token"
 	return domain.AgentAccountIdentityCheck{
-		SignedIn: report.LoggedIn && report.AuthMethod == "claude.ai",
+		SignedIn: report.LoggedIn && subscription,
 		Email:    report.Email,
 		Plan:     report.SubscriptionType,
 	}, nil

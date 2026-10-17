@@ -1,6 +1,7 @@
 package agentaccount
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -228,5 +229,37 @@ func TestLaunchEnvOverridesCredentialEnv(t *testing.T) {
 	}
 	if (&Claude{}).LaunchEnv("") != nil || (&Codex{}).LaunchEnv("") != nil {
 		t.Fatal("the device account must launch with the environment untouched")
+	}
+}
+
+// TestClaudeIdentityCountsSubscriptionLogins pins which `claude auth status`
+// reports are signed in: a claude.ai login, and a CLAUDE_CODE_OAUTH_TOKEN login
+// (the long-lived subscription token from `claude setup-token`), which carries
+// no email. An API key is not a subscription sign-in.
+func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the CLI")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	write(t, bin, "#!/bin/sh\nprintf '%s' \"$FAKE_CLAUDE_STATUS\"\n")
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	for _, tc := range []struct {
+		name, status string
+		signedIn     bool
+		email        string
+	}{
+		{"claude.ai", `{"loggedIn":true,"authMethod":"claude.ai","email":"a@example.com","subscriptionType":"max"}`, true, "a@example.com"},
+		{"token", `{"loggedIn":true,"authMethod":"oauth_token"}`, true, ""},
+		{"api key", `{"loggedIn":true,"authMethod":"api_key"}`, false, ""},
+		{"signed out", `{"loggedIn":false,"authMethod":"none"}`, false, ""},
+	} {
+		t.Setenv("FAKE_CLAUDE_STATUS", tc.status)
+		got, err := c.Identity(context.Background(), "")
+		if err != nil || got.SignedIn != tc.signedIn || got.Email != tc.email {
+			t.Fatalf("%s: identity = %+v, %v", tc.name, got, err)
+		}
 	}
 }
