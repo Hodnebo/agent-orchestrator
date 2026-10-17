@@ -1,4 +1,5 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useTranslation } from "react-i18next";
 /**
  * The Chat composer.
  *
@@ -351,6 +352,7 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const { t } = useTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -2008,7 +2010,7 @@ export const ChatComposer = memo(function ChatComposer({
 										</Button>
 									</span>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">Files can be attached once the task has started</TooltipContent>
+								<TooltipContent side="bottom">{t("chat.composer.attachLater")}</TooltipContent>
 							</Tooltip>
 						) : null}
 						{settings}

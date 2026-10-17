@@ -3,9 +3,11 @@ import { cn } from "../../lib/utils";
 
 /**
  * A long composer menu list: scrolls on an inner strip, with a cue at the bottom
- * while more rows sit below. `items` restarts the strip at the top when it changes.
+ * while more rows sit below. A change in which rows are listed restarts it at the top.
  */
-export function ModelMenuChoices({ items, children }: { items: unknown; children: ReactNode }) {
+export function ModelMenuChoices({ items, children }: { items: readonly { id: string }[]; children: ReactNode }) {
+	// Lists are often rebuilt each render; only a different set of rows restarts the strip.
+	const signature = items.map((item) => item.id).join("\n");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [canScrollDown, setCanScrollDown] = useState(false);
 	const updateScrollCue = useCallback(() => {
@@ -20,7 +22,7 @@ export function ModelMenuChoices({ items, children }: { items: unknown; children
 		const observer = new ResizeObserver(updateScrollCue);
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [items, updateScrollCue]);
+	}, [signature, updateScrollCue]);
 
 	return (
 		<div className="flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col">
