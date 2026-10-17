@@ -123,11 +123,11 @@ func TestUsageLimitRenumberRefusesIncompleteSchema(t *testing.T) {
 
 func assertUsageLimitMigrationApplied(t *testing.T, db *sql.DB) {
 	t.Helper()
-	rows, err := db.Query(`SELECT usage_limit_resets_at, usage_limit_auto_resume, usage_limit_resume_error FROM conversation_turns LIMIT 0`)
-	if err != nil {
-		t.Fatalf("usage-limit columns missing: %v", err)
+	var columns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_turns')
+WHERE name IN ('usage_limit_resets_at', 'usage_limit_auto_resume', 'usage_limit_resume_error')`).Scan(&columns); err != nil || columns != 3 {
+		t.Fatalf("usage-limit column count = %d, %v", columns, err)
 	}
-	_ = rows.Close()
 	var objects, receipts int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('conversation_turns_auto_resume', 'conversation_turns_auto_resume_cdc_update')`).Scan(&objects); err != nil || objects != 2 {
 		t.Fatalf("usage-limit index/trigger count = %d, %v", objects, err)
