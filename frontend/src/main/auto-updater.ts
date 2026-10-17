@@ -1287,14 +1287,17 @@ function broadcastDiscoveredAvailable(): void {
     lastStatus.state === "available" ||
     lastStatus.state === "downloading" ||
     lastStatus.state === "preparing" ||
-    lastStatus.state === "downloaded"
+    lastStatus.state === "downloaded" ||
+    (stagingDiskShortfall && lastStatus.state === "error" && lastStatus.version === discovered.version)
   ) {
     return;
   }
   if (hasStagedBuild() && !supersedesStagedBuild(discovered.version)) return;
   pendingUpdateVersion = discovered.version;
   offeredReleaseNotes = discovered.notes ?? offeredReleaseNotes;
-  broadcastCompletedCheck({ state: "available", version: discovered.version });
+  // Goes through broadcastAvailable so a disk refusal still names the build
+  // instead of offering a Download the preflight would refuse (#6607).
+  broadcastAvailable(discovered.version);
 }
 
 // stagedDownloadedStatus rebuilds the enriched downloaded status from module

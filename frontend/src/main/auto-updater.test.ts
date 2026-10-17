@@ -4677,6 +4677,54 @@ describe("disk preflight refusal (#6607)", () => {
     } finally { restore(); }
   });
 
+  it("keeps the refusal when the automatic nightly check falls back to API discovery", async () => {
+    const restore = stubProcess("darwin", process.execPath);
+    const resourcesPath = mkdtempSync(nodePath.join(os.tmpdir(), "ao-nightly-disk-"));
+    writeFileSync(
+      nodePath.join(resourcesPath, "app-update.yml"),
+      "provider: github\nowner: Untrivial-ai\nrepo: agent-orchestrator\n",
+    );
+    const originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", { configurable: true, value: resourcesPath });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(
+      JSON.stringify([{
+        tag_name: "v1.0.1-nightly.202608231517",
+        draft: false,
+        prerelease: true,
+        assets: [{ name: "nightly-mac.yml" }],
+      }]),
+      { status: 200 },
+    )));
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater({
+        enabled: true,
+        channel: "nightly",
+        nightlyAck: true,
+        feature: null,
+      });
+      module.__setStagingProbesForTesting({ stagingDiskIsFull: () => true });
+      await module.checkForUpdatesNow(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "1.0.1-nightly.202608231350" });
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: DISK_MESSAGE });
+
+      // The manifest fetch stalls, so only discovery knows about the newer build.
+      autoUpdater.checkForUpdates.mockRejectedValue(new Error("request timed out"));
+      await module.startAutoUpdates(stateDir);
+
+      // Offering Download here would only be refused by the same preflight.
+      expect(module.getUpdateStatus()).toMatchObject({
+        state: "error",
+        message: DISK_MESSAGE,
+        version: "v1.0.1-nightly.202608231517",
+      });
+    } finally {
+      if (originalResourcesPath) Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+      else Reflect.deleteProperty(process, "resourcesPath");
+      rmSync(resourcesPath, { recursive: true, force: true });
+      restore();
+    }
+  });
+
   it("still refuses an explicit restart while the disk is full", async () => {
     const restore = stubProcess("darwin", process.execPath);
     try {
