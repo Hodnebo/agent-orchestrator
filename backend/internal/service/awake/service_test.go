@@ -652,11 +652,9 @@ func TestAwakeAgentRecoveryRequiresEvidenceAndNeverRepeatsGeneration(t *testing.
 	b.recovery = true
 	connected := true
 	s.observation.NetworkConnected = &connected
-	settings := s.Status().Settings
-	settings.AgentReconnect = true
-	if err := s.UpdateSettings(context.Background(), settings); err != nil {
-		t.Fatal(err)
-	}
+	// Exercise the retained foundation directly; the shipped settings service
+	// rejects enabling reconnect until its follow-up release.
+	s.doc.Settings.AgentReconnect = true
 	if s.agentTask(context.Background()) != nil {
 		t.Fatal("reconnected without awake ownership")
 	}
@@ -827,6 +825,10 @@ func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	next.now = s.now
+	// Startup disables deferred policies. Enable this internal fixture only to
+	// retain coverage of the future recovery foundation's durable budget.
+	next.doc.Settings.HotspotRecovery = true
+	next.doc.Settings.HotspotName = "saved"
 	tick(t, next)
 	*now = now.Add(5 * time.Second)
 	tick(t, next)

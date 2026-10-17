@@ -166,7 +166,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainAwakeObservation":                               "AwakeObservation",
 	"DomainAwakeApplication":                               "AwakeApplication",
 	"DomainStartAwakeRequest":                              "StartAwakeRequest",
-	"ControllersAwakeBrowserRequest":                       "AwakeBrowserRequest",
 	"ControllersAwakeIDParam":                              "AwakeIDParam",
 	"ControllersExtendAwakeRequest":                        "ExtendAwakeRequest",
 	"ControllersAwakeRulesRequest":                         "AwakeRulesRequest",
@@ -3492,7 +3491,6 @@ func awakeOperations() []operation {
 		common(http.MethodPost, "/api/v1/awake/stop", "stopAwake", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/resume", "resumeAwake", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),
-		common(http.MethodPost, "/api/v1/awake/browser", "awakeBrowser", controllers.AwakeBrowserRequest{}, nil),
 		common(http.MethodDelete, "/api/v1/awake/history", "clearAwakeHistory", nil, nil),
 		common(http.MethodPost, "/api/v1/awake/downloads", "awakeDownloads", controllers.AwakeDownloadsRequest{}, nil),
 	}

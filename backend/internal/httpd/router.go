@@ -441,7 +441,6 @@ func mountAwake(r chi.Router, c *controllers.AwakeController) {
 	r.Post("/api/v1/awake/stop", c.Stop)
 	r.Post("/api/v1/awake/resume", c.Resume)
 	r.Post("/api/v1/awake/recover", c.Recover)
-	r.Post("/api/v1/awake/browser", c.Browser)
 	r.Delete("/api/v1/awake/history", c.ClearHistory)
 	r.Post("/api/v1/awake/downloads", c.Downloads)
 }

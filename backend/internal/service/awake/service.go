@@ -99,8 +99,10 @@ func New(ctx context.Context, store Store, host Host, bindings Bindings) (*Servi
 			return nil, errors.New("unsupported awake settings version")
 		}
 	}
+	// Older PR builds could persist deferred opt-ins. Disable them durably
+	// before any automatic rule or host action is allowed to run.
+	changed := clearDeferredSettings(&s.doc.Settings)
 	// A daemon restart never resurrects an unbounded manual request.
-	changed := false
 	for i := range s.doc.Sessions {
 		if s.doc.Sessions[i].EndedAt == nil {
 			now := s.now()
@@ -409,12 +411,30 @@ func (s *Service) Resume(ctx context.Context) error {
 	return s.reconcile(ctx)
 }
 
+// clearDeferredSettings returns whether a previous build enabled a policy that
+// is outside this release's supported surface. Low Power Mode and display wake
+// assertions remain supported; optional brightness/audio/app/network effects do not.
+func clearDeferredSettings(settings *domain.AwakeSettings) bool {
+	changed := settings.MuteAudio || settings.DarkenKeyboard || settings.RestoreDisplay ||
+		len(settings.PauseApps) != 0 || settings.HotspotName != "" || settings.HotspotRecovery ||
+		settings.AgentReconnect || settings.BrowserActions
+	settings.MuteAudio, settings.DarkenKeyboard, settings.RestoreDisplay = false, false, false
+	settings.PauseApps = []string{}
+	settings.HotspotName, settings.HotspotRecovery = "", false
+	settings.AgentReconnect, settings.BrowserActions = false, false
+	return changed
+}
+
 // UpdateSettings validates and persists host policy.
 func (s *Service) UpdateSettings(ctx context.Context, settings domain.AwakeSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("stay awake is shutting down")
+	}
+	supported := settings
+	if clearDeferredSettings(&supported) {
+		return invalid("App pausing, display/keyboard/audio effects, network recovery, agent reconnect and browser actions are deferred to a follow-up release")
 	}
 	if settings.LowPowerBatteryPercent != 0 && (settings.LowPowerBatteryPercent < 10 || settings.LowPowerBatteryPercent > 90) {
 		return invalid("Low Power Mode threshold must be between 10 and 90 percent")
@@ -954,11 +974,11 @@ type agentRecovery interface {
 
 func (s *Service) capabilities() []domain.AwakeCapability {
 	result := s.host.Capabilities()
-	recovery, ok := s.bindings.(agentRecovery)
 	for i := range result {
-		if result[i].ID == "agent_reconnect" && ok && recovery.AgentRecoverySupported() {
-			result[i].Available = true
-			result[i].Reason = "Reconnect only an interrupted AO-managed Chat attachment to a surviving provider. No new agent or prompt is started."
+		switch result[i].ID {
+		case "audio", "keyboard", "display_restore", "pause_apps", "hotspot", "agent_reconnect", "browser_actions":
+			result[i].Available = false
+			result[i].Reason = "This control is deferred to a follow-up release."
 		}
 	}
 	return result

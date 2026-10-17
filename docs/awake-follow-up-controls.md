@@ -2,8 +2,11 @@
 
 PR2 exposes standalone desktop awake sessions, automatic activation, lid/display
 wake, battery/heat protection, and automatic Low Power Mode. The following
-advanced controls are deliberately deferred. Existing backend/native contracts
-are foundations, not a claim that these controls are available in Settings.
+advanced controls are deliberately deferred. Backend/native foundations remain
+internal: PR2 rejects non-default deferred settings even on capable hosts, clears
+and persists older saved opt-ins before starting, and reports these capabilities
+as unavailable. The browser-action route is not mounted or present in the public
+API/client. Internal foundation tests do not authorize external activation.
 
 | Future controls | Existing foundation | Work and acceptance for the next PR |
 | --- | --- | --- |
@@ -15,9 +18,10 @@ are foundations, not a claim that these controls are available in Settings.
 | General recovery and history | Session history, extension/end operations and native recovery request | Add active-source/history management, extension, clear-history and recovery controls. Keep action replay protections when history is cleared. Preserve unresolved journals and provide actionable recovery states. |
 
 Low Power Mode has its own narrowly scoped recovery control in PR2; the general
-recovery/history UI above is still deferred. Do not enable the deferred settings
-by default while adding these interfaces. Each should use the existing daemon
-boundary, discover actual host capabilities, and receive independent native
+recovery/history UI above is still deferred. A follow-up must deliberately
+remove the service scope guard, add explicit opt-ins, and restore the browser
+API operation together with its controller/client if needed. Each should use the
+existing daemon boundary, discover actual host capabilities, and receive independent native
 acceptance tests before release.
 
 The physical test handoff for current PR2 code is separate:

@@ -25,7 +25,6 @@ type AwakeService interface {
 	Resume(context.Context) error
 	Recover(context.Context) error
 	ClearHistory(context.Context) error
-	RelaunchBrowser(context.Context, string, string, bool) error
 	UpdateSettings(context.Context, domain.AwakeSettings) error
 	UpdateRules(context.Context, []domain.AwakeRule) error
 	Downloads([]string) error
@@ -179,24 +178,6 @@ func (c *AwakeController) Downloads(w http.ResponseWriter, r *http.Request) {
 func (c *AwakeController) Recover(w http.ResponseWriter, r *http.Request) {
 	if c.available(w, r) {
 		c.reply(w, r, c.Svc.Recover(r.Context()))
-	}
-}
-
-// AwakeBrowserRequest describes a separately confirmed browser relaunch.
-type AwakeBrowserRequest struct {
-	RequestID string `json:"requestId"`
-	BrowserID string `json:"browserId"`
-	Confirmed bool   `json:"confirmed"`
-}
-
-// Browser runs a separately confirmed browser action.
-func (c *AwakeController) Browser(w http.ResponseWriter, r *http.Request) {
-	if !c.available(w, r) {
-		return
-	}
-	var body AwakeBrowserRequest
-	if c.decode(w, r, &body) {
-		c.reply(w, r, c.Svc.RelaunchBrowser(r.Context(), body.RequestID, body.BrowserID, body.Confirmed))
 	}
 }
 

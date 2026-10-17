@@ -62,6 +62,18 @@ failed replacements release every owned idle process. Display-policy changes use
 the same bounded handoff. Physical idle-sleep continuity still needs hardware
 acceptance; fake-process tests do not exercise macOS assertion acquisition.
 
+## Deferred action scope
+
+This release rejects non-default app pausing, audio mute, display/keyboard
+brightness/restoration, saved-network recovery, agent reconnect and browser-action
+settings, regardless of host capability. Startup clears and durably saves opt-ins
+from older PR builds before admitting automatic rules; failure to persist that
+reset aborts service initialization. Deferred capabilities report unavailable.
+The browser-action HTTP route, operation schema and frontend action are absent.
+Internal backend/native foundations and restoration of previously owned changes
+remain for the follow-up; they cannot be enabled through this release's settings
+API. Core display-awake assertions and Low Power Mode are supported separately.
+
 ## Native protocol and recovery
 
 Protocol 4 extends the existing unprivileged launchd coordinator rather than

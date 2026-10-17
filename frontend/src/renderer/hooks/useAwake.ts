@@ -19,7 +19,6 @@ type Action =
 	| { kind: "end"; id: string }
 	| { kind: "extend"; id: string; seconds: number }
 	| { kind: "stop" | "resume" | "recover" | "clearHistory" | "authorizeLowPower" }
-	| { kind: "browser"; id: string; browserId: string }
 	| { kind: "settings"; settings: AwakeSettings }
 	| { kind: "rules"; rules: AwakeRule[] };
 
@@ -75,14 +74,6 @@ export function useAwake(enabled = true, detailed = false) {
 						return apiClient.POST("/api/v1/awake/recover");
 					case "clearHistory":
 						return apiClient.DELETE("/api/v1/awake/history");
-					case "browser":
-						return apiClient.POST("/api/v1/awake/browser", {
-							body: {
-								requestId: action.id,
-								browserId: action.browserId,
-								confirmed: true,
-							},
-						});
 					case "settings":
 						return apiClient.PUT("/api/v1/awake/settings", {
 							body: action.settings,

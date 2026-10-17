@@ -31,7 +31,8 @@ type AwakeDocument struct {
 	Network         AwakeNetworkAttempt   `json:"network"`
 }
 
-// AwakeSettings configures desktop wake defaults and optional effects.
+// AwakeSettings configures desktop wake defaults. Deferred effect fields are
+// reserved and accepted only as false/empty values by the settings service.
 type AwakeSettings struct {
 	LidClosed              bool     `json:"lidClosed"`
 	DisplayAwake           bool     `json:"displayAwake"`

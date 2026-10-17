@@ -535,23 +535,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/awake/browser": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Manage desktop Stay Awake */
-        post: operations["awakeBrowser"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/awake/downloads": {
         parameters: {
             query?: never;
@@ -4287,11 +4270,6 @@ export interface components {
             identity: string;
             name: string;
             protected: boolean;
-        };
-        AwakeBrowserRequest: {
-            browserId: string;
-            confirmed: boolean;
-            requestId: string;
         };
         AwakeCapability: {
             available: boolean;
@@ -8869,57 +8847,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AwakeState"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    awakeBrowser: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AwakeBrowserRequest"];
-            };
-        };
         responses: {
             /** @description OK */
             200: {
