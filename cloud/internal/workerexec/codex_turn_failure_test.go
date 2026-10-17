@@ -72,7 +72,7 @@ func TestCodexListedModelsReadsEveryPage(t *testing.T) {
 	go func() {
 		reader := bufio.NewReader(requestReader)
 		pages := []string{
-			`{"data":[{"id":"gpt-6-luna","model":"gpt-6-luna"}],"nextCursor":"page-2"}`,
+			`{"data":[{"id":"gpt-6-luna","model":"gpt-6-luna","isDefault":true}],"nextCursor":"page-2"}`,
 			`{"data":[{"id":"terra-preset","model":"gpt-5.6-terra"}]}`,
 		}
 		for index := range pages {
@@ -90,9 +90,12 @@ func TestCodexListedModelsReadsEveryPage(t *testing.T) {
 			_, _ = responseWriter.Write([]byte(fmt.Sprintf(`{"id":%d,"result":%s}`+"\n", request.ID, pages[index])))
 		}
 	}()
-	listed, ok := codexListedModels(context.Background(), conn)
+	listed, defaultModel, ok := codexListedModels(context.Background(), conn)
 	if !ok {
 		t.Fatal("model list unavailable")
+	}
+	if defaultModel != "gpt-6-luna" {
+		t.Fatalf("default model = %q, want gpt-6-luna", defaultModel)
 	}
 	for _, model := range []string{"gpt-6-luna", "terra-preset", "gpt-5.6-terra"} {
 		if !listed[model] {
@@ -101,5 +104,44 @@ func TestCodexListedModelsReadsEveryPage(t *testing.T) {
 	}
 	if listed["gpt-5.6-sol"] {
 		t.Fatal("an unlisted model was listed")
+	}
+}
+
+// A model this Codex does not list runs on Codex's default model, for the
+// thread as well as the turn, with a notice; a listed model is kept.
+func TestCodexTurnModelFallsBackToTheDefault(t *testing.T) {
+	serve := func(t *testing.T) *codexRPC {
+		requestReader, requestWriter := io.Pipe()
+		responseReader, responseWriter := io.Pipe()
+		t.Cleanup(func() {
+			requestReader.Close()
+			requestWriter.Close()
+			responseReader.Close()
+			responseWriter.Close()
+		})
+		conn := newCodexRPC(requestWriter, responseReader)
+		go func() {
+			line, err := bufio.NewReader(requestReader).ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var request struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal(line, &request) != nil {
+				return
+			}
+			_, _ = responseWriter.Write([]byte(fmt.Sprintf(`{"id":%d,"result":{"data":[{"id":"gpt-5.6-terra","model":"gpt-5.6-terra"},{"id":"gpt-6-luna","model":"gpt-6-luna","isDefault":true}]}}`+"\n", request.ID)))
+		}()
+		return conn
+	}
+	if model, notice := codexTurnModel(context.Background(), serve(t), "gpt-5.6-sol"); model != "gpt-6-luna" || !strings.Contains(notice, "gpt-5.6-sol is not available") {
+		t.Fatalf("unlisted model = %q notice %q, want Codex's default with a notice", model, notice)
+	}
+	if model, notice := codexTurnModel(context.Background(), serve(t), "gpt-5.6-terra"); model != "gpt-5.6-terra" || notice != "" {
+		t.Fatalf("listed model = %q notice %q, want it kept", model, notice)
+	}
+	if model, notice := codexTurnModel(context.Background(), nil, ""); model != "" || notice != "" {
+		t.Fatalf("no requested model = %q notice %q", model, notice)
 	}
 }

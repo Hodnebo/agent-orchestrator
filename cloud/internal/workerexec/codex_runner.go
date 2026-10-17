@@ -237,10 +237,11 @@ type codexTurnError struct {
 // codexListedModels returns the models this Codex lists for its current
 // sign-in (model/list, hidden ones included), by id and by model name. ok is
 // false when the list is unavailable, so the requested model is used as is.
-func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, bool) {
+func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, string, bool) {
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	listed := map[string]bool{}
+	defaultModel := ""
 	cursor := ""
 	for page := 0; page < 10; page++ {
 		params := map[string]any{"includeHidden": true}
@@ -249,15 +250,19 @@ func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, bo
 		}
 		var result struct {
 			Data []struct {
-				ID    string `json:"id"`
-				Model string `json:"model"`
+				ID        string `json:"id"`
+				Model     string `json:"model"`
+				IsDefault bool   `json:"isDefault"`
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
 		if err := conn.request(listCtx, "model/list", params, &result); err != nil {
-			return nil, false
+			return nil, "", false
 		}
 		for _, model := range result.Data {
+			if model.IsDefault && defaultModel == "" {
+				defaultModel = strings.TrimSpace(model.ID)
+			}
 			if id := strings.TrimSpace(model.ID); id != "" {
 				listed[id] = true
 			}
@@ -270,7 +275,23 @@ func codexListedModels(ctx context.Context, conn *codexRPC) (map[string]bool, bo
 		}
 		cursor = *result.NextCursor
 	}
-	return listed, len(listed) > 0
+	return listed, defaultModel, len(listed) > 0
+}
+
+// codexTurnModel is the model a Chat turn runs on: the requested one when this
+// Codex lists it for its sign-in (or the list is unavailable), else Codex's
+// default model, with a notice naming the model that was dropped. The thread
+// gets the same model, so a thread created on the unlisted model (for example
+// by the terminal's --model) is moved off it on resume.
+func codexTurnModel(ctx context.Context, conn *codexRPC, requested string) (model, notice string) {
+	if requested == "" {
+		return "", ""
+	}
+	listed, defaultModel, ok := codexListedModels(ctx, conn)
+	if !ok || listed[requested] {
+		return requested, ""
+	}
+	return defaultModel, fmt.Sprintf("AO: %s is not available with the Codex sign-in this session uses, so this turn runs on Codex's default model. Pick a model from Codex's list to choose another.\n\n", requested)
 }
 
 // codexTurnErrorMaxLen bounds the provider text a failed turn shows.
@@ -365,8 +386,9 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	if command.SystemPrompt != "" {
 		threadParams["developerInstructions"] = command.SystemPrompt
 	}
-	if turn.Model != "" {
-		threadParams["model"] = turn.Model
+	model, modelNotice := codexTurnModel(openCtx, conn, turn.Model)
+	if model != "" {
+		threadParams["model"] = model
 	}
 	if turn.ReasoningEffort != "" {
 		threadParams["config"] = map[string]string{"model_reasoning_effort": turn.ReasoningEffort}
@@ -462,19 +484,17 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 		"approvalPolicy": policy, "approvalsReviewer": reviewer,
 		"sandboxPolicy": codexTurnSandbox(sandbox, command.WritableRoots),
 	}
-	if turn.Model != "" {
-		// The desktop's model list comes from the local Codex, which may sign
-		// in differently: a ChatGPT login cannot run every API model, and
-		// Codex fails such a turn with a 400. Run a model this Codex does not
-		// list on its default instead, and say so.
-		if listed, ok := codexListedModels(ctx, conn); ok && !listed[turn.Model] {
-			notice := fmt.Sprintf("AO: %s is not available with the Codex sign-in this session uses, so this turn runs on Codex's default model. Pick a model from Codex's list to choose another.\n\n", turn.Model)
-			if err := publish(Output{Stream: "stdout", Text: notice, ItemID: "ao-model-notice-" + turn.ID}); err != nil {
-				return err
-			}
-		} else {
-			turnParams["model"] = turn.Model
+	// The desktop's model list comes from the local Codex, which may sign in
+	// differently: a ChatGPT login cannot run every API model, and Codex fails
+	// such a turn with a 400. codexTurnModel moved an unlisted model to
+	// Codex's default; say so in the turn.
+	if modelNotice != "" {
+		if err := publish(Output{Stream: "stdout", Text: modelNotice, ItemID: "ao-model-notice-" + turn.ID}); err != nil {
+			return err
 		}
+	}
+	if model != "" {
+		turnParams["model"] = model
 	}
 	if turn.ReasoningEffort != "" {
 		turnParams["effort"] = turn.ReasoningEffort
