@@ -626,3 +626,127 @@ func TestLowPowerAuthorizationCancellationDoesNotSaveSettings(t *testing.T) {
 		t.Fatal("canceled authorization changed settings")
 	}
 }
+
+func TestNetworkRecoveryPersistsFreshBudgetAcrossRestart(t *testing.T) {
+	s, store, h, bindings, now := fixture(t)
+	ctx := context.Background()
+	connected := false
+	h.observation.NetworkConnected = &connected
+	h.networkError = errors.New("outage A join failed")
+	bindings.agent = true
+	s.doc.Settings.HotspotRecovery = true
+	s.doc.Settings.HotspotName = "saved"
+	rule := domain.AwakeRule{ID: "work", Name: "Agent work", Enabled: true, Match: "all", Conditions: []domain.AwakeCondition{{Kind: "agent_activity"}}}
+	if err := s.UpdateRules(ctx, []domain.AwakeRule{rule}); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(5 * time.Second)
+	tick(t, s)
+	if !h.active {
+		t.Fatal("persisted rule did not activate wake")
+	}
+	if s.networkTask(ctx) != nil {
+		t.Fatal("outage debounce was skipped")
+	}
+	advance := func() {
+		// The real loop samples rules every five seconds; preserve that
+		// freshness while advancing the retry cooldown in this regression.
+		for range 6 {
+			*now = now.Add(5 * time.Second)
+			tick(t, s)
+		}
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		advance()
+		task := s.networkTask(ctx)
+		if task == nil {
+			t.Fatalf("outage A attempt %d missing", attempt+1)
+		}
+		s.runNetwork(ctx, *task)
+	}
+	episodeA := s.doc.Network.Episode
+	advance() // cooldown is not an alternative blocker
+	if s.networkTask(ctx) != nil {
+		t.Fatal("outage A exceeded its budget")
+	}
+	connected = true
+	tick(t, s)
+	if s.networkTask(ctx) != nil {
+		t.Fatal("connected observation triggered a handoff")
+	}
+	closedDocument := store.document
+	// No intervening document save may mask the recovery transition. There are
+	// no manual sessions for New to end/save during reconstruction.
+	connected = false
+	nextHost := &fakeHost{observation: h.observation}
+	next, err := New(ctx, store, nextHost, bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.now = s.now
+	tick(t, next)
+	*now = now.Add(5 * time.Second)
+	tick(t, next)
+	if !nextHost.active {
+		t.Fatal("persisted automatic rule did not reactivate")
+	}
+	if next.networkTask(ctx) != nil {
+		t.Fatal("outage B debounce was skipped")
+	}
+	*now = now.Add(10 * time.Second)
+	task := next.networkTask(ctx)
+	if task == nil {
+		t.Fatalf("outage B inherited outage A's exhausted budget: %+v", next.doc.Network)
+	}
+	if next.doc.Network.Attempts != 1 || task.episode == episodeA {
+		t.Fatalf("outage B did not receive a new episode and budget: %+v", next.doc.Network)
+	}
+	next.runNetwork(ctx, *task)
+	var closed domain.AwakeDocument
+	if err := json.Unmarshal([]byte(closedDocument), &closed); err != nil {
+		t.Fatal(err)
+	}
+	if closed.Network.Episode != "" || closed.Network.Attempts != 0 || closed.Network.LastAttempt != nil {
+		t.Fatalf("outage closure was not durable: %+v", closed.Network)
+	}
+}
+
+func TestNetworkRecoverySaveFailureRetainsBudgetAndRetriesClosure(t *testing.T) {
+	s, store, _, _, now := fixture(t)
+	ctx := context.Background()
+	start(t, s, domain.StartAwakeRequest{Mode: "indefinite"})
+	s.doc.Settings.HotspotRecovery = true
+	s.doc.Network = domain.AwakeNetworkAttempt{Episode: "outage-A", Attempts: 3, LastAttempt: now, Outcome: "failed"}
+	if err := s.save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.networkOutage = now.Add(-time.Minute)
+	prior, outage, saved, writes := s.doc.Network, s.networkOutage, store.document, store.writes
+	connected := true
+	s.observation.NetworkConnected = &connected
+	store.fail = true
+	if s.networkTask(ctx) != nil {
+		t.Fatal("closure failure triggered a handoff")
+	}
+	if s.doc.Network != prior || s.networkOutage != outage || store.document != saved {
+		t.Fatal("failed save reset the episode only in memory")
+	}
+	if s.Status().Reason != "persistence_failed" {
+		t.Fatal("closure save failure was not surfaced")
+	}
+	store.fail = false
+	s.networkTask(ctx)
+	if s.doc.Network.Episode != "" || s.doc.Network.Attempts != 0 || s.doc.Network.LastAttempt != nil || !s.networkOutage.IsZero() {
+		t.Fatalf("recovery closure was not retried: %+v", s.doc.Network)
+	}
+	if s.doc.Network.Outcome != prior.Outcome || s.Status().Reason != "" {
+		t.Fatal("successful closure lost the last outcome or retained the save error")
+	}
+	if store.writes != writes+1 {
+		t.Fatal("successful closure was not saved once")
+	}
+	s.networkTask(ctx)
+	if store.writes != writes+1 {
+		t.Fatal("unchanged connected polls rewrote the document")
+	}
+}

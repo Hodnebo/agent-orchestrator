@@ -851,9 +851,21 @@ func (s *Service) networkTask(ctx context.Context) *networkTask {
 		return nil
 	}
 	if *connected {
+		previous := s.doc.Network
+		if previous.Episode != "" || previous.Attempts != 0 || previous.LastAttempt != nil {
+			// Closing an outage must be durable before a later outage can use
+			// a fresh retry budget. Keep the last action outcome for status.
+			s.doc.Network = domain.AwakeNetworkAttempt{Outcome: previous.Outcome}
+			if err := s.save(ctx); err != nil {
+				s.doc.Network = previous
+				s.reason = "persistence_failed"
+				return nil
+			}
+			if s.reason == "persistence_failed" {
+				s.reason = ""
+			}
+		}
 		s.networkOutage = time.Time{}
-		s.doc.Network.Episode = ""
-		s.doc.Network.Attempts = 0
 		return nil
 	}
 	now := s.now()
