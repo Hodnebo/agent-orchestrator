@@ -52,6 +52,16 @@ silently resume paused rules. If a safety-latch save fails, ownership remains
 stopped and reconciliation retries the pending document write, even after
 observations recover. A successful save makes the acknowledgment latch durable.
 
+On hosts without the native guard, idle-only wake uses `caffeinate` with an
+OS-enforced timeout and daemon-PID ownership. Rolling policy deadlines reuse the
+running process until its remaining timeout enters a 7.5-second renewal margin,
+between the first and second normal policy ticks. A replacement starts
+before the old assertion retires, with at most five seconds of overlap capped by
+both policy deadlines. Shortened deadlines cap all pending retirements; Stop and
+failed replacements release every owned idle process. Display-policy changes use
+the same bounded handoff. Physical idle-sleep continuity still needs hardware
+acceptance; fake-process tests do not exercise macOS assertion acquisition.
+
 ## Native protocol and recovery
 
 Protocol 4 extends the existing unprivileged launchd coordinator rather than

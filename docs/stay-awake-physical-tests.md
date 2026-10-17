@@ -72,6 +72,12 @@ Power Mode. Mobile access is not required. Other advanced UI is deferred in
   desktop/mobile owners; stopping one source while another remains active.
 - Test indefinite, duration, end-at-time, app process exit/PID identity, and AO
   browser download completion/interrupted heartbeat. Verify expired sources end.
+- On a Mac without the native guard (for example a lidless Mac or an isolated
+  data directory), test a live session/app/download binding and automatic rule
+  while already idle past the normal sleep threshold. Observe repeated renewal
+  windows with `pmset -g assertions`; verify no idle-sleep interruption, normal
+  expiry, display-policy changes, and cleanup after Stop/daemon exit. This
+  fallback continuity test is pending physical verification.
 - Test enabled automatic rules, pause/resume, network/device observation loss,
   schedule/timezone boundaries, and unknown battery readings.
 - Test configured battery stop and injected critical-heat policy in automated
