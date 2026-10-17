@@ -1753,6 +1753,7 @@ function ChatWorkspaceContent({
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
 									retryControl={retryControl}
+									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
 									editBusy={Boolean(turn)}
@@ -2445,6 +2446,7 @@ export function Timeline({
 	onOpenFiles,
 	onOpenFile,
 	retryControl,
+	composerRecoveryTurnId,
 	onEditHumanMessage,
 	editPending,
 	editBusy,
@@ -2480,6 +2482,7 @@ export function Timeline({
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
 	retryControl?: ChatRetryControl;
+	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	editPending?: boolean;
 	editBusy?: boolean;
@@ -3895,6 +3898,7 @@ export function Timeline({
 							group.turnId &&
 							retryControl &&
 							retryableTurns.has(group.turnId) &&
+							group.turnId !== composerRecoveryTurnId &&
 							groupHasHumanPrompt(group)
 								? {
 										onRetry: () => {
