@@ -5,8 +5,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +23,7 @@ func composeFixture(t *testing.T, name string) (Run, []Check) {
 	is(t, "")(nil, json.Unmarshal(raw, &f))
 	dir := t.TempDir()
 	for i := range f.Checks {
+		f.Checks[i].Claim = f.Checks[i].onLeg() == "head"
 		for j := range f.Checks[i].Receipts {
 			r := &f.Checks[i].Receipts[j]
 			if r.AfterPath == "" {
@@ -67,29 +66,22 @@ func TestComposeRun12(t *testing.T) {
 	t.Logf("composed comment:\n%s", got)
 
 	for _, want := range []string{
-		"**Result: the PR does what it says in the 2 checks I finished. One check only ran on the PR build.**",
-		"On the PR build, with the sidebar expanded, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present. On main, with the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show.",
-		"On the PR build, opening a project enabled Go back.",
-		"I did not repeat this on main: main has no Go back or Go forward buttons, so there was nothing to re-check.\n",
-		"Main on the left: with the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show. PR build on the right: with the sidebar expanded, Collapse sidebar, Go back, Go forward (both disabled on Home).",
-		"\nPR build: opening a project enabled Go back. Collapsing the sidebar kept both arrows, and re-expanding it showed both arrows plus the Orchestrator.inc brand.\n",
+		"**Result: pass.**",
+		"Passed: Arrows beside brand, sidebar open (main does not do this); Arrows survive navigation and collapse (not tested on main)",
+		"<details><summary>Full check notes</summary>",
+		"- Arrows beside brand, sidebar open. Expected: With the sidebar expanded, Go back and Go forward buttons are visible next to the Orchestrator.inc brand.",
+		"The PR build: pass. With the sidebar expanded on the PR build, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present.",
+		"Main: fail. On main with the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show.",
+		"- Arrows survive navigation and collapse. Expected: After opening a project then collapsing and re-expanding the sidebar, both arrows remain visible and Go back becomes enabled.",
+		"The PR build: pass. On the PR build, opening a project enabled Go back.",
+		"Main: skipped. main has no Go back or Go forward buttons, so there was nothing to re-check",
+		"PR build on the right: with the sidebar expanded on the PR build, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present.",
+		"\nPR build: on the PR build, opening a project enabled Go back. Collapsing the sidebar kept both arrows, and re-expanding it showed both arrows plus the Orchestrator.inc brand.\n",
 		`Step 2, PR build: click "Sample project 10"`,
 		"/runs/6403/20261011-171714/",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q", want)
-		}
-	}
-	doubled := regexp.MustCompile(`(?i)\b(on|in) (the PR build|main)\b[^.]*\b(on|in) (the PR build|main)\b`)
-	for _, line := range strings.Split(got, "\n") {
-		if !strings.HasPrefix(line, "I checked") && !strings.HasPrefix(line, "Next I checked") && !strings.HasPrefix(line, "I also checked") {
-			continue
-		}
-		// a check paragraph names each build once per sentence
-		for _, sentence := range strings.Split(line, ". ") {
-			if doubled.MatchString(sentence) {
-				t.Errorf("a build is named twice in %q", sentence)
-			}
 		}
 	}
 	for _, bad := range []string{"/Users/", "run_ao", "ao-10", "look at before merging", "could not compare"} {
@@ -102,7 +94,7 @@ func TestComposeRun12(t *testing.T) {
 			t.Errorf("caption %q", it.caption)
 		}
 	}
-	noSlop(t, got)
+	noSlopSummary(t, run, v)
 }
 
 func TestComposeRun13SaysTheSkipReasonOnceAndNotUnderTheChecks(t *testing.T) {
@@ -112,23 +104,16 @@ func TestComposeRun13SaysTheSkipReasonOnceAndNotUnderTheChecks(t *testing.T) {
 	got, _ := composeComment(t, run, v)
 	t.Logf("composed comment:\n%s", got)
 	const reason = "I did not run main: the PR build's search worked, but the Local/Cloud tabs and visual layout could not be confirmed here, so a comparison against main would not change the verdict.\n"
-	lines := strings.Split(got, "\n")
-	if strings.Count(got, "I did not run main") != 1 || strings.Contains(got, "could not compare") || lines[2] != "**Result: the PR build works as far as I could check; nothing was compared against main, so read the diff before merging.**" || lines[4]+"\n" != reason {
-		t.Errorf("the reason is said once, right after the result line:\n%s", got)
+	result := "**Result: partial: something misbehaved.**"
+	if strings.Count(got, "I did not run main") != 1 || strings.Contains(got, "could not compare") || !strings.Contains(got, result+"\n\n") || !strings.Contains(got, reason) {
+		t.Errorf("the reason is said once, after the result and counts:\n%s", got)
 	}
-	for _, p := range strings.Split(got, "\n\n") {
-		if strings.HasPrefix(p, "I checked that") || strings.HasPrefix(p, "Next I checked that") {
-			if strings.Contains(p, "main") {
-				t.Errorf("a check paragraph mentions main: %q", p)
-			}
-			if !strings.HasSuffix(p, ".") {
-				t.Errorf("paragraph does not end after the PR build sentence: %q", p)
-			}
-		}
+	if strings.Index(got, reason) > strings.Index(got, "Passed:") {
+		t.Errorf("run-wide skip reason follows the compact check list:\n%s", got)
 	}
 	for _, want := range []string{
 		" The PR build shows a full-width search field above one row per harness in Settings > Harness; the Local/Cloud tabs did not appear because cloud is off here. I only checked page structure, not the dividers or logo tiles visually.\n",
-		"\nPR build. The PR build shows a full-width search field above one row per harness in Settings > Harness; the Local/Cloud tabs did not appear because cloud is off here.\n",
+		"\nPR build. The PR build shows a full-width search field above one row per harness in Settings > Harness; the Local/Cloud tabs did not appear because cloud is off here. I only checked page structure, not the dividers or logo tiles visually.\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q", want)
@@ -139,26 +124,23 @@ func TestComposeRun13SaysTheSkipReasonOnceAndNotUnderTheChecks(t *testing.T) {
 			t.Errorf("the build is named twice: %q", bad)
 		}
 	}
-	noSlop(t, got)
+	noSlopSummary(t, run, v)
 }
 
-func TestBuildsRemovesTheBuildTheCommentAlreadyNames(t *testing.T) {
-	run := Run{BaseRef: "main"}
-	for in, want := range map[string]string{
-		"With the sidebar expanded on the PR build, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present.":         "With the sidebar expanded, Collapse sidebar, Go back, Go forward (both disabled on Home) and the Orchestrator.inc brand are all present.",
-		"On main with the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show. Go back and Go forward are missing, which is the bug the PR fixes.": "With the sidebar expanded, only Collapse sidebar and the Orchestrator.inc brand show. Go back and Go forward are missing, which is the bug the PR fixes.",
-		"On the PR build, opening a project enabled Go back. Collapsing the sidebar kept both arrows.":                                                                     "Opening a project enabled Go back. Collapsing the sidebar kept both arrows.",
-		"in the PR build, it works":                      "It works",
-		"The menu stayed open. It is on main too.":       "The menu stayed open. It is on main too.",
-		"Typing grok in the PR build's search worked":    "Typing grok in the PR build's search worked",
-		"Opened the menu on main and then closed it, ok": "Opened the menu and then closed it, ok",
-	} {
-		if got := builds(in, run); got != want {
-			t.Errorf("builds(%q)\n got %q\nwant %q", in, got, want)
-		}
+func TestCheckNotesKeepTesterBuildWordsAndIdentifiers(t *testing.T) {
+	name := "Menu follows head and base state"
+	expect := "On main, c1 keeps the menu open."
+	note := "Head: the menu stayed open. Base: it closed. See c1 for the run record."
+	check := Check{ID: "c1", Name: name, Expect: expect, Note: note, State: CheckPartial}
+	v := plainVerdict(commentRun, Verdict{Checks: []Check{check}})
+	if got := plainTester(note, commentRun, v.Checks); got != note {
+		t.Fatalf("tester note changed from %q to %q", note, got)
 	}
-	if got := builds("On develop it fails, on develop twice", Run{BaseRef: "develop"}); got != "It fails, on develop twice" {
-		t.Errorf("another base branch is named too: %q", got)
+	full := fullCheckNotes(commentRun, v)
+	for _, want := range []string{"- " + name, "Expected: " + expect, "The PR build: partial. " + note} {
+		if !strings.Contains(full, want) {
+			t.Errorf("full check notes lost %q:\n%s", want, full)
+		}
 	}
 }
 
@@ -174,14 +156,8 @@ func TestHeroCaptionOfASingleSideCarriesItsNote(t *testing.T) {
 	}
 }
 
-func TestANoteThatOpensWithABuildKeepsItsOwnSentence(t *testing.T) {
+func TestHeroCaptionKeepsTesterBuildWords(t *testing.T) {
 	run := Run{BaseRef: "main"}
-	for in, want := range map[string]bool{"The PR build shows the list.": true, "the main build is empty.": true, "Main has no arrows.": true, "The PR build's search worked.": true,
-		"Typing grok in the PR build worked.": false, "Maintenance mode is shown.": false, "It shows on main.": false} {
-		if got := subjectLed(in, run); got != want {
-			t.Errorf("subjectLed(%q) = %t", in, got)
-		}
-	}
 	if got := heroCaption(run, hero{pr: &shot{}, base: &shot{}, baseNote: "Main has no arrows.", prNote: "The PR build shows both arrows."}); got != "Main on the left. Main has no arrows. PR build on the right. The PR build shows both arrows." {
 		t.Errorf("both sides: %q", got)
 	}
@@ -217,13 +193,21 @@ func TestEvidencePathHasNoSessionOrRunID(t *testing.T) {
 	}
 }
 
-func TestSkippedCheckLowercasesItsExpectationAndAllSkippedEndsOnTheResultLine(t *testing.T) {
+func TestSkippedChecksUseNamesAndKeepFullExpectationsInDetails(t *testing.T) {
 	checks := []Check{
 		{ID: "c1", Name: "report-wrapper", Expect: "A report delivery inside a Claude paste wrapper is recorded", State: CheckSkipped, Note: "this change has no screen."},
 		{ID: "c2", Name: "cli-flag", Expect: "I run the new flag and it prints the count", State: CheckSkipped, Note: "no app to drive."},
 	}
-	got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
-	for _, want := range []string{"**Result: could not test this from the app.**", "I could not check that a report delivery inside a Claude paste wrapper is recorded. This change has no screen.", "I could not check that I run the new flag"} {
+	v := commentVerdict(checks)
+	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
+	for _, want := range []string{
+		"**Result: the PR's stated behavior was not checked.**",
+		"Not tested: report wrapper (this change has no screen; main: not compared); cli flag (no app to drive; main: not compared)",
+		"- report wrapper. Expected: A report delivery inside a Claude paste wrapper is recorded.",
+		"The PR build: skipped. this change has no screen.",
+		"- cli flag. Expected: I run the new flag and it prints the count.",
+		"The PR build: skipped. no app to drive.",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in\n%s", want, got)
 		}
@@ -231,41 +215,23 @@ func TestSkippedCheckLowercasesItsExpectationAndAllSkippedEndsOnTheResultLine(t 
 	if strings.Contains(got, "could not reach any check") {
 		t.Errorf("the result line already says it:\n%s", got)
 	}
-	some := commentVerdict([]Check{checks[0], {ID: "c3", Name: "x", Expect: "x works", State: CheckPartial, Note: "half", Receipts: []Receipt{{Seq: 1}}}})
+	some := commentVerdict([]Check{checks[0], {ID: "c3", Name: "x", Expect: "x works", State: CheckPartial, Claim: true, Note: "half", Receipts: []Receipt{{Seq: 1}}}})
 	if got := renderComment(commentRun, some, evidence{}, commentRun.CreatedAt); strings.Contains(got, "could not test this from the app") {
 		t.Errorf("only some checks were skipped:\n%s", got)
 	}
 }
 
-func TestLowerLeadKeepsUILabelsAndNames(t *testing.T) {
-	notes := []string{"Search field above the list. Rows list every harness.", "Opened Settings > Harness and the Go menu."}
-	for in, want := range map[string]string{
-		"Go back and Go forward buttons are visible beside the Orchestrator.inc brand when the sidebar is open": "Go back and Go forward buttons are visible beside the Orchestrator.inc brand when the sidebar is open",
-		"Search field is full width; Local/Cloud tabs appear above it when cloud is on":                         "search field is full width; Local/Cloud tabs appear above it when cloud is on",
-		"Settings > Harness shows tabs above a search field":                                                    "Settings > Harness shows tabs above a search field", // Settings is named mid-sentence in a note
-		"Rows have dividers":                            "rows have dividers", // only a sentence start in the notes
-		"Go menu opens":                                 "Go menu opens",      // named mid-sentence in a note
-		"CLI tests pass":                                "CLI tests pass",
-		"Back/forward navigate and stay visible":        "Back/forward navigate and stay visible",
-		"Orchestrator.inc brand is shown":               "Orchestrator.inc brand is shown",
-		"Tab2 opens":                                    "Tab2 opens",
-		"A report delivery is recorded":                 "a report delivery is recorded",
-		"With the sidebar expanded, both arrows show":   "with the sidebar expanded, both arrows show",
-		"Typing grok filters the list":                  "typing grok filters the list",
-		"Opening a project enables Go back":             "opening a project enables Go back",
-		"After a restart the menu is still open":        "after a restart the menu is still open",
-		"I run the new flag":                            "I run the new flag",
-		"The cli package's tests pass":                  "the cli package's tests pass",
-		"Settings page opens":                           "Settings page opens",
-		"Each harness row has a divider":                "each harness row has a divider",
-		"Once the sidebar collapses, the brand is gone": "once the sidebar collapses, the brand is gone",
-	} {
-		if got := lowerLead(in, notes...); got != want {
-			t.Errorf("lowerLead(%q)\n got %q\nwant %q", in, got, want)
-		}
+func TestCheckNamesAndExpectationsStaySeparate(t *testing.T) {
+	check := Check{ID: "c1", Name: "settings menu", Expect: "Settings page opens", Note: "The Settings label stayed visible.", State: CheckPass}
+	compact := compactChecks(commentRun, Verdict{Checks: []Check{check}})
+	full := fullCheckNotes(commentRun, Verdict{Checks: []Check{check}})
+	if compact != "Passed: settings menu (main: not compared)" {
+		t.Fatalf("compact summary should use Name: %q", compact)
 	}
-	if got := lowerLead("Settings page opens"); got != "settings page opens" {
-		t.Errorf("no notes: %q", got)
+	for _, want := range []string{"- settings menu. Expected: Settings page opens.", "The PR build: pass. The Settings label stayed visible."} {
+		if !strings.Contains(full, want) {
+			t.Fatalf("full notes lost separate name, expectation, or note:\n%s", full)
+		}
 	}
 }
 
@@ -277,84 +243,125 @@ func TestComposeRun14(t *testing.T) {
 		checks[i].SameFault = checks[i].onLeg() == "base"
 	}
 	v := commentVerdict(checks)
-	if v.Overall != CheckPartial || !slices.Equal(v.Reasons, []string{reasonPrePartial}) {
+	if v.Overall != CheckPartial || len(v.Reasons) != 4 ||
+		!strings.Contains(v.Reasons[0], "fails the same way on main and the PR build") ||
+		!strings.Contains(v.Reasons[2], "fails the same way on main and the PR build") {
 		t.Fatalf("overall %s reasons %q", v.Overall, v.Reasons)
 	}
 	got, _ := composeComment(t, run, v)
 	t.Logf("composed comment:\n%s", got)
 	paras := strings.Split(got, "\n\n")
-	if want := "**Result: nothing failed, but I could not confirm the change from the app; read the diff before merging.**"; paras[1] != want {
+	if want := "**Result: partial: something misbehaved.**"; paras[1] != want {
 		t.Errorf("result line %q", paras[1])
 	}
-	if !strings.HasPrefix(paras[2], "I checked that search field is full width; Local/Cloud tabs appear above it when cloud is on. On the PR build, ") ||
-		strings.Contains(paras[2], "I could not confirm it on main either.") { // the main sentence already says what was seen
-		t.Errorf("first paragraph %q", paras[2])
+	compact := compactChecks(run, v)
+	if !strings.Contains(compact, "- Harness toolbar layout: partial (main does part of this). Search field sits at the top of Settings > Harness above the list.") ||
+		!strings.Contains(compact, "- Harness rows and logos: partial (main does part of this). Rows list every harness;") {
+		t.Errorf("compact partial row %q", paras[5])
 	}
-	if want := "\n\nWhat I could not confirm on the PR build I could not confirm on main either.\n\n"; !strings.Contains(got, want) {
-		t.Errorf("no %q", want)
+	full := fullCheckNotes(run, v)
+	for _, want := range []string{
+		"- Harness toolbar layout. Expected: Search field is full width; Local/Cloud tabs appear above it when cloud is on.",
+		"The PR build: partial. Search field sits at the top of Settings > Harness above the list.",
+		"Main: partial. Search field above the list; no Local/Cloud tabs since cloud is off, same as the PR build.",
+	} {
+		if !strings.Contains(full, want) {
+			t.Errorf("full notes missing %q:\n%s", want, full)
+		}
+	}
+	if strings.Contains(got, "Pre-existing") || strings.Contains(got, "What I could not confirm on the PR build I could not confirm on main either.") {
+		t.Errorf("claim partials were described as pre-existing:\n%s", got)
 	}
 	for _, bad := range []string{"Whatever failed", "so the PR did not cause it", "same thing happens", "do not rely on this run"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("comment contains %q", bad)
 		}
 	}
-	noSlop(t, got)
+	noSlopSummary(t, run, v)
 }
 
-func TestPreExistingReasonSaysWhatWasLeftOut(t *testing.T) {
-	mk := func(id, name, leg string, s CheckState) Check {
-		return Check{ID: id, Name: name, State: s, Leg: leg, SameFault: leg == "base", Receipts: []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: evidenceFile(t)}}}
+func TestSameFaultClaimReasonAndUnclaimedPreExistingOutcome(t *testing.T) {
+	mk := func(id, name, leg, purpose string, s CheckState) Check {
+		return Check{
+			ID: id, Name: name, Purpose: purpose, Claim: purpose == "claim", State: s, Leg: leg,
+			SameFault: leg == "base", Receipts: []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: evidenceFile(t)}},
+		}
 	}
-	for _, c := range []struct {
-		name   string
-		checks []Check
-		reason string
-		plain  string
+	const sameFaultReason = "fails the same way on main and the PR build"
+	for _, tc := range []struct {
+		name       string
+		purpose    string
+		checks     []Check
+		want       CheckState
+		wantReason string
 	}{
-		{"fails", []Check{mk("c1", "a", "", CheckFail), mk("c2", "a", "base", CheckFail)}, reasonPreOnly, "Whatever failed on the PR build failed on main too."},
-		{"partials", []Check{mk("c1", "a", "", CheckPartial), mk("c2", "a", "base", CheckPartial)}, reasonPrePartial, "What I could not confirm on the PR build I could not confirm on main either."},
-		{"both", []Check{mk("c1", "a", "", CheckFail), mk("c2", "a", "base", CheckFail), mk("c3", "b", "", CheckPartial), mk("c4", "b", "base", CheckPartial)}, reasonPreBoth,
-			"Whatever failed on the PR build failed on main too. What I could not confirm on the PR build I could not confirm on main either."},
+		{
+			name:       "claim fail",
+			purpose:    "claim",
+			checks:     []Check{mk("c1", "a", "", "claim", CheckFail), mk("c2", "a", "base", "claim", CheckFail)},
+			want:       CheckPartial,
+			wantReason: sameFaultReason,
+		},
+		{
+			name:       "claim partial",
+			purpose:    "claim",
+			checks:     []Check{mk("c1", "a", "", "claim", CheckPartial), mk("c2", "a", "base", "claim", CheckPartial)},
+			want:       CheckPartial,
+			wantReason: sameFaultReason,
+		},
+		{
+			name:       "risk without claims",
+			purpose:    "risk",
+			checks:     []Check{mk("c1", "a", "", "risk", CheckFail), mk("c2", "a", "base", "risk", CheckFail)},
+			want:       CheckUntested,
+			wantReason: reasonUntested,
+		},
+		{
+			name:       "explore without claims",
+			purpose:    "explore",
+			checks:     []Check{mk("c1", "a", "", "explore", CheckPartial), mk("c2", "a", "base", "explore", CheckPartial)},
+			want:       CheckUntested,
+			wantReason: reasonUntested,
+		},
 	} {
-		overall, reasons := derive(c.checks)
-		if overall != CheckPartial || len(reasons) != 1 || reasons[0] != c.reason {
-			t.Errorf("%s: %s %q", c.name, overall, reasons)
-			continue
-		}
-		if got := plainReason(reasons[0], "main"); got != c.plain {
-			t.Errorf("%s: plain reason %q", c.name, got)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			overall, reasons := derive(tc.checks)
+			if overall != tc.want {
+				t.Fatalf("purpose %s: %s %q, want %s", tc.purpose, overall, reasons, tc.want)
+			}
+			if tc.wantReason == sameFaultReason {
+				if len(reasons) != 1 || !strings.Contains(reasons[0], sameFaultReason) || !strings.Contains(plainReason(reasons[0], "main"), sameFaultReason) {
+					t.Fatalf("same-fault claim reason = %q", reasons)
+				}
+				return
+			}
+			if len(reasons) != 1 || reasons[0] != tc.wantReason || plainReason(reasons[0], "main") != "I did not check the PR's stated behavior." {
+				t.Fatalf("unclaimed pre-existing reason = %q", reasons)
+			}
+		})
 	}
 }
 
 func TestVerdictLineForAllPartialAndUnreached(t *testing.T) {
-	const confirm = "nothing failed, but I could not confirm the change from the app; read the diff before merging"
-	const unfinished = "nothing failed, but I could not confirm the change from the app; read the diff before merging"
 	for _, c := range []struct {
-		name string
-		t    tally
-		want string
+		name   string
+		checks []Check
+		want   string
 	}{
-		{"partial pairs only", tally{pre: 2, prePartial: 2}, confirm},
-		{"a failing pair among them", tally{pre: 2, prePartial: 1}, unfinished},
-		{"a check never reached", tally{pre: 1, prePartial: 1, unreached: 1}, unfinished},
-		{"a partial that main did not show", tally{pre: 1, prePartial: 1, partial: 1}, unfinished},
+		{"partial pairs only", []Check{{Name: "menu", State: CheckPartial}, {Name: "menu", State: CheckPartial, Leg: "base"}}, "partial: something misbehaved"},
+		{"a failing pair", []Check{{Name: "menu", State: CheckFail}, {Name: "menu", State: CheckFail, Leg: "base"}}, "partial: something misbehaved"},
+		{"a check never reached", []Check{{Name: "login", State: CheckSkipped, Claim: true}}, "partial: not everything could be tested; skipped claim checks: login on the PR build"},
 	} {
-		if got := verdictLine(CheckPartial, c.t, "main"); got != c.want {
-			t.Errorf("%s: %q", c.name, got)
+		if got := verdictLine(CheckPartial, count(c.checks), "main"); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
 }
 
-func TestCheckParaKeepsNamesAndLowersCommonNouns(t *testing.T) {
-	for expect, want := range map[string]string{
-		"Go back and Go forward buttons are visible beside the Orchestrator.inc brand when the sidebar is open": "I checked that Go back and Go forward buttons are visible beside the Orchestrator.inc brand when the sidebar is open.",
-		"Search field is full width; Local/Cloud tabs appear above it when cloud is on":                         "I checked that search field is full width; Local/Cloud tabs appear above it when cloud is on.",
-	} {
-		c := Check{ID: "c1", Name: "x", Expect: expect, State: CheckPass, Note: "It works.", Receipts: []Receipt{{Seq: 1, Leg: "head"}}}
-		if got := checkPara(commentRun, commentVerdict([]Check{c}), c, 300, 0); !strings.HasPrefix(got, want) {
-			t.Errorf("checkPara\n got %q\nwant prefix %q", got, want)
-		}
+func TestCompactPassLineUsesTheCheckName(t *testing.T) {
+	check := Check{ID: "c1", Name: "history arrows", Expect: "Go back and Go forward buttons are visible beside the Orchestrator.inc brand", State: CheckPass}
+	if got := compactChecks(commentRun, Verdict{Checks: []Check{check}}); got != "Passed: history arrows (main: not compared)" {
+		t.Fatalf("compact line used the expectation instead of Name: %q", got)
 	}
 }
 
@@ -362,45 +369,34 @@ func TestCheckParaKeepsNamesAndLowersCommonNouns(t *testing.T) {
 func TestComposeRun17CountsTheSkippedCheckAsNotDone(t *testing.T) {
 	run, checks := composeFixture(t, "compose-run17")
 	v := commentVerdict(checks)
+	if v.Overall != CheckPartial {
+		t.Fatalf("overall %s, want partial", v.Overall)
+	}
 	got, _ := composeComment(t, run, v)
-	if !strings.Contains(got, "**Result: the PR does what it says in the 1 check I finished. One check could not be done.**") || strings.Contains(got, "only ran on the PR build") {
+	if !strings.Contains(got, "**Result: partial: not everything could be tested.**") || !strings.Contains(got, "Not tested: Toolbar scrolls with list (") || strings.Contains(got, "only ran on the PR build") {
 		t.Errorf("result line:\n%s", got)
 	}
-	noSlop(t, got)
+	noSlopSummary(t, run, v)
 }
 
-func TestWithoutComparisonDropsOnlyTheSentencesAboutMain(t *testing.T) {
-	run := Run{BaseRef: "main"}
-	for in, want := range map[string]string{
-		"Not yet compared against main; Local/Cloud tabs were not visible because cloud is off here.": "Local/Cloud tabs were not visible because cloud is off here.",
-		"Not compared against main.":                                       "",
-		"The list showed 5 rows. Compared with main, it has one more row.": "The list showed 5 rows.",
-		"Rows are compared by name. The list showed 5 rows.":               "Rows are compared by name. The list showed 5 rows.",
-		"The list showed 5 rows. Main was not compared":                    "The list showed 5 rows.",
-		"The list showed 5 rows":                                           "The list showed 5 rows",
+func TestPlainVerdictKeepsComparisonWords(t *testing.T) {
+	note := "Not yet compared against main; Local/Cloud tabs were not visible because cloud is off here."
+	for _, checks := range [][]Check{
+		{{ID: "c1", Name: "search field", Note: note, State: CheckPass}},
+		{{ID: "c1", Name: "search field", Note: note, State: CheckPass}, {ID: "b1", Name: "search field", Leg: "base", State: CheckPass}},
 	} {
-		if got := withoutComparison(in, run); got != want {
-			t.Errorf("%q:\n got %q\nwant %q", in, got, want)
+		v := plainVerdict(commentRun, Verdict{Checks: checks})
+		if v.Checks[0].Note != note {
+			t.Fatalf("plainVerdict rewrote comparison wording: %q", v.Checks[0].Note)
 		}
 	}
-	if got := withoutComparison("Checked. Not compared with develop.", Run{BaseRef: "develop"}); got != "Checked." {
-		t.Errorf("another base branch: %q", got)
-	}
 }
 
-// A sentence about what was compared with main is false when the check has no result on main, and true when it has one.
-func TestANoteAboutWhatWasComparedIsKeptOnlyWhenMainWasRun(t *testing.T) {
+func TestComparisonNoteRemainsVerbatimInFullNotes(t *testing.T) {
 	note := "Not yet compared against main; Local/Cloud tabs were not visible because cloud is off here."
-	run, checks := composeFixture(t, "compose-run17")
-	checks[0].Note = note
-	got, _ := composeComment(t, run, commentVerdict(checks)) // c3 is c1's result on main
-	if !strings.Contains(got, "ot yet compared against main") || !strings.Contains(got, "ocal/Cloud tabs were not visible because cloud is off here.") {
-		t.Errorf("a check that ran on main lost its sentence:\n%s", got)
-	}
-	checks = slices.DeleteFunc(checks, func(c Check) bool { return c.onLeg() == "base" })
-	checks[0].Note = note
-	got, _ = composeComment(t, run, commentVerdict(checks))
-	if strings.Contains(got, "ot yet compared against main") || !strings.Contains(got, "ocal/Cloud tabs were not visible because cloud is off here.") {
-		t.Errorf("a check with no result on main kept its claim:\n%s", got)
+	check := Check{ID: "c1", Name: "search field", Expect: "the search field appears", Note: note, State: CheckPass}
+	full := fullCheckNotes(commentRun, Verdict{Checks: []Check{check}})
+	if !strings.Contains(full, "The PR build: pass. "+note) {
+		t.Fatalf("full notes rewrote or dropped tester comparison wording:\n%s", full)
 	}
 }

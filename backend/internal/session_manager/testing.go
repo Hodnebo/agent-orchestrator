@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 // ErrTestingHarness means a Litmus testing session was asked for on anything
@@ -42,7 +40,7 @@ func createTestingWorkspace(dataDir string, id domain.SessionID, projectID domai
 }
 
 // applyTestingLaunch gives a launch in a run dir the unattended permission mode, the tool lists and a model. Claude Code
-// gets dontAsk and the deny list; Codex has neither, so it runs with approvals and sandbox off and relies on GuardEnv.
+// gets dontAsk and the deny list; Codex has neither, so it runs with approvals and sandbox off and follows the skill.
 func applyTestingLaunch(cfg *ports.LaunchConfig, dataDir string, harness domain.AgentHarness) {
 	if litmus.IsRunDir(dataDir, cfg.WorkspacePath) {
 		cfg.Permissions, cfg.AllowedTools, cfg.DisallowedTools = testingPolicy(harness)
@@ -94,11 +92,10 @@ func testerModel(c *ports.AgentConfig, harness domain.AgentHarness) {
 	}
 }
 
-// applyTestingEnv names the run in the environment of a session working in its run dir, blocks git push there and gives gh no login.
+// applyTestingEnv names the run without changing the owner's GitHub or git environment.
 func applyTestingEnv(env map[string]string, dataDir string, id domain.SessionID, workspacePath string) {
 	if litmus.IsRunDir(dataDir, workspacePath) {
 		env[litmus.EnvRun] = litmus.RunID(string(id))
-		litmus.GuardEnv(env, workspacePath)
 	}
 }
 
@@ -122,12 +119,4 @@ func (m *Manager) refuseTestingSession(ctx context.Context, id domain.SessionID)
 		return fmt.Errorf("%w: %s", ErrTestingSessionFixed, id)
 	}
 	return nil
-}
-
-// litmusSkillPointer replaces the generic ao guide in a testing session's system
-// prompt: that guide steers toward previews and builds, which the policy denies.
-func (m *Manager) litmusSkillPointer() string {
-	skillFile := filepath.ToSlash(filepath.Join(skillassets.LitmusDir(m.dataDir), "SKILL.md"))
-	return "\n\n## Testing a pull request\n\n" +
-		"You are a Litmus tester. Read `" + skillFile + "` and follow it. Do not load other ao guides."
 }

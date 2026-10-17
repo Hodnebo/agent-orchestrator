@@ -24,12 +24,15 @@ func TestToolPolicyListsAndRunDir(t *testing.T) {
 			t.Errorf("%s is not allowed", a)
 		}
 	}
-	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)", "Bash(gh auth:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"} {
+	for _, d := range []string{"Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Bash(ao testing discard:*)", "Bash(ao testing rerun:*)", "Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"} {
 		if !slices.Contains(denied, d) {
 			t.Errorf("%s is not denied", d)
 		}
 	}
 	for _, d := range denied {
+		if strings.HasPrefix(d, "Bash(gh") || strings.HasPrefix(d, "Bash(git") {
+			t.Errorf("GitHub or git command is denied: %s", d)
+		}
 		if !strings.HasPrefix(d, "Bash(") && !strings.HasPrefix(d, "Read(**/litmus/runs/run_*/") {
 			t.Errorf("a whole tool is denied: %s", d)
 		}
@@ -63,7 +66,8 @@ func sweep(svc *Service, killErr error) (killed []string) {
 func TestSweepExpiredTransitionsAndRestart(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	svc := New(NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc := newTestService(t, NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc.runner, svc.retryPause = gitFixture(t), 0
 	for _, sid := range []string{"old", "lazy", "done"} {
 		is(t, "")(svc.Intake(ctx, sid, prURL))
 	}
@@ -77,7 +81,7 @@ func TestSweepExpiredTransitionsAndRestart(t *testing.T) {
 	}
 
 	now = now.Add(RunBudget - time.Minute + time.Second) // old, lazy and done are past the deadline, young is not
-	is(t, "TESTING_RUN_CLOSED")(svc.Status(ctx, "lazy")) // a verb flips lazy to expired before the sweep sees it
+	is(t, "TESTING_RUN_CLOSED")(svc.Status(ctx, "lazy")) // reads refuse late testing; the sweep owns closure
 	if got := sweep(svc, errors.New("kill failed")); !slices.Equal(got, []string{"lazy", "old"}) {
 		t.Fatalf("killed %v, want lazy and old (a submitted run is left alone)", got)
 	}
@@ -95,13 +99,14 @@ func TestSweepExpiredTransitionsAndRestart(t *testing.T) {
 	if states["old"] != RunExpired || states["lazy"] != RunExpired || states["young"] != RunIntake || states["done"] != RunSubmitted {
 		t.Fatalf("states = %v", states)
 	}
-	is(t, "TESTING_RUN_CLOSED")(svc.CheckAdd(ctx, "old", "late", "x", "")) // every verb refuses once expired
+	is(t, "TESTING_RUN_CLOSED")(svc.CheckAdd(ctx, "old", "late", "x", "", "", "", CheckClassification{Purpose: "explore"})) // every verb refuses once expired
 	is(t, "TESTING_RUN_CLOSED")(svc.Submit(ctx, "old", "", ""))
-	is(t, "")(svc.CheckAdd(ctx, "young", "still open", "x", ""))
+	is(t, "")(svc.CheckAdd(ctx, "young", "still open", "x", "", "", "", CheckClassification{Purpose: "explore"}))
 
 	// A new daemon over the same data dir knows what was reaped from disk alone: it leaves old and lazy be, and closes
 	// young (it has a check) with that check skipped, without killing anything itself.
-	again := New(NewStore(dir), func() time.Time { return now.Add(time.Hour) }).WithGH(fixtureGH(t))
+	again := newTestService(t, NewStore(dir), func() time.Time { return now.Add(time.Hour) }).WithGH(fixtureGH(t))
+	again.runner, again.retryPause = gitFixture(t), 0
 	if got := sweep(again, nil); got != nil {
 		t.Fatalf("restart killed %v", got)
 	}
@@ -246,7 +251,8 @@ func TestSweepSparesARunBeforeItsDeadline(t *testing.T) {
 func TestSweepWaitsForInFlightVerbBeforeReaping(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	svc := New(NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc := newTestService(t, NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc.runner, svc.retryPause = gitFixture(t), 0
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
 	now = now.Add(RunBudget + time.Second)
 
@@ -275,16 +281,17 @@ func TestSweepReapsATesterThatNeverRanIntake(t *testing.T) {
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	act := map[string]string{} // session -> activity state
 	since := now
-	svc := New(NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t)).
+	svc := newTestService(t, NewStore(dir), func() time.Time { return now }).WithGH(fixtureGH(t)).
 		WithActivity(func(_ context.Context, id string) (string, time.Time, bool) {
 			st, ok := act[id]
 			return st, since, ok
 		})
+	svc.runner, svc.retryPause = gitFixture(t), 0
 	for _, sid := range []string{"idle", "gone", "slow", "worked", "busy"} {
 		spawnTester(t, svc, sid)
 	}
 	is(t, "")(svc.Intake(ctx, "worked", prURL)) // ran intake and planned a check
-	is(t, "")(svc.CheckAdd(ctx, "worked", "a check", "x", ""))
+	is(t, "")(svc.CheckAdd(ctx, "worked", "a check", "x", "", "", "", CheckClassification{Purpose: "explore"}))
 	act["idle"], act["gone"], act["worked"], act["busy"] = "idle", "active", "idle", "active"
 
 	now = now.Add(time.Minute)
@@ -324,7 +331,8 @@ func TestSweepReapsATesterThatNeverRanIntake(t *testing.T) {
 
 func TestSweepSparesATesterWithIntakeOrPrepareInFlight(t *testing.T) {
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	svc := New(NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc := newTestService(t, NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc.runner, svc.retryPause = gitFixture(t), 0
 	spawnTester(t, svc, "s1")
 	for _, verb := range []string{"intake", "prepare"} {
 		svc.busy["run_s1 "+verb] = busyVerb{since: now, done: make(chan struct{})}
@@ -370,7 +378,7 @@ func TestSweepClosesARunWithChecksAtItsDeadline(t *testing.T) {
 				t.Fatalf("state %s (want %s), comments sent %q", got.State, c.want, g.sent)
 			}
 			saved, _ := svc.store.Checks("run_s1")
-			for _, i := range []int{3, 4} {
+			for _, i := range []int{len(checks), len(checks) + 1} {
 				if saved[i].State != CheckSkipped || saved[i].Note != ReasonOutOfTime {
 					t.Errorf("%s = %+v, want skipped %q", saved[i].ID, saved[i], ReasonOutOfTime)
 				}
@@ -378,7 +386,7 @@ func TestSweepClosesARunWithChecksAtItsDeadline(t *testing.T) {
 			for _, f := range []string{"verdict.md", "comment.md"} {
 				exists(t, filepath.Join(runDir, f))
 			}
-			if md, _ := os.ReadFile(filepath.Join(runDir, "verdict.md")); !strings.Contains(string(md), "# Verdict: pass") {
+			if md, _ := os.ReadFile(filepath.Join(runDir, "verdict.md")); !strings.Contains(string(md), "# Verdict: pass") { // c4 was not a claim, so its deadline skip does not cap the claimed result
 				t.Errorf("verdict.md:\n%s", md)
 			}
 			if sweep(svc, nil); len(g.sent) > 1 {
@@ -463,7 +471,8 @@ func TestDeadlineCloseKeepsAReceiptThatArrivedBeforeMarkBusy(t *testing.T) {
 
 func TestSweepReapsAnIntakeOnlyRunAfterSpawnBudgetWithoutActivitySeam(t *testing.T) {
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	svc := New(NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc := newTestService(t, NewStore(t.TempDir()), func() time.Time { return now }).WithGH(fixtureGH(t))
+	svc.runner, svc.retryPause = gitFixture(t), 0
 	spawnTester(t, svc, "s1")
 	is(t, "")(svc.Intake(ctx, "s1", prURL)) // intake ran, no checks followed
 	now = now.Add(SpawnBudget - time.Second)
@@ -479,31 +488,28 @@ func TestSweepReapsAnIntakeOnlyRunAfterSpawnBudgetWithoutActivitySeam(t *testing
 	}
 }
 
-func TestSweepDiscardsARunThatWaitedAWeekForApproval(t *testing.T) {
+func TestSweepKeepsARunWaitingForApprovalUntilTheOwnerActs(t *testing.T) {
 	svc, runDir, g := askSvc(t, true)
 	_, err := svc.Submit(ctx, "s1", "", "")
 	is(t, "")(nil, err)
 	run, _ := svc.store.Get("run_s1")
 
-	svc.clock = func() time.Time { return run.CreatedAt.Add(AwaitingTTL) }
+	svc.clock = func() time.Time { return run.CreatedAt.Add(8*24*time.Hour + time.Second) }
 	if killed := sweep(svc, nil); len(killed) != 0 {
 		t.Fatalf("killed %v", killed)
 	}
-	if got, _ := svc.store.Get("run_s1"); got.State != RunAwaitingApproval {
-		t.Fatalf("a run exactly at the limit was discarded: %s", got.State)
-	}
-
-	svc.clock = func() time.Time { return run.CreatedAt.Add(AwaitingTTL + time.Second) }
-	sweep(svc, nil)
 	got, _ := svc.store.Get("run_s1")
-	if got.State != RunCleaned || got.CommentState != CommentDiscarded || len(g.calls) != 0 {
+	if got.State != RunAwaitingApproval || got.CommentState != CommentAwaiting || len(g.calls) != 0 {
 		t.Fatalf("after a week: %s %q, gh calls %q", got.State, got.CommentState, g.calls)
 	}
-	log, _ := os.ReadFile(filepath.Join(runDir, "comment.log"))
-	if !strings.Contains(string(log), "discarded: nobody approved or discarded this comment within 7 days") {
-		t.Fatalf("comment.log = %q", log)
+	if _, err := os.Stat(filepath.Join(runDir, "comment.log")); !os.IsNotExist(err) {
+		t.Fatalf("automatic discard left comment.log, err=%v", err)
 	}
-	is(t, "TESTING_NOT_AWAITING")(svc.Post(ctx, "run_s1"))
+	discarded, err := svc.Discard(ctx, "run_s1")
+	is(t, "")(nil, err)
+	if discarded.State != RunCleaned || discarded.CommentState != CommentDiscarded {
+		t.Fatalf("owner discard: %+v", discarded)
+	}
 }
 
 // RefuseTester names the verbs only the user may run; a session with a run or a spawn marker is a tester.
@@ -512,10 +518,12 @@ func TestRefuseTesterRefusesARunsOwnSession(t *testing.T) {
 	if err := store.Save(Run{ID: "run_ao-1", SessionID: "ao-1"}); err != nil {
 		t.Fatal(err)
 	}
-	s := New(store, nil)
-	err := s.RefuseTester("ao-1", "post")
-	if err == nil || !strings.Contains(err.Error(), "post") {
-		t.Fatalf("tester session not refused: %v", err)
+	s := newTestService(t, store, nil)
+	for _, verb := range []string{"start", "post", "discard", "prune", "rerun"} {
+		err := s.RefuseTester("ao-1", verb)
+		if err == nil || !strings.Contains(err.Error(), verb) {
+			t.Fatalf("tester session not refused for %s: %v", verb, err)
+		}
 	}
 	for _, id := range []string{"", "ao-orch"} {
 		if err := s.RefuseTester(id, "post"); err != nil {

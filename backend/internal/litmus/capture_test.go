@@ -156,8 +156,8 @@ func TestCheckEndCapturesOpaqueThemePairAndRestoresSystem(t *testing.T) {
 			run, _ := svc.store.Get("run_s1")
 			is(t, "")(nil, svc.store.Save(run))
 			svc.engineFor(run.ID, run.Legs[0]).connectPage = func(context.Context) (*pageCDP, error) { return page, nil }
-			is(t, "")(svc.CheckAdd(ctx, "s1", "accounts", "limits readable", ""))
-			is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+			is(t, "")(svc.CheckAdd(ctx, "s1", "accounts", "limits readable", "", "", "", CheckClassification{Purpose: "explore"}))
+			is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
 			is(t, "")(svc.Drive(ctx, "s1", "click", []string{"e1"}))
 			check, err := svc.CheckEnd(context.Background(), "s1", "c1", CheckPass, "readable", false, 0)
 			is(t, "")(nil, err)
@@ -291,7 +291,8 @@ func TestThemePairRestoresPriorPreferenceAfterCaptureFailure(t *testing.T) {
 			}
 			e.connectPage = func(context.Context) (*pageCDP, error) { return page, nil }
 			shots, note := svc.themePair(ctx, e, "c1")
-			if len(shots) != wantShots || !strings.Contains(note, "capture failed") || active() != prior || e.theme != prior {
+			log, err := os.ReadFile(filepath.Join(svc.store.legDir(run.ID, "head"), "engine.log"))
+			if len(shots) != wantShots || note != themePairFailed || err != nil || !strings.Contains(string(log), "capture failed") || active() != prior || e.theme != prior {
 				t.Fatalf("failure did not restore %s: shots=%v note=%q active=%s", prior, shots, note, active())
 			}
 			wantPreferences := "light,dark"
@@ -401,7 +402,8 @@ func TestThemePairRetainsShotAfterFlattenFailure(t *testing.T) {
 	}
 	e.connectPage = func(context.Context) (*pageCDP, error) { return page, nil }
 	shots, note := svc.themePair(ctx, e, "c1")
-	if len(shots) != 1 || !fileExists(shots[0].Path) || !strings.Contains(note, "cannot sample window background") || strings.Join(preferences(), ",") != "light," {
+	log, err := os.ReadFile(filepath.Join(svc.store.legDir(run.ID, "head"), "engine.log"))
+	if len(shots) != 1 || !fileExists(shots[0].Path) || note != themePairFailed || err != nil || !strings.Contains(string(log), "cannot sample window background") || strings.Join(preferences(), ",") != "light," {
 		t.Fatalf("flatten failure lost theme evidence: shots=%v note=%q preferences=%v", shots, note, preferences())
 	}
 }
@@ -420,8 +422,8 @@ func TestCheckEndSkipsThemePairForSkippedAndUnlaunchedLeg(t *testing.T) {
 				run.Legs[0].State = "prepared"
 				is(t, "")(nil, svc.store.Save(run))
 			}
-			is(t, "")(svc.CheckAdd(ctx, "s1", "unreachable", "screen visible", ""))
-			is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+			is(t, "")(svc.CheckAdd(ctx, "s1", "unreachable", "screen visible", "", "", "", CheckClassification{Purpose: "explore"}))
+			is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
 			result := CheckSkipped
 			wantReceipts := 0
 			if unlaunched {
@@ -447,16 +449,20 @@ func TestCheckEndSkipsThemePairForSkippedAndUnlaunchedLeg(t *testing.T) {
 
 func TestWorthALookNotesStayOutOfVerdict(t *testing.T) {
 	checks := []Check{
-		{ID: "c1", Name: "accounts", Expect: "limits readable", State: CheckPass, Note: "Limits are readable. Worth a look: Similar rows use different summaries.", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
-		{ID: "c2", Name: "accounts", Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", Action: "click", AfterPath: evidenceFile(t)}}},
+		{ID: "c1", Name: "accounts", Expect: "limits readable", State: CheckPass, Claim: true, Note: "Limits are readable. Worth a look: Similar rows use different summaries.", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
+		{ID: "c2", Name: "accounts", Leg: "base", State: CheckFail, Claim: true, Receipts: []Receipt{{Leg: "base", Action: "click", AfterPath: evidenceFile(t)}}},
 	}
 	v := commentVerdict(checks)
 	if v.Overall != CheckPass || len(v.Reasons) != 0 {
 		t.Fatalf("UI note changed verdict: %+v", v)
 	}
 	body := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if strings.Count(body, "Worth a look:") != 1 || !strings.Contains(body, "Similar rows use different summaries.") || !strings.Contains(body, "limits are readable.") {
-		t.Fatalf("comment UI note: %s", body)
+	visible := stripCommentDetails(body)
+	if strings.Count(visible, "Worth a look:") != 1 || !strings.Contains(visible, "Similar rows use different summaries.") || !strings.Contains(visible, "Passed: accounts (main does not do this)") {
+		t.Fatalf("comment visible UI note: %s", visible)
+	}
+	if !strings.Contains(body, "The PR build: pass. Limits are readable. Worth a look: Similar rows use different summaries.") {
+		t.Fatalf("full check notes lost the tester's original note: %s", body)
 	}
 }
 

@@ -39,16 +39,10 @@ func (s *Service) Replay(ctx context.Context, sessionID, checkID, leg string) (m
 		return nil, apierr.NotFound("TESTING_CHECK_NOT_FOUND", "no check "+strconv.Quote(checkID))
 	}
 	head := checks[headIndex]
-	if head.onLeg() != "head" {
-		return nil, invalid("TESTING_REPLAY_HEAD_CHECK", "replay needs a check from the head leg")
-	}
-	if head.State == CheckRunning {
-		return nil, conflict("TESTING_REPLAY_CHECK_STATE", "end the head check before replaying it on base")
+	if err := replayAdmissibility(checks, head); err != nil {
+		return nil, err
 	}
 	headReceipts := slices.DeleteFunc(slices.Clone(head.Receipts), func(r Receipt) bool { return r.onLeg() != "head" })
-	if len(headReceipts) == 0 {
-		return nil, conflict("TESTING_REPLAY_EMPTY", "check "+strconv.Quote(checkID)+" has no head actions to replay")
-	}
 	if _, err := pickLeg(run, "base"); err != nil {
 		return nil, err
 	}
@@ -71,12 +65,7 @@ func (s *Service) Replay(ctx context.Context, sessionID, checkID, leg string) (m
 		}
 		lastSnapshot = snap
 		action := strings.TrimSpace(receipt.Action)
-		v, supported := verbs[action]
-		if !supported || !v.receipt || v.refs > 1 {
-			stopped = fmt.Sprintf("step %d: stopped: action %q cannot be replayed", step, action)
-			lines = append(lines, stopped)
-			break
-		}
+		v := replayVerbs[action]
 		args := slices.Clone(receipt.Args)
 		if v.refs > 0 {
 			ref, ambiguous := replayRef(snapOut, receipt.TargetRole, receipt.TargetName)
@@ -157,13 +146,51 @@ func (s *Service) replayObservation(ctx context.Context, run Run, source Receipt
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	target := refInfo{role: source.TargetRole, name: source.TargetName}
-	rec := s.receipt(ctx, run.ID, e, leg.Name, "observe", nil, target, nil, nil, 0, reason)
+	rec, _ := s.receipt(ctx, run.ID, e, leg.Name, "observe", nil, target, nil, nil, nil, actionTime{}, 0, reason)
 	return rec, nil
+}
+
+// replayAdmissibility is shared by Replay, its ledger mutation and status hints.
+// Validate every head action before opening a base check or driving the app.
+func replayAdmissibility(checks []Check, head Check) error {
+	if head.onLeg() != "head" {
+		return invalid("TESTING_REPLAY_HEAD_CHECK", "replay needs a check from the head leg")
+	}
+	if head.State == CheckRunning {
+		return conflict("TESTING_REPLAY_CHECK_STATE", "end the head check before replaying it on base")
+	}
+	count := 0
+	for _, receipt := range head.Receipts {
+		if receipt.onLeg() != "head" {
+			continue
+		}
+		count++
+		action := strings.TrimSpace(receipt.Action)
+		v, supported := replayVerbs[action]
+		if !supported || !v.receipt || v.refs > 1 {
+			return conflict("TESTING_REPLAY_ACTION", fmt.Sprintf("action %q in check %s cannot be replayed", action, head.ID))
+		}
+	}
+	if count == 0 {
+		return conflict("TESTING_REPLAY_EMPTY", "check "+strconv.Quote(head.ID)+" has no head actions to replay")
+	}
+	if err := validateTwinClassification(checks, head); err != nil {
+		return err
+	}
+	baseIndex := checkTwinIndex(checks, head)
+	for i, check := range checks {
+		if check.State == CheckRunning && i != baseIndex {
+			return conflict("TESTING_CHECK_STATE", "check "+check.ID+" is still running; end it first")
+		}
+	}
+	if baseIndex >= 0 && checks[baseIndex].State != CheckPending && checks[baseIndex].State != CheckRunning {
+		return conflict("TESTING_REPLAY_CHECK_STATE", "base check "+strconv.Quote(checks[baseIndex].ID)+" is already "+string(checks[baseIndex].State))
+	}
+	return nil
 }
 
 // openReplayCheck makes the base twin ready to receive receipts. A pre-added
 // pending twin is reused; an ended twin is never overwritten.
-
 func (s *Service) openReplayCheck(runID string, head Check) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,20 +198,10 @@ func (s *Service) openReplayCheck(runID string, head Check) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	baseIndex := -1
-	for i := range checks {
-		if checks[i].onLeg() != "base" || !strings.EqualFold(checks[i].Name, head.Name) {
-			continue
-		}
-		baseIndex = i
-		break
+	if err := replayAdmissibility(checks, head); err != nil {
+		return "", err
 	}
-	for i, check := range checks {
-		if check.State != CheckRunning || i == baseIndex {
-			continue
-		}
-		return "", conflict("TESTING_CHECK_STATE", "check "+check.ID+" is still running; end it first")
-	}
+	baseIndex := checkTwinIndex(checks, head)
 	if baseIndex >= 0 {
 		if checks[baseIndex].State == CheckPending {
 			checks[baseIndex].State = CheckRunning
@@ -193,13 +210,12 @@ func (s *Service) openReplayCheck(runID string, head Check) (string, error) {
 		if checks[baseIndex].State == CheckRunning {
 			return checks[baseIndex].ID, nil
 		}
-		return "", conflict("TESTING_REPLAY_CHECK_STATE", "base check "+strconv.Quote(checks[baseIndex].ID)+" is already "+string(checks[baseIndex].State))
 	}
 	n := len(checks) + 1
 	for {
 		id := "c" + strconv.Itoa(n)
 		if slices.IndexFunc(checks, func(c Check) bool { return c.ID == id }) < 0 {
-			checks = append(checks, Check{ID: id, Name: head.Name, Expect: head.Expect, State: CheckRunning, Leg: "base"})
+			checks = append(checks, Check{ID: id, Name: head.Name, Expect: head.Expect, State: CheckRunning, Leg: "base", Purpose: head.Purpose, Claim: head.Claim, ClaimSentence: head.ClaimSentence, Risk: head.Risk})
 			return id, s.store.SaveChecks(runID, checks)
 		}
 		n++

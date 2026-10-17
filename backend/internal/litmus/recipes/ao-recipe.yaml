@@ -33,7 +33,12 @@ env:
   # The app's cloud parts (Local/Cloud tabs, sign-in) show only when the cloud offering flag is on, the
   # client identity is the entitled one, and a control plane is configured. The control-plane address is
   # a baked default in backend/internal/config/config.go (production), so these two switch the gate on
-  # for the test windows. No account is involved; sign-in stays a button.
+  # for the test windows.
   AO_CLIENT: eleven_x
   AO_CLOUD_OFFERING: "on"
 isolation: true            # adds the AO_* block that keeps the target off the real AO
+notes: |
+  You may create AO Cloud projects.
+  Clone a repo accepts a typed URL and destination, avoiding the native folder picker.
+  For waits under about 3 minutes, wait or trigger directly;
+  force update checks with GET `/api/v1/agents/{agent}/update-advisory?refresh=true` on the leg's daemon. Say which you did in the check note.

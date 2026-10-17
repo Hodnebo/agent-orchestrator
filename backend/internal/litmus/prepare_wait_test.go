@@ -127,6 +127,10 @@ func TestPrepareStartsTheRunBudgetWhenTheBuildsAreReady(t *testing.T) {
 	}
 	at = run.Deadline.Add(time.Second)
 	is(t, "TESTING_RUN_CLOSED")(svc.Status(ctx, "s1"))
+	if saved, _ := svc.store.Get(run.ID); saved.State != RunPrepared {
+		t.Fatalf("status changed run state to %q", saved.State)
+	}
+	sweep(svc, nil)
 	if saved, _ := svc.store.Get(run.ID); saved.State != RunExpired {
 		t.Fatalf("state %q after the moved deadline", saved.State)
 	}

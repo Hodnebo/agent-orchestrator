@@ -231,6 +231,8 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				replay := middleware.Timeout(max(timeout, litmus.RunBudget+time.Minute))(next)
+				drive := middleware.Timeout(max(timeout, litmus.DriveBudget))(next)
+				relaunch := middleware.Timeout(max(timeout, litmus.DefaultLaunchBudget+10*time.Second))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
@@ -238,6 +240,14 @@ func (a *API) Register(root chi.Router) {
 					}
 					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/testing/checks/{id}/replay" {
 						replay.ServeHTTP(w, req)
+						return
+					}
+					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/testing/drive" {
+						drive.ServeHTTP(w, req)
+						return
+					}
+					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/testing/relaunch" {
+						relaunch.ServeHTTP(w, req)
 						return
 					}
 					ordinary.ServeHTTP(w, req)

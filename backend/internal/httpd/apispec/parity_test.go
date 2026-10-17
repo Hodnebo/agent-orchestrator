@@ -45,12 +45,13 @@ func TestRouteSpecParity(t *testing.T) {
 	// mountControl, skips mounting entirely on a nil controller) registers its
 	// routes here — otherwise the mobile spec operations below would have no
 	// mounted route to match.
+	home := t.TempDir()
 	deps := httpd.APIDeps{
 		Mobile:       &controllers.MobileController{},
 		DeviceRoster: stubDeviceRoster{},
 		DeviceLive:   stubDeviceLive{},
 		// Testing mounts only when wired; its operations are in the spec unconditionally.
-		Testing: litmus.New(litmus.NewStore(t.TempDir()), nil),
+		Testing: litmus.New(litmus.NewStore(t.TempDir()), nil).WithOwnerHome(home, []string{"HOME=" + home}),
 	}
 	router := httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{})
 

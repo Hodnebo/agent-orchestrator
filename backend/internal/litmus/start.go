@@ -13,7 +13,7 @@ import (
 )
 
 // Harness is the agent a testing worker runs on when nothing else is chosen. Claude Code enforces the tool lists
-// and dontAsk mode of ToolPolicy; HarnessCodex has no such lists, so only GuardEnv and the skill's rules bind it.
+// and dontAsk mode of ToolPolicy; HarnessCodex has no such lists and follows the skill's rules.
 const Harness = "claude-code"
 
 // HarnessCodex is the other agent a testing worker may run on.
@@ -32,12 +32,6 @@ type SpawnRequest struct {
 
 // Spawner launches the testing worker's AO session (kind worker, mode tui) and returns its id.
 type Spawner func(ctx context.Context, req SpawnRequest) (sessionID string, err error)
-
-// ShellRule is the sentence the spawn prompt and SKILL.md share: what the tester's open toolset is for, and its limits.
-const ShellRule = "You have a normal shell and the usual tools: run any command, read code and logs. Put scratch files in `scratch/`; never edit the files Litmus writes in the run folder. Build, open and drive the two app windows only through `ao testing`, leave the checkouts as Litmus made them, and never push or post to GitHub."
-
-// ExploreRule is the sentence that tells the tester it is driving a real app and may reach for settings.
-const ExploreRule = "Explore the app the way a user would: menus, settings, modes. If a feature hides behind a setting, turn the setting on and say so in your note."
 
 // StartRequest names the PR to test. An empty Harness means the project's Litmus setting, then its worker harness when
 // that is supported, then claude-code.
@@ -111,7 +105,7 @@ func (s *Service) Start(ctx context.Context, req StartRequest) (Started, error) 
 		ProjectID: strings.TrimSpace(req.ProjectID),
 		Harness:   harness,
 		Name:      name,
-		Prompt:    fmt.Sprintf("Test PR %s. Start with `ao testing intake %s`. %s %s", url, url, ShellRule, ExploreRule),
+		Prompt:    fmt.Sprintf("Test PR %s. Start with `ao testing intake %s`.", url, url),
 	})
 	if err != nil {
 		return Started{}, err

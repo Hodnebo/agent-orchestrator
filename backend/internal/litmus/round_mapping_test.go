@@ -81,7 +81,7 @@ func roundBugChecks(names ...string) []Check {
 }
 
 func TestPerBugRetryRetainsAllCommentIds(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	old := roundMappingRun(t, svc, "old", 0)
 	old.Comments = []PostedComment{{Name: "A", ID: 101, Number: 1}, {Name: "B", ID: 102, Number: 2}}
 	if err := svc.store.Save(old); err != nil {
@@ -110,7 +110,7 @@ func TestPerBugRetryRetainsAllCommentIds(t *testing.T) {
 }
 
 func TestPerBugFixedHistorySurvivesPassAndRecurrence(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	old := roundMappingRun(t, svc, "old", 0)
 	old.Comments = []PostedComment{{Name: "A", ID: 101, Number: 1}}
 	if err := svc.store.Save(old); err != nil {
@@ -144,7 +144,7 @@ func TestPerBugFixedHistorySurvivesPassAndRecurrence(t *testing.T) {
 	if _, _, err := svc.publishCommentSet(ctx, run, v, evidence{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if g.posts != 1 || !strings.HasPrefix(g.bodies[101], "Bug 1 of 1:") {
+	if g.posts != 1 || !strings.HasPrefix(g.bodies[101], "**Result: something broke; do not merge yet.**\n\nBug 1 of 1:") {
 		t.Fatalf("recurrence created a new bug comment: posts=%d body=%q", g.posts, g.bodies[101])
 	}
 	markers := 0
@@ -157,7 +157,7 @@ func TestPerBugFixedHistorySurvivesPassAndRecurrence(t *testing.T) {
 }
 
 func TestPostKeepsCommentOff(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	run := roundMappingRun(t, svc, "off", 0)
 	run.State, run.Comment = RunAwaitingApproval, CommentOff
 	if err := svc.store.Save(run); err != nil {

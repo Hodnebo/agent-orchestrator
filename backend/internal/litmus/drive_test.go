@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // fakeEngine stands in for the agent-browser binary: it records each client call
@@ -52,12 +54,22 @@ func (f *fakeEngine) exec(ctx context.Context, _ string, args, env []string) (st
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
+	if args[2] == "tab" {
+		if out, ok := f.out["tab"]; ok {
+			return out, nil
+		}
+		return "→ [t1] App - http://app.test\n", nil
+	}
 	return f.out[args[2]], nil
 }
 
+// words omits repeated target-binding calls; TestEnginePinsTheAppTab checks binding separately.
 func (f *fakeEngine) words() string {
 	var w []string
 	for _, c := range f.calls {
+		if c[0] == "tab" && (len(w) == 0 || w[len(w)-1] != "stream") {
+			continue
+		}
 		w = append(w, c[0])
 	}
 	return strings.Join(w, ",")
@@ -78,15 +90,41 @@ func driveSvc(t *testing.T) (*Service, *fakeEngine, *fakeRunner, string) {
 	svc, now := newSvc(t)
 	f, r := &fakeEngine{fail: map[string]error{}, out: map[string]string{}}, &fakeRunner{}
 	svc.engExec, svc.runner, svc.binary = f.exec, r, "/fake/agent-browser"
+	svc.sys = (&fakeSys{started: map[int]time.Time{110: *now}, cmds: map[int]string{110: "Electron"}}).ops()
 	t.Cleanup(func(d time.Duration) func() { return func() { settleDelay = d } }(settleDelay))
 	settleDelay = 0
 	t.Cleanup(func() { svc.closeEngines("run_s1") })
 	run := Run{ID: "run_s1", SessionID: "s1", State: RunRunning, Deadline: now.Add(RunBudget)}
-	leg, err := svc.attachEngine(ctx, run.ID, Leg{Name: "head", State: "running", DebugPort: 9400})
+	leg, err := svc.attachEngine(ctx, run.ID, Leg{Name: "head", State: "running", DebugPort: 9400, Engine: &EngineInfo{AppOrigin: "http://app.test"}})
 	is(t, "")(nil, err)
 	run.Legs = []Leg{leg}
 	is(t, "")(nil, svc.store.Save(run))
+	legDir := svc.store.legDir(run.ID, "head")
+	is(t, "")(nil, os.MkdirAll(legDir, 0o750))
+	is(t, "")(nil, writeOwned(legDir, Owned{RunID: run.ID, Leg: "head", State: "running", Electron: Proc{PID: 110, Start: *now}}))
+	svc.engineFor(run.ID, leg).identity = fakeDaemonIdentity
 	return svc, f, r, filepath.Join(svc.store.root, run.ID)
+}
+
+func fakeDaemonIdentity() (daemonIdentity, error) {
+	return daemonIdentity{pid: 1, start: time.Unix(1, 0)}, nil
+}
+
+func TestCompareValidatesCheckBeforeLegState(t *testing.T) {
+	svc, _ := newSvc(t)
+	is(t, "")(svc.Intake(ctx, "s1", prURL))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu", "opens", "base", "", "", CheckClassification{Purpose: "explore"}))
+	_, err := svc.Compare(ctx, "s1", "c9")
+	is(t, "TESTING_CHECK_NOT_FOUND")(nil, err)
+	_, err = svc.Compare(ctx, "s1", "c1")
+	is(t, "TESTING_COMPARE_INCOMPLETE")(nil, err)
+	checks, err := svc.store.Checks("run_s1")
+	is(t, "")(nil, err)
+	checks[0].Receipts = []Receipt{{Leg: "base", Seq: 1, AfterPath: evidenceFile(t)}}
+	checks = append(checks, Check{ID: "c2", Name: "menu", Receipts: []Receipt{{Leg: "head", Seq: 2, AfterPath: evidenceFile(t)}}})
+	is(t, "")(nil, svc.store.SaveChecks("run_s1", checks))
+	_, err = svc.Compare(ctx, "s1", "c1")
+	is(t, "TESTING_LEG_NOT_LAUNCHED")(nil, err)
 }
 
 func TestDriveMapsVerbsAndNormalizesRefs(t *testing.T) {
@@ -95,7 +133,7 @@ func TestDriveMapsVerbsAndNormalizesRefs(t *testing.T) {
 		{"snapshot -i", "snapshot -i"}, {"click e12", "click @e12"}, {"click @e12", "click @e12"}, {"fill e3 hi", "fill @e3 hi"},
 		{"type @e3 x", "type @e3 x"}, {"press Enter", "press Enter"}, {"drag e1 e2", "drag @e1 @e2"}, {"wait --text Done", "wait --text Done"},
 		{"wait 500", "wait 500"}, {"console", "console"}, {"errors", "errors"}, {"network", "network requests"},
-		{"network --filter api", "network requests --filter api"}, {"tab", "tab list"}, {"tab list", "tab list"},
+		{"network --filter api", "network requests --filter api"}, {"tab", "tab list"}, {"tab list", "tab list"}, {"tab --help", "tab list --help"},
 		{"screenshot a.png", "screenshot " + d + "/a.png"},
 	} {
 		f := strings.Fields(c.in)
@@ -156,7 +194,9 @@ func TestDriveClickTabDriftReturnsErrorWithoutClick(t *testing.T) {
 	run, err := svc.store.Get("run_s1")
 	is(t, "")(nil, err)
 	e := svc.engineFor(run.ID, run.Legs[0])
+	e.AppOrigin = "http://localhost:5173"
 	e.last = "before.png" // avoid a before-shot, so the first click-point call observes the drift
+	e.refs = map[string]refInfo{"@e1": {role: "button", name: "Continue"}}
 	_, err = svc.Drive(ctx, "s1", "click", []string{"e1"})
 	is(t, "TESTING_ENGINE_FAILED")(nil, err)
 	if !strings.Contains(err.Error(), errTabDrift.Error()) {
@@ -189,6 +229,7 @@ func TestDriveClickPointFailuresAreBestEffortAndLogged(t *testing.T) {
 			is(t, "")(nil, err)
 			e := svc.engineFor(run.ID, run.Legs[0])
 			e.last = "before.png" // skip the unrelated first-action before-shot
+			e.refs = map[string]refInfo{"@e1": {role: "button", name: "Continue"}}
 			if _, err := svc.Drive(ctx, "s1", "click", []string{"e1"}); err != nil {
 				t.Fatalf("click failed after best-effort point failure: %v", err)
 			}
@@ -204,17 +245,21 @@ func TestDriveClickPointFailuresAreBestEffortAndLogged(t *testing.T) {
 
 func TestDriveRefusals(t *testing.T) {
 	svc, f, _, _ := driveSvc(t)
-	base, err := svc.attachEngine(ctx, "run_s1", Leg{Name: "base", DebugPort: 9401}) // created but not launched
+	base, err := svc.attachEngine(ctx, "run_s1", Leg{Name: "base", DebugPort: 9401, Engine: &EngineInfo{AppOrigin: "http://app.test"}}) // created but not launched
 	is(t, "")(nil, err)
+	svc.engineFor("run_s1", base).identity = fakeDaemonIdentity
 	run, _ := svc.store.Get("run_s1")
 	run.Legs = append(run.Legs, base)
 	is(t, "")(nil, svc.store.Save(run))
 
 	for _, c := range []struct{ want, in string }{
-		{"TESTING_ACTION_UNSUPPORTED", "open https://example.com"}, {"TESTING_ACTION_UNSUPPORTED", "eval 1"}, {"TESTING_ACTION_UNSUPPORTED", "cookies"},
-		{"TESTING_ARGS_INVALID", "click"}, {"TESTING_ARGS_INVALID", "click button"}, {"TESTING_ARGS_INVALID", "fill e1"},
-		{"TESTING_ARGS_INVALID", "press --cdp=http://x"}, {"TESTING_ARGS_INVALID", "snapshot --session x"}, {"TESTING_ARGS_INVALID", "tab new"},
-		{"TESTING_ACTION_UNSUPPORTED", "record start v.mp4"}, {"TESTING_ACTION_UNSUPPORTED", "record stop"},
+		{"TESTING_ACTION_UNSUPPORTED", "connect 9222"}, {"TESTING_ACTION_UNSUPPORTED", "profiles"},
+		{"TESTING_ACTION_UNSUPPORTED", "cookies import /owner/cookies"}, {"TESTING_ACTION_UNSUPPORTED", "auth login owner"},
+		{"TESTING_ACTION_UNSUPPORTED", "install"}, {"TESTING_ACTION_UNSUPPORTED", "clipboard read"},
+		{"TESTING_ACTION_UNSUPPORTED", "press --cdp=http://x"}, {"TESTING_ACTION_UNSUPPORTED", "snapshot --session x"},
+		{"TESTING_ACTION_UNSUPPORTED", "snapshot --config /owner/config"}, {"TESTING_ACTION_UNSUPPORTED", "tab new"},
+		{"TESTING_ACTION_UNSUPPORTED", "click --new-tab e1"}, {"TESTING_ACTION_UNSUPPORTED", "click e1 --new-window"},
+		{"TESTING_ACTION_UNSUPPORTED", "cdp Target.createTarget"}, {"TESTING_ACTION_UNSUPPORTED", "close --all"},
 		{"TESTING_PATH_INVALID", "screenshot ../x.png"}, {"TESTING_PATH_INVALID", "screenshot /etc/x.png"},
 		{"TESTING_LEG_NOT_LAUNCHED", "snapshot --leg base"}, {"TESTING_LEG_NOT_LAUNCHED", "snapshot --leg=main"},
 	} {
@@ -266,10 +311,10 @@ func TestDriveReceiptsSequenceAndAttach(t *testing.T) {
 	if res["after"] != "receipts/1-after.png" { // the reply names the shot to Read
 		t.Fatalf("reply names the after-shot %v", res["after"])
 	}
-	if got, want := f.words(), "stream,tab,scrollintoview,get,screenshot,click,wait,screenshot,errors,console,snapshot"; got != want {
+	if got, want := f.words(), "stream,tab,get,screenshot,click,wait,screenshot,errors,console,snapshot"; got != want {
 		t.Fatalf("engine calls %s, want %s", got, want)
 	}
-	if w := f.find("wait"); !reflect.DeepEqual(w, []string{"wait", "--load", "load"}) {
+	if w := f.find("wait"); !reflect.DeepEqual(w, []string{"wait", "--load", "load", "--timeout", strconv.FormatInt(settleLoad.Milliseconds(), 10)}) {
 		t.Fatalf("settle ran %v", w)
 	}
 	if r.count("sips -Z 1320") != 2 {
@@ -279,8 +324,8 @@ func TestDriveReceiptsSequenceAndAttach(t *testing.T) {
 		t.Fatalf("console tail %q", rec.ConsoleTail)
 	}
 
-	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", ""))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
 	f.calls = nil
 	res, err = svc.Drive(ctx, "s1", "fill", []string{"e2", "hi"})
 	rec, _ = res["receipt"].(actionRec)
@@ -303,15 +348,15 @@ func TestDriveReceiptsSequenceAndAttach(t *testing.T) {
 	if _, named := res["after"]; named {
 		t.Errorf("a missing shot is named in the reply: %v", res["after"])
 	}
-	if rec, _ = res["receipt"].(actionRec); err != nil || rec.Seq != 3 || rec.After != "" || len(rec.Warnings) == 0 {
+	if rec, _ = res["receipt"].(actionRec); err != nil || rec.Seq != 4 || rec.After != "" || len(rec.Warnings) == 0 {
 		t.Fatalf("receipt without a shot: %+v err %v", rec, err)
 	}
-	f.fail["click"] = errors.New("stale ref") // a failed action leaves no receipt
+	f.fail["click"] = errors.New("stale ref") // a failed action still gets a receipt
 	is(t, "TESTING_ENGINE_FAILED")(svc.Drive(ctx, "s1", "click", []string{"e9"}))
 
 	data, _ := os.ReadFile(filepath.Join(runDir, "actions.jsonl"))
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 3 {
+	if len(lines) != 5 {
 		t.Fatalf("actions.jsonl:\n%s", data)
 	}
 	var first map[string]any
@@ -328,19 +373,52 @@ func TestDriveReceiptsSequenceAndAttach(t *testing.T) {
 	// a daemon restart keeps counting
 	svc.seqs = map[string]int{}
 	f.fail = map[string]error{}
-	if res, _ = svc.Drive(ctx, "s1", "check", []string{"e4"}); res["receipt"].(actionRec).Seq != 4 {
+	if res, _ = svc.Drive(ctx, "s1", "check", []string{"e4"}); res["receipt"].(actionRec).Seq != 6 {
 		t.Fatalf("seq after restart: %+v", res["receipt"])
 	}
 	is(t, "")(svc.CheckEnd(ctx, "s1", "c1", CheckPass, "", false, 0))
-	if v, err := svc.Submit(ctx, "s1", "", ""); err != nil || v.Overall != CheckPartial { // the attached receipt satisfies submit; the base was never looked at
-		t.Fatalf("submit %+v err %v", v, err)
+	is(t, "TESTING_NO_CLAIM_CHECKS")(svc.Submit(ctx, "s1", "", "")) // this fixture deliberately classifies the check as exploration
+}
+
+func TestDriveAttachesReceiptsOnlyToChecksOnTheSameLeg(t *testing.T) {
+	for _, tc := range []struct{ checkLeg, actionLeg string }{
+		{"base", "head"}, {"head", "base"}, {"base", "base"}, {"", "head"},
+	} {
+		t.Run(tc.checkLeg+"/"+tc.actionLeg, func(t *testing.T) {
+			svc, _, _, runDir := driveSvc(t)
+			run, err := svc.store.Get("run_s1")
+			is(t, "")(nil, err)
+			base, err := svc.attachEngine(ctx, run.ID, Leg{Name: "base", State: "running", DebugPort: 9401, Engine: &EngineInfo{AppOrigin: "http://app.test"}})
+			is(t, "")(nil, err)
+			svc.engineFor(run.ID, base).identity = fakeDaemonIdentity
+			run.Legs = append(run.Legs, base)
+			is(t, "")(nil, svc.store.Save(run))
+			is(t, "")(svc.CheckAdd(ctx, "s1", "menu", "opens", tc.checkLeg, "", "", CheckClassification{Purpose: "explore"}))
+			is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
+			res, err := svc.Drive(ctx, "s1", "press", []string{"Enter", "--leg", tc.actionLeg})
+			is(t, "")(nil, err)
+			checks, err := svc.store.Checks(run.ID)
+			is(t, "")(nil, err)
+			wantUnassigned := checks[0].onLeg() != tc.actionLeg
+			rec := res["receipt"].(actionRec)
+			if rec.Unassigned != wantUnassigned || (len(checks[0].Receipts) == 0) != wantUnassigned {
+				t.Fatalf("receipt %+v, check %+v; want unassigned %t", rec, checks[0], wantUnassigned)
+			}
+			data, err := os.ReadFile(filepath.Join(runDir, "actions.jsonl"))
+			is(t, "")(nil, err)
+			var saved actionRec
+			is(t, "")(nil, json.Unmarshal(data, &saved))
+			if saved.Unassigned != wantUnassigned || saved.Leg != tc.actionLeg {
+				t.Fatalf("actions.jsonl lost the receipt's leg or assignment: %+v", saved)
+			}
+		})
 	}
 }
 
 func TestDriveFailedShotCannotEndCheck(t *testing.T) {
 	svc, f, _, _ := driveSvc(t)
-	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", ""))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
 	f.fail["screenshot"] = errors.New("capture failed")
 	res, err := svc.Drive(ctx, "s1", "click", []string{"e1"})
 	if rec, ok := res["receipt"].(actionRec); err != nil || !ok || rec.After != "" || len(rec.Warnings) == 0 {
@@ -358,6 +436,24 @@ func TestDriveFailedShotCannotEndCheck(t *testing.T) {
 	is(t, "")(svc.CheckEnd(ctx, "s1", "c1", CheckSkipped, "capture failed", false, 0))
 }
 
+func TestDriveLegDownReceiptStopsCaptureCascade(t *testing.T) {
+	svc, f, _, _ := driveSvc(t)
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
+	f.fail["wait"] = errLegDown
+	res, err := svc.Drive(ctx, "s1", "press", []string{"Enter"})
+	if err == nil {
+		t.Fatal("leg-down press unexpectedly succeeded")
+	}
+	rec, ok := res["receipt"].(actionRec)
+	if !ok || !strings.Contains(rec.Reason, "the head app is not responding") || !strings.Contains(rec.Reason, "ao testing relaunch head") || rec.After != "" {
+		t.Fatalf("leg-down receipt %+v, err %v", res, err)
+	}
+	if f.find("errors") != nil || f.find("console") != nil {
+		t.Fatalf("leg-down receipt continued browser probes: %v", f.calls)
+	}
+}
+
 func TestEngineEnvAndSocketGuard(t *testing.T) {
 	t.Setenv("AO_PORT", "3002")
 	t.Setenv("ANTHROPIC_API_KEY", "secret")
@@ -370,7 +466,8 @@ func TestEngineEnvAndSocketGuard(t *testing.T) {
 	env := e.env()
 	for k, want := range map[string]string{
 		"AGENT_BROWSER_CDP": "http://127.0.0.1:9400", "AGENT_BROWSER_SOCKET_DIR": e.SocketDir, "AGENT_BROWSER_SESSION": e.Session, "AGENT_BROWSER_NAMESPACE": e.Namespace,
-		"AGENT_BROWSER_CONTENT_BOUNDARIES": "1", "AGENT_BROWSER_MAX_OUTPUT": "50000", "AGENT_BROWSER_IDLE_TIMEOUT_MS": "300000", "AGENT_BROWSER_AUTO_CONNECT": "0",
+		"AO_LITMUS_CWD": "/run/r1", "AGENT_BROWSER_DOWNLOAD_PATH": "/run/r1/downloads",
+		"AGENT_BROWSER_CONTENT_BOUNDARIES": "1", "AGENT_BROWSER_MAX_OUTPUT": "50000", "AGENT_BROWSER_IDLE_TIMEOUT_MS": "0", "AGENT_BROWSER_AUTO_CONNECT": "0",
 		"HOME": e.home(), "TMPDIR": e.home(), "AGENT_BROWSER_CONFIG": filepath.Join(e.home(), "config.json"), "AO_PORT": "", "ANTHROPIC_API_KEY": "",
 	} {
 		if got := envValue(env, k); got != want {
@@ -390,7 +487,8 @@ func TestEngineEnvAndSocketGuard(t *testing.T) {
 
 func TestEngineTimeoutCloseAndMissingBinary(t *testing.T) {
 	f := &fakeEngine{}
-	e := newEngine(EngineInfo{Binary: "/fake/agent-browser", RunDir: t.TempDir(), Session: "s", Namespace: "s", SocketDir: "/tmp/litmus-nothere"}, f.exec)
+	e := newEngine(EngineInfo{Binary: "/fake/agent-browser", RunDir: t.TempDir(), Session: "s", Namespace: "s", SocketDir: "/tmp/litmus-nothere", AppOrigin: "http://app.test"}, f.exec)
+	e.identity = fakeDaemonIdentity
 	begin := time.Now()
 	if _, err := e.Run(ctx, 50*time.Millisecond, "hang"); err == nil || !strings.Contains(err.Error(), "agent-browser hang") || time.Since(begin) > 2*time.Second {
 		t.Fatalf("timeout err = %v after %s", err, time.Since(begin))
@@ -429,38 +527,63 @@ func TestEnginePinsTheAppTab(t *testing.T) {
 		list, calls string
 		moved       bool
 	}{
-		{"→ [t1] App - http://localhost:5173/#/x\n  [t2] about:blank - about:blank\n", "stream,tab,tab,snapshot,tab,tab,click", false},  // still on the app: refs stay valid
-		{"  [t1] App - http://localhost:5173/#/x\n→ [t2] about:blank - about:blank\n", "stream,tab,tab,tab,snapshot,tab,tab,tab", true}, // a session's hidden page took over: back to t1, refs gone
+		{"→ [t1] App - http://localhost:5173/#/x\n  [t2] about:blank - about:blank\n", "stream,tab,snapshot,click", false}, // still on the app: refs stay valid
+		{"  [t1] App - http://localhost:5173/#/x\n→ [t2] about:blank - about:blank\n", "stream,tab,snapshot", true},        // a session's hidden page took over: back to t1, refs gone
 	} {
 		f := &fakeEngine{out: map[string]string{"tab": c.list}}
-		e := newEngine(EngineInfo{Binary: "/fake/agent-browser", RunDir: t.TempDir(), Session: "s", Namespace: "s"}, f.exec)
+		e := newEngine(EngineInfo{Binary: "/fake/agent-browser", RunDir: t.TempDir(), Session: "s", Namespace: "s", AppOrigin: "http://localhost:5173"}, f.exec)
 		var err error
 		for _, a := range [][]string{{"snapshot"}, {"tab", "list"}, {"click", "@e1"}} {
 			_, err = e.Run(ctx, time.Second, a...)
 		}
-		if f.words() != c.calls || (err != nil) != c.moved || (c.moved && (!strings.Contains(err.Error(), "re-selected") || !reflect.DeepEqual(f.calls[3], []string{"tab", "t1"}))) {
+		if f.words() != c.calls || (err != nil) != c.moved || (c.moved && (!strings.Contains(err.Error(), "re-selected") || !slices.ContainsFunc(f.calls, func(args []string) bool { return reflect.DeepEqual(args, []string{"tab", "t1"}) }))) {
 			t.Errorf("calls %s (%v), err %v; want %s", f.words(), f.calls, err, c.calls)
 		}
 	}
 }
 
+func TestEngineTabHelpDoesNotNeedAnAppTab(t *testing.T) {
+	f := &fakeEngine{out: map[string]string{"tab": "tab help\n"}}
+	e := newEngine(EngineInfo{Binary: "/fake/agent-browser", RunDir: t.TempDir(), Session: "s", Namespace: "s"}, f.exec)
+	out, err := e.Run(ctx, time.Second, "tab", "--help")
+	if err != nil || out != "tab help\n" {
+		t.Fatalf("tab help output %q, err %v", out, err)
+	}
+	for _, call := range f.calls {
+		if slices.Equal(call, []string{"tab", "list"}) {
+			t.Fatalf("tab help performed app probe: %v", f.calls)
+		}
+	}
+	if !slices.ContainsFunc(f.calls, func(call []string) bool { return slices.Equal(call, []string{"tab", "--help"}) }) {
+		t.Fatalf("tab help command missing: %v", f.calls)
+	}
+}
+
 func TestCleanupClosesEngineAndKillsItsDaemon(t *testing.T) {
 	svc, f, _, _ := driveSvc(t)
-	fs := &fakeSys{cmds: map[int]string{4242: "/fake/agent-browser", 4343: "/bin/other"}}
+	fs := &fakeSys{cmds: map[int]string{4242: "/fake/agent-browser", 4343: "/bin/other"}, started: map[int]time.Time{4242: time.Now().Add(-time.Hour)}}
 	svc.sys = fs.ops()
+	kill := svc.sys.kill
+	svc.sys.kill = func(pid int) {
+		kill(pid)
+		delete(fs.cmds, pid)
+		delete(fs.started, pid)
+	}
 	run, _ := svc.store.Get("run_s1")
 	info := run.Legs[0].Engine
 	pidDir := filepath.Join(info.SocketDir, "namespaces", info.Namespace, "run")
 	is(t, "")(nil, os.MkdirAll(pidDir, 0o700))
 	is(t, "")(nil, os.WriteFile(filepath.Join(pidDir, info.Namespace+".pid"), []byte("4242"), 0o600))
-	is(t, "")(nil, os.WriteFile(filepath.Join(pidDir, "other.pid"), []byte("4343"), 0o600)) // not an engine process: left alone
 
 	out, err := svc.Cleanup(ctx, "s1")
 	if err != nil || out.State != RunCleaned {
 		t.Fatalf("cleanup %+v err %v", out, err)
 	}
-	if f.words() != "close" || fmt.Sprint(fs.log) != "[kill 4242]" {
+	if f.words() != "" || fmt.Sprint(fs.log) != "[kill 4242 rm 110]" {
 		t.Fatalf("engine calls %q, process log %v", f.words(), fs.log)
+	}
+	if fs.cmds[4343] != "/bin/other" {
+		t.Fatal("cleanup changed an unrelated process")
 	}
 	if _, err := os.Stat(info.SocketDir); !os.IsNotExist(err) {
 		t.Fatalf("socket dir left behind: %v", err)
@@ -519,8 +642,8 @@ func TestAfterShotRetriesOnceWhenTheWindowDoesNotPaint(t *testing.T) {
 func TestDriveNamesTheTargetFromTheLastSnapshot(t *testing.T) {
 	svc, f, _, runDir := driveSvc(t)
 	f.out["snapshot"] = "- generic [ref=e1]\n  - button \"Go back\" [ref=e7]\n  - textbox \"Message the agent\" [ref=e9]\n  - button [disabled, ref=e11]\n"
-	is(t, "")(svc.CheckAdd(ctx, "s1", "history", "going back works", ""))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "history", "going back works", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
 	drive := func(action string, args ...string) actionRec {
 		t.Helper()
 		res, err := svc.Drive(ctx, "s1", action, args)
@@ -554,7 +677,7 @@ func TestDriveNamesTheTargetFromTheLastSnapshot(t *testing.T) {
 		t.Fatalf("receipts %+v", rc)
 	}
 	data, _ := os.ReadFile(filepath.Join(runDir, "actions.jsonl"))
-	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 6 || !strings.Contains(lines[1], `"targetRole":"button","targetName":"Go back"`) || strings.Contains(lines[0], "target") {
+	if lines := strings.Split(strings.TrimSpace(string(data)), "\n"); len(lines) != 7 || !strings.Contains(lines[2], `"targetRole":"button","targetName":"Go back"`) || strings.Contains(lines[0], "target") {
 		t.Fatalf("actions.jsonl:\n%s", data)
 	}
 }
@@ -581,8 +704,8 @@ func TestDriveClickRecordsItsPoint(t *testing.T) {
 	if want := (&clickAt{X: 60, Y: 40, W: 1280, H: 720}); err != nil || !reflect.DeepEqual(rec.Click, want) {
 		t.Fatalf("click point %+v, want %+v, err %v", rec.Click, want, err)
 	}
-	if got := f.find("get"); !reflect.DeepEqual(got, []string{"get", "box", "@e1"}) {
-		t.Fatalf("box asked as %v", got)
+	if !slices.ContainsFunc(f.calls, func(call []string) bool { return reflect.DeepEqual(call, []string{"get", "box", "@e1"}) }) {
+		t.Fatalf("box lookup missing: %v", f.calls)
 	}
 	if acts := readActions(runDir); len(acts) != 1 || !reflect.DeepEqual(acts[0].Click, rec.Click) {
 		t.Fatalf("actions.jsonl lost the point: %+v", acts)
@@ -594,12 +717,444 @@ func TestDriveClickRecordsItsPoint(t *testing.T) {
 		t.Fatalf("plain text box: %+v", rec.Click)
 	}
 	f.fail["get"] = errors.New("no such element") // best effort: the click still goes ahead, without a point
+	e.refs = map[string]refInfo{"@e1": {role: "button", name: "Continue"}}
 	res, err = svc.Drive(ctx, "s1", "click", []string{"e1"})
 	if rec, _ = res["receipt"].(actionRec); err != nil || rec.Click != nil {
 		t.Fatalf("a failed box lookup: %+v, err %v", rec.Click, err)
 	}
 	f.calls = nil
+	e.refs = map[string]refInfo{"@e1": {role: "textbox", name: "Prompt"}}
 	if _, err := svc.Drive(ctx, "s1", "fill", []string{"e1", "x"}); err != nil || f.find("get") != nil {
 		t.Fatalf("fill unexpectedly read a target box: %v %v", f.calls, err)
 	}
+}
+
+func TestDriveClickScrollsOnlyWhenTheInitialBoxIsOutside(t *testing.T) {
+	svc, f, _, _ := driveSvc(t)
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
+	f.out["get"] = `{"x":-20,"y":20,"width":100,"height":40}`
+	f.hook = func(args []string) {
+		if len(args) > 0 && args[0] == "scrollintoview" {
+			f.out["get"] = `{"x":40,"y":30,"width":100,"height":40}`
+		}
+	}
+	e := svc.engineFor("run_s1", Leg{Name: "head"})
+	e.connectPage = func(context.Context) (*pageCDP, error) {
+		return &pageCDP{request: func(_ context.Context, method string, params, out any) error {
+			if method != "Runtime.evaluate" || params.(map[string]any)["expression"] != "[innerWidth, innerHeight]" {
+				t.Fatalf("unexpected viewport request: %s %v", method, params)
+			}
+			data, _ := json.Marshal(map[string]any{"result": map[string]any{"value": []float64{1280, 720}}})
+			return json.Unmarshal(data, out)
+		}}, nil
+	}
+	res, err := svc.Drive(ctx, "s1", "click", []string{"e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := res["receipt"].(actionRec)
+	if rec.Box == nil || rec.Box.X != -20 || rec.Click == nil || rec.Click.X != 90 {
+		t.Fatalf("initial box or post-scroll point lost: box=%+v click=%+v calls=%v", rec.Box, rec.Click, f.calls)
+	}
+	checks, err := svc.store.Checks("run_s1")
+	if err != nil || len(checks) != 1 || len(checks[0].Receipts) != 1 || checks[0].Receipts[0].Box == nil || checks[0].Receipts[0].Box.X != 40 {
+		t.Fatalf("receipt crop box did not use post-scroll bounds: checks=%+v err=%v", checks, err)
+	}
+	if got := f.words(); !strings.Contains(got, "get,scrollintoview,get") {
+		t.Fatalf("offscreen click did not scroll after measuring: %s", got)
+	}
+
+	f.calls = nil
+	f.out["get"] = `{"x":40,"y":30,"width":100,"height":40}`
+	res, err = svc.Drive(ctx, "s1", "click", []string{"e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.words(); strings.Contains(got, "scrollintoview") {
+		t.Fatalf("onscreen click scrolled: %s", got)
+	}
+}
+
+func readActionLog(t *testing.T, runDir string) []actionRec {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(runDir, "actions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []actionRec
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rec actionRec
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func TestDrivePassthroughReceiptsAndReadOnlyLog(t *testing.T) {
+	svc, f, _, dir := driveSvc(t)
+	for _, row := range []struct {
+		action string
+		args   []string
+	}{
+		{"hover", []string{"e8"}}, {"scroll", []string{"down", "321"}}, {"dblclick", []string{"e2"}},
+		{"keyboard", []string{"type", "free keyboard"}}, {"eval", []string{"document.body.dataset.test='yes'"}},
+		{"reload", nil}, {"open", []string{"https://example.test"}}, {"record", []string{"start", "scratch/demo.mp4"}}, {"record", []string{"stop"}},
+	} {
+		res, err := svc.Drive(ctx, "s1", row.action, row.args)
+		rec, ok := res["receipt"].(actionRec)
+		if err != nil || !ok || rec.After == "" || !fileExists(rec.After) || rec.Action != row.action {
+			t.Fatalf("%s: %+v %v", row.action, res, err)
+		}
+	}
+	if got := f.find("hover"); !reflect.DeepEqual(got, []string{"hover", "@e8"}) {
+		t.Fatalf("hover args %v", got)
+	}
+	before := len(f.calls)
+	res, err := svc.Drive(ctx, "s1", "get", []string{"styles", "e8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := res["receipt"]; ok {
+		t.Fatalf("read-only command got receipt: %v", res)
+	}
+	for _, call := range f.calls[before:] {
+		if call[0] == "screenshot" || call[0] == "wait" {
+			t.Fatalf("read-only command settled or captured: %v", call)
+		}
+	}
+	if !slices.ContainsFunc(f.calls[before:], func(call []string) bool { return reflect.DeepEqual(call, []string{"get", "styles", "@e8"}) }) {
+		t.Fatalf("query refs %v", f.calls[before:])
+	}
+	logs := readActionLog(t, dir)
+	if len(logs) != 10 || logs[4].Action != "eval" || logs[9].Action != "get" || logs[9].After != "" {
+		t.Fatalf("action log %+v", logs)
+	}
+}
+
+func TestDriveLogsFailedAndRefusedCommands(t *testing.T) {
+	svc, f, _, dir := driveSvc(t)
+	f.fail["hover"] = errors.New("missing element")
+	res, err := svc.Drive(ctx, "s1", "hover", []string{"e1"})
+	if err == nil {
+		t.Fatal("expected engine failure")
+	}
+	rec := res["receipt"].(actionRec)
+	if rec.After == "" || !strings.Contains(rec.Reason, "missing element") {
+		t.Fatalf("failed receipt %+v", rec)
+	}
+	is(t, "TESTING_ACTION_UNSUPPORTED")(svc.Drive(ctx, "s1", "connect", []string{"9222"}))
+	f.fail["get"] = errors.New("no value")
+	is(t, "TESTING_ENGINE_FAILED")(svc.Drive(ctx, "s1", "get", []string{"value", "e1"}))
+	logs := readActionLog(t, dir)
+	if len(logs) != 3 || logs[1].Action != "connect" || logs[1].Reason == "" || logs[2].Action != "get" || logs[2].Reason == "" {
+		t.Fatalf("failed/refused log %+v", logs)
+	}
+	if f.find("connect") != nil {
+		t.Fatal("refused command reached engine")
+	}
+}
+
+func TestDriveRawCDPUsesLegPageAndReceipt(t *testing.T) {
+	svc, _, _, dir := driveSvc(t)
+	run, _ := svc.store.Get("run_s1")
+	e := svc.engineFor(run.ID, run.Legs[0])
+	var calls []string
+	e.connectPage = func(context.Context) (*pageCDP, error) {
+		return &pageCDP{request: func(_ context.Context, method string, params, out any) error {
+			calls = append(calls, method)
+			if method == "Runtime.evaluate" {
+				raw := params.(json.RawMessage)
+				if !strings.Contains(string(raw), "document.title") {
+					t.Fatalf("params %s", raw)
+				}
+				*out.(*json.RawMessage) = json.RawMessage(`{"result":{"value":"app"}}`)
+			}
+			return nil
+		}}, nil
+	}
+	res, err := svc.Drive(ctx, "s1", "cdp", []string{"Runtime.evaluate", `{"expression":"document.title"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(calls, "Runtime.evaluate") || !strings.Contains(res["output"].(string), "app") {
+		t.Fatalf("CDP result %v, calls %v", res, calls)
+	}
+	if rec := res["receipt"].(actionRec); rec.Action != "cdp" || rec.After == "" {
+		t.Fatalf("CDP receipt %+v", rec)
+	}
+	logs := readActionLog(t, dir)
+	if len(logs) != 1 || logs[0].Action != "cdp" {
+		t.Fatalf("CDP log %+v", logs)
+	}
+	is(t, "TESTING_ACTION_UNSUPPORTED")(svc.Drive(ctx, "s1", "cdp", []string{"Target.attachToTarget", `{"targetId":"other"}`}))
+	is(t, "TESTING_ARGS_INVALID")(svc.Drive(ctx, "s1", "cdp", []string{"Page.reload", "not json"}))
+}
+
+func TestDriveRefPositionsAndFileBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	for _, row := range []struct {
+		action     string
+		args, want []string
+	}{
+		{"fill", []string{"e1", "e2"}, []string{"fill", "@e1", "e2"}},
+		{"get", []string{"attr", "e1", "id"}, []string{"get", "attr", "@e1", "id"}},
+		{"is", []string{"visible", "e1"}, []string{"is", "visible", "@e1"}},
+		{"find", []string{"first", "e1", "hover"}, []string{"find", "first", "@e1", "hover"}},
+		{"snapshot", []string{"-s", "e1"}, []string{"snapshot", "-s", "@e1"}},
+		{"select", []string{"e1", "one", "two"}, []string{"select", "@e1", "one", "two"}},
+	} {
+		got, _, err := argv(row.action, row.args, dir, "head")
+		if err != nil || !reflect.DeepEqual(got, row.want) {
+			t.Fatalf("%s got %v %v want %v", row.action, got, err, row.want)
+		}
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		action string
+		args   []string
+	}{
+		{"upload", []string{"e1", "../owner.txt"}}, {"screenshot", []string{"escape/host.png"}},
+		{"pdf", []string{"/etc/host.pdf"}}, {"open", []string{"file:///etc/passwd"}},
+	} {
+		if _, _, err := argv(row.action, row.args, dir, "head"); err == nil {
+			t.Fatalf("escape accepted %s %v", row.action, row.args)
+		}
+	}
+}
+
+func TestDriveBatchGuardsAndLogsChildren(t *testing.T) {
+	svc, f, _, dir := driveSvc(t)
+	res, err := svc.Drive(ctx, "s1", "batch", []string{`hover e1`, `fill e2 "hello world"`})
+	if err != nil || res["receipt"] == nil {
+		t.Fatalf("batch %v %v", res, err)
+	}
+	if got := f.find("fill"); !reflect.DeepEqual(got, []string{"fill", "@e2", "hello world"}) {
+		t.Fatalf("batch args %v", got)
+	}
+	logs := readActionLog(t, dir)
+	if len(logs) != 3 || logs[0].Action != "hover" || logs[1].Action != "fill" || logs[2].Action != "batch" {
+		t.Fatalf("batch log %+v", logs)
+	}
+}
+
+func TestDriveGlobalOptionsCannotHideEscapes(t *testing.T) {
+	dir := t.TempDir()
+	for _, row := range []struct {
+		action string
+		args   []string
+	}{
+		{"plugins", []string{"run", "host", "command"}},
+		{"stream", []string{"--json", "enable"}}, {"window", []string{"--json", "new"}},
+		{"click", []string{"e1", "--new-tab=true"}}, {"click", []string{"--new-window", "e1"}},
+		{"state", []string{"--json", "load", "/owner/state.json"}},
+		{"record", []string{"--json", "start", "/owner/video.mp4"}},
+		{"trace", []string{"--json", "stop", "/owner/trace.zip"}},
+		{"screenshot", []string{"/owner/a.png", "--user-agent", "harmless"}},
+		{"diff", []string{"screenshot", "-b", "/owner/baseline.png"}},
+		{"wait", []string{"--download", "/owner/file"}},
+		{"webmcp", []string{"invoke", "read", "--params", "@/owner/params.json"}},
+		{"snapshot", []string{"--action-policy", "/owner/policy.json"}},
+		{"download", []string{"e1", "engine/head/config.json"}},
+		{"cdp", []string{"Page.navigate", `{"url":"file:///etc/passwd"}`}},
+	} {
+		if _, _, err := argv(row.action, row.args, dir, "head"); err == nil {
+			t.Fatalf("escape accepted: %s %v", row.action, row.args)
+		}
+	}
+	got, _, err := argv("hover", []string{"--color-scheme", "dark", "e1", "--json"}, dir, "head")
+	want := []string{"hover", "@e1", "--color-scheme", "dark", "--json"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("forwarded options %v %v want %v", got, err, want)
+	}
+}
+
+func TestEngineRefusesMissingOrUnverifiableAppBinding(t *testing.T) {
+	for _, row := range []struct {
+		name  string
+		setup func(*fakeEngine)
+	}{
+		{"missing", func(f *fakeEngine) { f.out["tab"] = "→ [t2] Blank - about:blank" }},
+		{"listing failed", func(f *fakeEngine) { f.fail["tab"] = errors.New("connection lost") }},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			f := &fakeEngine{out: map[string]string{}, fail: map[string]error{}}
+			row.setup(f)
+			e := newEngine(EngineInfo{Binary: "/fake/browser", RunDir: t.TempDir(), Namespace: "s", Session: "s", AppOrigin: "http://app.test"}, f.exec)
+			if _, err := e.Run(ctx, time.Second, "hover", "@e1"); err == nil {
+				t.Fatal("missing target binding accepted")
+			}
+			if f.find("hover") != nil {
+				t.Fatal("command reached unbound browser")
+			}
+		})
+	}
+}
+
+func TestDrivePreservesEvalOutputBesideReceipt(t *testing.T) {
+	svc, f, _, _ := driveSvc(t)
+	f.out["eval"] = "the requested JS value"
+	res, err := svc.Drive(ctx, "s1", "eval", []string{"document.title"})
+	if err != nil || !strings.Contains(res["text"].(string), f.out["eval"]) || !strings.Contains(res["text"].(string), "receipt") {
+		t.Fatalf("eval reply %v %v", res, err)
+	}
+}
+
+func TestDriveBoundsAndScrubsDiagnosticOutput(t *testing.T) {
+	t.Setenv("LITMUS_TEST_TOKEN", "receipt-secret")
+	svc, f, _, runDir := driveSvc(t)
+	f.out["eval"] = "--- AGENT_BROWSER_PAGE_CONTENT nonce=42 origin=app ---\n" + strings.Repeat("value ", 600) + `{"password":"two word fixture","token":"receipt-secret"}` + "\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=42 ---"
+	res, err := svc.Drive(ctx, "s1", "eval", []string{"document.body.innerText"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := res["receipt"].(actionRec)
+	if len([]byte(rec.Output)) > actionOutputCap || !strings.Contains(rec.Output, "[truncated; full output: outputs/1-eval.txt]") {
+		t.Fatalf("bounded output = %d bytes %q", len([]byte(rec.Output)), rec.Output)
+	}
+	if strings.Contains(rec.Output, "receipt-secret") || strings.Contains(rec.Output, "two word fixture") || strings.Contains(rec.Output, "AGENT_BROWSER_PAGE_CONTENT") {
+		t.Fatalf("sensitive or wrapper text persisted inline: %q", rec.Output)
+	}
+	full, err := os.ReadFile(rec.OutputPath)
+	if err != nil || len(full) <= actionOutputCap {
+		t.Fatalf("full output %q: %v, %d bytes", rec.OutputPath, err, len(full))
+	}
+	if strings.Contains(string(full), "receipt-secret") || strings.Contains(string(full), "two word fixture") || strings.Contains(string(full), "AGENT_BROWSER_PAGE_CONTENT") {
+		t.Fatalf("sensitive or wrapper text persisted in full output: %q", full)
+	}
+	if want := filepath.Join(runDir, "outputs", "1-eval.txt"); rec.OutputPath != want {
+		t.Fatalf("output path %q, want %q", rec.OutputPath, want)
+	}
+}
+
+func TestClipBytesStopsOnUTF8Boundary(t *testing.T) {
+	got := clipBytes("éé", 3)
+	if got != "é" || !utf8.ValidString(got) {
+		t.Fatalf("clipBytes returned invalid or oversized prefix %q", got)
+	}
+}
+
+func TestDriveOutputFailureStillReturnsScrubbedBoundedOutput(t *testing.T) {
+	t.Setenv("LITMUS_TEST_TOKEN", "receipt-secret")
+	svc, f, _, runDir := driveSvc(t)
+	if err := os.WriteFile(filepath.Join(runDir, "outputs"), []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.out["eval"] = strings.Repeat("value ", 600) + `{"password":"two word fixture","token":"receipt-secret"}`
+	res, err := svc.Drive(ctx, "s1", "eval", []string{"document.body.innerText"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := res["receipt"].(actionRec)
+	if len([]byte(rec.Output)) > actionOutputCap || strings.Contains(rec.Output, "receipt-secret") || strings.Contains(rec.Output, "two word fixture") {
+		t.Fatalf("output was not safely bounded: %q", rec.Output)
+	}
+	if rec.OutputPath != "" {
+		t.Fatalf("output path reported despite write failure: %q", rec.OutputPath)
+	}
+}
+
+func TestDriveKeepsSelectorsAndOptionalDownloadPath(t *testing.T) {
+	dir := t.TempDir()
+	got, file, err := argv("screenshot", []string{".button.primary", "--full"}, dir, "head")
+	if err != nil || len(got) != 4 || got[1] != ".button.primary" || got[2] != "--full" || got[3] != file {
+		t.Fatalf("selector screenshot %v %q %v", got, file, err)
+	}
+	got, _, err = argv("wait", []string{"--download", "--timeout", "10000"}, dir, "head")
+	if err != nil || !reflect.DeepEqual(got, []string{"wait", "--download", "--timeout", "10000"}) {
+		t.Fatalf("optional download path %v %v", got, err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "engine", "head"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "engine"), filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"alias/head/config.json", "checks.json", "run.json", "actions.jsonl", homeSnapshotFile, homeChangesFile, "head/home/result.png", "base/home/result.png"} {
+		if _, _, err := argv("download", []string{"e1", path}, dir, "head"); err == nil {
+			t.Fatalf("managed path accepted %s", path)
+		}
+	}
+	for _, name := range []string{homeSnapshotFile, homeChangesFile} {
+		for _, row := range []struct {
+			action string
+			args   []string
+		}{
+			{"screenshot", []string{name}},
+			{"network", []string{"--output", name}},
+			{"network", []string{"--output=" + name}},
+		} {
+			if _, _, err := argv(row.action, row.args, dir, "head"); err == nil {
+				t.Fatalf("managed homeguard path accepted: %s %v", row.action, row.args)
+			}
+		}
+	}
+}
+
+func TestDriveLogsClosedRunRefusal(t *testing.T) {
+	svc, _, _, dir := driveSvc(t)
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	run.State = RunSubmitted
+	is(t, "")(nil, svc.store.Save(run))
+	is(t, "TESTING_RUN_CLOSED")(svc.Drive(ctx, "s1", "hover", []string{"e1"}))
+	logs := readActionLog(t, dir)
+	if len(logs) != 1 || logs[0].Action != "hover" || logs[0].Reason == "" {
+		t.Fatalf("closed refusal log %+v", logs)
+	}
+}
+
+func TestDriveSnapshotJSONKeepsRefCaptionsAndHelp(t *testing.T) {
+	svc, f, _, _ := driveSvc(t)
+	f.out["snapshot"] = `{"success":true,"data":{"snapshot":"- button \"Save\" [ref=e1]"}}`
+	res, err := svc.Drive(ctx, "s1", "snapshot", []string{"--json"})
+	if err != nil || !strings.Contains(res["text"].(string), "Save") {
+		t.Fatalf("JSON snapshot %v %v", res, err)
+	}
+	res, err = svc.Drive(ctx, "s1", "hover", []string{"e1"})
+	if err != nil || res["receipt"].(actionRec).TargetName != "Save" {
+		t.Fatalf("snapshot ref lost %v %v", res, err)
+	}
+	f.out["snapshot"] = "Usage: agent-browser snapshot [options]"
+	res, err = svc.Drive(ctx, "s1", "snapshot", []string{"--help"})
+	if err != nil || !strings.Contains(res["text"].(string), "Usage:") {
+		t.Fatalf("help hidden %v %v", res, err)
+	}
+}
+
+func TestDrivePassesLogoutActionsThrough(t *testing.T) {
+	svc, f, _, _ := driveSvc(t)
+	f.out["snapshot"] = "- button \"Sign out\" [ref=e1]"
+	is(t, "")(svc.Drive(ctx, "s1", "snapshot", nil))
+	for _, cmd := range [][]string{
+		{"click", "@e1"}, {"fill", "#chat", "/logout"}, {"type", "#chat", "/logout"},
+		{"keyboard", "type", "/logout"}, {"press", "Enter"}, {"eval", `fetch('/logout')`},
+	} {
+		is(t, "")(svc.Drive(ctx, "s1", cmd[0], cmd[1:]))
+		if f.find(cmd[0]) == nil {
+			t.Fatalf("command did not reach engine: %q", cmd)
+		}
+	}
+	is(t, "TESTING_ACTION_UNSUPPORTED")(svc.Drive(ctx, "s1", "click", []string{"@e1", "--new-tab"}))
+}
+
+func TestAttachEngineWithoutLoginGuard(t *testing.T) {
+	svc, _ := newSvc(t)
+	svc.binary = "fake-agent-browser"
+	// No browser listener or guard is configured. Attaching must not make CDP calls.
+	svc.engExec = func(context.Context, string, []string, []string) (string, error) {
+		t.Fatal("unexpected browser call during attach")
+		return "", nil
+	}
+	leg, err := svc.attachEngine(ctx, "run_s1", Leg{Name: "head", DebugPort: 9400, State: "running"})
+	is(t, "")(nil, err)
+	if leg.Engine == nil || leg.State != "running" {
+		t.Fatalf("attached leg = %+v", leg)
+	}
+	svc.engineFor("run_s1", leg).Close(svc.sys)
 }

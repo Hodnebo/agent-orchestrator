@@ -9,7 +9,7 @@ import (
 func TestStartSpawnsOneClaudeCodeWorkerForThePR(t *testing.T) {
 	ctx := context.Background()
 	var got []SpawnRequest
-	svc := New(NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r SpawnRequest) (string, error) {
+	svc := newTestService(t, NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r SpawnRequest) (string, error) {
 		got = append(got, r)
 		return "ses-9", nil
 	})
@@ -19,7 +19,7 @@ func TestStartSpawnsOneClaudeCodeWorkerForThePR(t *testing.T) {
 		t.Fatalf("Start = %+v, %v", st, err)
 	}
 	want := SpawnRequest{ProjectID: "p1", Harness: "claude-code", Name: "litmus: PR #42",
-		Prompt: "Test PR https://github.com/acme/web/pull/42. Start with `ao testing intake https://github.com/acme/web/pull/42`. " + ShellRule + " " + ExploreRule}
+		Prompt: "Test PR https://github.com/acme/web/pull/42. Start with `ao testing intake https://github.com/acme/web/pull/42`."}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("spawn request = %+v, want %+v", got, want)
 	}
@@ -31,11 +31,11 @@ func TestStartSpawnsOneClaudeCodeWorkerForThePR(t *testing.T) {
 	}
 
 	boom := errors.New("spawn failed")
-	failing := New(NewStore(t.TempDir()), nil).WithSpawner(func(context.Context, SpawnRequest) (string, error) { return "", boom })
+	failing := newTestService(t, NewStore(t.TempDir()), nil).WithSpawner(func(context.Context, SpawnRequest) (string, error) { return "", boom })
 	if _, err := failing.Start(ctx, StartRequest{PRURL: "acme/web#42"}); !errors.Is(err, boom) {
 		t.Fatalf("spawn error not passed through: %v", err)
 	}
-	is(t, "TESTING_SPAWN_UNAVAILABLE")(New(NewStore(t.TempDir()), nil).Start(ctx, StartRequest{PRURL: "acme/web#42"}))
+	is(t, "TESTING_SPAWN_UNAVAILABLE")(newTestService(t, NewStore(t.TempDir()), nil).Start(ctx, StartRequest{PRURL: "acme/web#42"}))
 }
 
 func TestStartPicksTheHarnessFromRequestSettingWorkerThenDefault(t *testing.T) {
@@ -53,7 +53,7 @@ func TestStartPicksTheHarnessFromRequestSettingWorkerThenDefault(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []SpawnRequest
-			svc := New(NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r SpawnRequest) (string, error) {
+			svc := newTestService(t, NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r SpawnRequest) (string, error) {
 				got = append(got, r)
 				return "ses-9", nil
 			}).WithProjectHarness(func(context.Context, string) string { return tc.worker })
@@ -74,7 +74,7 @@ func TestStartPicksTheHarnessFromRequestSettingWorkerThenDefault(t *testing.T) {
 
 func TestProjectSettingsHarnessRoundTripsAndRefusesOthers(t *testing.T) {
 	ctx := context.Background()
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	saved, err := svc.SetProjectSettings(ctx, "p1", ProjectSettings{Harness: " codex ", Model: "gpt-6.1-sol", Effort: "high"})
 	if err != nil || saved.Harness != "codex" {
 		t.Fatalf("saved %+v, %v", saved, err)

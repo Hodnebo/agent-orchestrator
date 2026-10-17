@@ -252,8 +252,8 @@ func TestFrameConcatListKeepsHoldsAndRepeatsLastFrame(t *testing.T) {
 
 func TestScreencastArgs(t *testing.T) {
 	want := []string{"-y", "-f", "concat", "-safe", "0", "-i", "list.txt", "-vf",
-		"scale=1320:780:force_original_aspect_ratio=decrease,pad=1320:780:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=5",
-		"-r", "5", "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "5", "-movflags", "+faststart", "-t", "65.000", "out.mp4"}
+		"scale=1320:780:force_original_aspect_ratio=decrease,pad=1320:780:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=25",
+		"-r", "25", "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "25", "-movflags", "+faststart", "-t", "65.000", "out.mp4"}
 	if got := screencastArgs("list.txt", "out.mp4", 65*time.Second); !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %v", got)
 	}
@@ -334,7 +334,7 @@ func TestScreencastRetriesInitialResolutionAndNotesUnexpectedCancellation(t *tes
 func TestBuildRecordingOnlyDeletesFramesAfterDurationCheck(t *testing.T) {
 	for _, duration := range []string{"69", "3", "invalid"} {
 		t.Run(duration, func(t *testing.T) {
-			s := New(NewStore(t.TempDir()), nil)
+			s := newTestService(t, NewStore(t.TempDir()), nil)
 			s.media = &fakeMedia{}
 			s.runner = &videoProbeRunner{duration: duration}
 			dir := s.store.legDir("run_s1", "head")
@@ -439,7 +439,7 @@ func TestRecordingTroubleIsLoggedAndNotedWithoutFailingRun(t *testing.T) {
 	}
 	run, _ = svc.store.Get(run.ID)
 	log, err := os.ReadFile(filepath.Join(runDir, "head", "engine.log"))
-	if err != nil || !strings.Contains(string(log), "page unavailable") || len(run.Gaps) != 1 || run.Gaps[0] != "The PR build's recording was not available: agent-browser tab: page unavailable." {
+	if err != nil || !strings.Contains(string(log), "page unavailable") || len(run.Gaps) != 1 || run.Gaps[0] != "The PR build's recording was not available." || strings.Contains(run.Gaps[0], "page unavailable") {
 		t.Fatalf("log %q, gaps %v, error %v", log, run.Gaps, err)
 	}
 	// A daemon restart can leave persisted recording times without an in-memory
@@ -449,7 +449,7 @@ func TestRecordingTroubleIsLoggedAndNotedWithoutFailingRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = svc.stopRecording(context.Background(), run)
-	if run.Legs[0].RecordStoppedAt.IsZero() || len(run.Gaps) != 2 {
+	if run.Legs[0].RecordStoppedAt.IsZero() || len(run.Gaps) != 1 {
 		t.Fatalf("stop did not settle missing recorder: %+v", run)
 	}
 }
@@ -462,8 +462,8 @@ func TestRecordingGapsNameBothBuildsAndReachCommentsAsLimits(t *testing.T) {
 	}
 	run, _ = svc.store.Get(run.ID)
 	want := []string{
-		"The PR build's recording was not available: page unavailable.",
-		"The main build's recording was not available: page unavailable.",
+		"The PR build's recording was not available.",
+		"The main build's recording was not available.",
 	}
 	if !slices.Equal(run.Gaps, want) {
 		t.Fatalf("gaps %q, want %q", run.Gaps, want)
@@ -626,10 +626,14 @@ func TestScreencastFrameWriteTroubleIsNormalizedAndBounded(t *testing.T) {
 }
 
 func TestRecordingEncodeTimeoutScalesWithFrames(t *testing.T) {
-	if got := recordingEncodeTimeout(8000); got != videoTimeout+800*time.Second {
-		t.Fatalf("8000-frame timeout %s", got)
+	outputFrames := recordingOutputFrameCount(70 * time.Second)
+	if outputFrames != 1750 {
+		t.Fatalf("70-second recording has %d output frames, want 1750", outputFrames)
 	}
-	if recordingEncodeTimeout(8000) <= recordingEncodeTimeout(1) {
+	if got := recordingEncodeTimeout(outputFrames); got != videoTimeout+175*time.Second {
+		t.Fatalf("1750-output-frame timeout %s", got)
+	}
+	if recordingEncodeTimeout(outputFrames) <= recordingEncodeTimeout(1) {
 		t.Fatal("timeout did not scale")
 	}
 }

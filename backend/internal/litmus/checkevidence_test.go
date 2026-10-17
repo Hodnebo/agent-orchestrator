@@ -1,9 +1,64 @@
 package litmus
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestCheckEndCorrectsNotesAndKeepsHistory(t *testing.T) {
+	for _, state := range outcomes {
+		t.Run(string(state), func(t *testing.T) {
+			svc, f, _, _ := driveSvc(t)
+			original := Check{ID: "c1", Name: "menu", State: state, Note: "keys missing", Shot: 11,
+				Receipts: []Receipt{{Seq: 11, AfterPath: evidenceFile(t)}}}
+			if state == CheckFail || state == CheckPartial {
+				original.Leg, original.SameFault = "base", true
+			}
+			is(t, "")(nil, svc.store.SaveChecks("run_s1", []Check{original}))
+			for _, flags := range []struct {
+				shot      int
+				sameFault bool
+			}{{11, false}, {0, true}, {11, true}} {
+				_, err := svc.CheckEnd(ctx, "s1", "c1", state, "must not be saved", flags.sameFault, flags.shot)
+				is(t, "TESTING_ARGS_INVALID")(nil, err)
+				if !strings.Contains(err.Error(), "omit --shot and --same-fault") {
+					t.Fatalf("re-end error lacks flag guidance: %v", err)
+				}
+				checks, err := svc.store.Checks("run_s1")
+				is(t, "")(nil, err)
+				if !reflect.DeepEqual(checks[0], original) {
+					t.Fatalf("refused note correction changed the check: %+v", checks[0])
+				}
+			}
+			for _, note := range []string{" keys present, label wrong ", "keys present, label wrong", "label is English"} {
+				got, err := svc.CheckEnd(ctx, "s1", "c1", state, note, false, 0)
+				is(t, "")(nil, err)
+				if got.State != state || got.Shot != original.Shot || got.SameFault != original.SameFault || !reflect.DeepEqual(got.Receipts, original.Receipts) {
+					t.Fatalf("note correction changed the outcome or evidence: %+v", got)
+				}
+			}
+			unchanged, err := svc.CheckEnd(ctx, "s1", "c1", state, "", false, 0)
+			is(t, "")(nil, err)
+			if unchanged.Note != "label is English" || !reflect.DeepEqual(unchanged.NoteHistory, []string{"keys missing", "keys present, label wrong"}) {
+				t.Fatalf("re-end without --note changed the note: %+v", unchanged)
+			}
+			other := CheckPass
+			if state == CheckPass {
+				other = CheckFail
+			}
+			is(t, "TESTING_CHECK_STATE")(svc.CheckEnd(ctx, "s1", "c1", other, "changed result", false, 0))
+			checks, err := svc.store.Checks("run_s1")
+			is(t, "")(nil, err)
+			if checks[0].Note != "label is English" || !reflect.DeepEqual(checks[0].NoteHistory, []string{"keys missing", "keys present, label wrong"}) {
+				t.Fatalf("note history not persisted: %+v", checks[0])
+			}
+			if len(f.calls) != 0 {
+				t.Fatalf("note correction drove the app: %v", f.calls)
+			}
+		})
+	}
+}
 
 func TestCheckEndShotValidationAndPersistence(t *testing.T) {
 	for _, tc := range []struct {

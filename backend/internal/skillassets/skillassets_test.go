@@ -267,23 +267,64 @@ func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
 	if fm.Name != LitmusSkillName || strings.TrimSpace(fm.Description) == "" || strings.TrimSpace(fm.Trigger) == "" {
 		t.Fatalf("litmus frontmatter incomplete: %+v", fm)
 	}
-	if n := len(strings.Fields(string(body))); n > 920 {
-		t.Fatalf("litmus SKILL.md is %d words, want at most 920", n)
+
+	skillBody, err := LitmusSkillBody()
+	if err != nil {
+		t.Fatalf("LitmusSkillBody: %v", err)
 	}
-	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "replay <headCheckId> --leg base", "--shot <N>", "submit", "--leg base", "only through `ao testing`", "never push or post to GitHub", "You have 25 minutes", "gate notes",
-		"You test one pull request. Litmus builds the PR and its base commit in private app windows. Check the PR's claim and likely nearby breakage.",
-		"Notes go to the PR author. Say what you saw in plain words: buttons present, what happened after a click, what was missing. Omit check ids, build names, receipt numbers and comparisons; Litmus adds those.",
-		"at most 4 for a PR over 30 files, 6 otherwise", "(a guide, not a limit)", "split a check that mixes two things", "it is done only when it has a result on both",
-		"Litmus saves unfinished work at the deadline", "Verify a broken claim or new failure first", "record a proved failure even when main cannot be compared",
-		"end the main side as `absent` with a screenshot of where it would be; `fail` means the feature is there and broken", "--result pass|fail|partial|absent|skipped",
-		"Use spare time to pin down a suspected bug, not to add breadth", "never on the PR build alone", "do the UI checks in the pack's suggested order",
-		"Never run the PR's tests or any package tests; Litmus judges what a user sees.", "If the PR has nothing to click, add one check, end it `skipped --note \"nothing to click; not tested by Litmus\"`, and submit.",
-		"At check end, Litmus saves light and dark shots to the receipt and comment.", "Inspect both on each changed screen.", "theme pair not taken: the app ignored the system theme", "Add differences between similar items (row summaries, list order, mixed names) to the check's `--note` as `Worth a look: <what differs>` at its start or end.", "Litmus moves that text to a `Worth a look` comment line; it does not change the verdict.",
-		"`absent` is for main only", "Use `--same-fault` on a base `fail` or `partial` only after proving it has the same cause as the head failure",
-		"If a `fail` is recorded, never submit `--blocked`", "Never open another run's folder; it is not evidence.",
-		"Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts; use test-window data or skip and say why.", "Accounts marked Device, Active, In use, ChatGPT or Claude are the owner's real logins, and a harness tab's Login, Logout or Refresh login acts on them too: look, never click Use, Switch, Log out, Sign out, Remove, Renew, Sign in again, Login, Logout, Refresh login or Use reset on them.", "End such a check `skipped` with 'would touch the owner's login'.", "Accounts you add yourself (API key) are fully testable.", `Billing and plan links are off limits, including a "Billing" tab.`} {
-		if !strings.Contains(string(body), verb) {
-			t.Fatalf("litmus SKILL.md does not mention %q", verb)
+	sections := strings.Split(skillBody, "\n## ")
+	if len(sections) != 5 {
+		names := make([]string, 0, len(sections))
+		for i, section := range sections {
+			if i == 0 {
+				names = append(names, "Intro")
+				continue
+			}
+			names = append(names, strings.SplitN(section, "\n", 2)[0])
+		}
+		t.Fatalf("litmus SKILL.md sections = %v, want [Intro Run Finding bugs Evidence and verdict Owner safety]", names)
+	}
+	sectionNames := []string{"Intro", "Run", "Finding bugs", "Evidence and verdict", "Owner safety"}
+	sectionCaps := []int{60, 160, 350, 300, 0}
+	sectionText := make(map[string]string, len(sections))
+	for i, section := range sections {
+		name := sectionNames[i]
+		sectionText[name] = section
+		if i > 0 {
+			gotName := strings.SplitN(section, "\n", 2)[0]
+			if gotName != name {
+				t.Fatalf("litmus SKILL.md section %q found, want %q", gotName, name)
+			}
+		}
+		if cap := sectionCaps[i]; cap > 0 {
+			if count := len(strings.Fields(section)); count > cap {
+				t.Fatalf("litmus SKILL.md section %q is %d words, want at most %d", name, count, cap)
+			}
+		}
+	}
+	if count := len(strings.Fields(skillBody)); count > 1200 {
+		t.Fatalf("litmus SKILL.md whole body is %d words, want at most 1200", count)
+	}
+	if got := strings.TrimSpace(sectionText["Owner safety"]); got != strings.TrimSpace(litmusOwnerSafety) {
+		t.Fatalf("litmus SKILL.md section %q differs from the pinned owner-safety text", "Owner safety")
+	}
+	for _, required := range []string{
+		"intake", "prepare", "launch", "check add", "--claim", `--risk "<what the diff could break>"`, "--explore",
+		"drive <command>", "drive <command> --help", "eval", "upload", "cdp <Method>", "snapshot",
+		"--result pass|fail|partial|absent|skipped", "replay <headCheckId> --leg base", "--leg base", "submit",
+		"--skip-base", "--blocked", "--shot <N>", "--same-fault", "--attribution environment", "--cause", "--receipt", "--replaces",
+		"You have 25 minutes", "Changed code", "Choose inputs that cross the diff's thresholds and branches", "Read values, not pixels", "gate notes", "ao testing --help",
+	} {
+		if !strings.Contains(skillBody, required) {
+			t.Fatalf("litmus SKILL.md does not mention %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"Litmus saves unfinished work at the deadline", "You may create AO Cloud projects", "Compare on base when possible", "Cleanup deletes these installs", "/api/v1/agents/{agent}/update-advisory?refresh=true", "Notes over 600 characters are refused", "Litmus couldn't test this",
+		"Plan 2+ risk checks", "Plan 4 pairs", "'Changed branches'", "When `check` shows under 5 min left",
+	} {
+		if strings.Contains(skillBody, forbidden) {
+			t.Fatalf("litmus SKILL.md contains forbidden wording %q", forbidden)
 		}
 	}
 
@@ -297,6 +338,85 @@ func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
 	}
 	if string(got) != string(body) {
 		t.Fatal("installed litmus SKILL.md differs from the embedded copy")
+	}
+}
+
+const litmusOwnerSafety = `Owner safety
+
+You may create your own private test repos under the owner's account, push to them, open test PRs there and link one to a task in the test app (never the owner's real AO) to reach PR-only UI.
+Never comment on, review, push to or close the PR under test or any repo you did not create. Delete repos you created at the end, or name them in a check note.
+
+Never run ` + "`ao testing start|post|discard|prune|rerun`" + `; Litmus posts results.
+
+Never signal a PID unless it is a child of this leg's owned.json electron pid. Start host processes under the run's scratch dir; name their start and stop in the check note.
+
+Skip access requiring a login, key or build flag; name it. Read gate notes for missing features.
+
+Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts (use ` + "`gh`" + ` and git for GitHub); use test-window data or skip and say why. Accounts you add yourself (API key) are fully testable.
+
+Don't log the owner out: avoid Log out, Sign out, Switch account, Remove account and credit-reset buttons on the owner's accounts, and don't run logout commands. Accounts marked Device, Active, In use, ChatGPT or Claude are the owner's real logins, and a harness tab's Login, Logout or Refresh login acts on them too: look, never click Use, Switch, Log out, Sign out, Remove, Renew, Sign in again, Login, Refresh login or Use reset on them. Skip such checks with 'would touch the owner's login'. Never run ` + "`gh auth`" + ` commands.
+
+Billing and plan links are off limits, including a "Billing" tab.
+
+Agent chats use the owner's account. Use any working model, cheapest first except for model PRs; if refused, try another. Short prompts unless a precondition needs long text.
+
+Never run the PR's tests or any package tests; Litmus judges what a user sees. If there is nothing to click, add a claim check and skip it with that reason.`
+
+func TestLitmusSkillBodyStripsAndRejectsMalformedFrontmatter(t *testing.T) {
+	body, err := LitmusSkillBody()
+	if err != nil {
+		t.Fatalf("LitmusSkillBody: %v", err)
+	}
+	if strings.TrimSpace(body) == "" || strings.Contains(body, "name: litmus") {
+		t.Fatalf("LitmusSkillBody returned an empty body or frontmatter: %q", body)
+	}
+	for name, input := range map[string]string{
+		"missing opening delimiter": "name: litmus\n---\n# body",
+		"missing closing delimiter": "---\nname: litmus\n# body",
+		"invalid YAML":              "---\nname: [\n---\n# body",
+		"empty body":                "---\nname: litmus\n---\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := stripFrontmatter([]byte(input)); err == nil || strings.TrimSpace(err.Error()) == "" {
+				t.Fatalf("stripFrontmatter(%q) error = %v, want non-empty error", input, err)
+			}
+		})
+	}
+}
+
+func TestLitmusSkillReportsBugsAndFailedAttempts(t *testing.T) {
+	body, err := files.ReadFile("litmus/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{
+		"Reserve `Worth a look: <opinion>` for design opinions",
+		"These never fail a PR.",
+		"A wrong value, broken state, or contradiction of the check's expect line in new or changed PR UI makes that check `partial` or `fail`.",
+		"Credit a head/base difference to the PR only if both legs took the same input path; otherwise end base `skipped` naming why.",
+		"Every attempt counts.",
+		"A failed attempt followed by a passing retry means `partial` unless a receipt proves the failure invalid",
+		"List failed attempts in the note.",
+	} {
+		if !strings.Contains(string(body), rule) {
+			t.Errorf("litmus skill missing rule %q", rule)
+		}
+	}
+}
+
+func TestLitmusRecipeCarriesTesterGateNotes(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "litmus", "recipes", "ao-recipe.yaml"))
+	if err != nil {
+		t.Fatalf("read Litmus AO recipe: %v", err)
+	}
+	for _, note := range []string{
+		"You may create AO Cloud projects.",
+		"Clone a repo accepts a typed URL and destination, avoiding the native folder picker.",
+		"GET `/api/v1/agents/{agent}/update-advisory?refresh=true` on the leg's daemon. Say which you did in the check note.",
+	} {
+		if !strings.Contains(string(body), note) {
+			t.Errorf("AO recipe missing tester gate note %q", note)
+		}
 	}
 }
 

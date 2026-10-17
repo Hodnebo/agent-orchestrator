@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -33,6 +34,12 @@ const (
 	DefaultLaunchBudget = readyLimit + 3*seedTimeout
 	// RecipeValidateBudget caps validation that prepares and launches a commit.
 	RecipeValidateBudget = 10 * time.Minute
+	legStopBudget        = 10 * time.Second
+	// PruneBudget is the existing shared-clone pruning and private-state removal allowance.
+	PruneBudget = 2 * time.Minute
+	// TeardownBudget covers two 10s death confirmations, shared-clone pruning,
+	// private install removal and the independently capped 20s home snapshot.
+	TeardownBudget = 2*legStopBudget + PruneBudget + homeSnapshotTimeout
 )
 
 func launchBudget(seedSteps int) time.Duration {
@@ -42,7 +49,7 @@ func launchBudget(seedSteps int) time.Duration {
 // Tests shorten these.
 var (
 	pollEvery = 500 * time.Millisecond
-	portWait  = 5 * time.Second
+	portWait  = legStopBudget
 )
 
 // Proc is a process and when it started, so a recycled pid is never mistaken for it.
@@ -82,11 +89,13 @@ func writeOwned(dir string, o Owned) error {
 // sysOps is everything that touches live processes, so tests can fake it.
 type sysOps struct {
 	startTime func(pid int) (time.Time, bool) // false when no such process
-	procs     func() map[int]string           // pid -> full command line
+	procs     func() (map[int]string, error)  // pid -> full command line
+	groupPIDs func(pgid int) ([]int, error)
 	killGroup func(pgid int)
 	kill      func(pid int)
 	rmBrowser func(pid int) // the target's browser-runtime socket dirs
-	portBusy  func(port int) bool
+	portBusy  func(port int) (bool, error)
+	freePorts func(n int) ([]int, error)
 }
 
 func realSys() sysOps {
@@ -96,8 +105,11 @@ func realSys() sysOps {
 			t, perr := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(strings.Fields(string(out)), " "), time.Local)
 			return t, err == nil && perr == nil
 		},
-		procs: func() map[int]string {
-			out, _ := process.Command("ps", "-axww", "-o", "pid=,command=").Output()
+		procs: func() (map[int]string, error) {
+			out, err := process.Command("ps", "-axww", "-o", "pid=,command=").Output()
+			if err != nil {
+				return nil, err
+			}
 			m := map[int]string{}
 			for _, line := range strings.Split(string(out), "\n") {
 				pid, cmd, _ := strings.Cut(strings.TrimSpace(line), " ")
@@ -105,10 +117,29 @@ func realSys() sysOps {
 					m[n] = strings.TrimSpace(cmd)
 				}
 			}
-			return m
+			return m, nil
 		},
 		killGroup: sigkillGroup,
-		kill:      sigkill,
+		freePorts: freePorts,
+		groupPIDs: func(pgid int) ([]int, error) {
+			out, err := process.Command("ps", "-ax", "-o", "pid=,pgid=").Output()
+			if err != nil {
+				return nil, err
+			}
+			var pids []int
+			for _, line := range strings.Split(string(out), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) == 2 && fields[1] == strconv.Itoa(pgid) {
+					pid, err := strconv.Atoi(fields[0])
+					if err != nil {
+						return nil, err
+					}
+					pids = append(pids, pid)
+				}
+			}
+			return pids, nil
+		},
+		kill: sigkill,
 		rmBrowser: func(pid int) {
 			for _, base := range []string{"/tmp", os.TempDir()} {
 				dirs, _ := filepath.Glob(filepath.Join(base, fmt.Sprintf("ao-brd-%d-*", pid)))
@@ -117,12 +148,18 @@ func realSys() sysOps {
 				}
 			}
 		},
-		portBusy: func(port int) bool {
+		portBusy: func(port int) (bool, error) {
 			c, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 200*time.Millisecond)
 			if err == nil {
 				_ = c.Close()
 			}
-			return err == nil
+			if err == nil {
+				return true, nil
+			}
+			if errors.Is(err, syscall.ECONNREFUSED) {
+				return false, nil
+			}
+			return false, err
 		},
 	}
 }
@@ -177,6 +214,16 @@ func runNumber(runID string) string {
 
 func tmuxSocket(runID, leg string) string { return "litmus-" + runID + "-" + leg }
 
+func hasTmuxSocket(argv, socket string) bool {
+	fields := strings.Fields(argv)
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "-L" && fields[i+1] == socket {
+			return true
+		}
+	}
+	return false
+}
+
 // legEnv is the target's whole environment. The isolation block comes last, so a
 // recipe cannot point a target back at the real AO; inherited AO_* never gets through.
 func legEnv(r Recipe, runID string, pr int, leg, legDir, root, nodeDir string, daemonPort, debugPort int) []string {
@@ -196,6 +243,7 @@ func legEnv(r Recipe, runID string, pr int, leg, legDir, root, nodeDir string, d
 	if r.Isolation {
 		env = append(env,
 			"AO_DEV_ELECTRON_DIR="+filepath.Join(legDir, "electron"),
+			"AO_DEV_API_TARGET=http://127.0.0.1:"+strconv.Itoa(daemonPort),
 			"AO_PORT="+strconv.Itoa(daemonPort),
 			"AO_RUN_FILE="+filepath.Join(legDir, "running.json"),
 			"AO_DATA_DIR="+filepath.Join(legDir, "data"),
@@ -267,20 +315,56 @@ func (c readyCheck) check(ctx context.Context) error {
 	return nil
 }
 
-// waitReady polls check until it passes, the limit runs out, or exited closes (the target died).
-func waitReady(ctx context.Context, c readyCheck, limit time.Duration, exited <-chan struct{}) error {
+// appURL returns the only page target at readiness. Seed steps may open more
+// pages, so this must run before the recipe is seeded and only works when the
+// ready target count makes the app page unambiguous.
+func (c readyCheck) appURL(ctx context.Context) (string, error) {
+	var targets []struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+	if err := getJSON(ctx, c.debug+"/json/list", &targets); err != nil {
+		return "", fmt.Errorf("debug port /json/list: %w", err)
+	}
+	var pages []string
+	for _, target := range targets {
+		if target.Type == "page" {
+			pages = append(pages, target.URL)
+		}
+	}
+	if len(pages) != c.ready.PageTargets {
+		return "", fmt.Errorf("%d page targets in /json/list, want %d", len(pages), c.ready.PageTargets)
+	}
+	if len(pages) != 1 {
+		return "", fmt.Errorf("%d page targets are ready; cannot identify the app URL unambiguously", len(pages))
+	}
+	if strings.TrimSpace(pages[0]) == "" {
+		return "", errors.New("the ready page target has no URL")
+	}
+	if isBlankURL(pages[0]) {
+		return "", errors.New("the ready page target is still about:blank")
+	}
+	return pages[0], nil
+}
+
+// waitReady polls for readiness and a non-blank app URL until the limit runs out or the target exits.
+func waitReady(ctx context.Context, c readyCheck, limit time.Duration, exited <-chan struct{}) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	for {
 		err := c.check(ctx)
 		if err == nil {
-			return nil
+			var appURL string
+			appURL, err = c.appURL(ctx)
+			if err == nil {
+				return appURL, nil
+			}
 		}
 		select {
 		case <-exited:
-			return fmt.Errorf("target exited before it was ready (last check: %w)", err)
+			return "", fmt.Errorf("target exited before it was ready (last check: %w)", err)
 		case <-ctx.Done():
-			return fmt.Errorf("target not ready after %s: %w", limit, err)
+			return "", fmt.Errorf("target not ready after %s: %w", limit, err)
 		case <-time.After(pollEvery):
 		}
 	}
@@ -324,21 +408,13 @@ func runArgs(r Recipe, env []string, goos string) []string {
 // target is ready, then seeds it. Any failure kills the leg again before returning, except a failed seed step
 // when seedGap is given: the leg then stays up and usable, and *seedGap says what is missing so the caller can
 // record it as a gap.
-func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, leg Leg, w *laps, seedGap *string) (Leg, error) {
+func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, leg Leg, w *laps, seedGap *string, keepState bool, reason string) (Leg, error) {
 	m := readManifest(leg.Worktree)
 	if m.SHA == "" {
 		return leg, conflict("TESTING_NOT_PREPARED", "leg "+leg.Name+" has no build; run `ao testing prepare`")
 	}
 	dir := s.store.legDir(runID, leg.Name)
-	for _, sub := range []string{"electron", "data", "logs"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o750); err != nil {
-			return leg, err
-		}
-	}
-	if err := writeWindowLabel(dir); err != nil {
-		return leg, err
-	}
-	ports, err := freePorts(2)
+	ports, err := s.sys.freePorts(2)
 	if err != nil {
 		return leg, err
 	}
@@ -347,8 +423,20 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 		nodeDir = filepath.Dir(m.NodePath)
 	}
 	env := legEnv(r, runID, pr, leg.Name, dir, leg.Worktree, nodeDir, ports[0], ports[1])
+	env, err = prepareLegEnv(env, dir, s.ownerHome)
+	if err != nil {
+		return leg, fmt.Errorf("litmus: prepare %s shell setup: %w", leg.Name, err)
+	}
+	for _, sub := range []string{"electron", "data", "logs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o750); err != nil {
+			return leg, err
+		}
+	}
+	if err := writeWindowLabel(dir); err != nil {
+		return leg, err
+	}
 	logPath := filepath.Join(dir, "logs", "dev.log")
-	logf, err := os.Create(logPath)
+	logf, err := openLaunchLog(filepath.Dir(logPath), s.clock(), s.scrub(reason))
 	if err != nil {
 		return leg, err
 	}
@@ -367,10 +455,24 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 	start, _ := s.sys.startTime(cmd.Process.Pid)
 	o := Owned{RunID: runID, Leg: leg.Name, PGID: Proc{cmd.Process.Pid, start}, DaemonPort: ports[0], DebugPort: ports[1], State: "running"}
 	fail := func(err error) (Leg, error) {
-		_ = cleanLeg(context.Background(), s.sys, dir, false)
-		_ = s.pruneClone(context.Background(), leg.Worktree) // the private AO may have registered a worktree before it failed
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TeardownBudget)
+		defer cancel()
+		var cleanupErr error
+		if keepState {
+			cleanupErr = killLeg(cleanupCtx, s.sys, dir)
+		} else {
+			cleanupErr = s.cleanLeg(cleanupCtx, runID, leg.Name)
+		}
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup target: %w", cleanupErr))
+		}
+		if !keepState { // relaunch keeps the private AO's registered worktrees
+			if pruneErr := s.pruneClone(cleanupCtx, leg.Worktree); pruneErr != nil {
+				err = errors.Join(err, fmt.Errorf("prune target worktree: %w", pruneErr))
+			}
+		}
 		leg.State = "failed"
-		return leg, fmt.Errorf("%s (logs in %s)", clip(err.Error(), 400), filepath.Dir(logPath))
+		return leg, fmt.Errorf("%s (logs in %s): %w", clip(err.Error(), 400), filepath.Dir(logPath), err)
 	}
 	if err := writeOwned(dir, o); err != nil {
 		sigkillGroup(cmd.Process.Pid)
@@ -378,11 +480,20 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 	}
 
 	rc := readyCheck{daemon: "http://127.0.0.1:" + strconv.Itoa(ports[0]), debug: "http://127.0.0.1:" + strconv.Itoa(ports[1]), ready: r.Ready}
-	if err := waitReady(ctx, rc, readyLimit, exited); err != nil {
+	appURL, err := waitReady(ctx, rc, readyLimit, exited)
+	if err != nil {
 		return fail(err)
 	}
+	if origin := appOrigin(appURL); origin == "" {
+		return fail(fmt.Errorf("identify app URL at readiness: unsupported URL %q", diagnosticURL(appURL)))
+	} else {
+		leg.Engine = &EngineInfo{AppOrigin: origin}
+	}
 	w.lap("ready")
-	o.Electron = s.electronProc("--remote-debugging-port=" + strconv.Itoa(ports[1]))
+	o.Electron, err = s.electronProc("--remote-debugging-port=" + strconv.Itoa(ports[1]))
+	if err != nil {
+		return fail(err)
+	}
 	var rf struct{ PID int }
 	if data, err := os.ReadFile(filepath.Join(dir, "running.json")); err == nil && json.Unmarshal(data, &rf) == nil && rf.PID > 0 {
 		o.Daemon.PID = rf.PID
@@ -391,7 +502,16 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 	if err := writeOwned(dir, o); err != nil {
 		return fail(err)
 	}
-	if err := s.seed(ctx, r.Seed, env, leg.Worktree, dir); err != nil {
+	if keepState {
+		seedLog, err := os.OpenFile(filepath.Join(dir, "logs", "seed.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err == nil {
+			_, err = fmt.Fprintln(seedLog, "relaunch: data dir kept, seed not re-run")
+			err = errors.Join(err, seedLog.Close())
+		}
+		if err != nil {
+			return fail(fmt.Errorf("log skipped seed: %w", err))
+		}
+	} else if err := s.seed(ctx, r.Seed, env, leg.Worktree, dir); err != nil {
 		gap, ok := seedGapOf(ctx, exited, leg.Name, err)
 		if seedGap == nil || !ok {
 			return fail(err)
@@ -408,8 +528,11 @@ func (s *Service) startLeg(ctx context.Context, runID string, pr int, r Recipe, 
 // electronProc finds the Electron browser process of a leg: the one whose argv carries flag and no --type= (renderer,
 // GPU and utility helpers inherit the debugging flag but are never the process to kill), lowest pid first. An
 // Electron binary wins over the npm and node wrappers that were given the same flag.
-func (s *Service) electronProc(flag string) Proc {
-	procs := s.sys.procs()
+func (s *Service) electronProc(flag string) (Proc, error) {
+	procs, err := s.sys.procs()
+	if err != nil {
+		return Proc{}, fmt.Errorf("list processes for Electron: %w", err)
+	}
 	var best int
 	for _, pid := range slices.Sorted(maps.Keys(procs)) {
 		args := strings.Fields(procs[pid])
@@ -424,7 +547,7 @@ func (s *Service) electronProc(flag string) Proc {
 	if best > 0 {
 		p.Start, _ = s.sys.startTime(best)
 	}
-	return p
+	return p, nil
 }
 
 // seedError is a seed step that failed: which one, and what it said.
@@ -452,7 +575,7 @@ func seedGapOf(ctx context.Context, exited <-chan struct{}, leg string, err erro
 		return "", false
 	}
 	build := map[string]string{"head": "PR", "base": "main"}[leg]
-	return fmt.Sprintf("The %s build started without its sample content (seed step %d failed: %s).", build, se.step, strings.Join(strings.Fields(se.reason), " ")), true
+	return fmt.Sprintf("The %s build started without its sample content (seed step %d failed).", build, se.step), true
 }
 
 // seed runs the recipe's seed steps in order, each under its own timeout, waiting for its waitFor.
@@ -474,6 +597,9 @@ func (s *Service) seed(ctx context.Context, steps []SeedStep, env []string, root
 		}
 		cancel()
 		if err != nil {
+			if _, logErr := fmt.Fprintf(logf, "seed step %d failed: %v\n", i+1, err); logErr != nil {
+				slog.Warn("litmus: could not write seed failure diagnostic", "step", i+1, "error", err, "logError", logErr)
+			}
 			return &seedError{step: i + 1, cmd: clip(st.Cmd, 80), reason: clip(cmp.Or(detail, err.Error()), 300)}
 		}
 	}
@@ -510,30 +636,46 @@ func (s *Service) Launch(ctx context.Context, sessionID, leg string) (Run, error
 		return Run{}, conflict("TESTING_NOT_PREPARED", "run `ao testing prepare` before launching "+leg)
 	}
 	if run.Legs[i].State == "running" {
-		return Run{}, conflict("TESTING_LEG_RUNNING", leg+" is already running")
+		return Run{}, conflict("TESTING_LEG_RUNNING", leg+" is already running; use: ao testing relaunch "+leg)
 	}
-	if checks, err := s.store.Checks(run.ID); err != nil {
-		return Run{}, err
-	} else if len(checks) < minChecks {
-		return Run{}, conflict("TESTING_CHECKS_REQUIRED", fmt.Sprintf("declare at least %d checks before launching (have %d): ao testing check add <name> --expect \"<observable>\"", minChecks, len(checks)))
+	owned, ownershipErr := readOwned(s.store.legDir(run.ID, leg))
+	if ownershipErr == nil && owned.State != "cleaned" {
+		return Run{}, conflict("TESTING_LEG_RUNNING", leg+" still has uncleaned target ownership; use: ao testing relaunch "+leg)
+	}
+	if ownershipErr != nil && (!os.IsNotExist(ownershipErr) || run.Legs[i].PID > 0) {
+		return Run{}, launchError(leg, fmt.Errorf("cannot verify prior leg ownership: %w", ownershipErr))
 	}
 	recipe, err := s.store.LoadRecipe(run.Repo)
 	if err != nil {
 		return Run{}, err
 	}
+	if err := s.resetTeardown(run.ID); err != nil {
+		return Run{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launchBudget(len(recipe.Seed)))
 	defer cancel()
 	var seedGap string
-	started, lerr := s.startLeg(ctx, run.ID, run.PRNumber, recipe, run.Legs[i], newLaps(), &seedGap)
+	started, lerr := s.startLeg(ctx, run.ID, run.PRNumber, recipe, run.Legs[i], newLaps(), &seedGap, false, "launch")
 	if lerr == nil {
 		started, lerr = s.attachEngine(ctx, run.ID, started)
+		if lerr != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TeardownBudget)
+			lerr = errors.Join(lerr, s.cleanLeg(cleanupCtx, run.ID, leg))
+			cancel()
+		}
 	}
 	if lerr == nil { // each leg records its own window, so a video never shows the other build
 		started = s.startRecording(ctx, run.ID, started)
 	}
+	if lerr == nil && started.Control == nil {
+		started.Control = &LegControl{State: "ok"}
+	}
 	seedGap = s.scrub(seedGap)
 	out, err := s.update(run.ID, func(cur *Run) {
 		if j := slices.IndexFunc(cur.Legs, func(l Leg) bool { return l.Name == leg }); j >= 0 {
+			if cur.Legs[j].Control != nil {
+				started.Control = cur.Legs[j].Control
+			}
 			cur.Legs[j] = started
 		}
 		if lerr == nil && !cur.State.Closed() {
@@ -559,43 +701,161 @@ func launchError(leg string, err error) error {
 	return conflict("TESTING_LAUNCH_FAILED", "launch "+leg+" failed: "+err.Error())
 }
 
-// cleanLeg stops everything a leg started and deletes its private state, keeping logs and
-// owned.json (marked cleaned). A process is only killed when its start time still matches.
-func cleanLeg(ctx context.Context, sys sysOps, dir string, checkPorts bool) error {
+// killLeg stops only this leg's owned processes. It leaves ownership and profile
+// files intact until every owned PID has exited and both ports are free.
+func killLeg(ctx context.Context, sys sysOps, dir string) error {
 	o, err := readOwned(dir)
-	if errors.Is(err, fs.ErrNotExist) || o.State == "cleaned" {
+	if errors.Is(err, fs.ErrNotExist) || err == nil && o.State == "cleaned" {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if t, ok := sys.startTime(o.PGID.PID); o.PGID.PID > 0 && (!ok || t.Equal(o.PGID.Start)) { // a leader that is gone may still have children
-		sys.killGroup(o.PGID.PID)
+	procs, err := sys.procs()
+	if err != nil {
+		return fmt.Errorf("list processes for cleanup: %w", err)
 	}
-	reap := func(p Proc) { // kill only the process we started; a gone one just leaves its browser dirs behind
-		if t, ok := sys.startTime(p.PID); p.PID > 0 && !ok {
-			sys.rmBrowser(p.PID)
-		} else if ok && !p.Start.IsZero() && t.Equal(p.Start) {
+	for _, p := range []Proc{o.PGID, o.Daemon, o.Electron} {
+		if p.PID <= 0 || !p.Start.IsZero() {
+			continue
+		}
+		_, known := sys.startTime(p.PID)
+		_, listed := procs[p.PID]
+		if known || listed {
+			return fmt.Errorf("cannot verify owned pid %d: start time is missing", p.PID)
+		}
+	}
+	tracked := map[int]Proc{}
+	track := func(pid int) {
+		start, _ := sys.startTime(pid)
+		tracked[pid] = Proc{PID: pid, Start: start}
+	}
+	if o.PGID.PID > 0 {
+		leaderStart, known := sys.startTime(o.PGID.PID)
+		_, listed := procs[o.PGID.PID]
+		if !known && listed {
+			return fmt.Errorf("cannot verify leg process group %d: leader start time is unknown", o.PGID.PID)
+		}
+		if !known || !o.PGID.Start.IsZero() && leaderStart.Equal(o.PGID.Start) {
+			pids, err := sys.groupPIDs(o.PGID.PID)
+			if err != nil {
+				return fmt.Errorf("list leg process group: %w", err)
+			}
+			authorized := known
+			for _, pid := range pids {
+				if strings.Contains(procs[pid], dir+string(filepath.Separator)) {
+					authorized = true
+				}
+				for _, owned := range []Proc{o.Electron, o.Daemon} {
+					t, ok := sys.startTime(pid)
+					if owned.PID == pid && !owned.Start.IsZero() && ok && t.Equal(owned.Start) {
+						authorized = true
+					}
+				}
+			}
+			if !authorized && len(pids) > 0 {
+				return fmt.Errorf("cannot verify leaderless leg process group %d ownership", o.PGID.PID)
+			}
+			if authorized {
+				for _, pid := range pids {
+					track(pid)
+				}
+				if known {
+					tracked[o.PGID.PID] = o.PGID
+				}
+				sys.killGroup(o.PGID.PID)
+			}
+		}
+	}
+
+	reap := func(p Proc) {
+		if p.PID <= 0 {
+			return
+		}
+		t, ok := sys.startTime(p.PID)
+		if !ok {
+			// A process-list entry with no start time is not confirmed dead.
+			if _, live := procs[p.PID]; live {
+				tracked[p.PID] = p
+			} else {
+				sys.rmBrowser(p.PID)
+			}
+		} else if !p.Start.IsZero() && t.Equal(p.Start) {
+			tracked[p.PID] = p
 			sys.kill(p.PID)
 			sys.rmBrowser(p.PID)
 		}
 	}
 	reap(o.Daemon)
 	reap(o.Electron)
-	needles := []string{dir + string(filepath.Separator), tmuxSocket(o.RunID, o.Leg)}
-	procs := sys.procs()
+	tmux := tmuxSocket(o.RunID, o.Leg)
 	for _, pid := range slices.Sorted(maps.Keys(procs)) {
-		if pid != os.Getpid() && slices.ContainsFunc(needles, func(n string) bool { return strings.Contains(procs[pid], n) }) {
-			sys.kill(pid)
-			sys.rmBrowser(pid)
+		if pid != os.Getpid() && (strings.Contains(procs[pid], dir+string(filepath.Separator)) || hasTmuxSocket(procs[pid], tmux)) {
+			if _, killed := tracked[pid]; !killed {
+				track(pid)
+				sys.kill(pid)
+				sys.rmBrowser(pid)
+			}
 		}
 	}
-	if checkPorts {
-		if err := waitPortsFree(ctx, sys, o.DaemonPort, o.DebugPort); err != nil {
-			return err
+	deadline := time.NewTimer(portWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		live, err := sys.procs()
+		if err != nil {
+			return fmt.Errorf("confirm leg process death: %w", err)
+		}
+		var alive, busy []int
+		for pid, p := range tracked {
+			t, known := sys.startTime(pid)
+			_, listed := live[pid]
+			if known && (p.Start.IsZero() || t.Equal(p.Start)) || listed && !known {
+				alive = append(alive, pid)
+			}
+		}
+		for pid, argv := range live {
+			if pid != os.Getpid() && (strings.Contains(argv, dir+string(filepath.Separator)) || hasTmuxSocket(argv, tmux)) && !slices.Contains(alive, pid) {
+				alive = append(alive, pid)
+			}
+		}
+		for _, port := range []int{o.DaemonPort, o.DebugPort} {
+			if port <= 0 {
+				continue
+			}
+			inUse, err := sys.portBusy(port)
+			if err != nil {
+				return fmt.Errorf("confirm leg port %d free: %w", port, err)
+			}
+			if inUse {
+				busy = append(busy, port)
+			}
+		}
+		if len(alive) == 0 && len(busy) == 0 {
+			return nil
+		}
+		slices.Sort(alive)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("leg death unconfirmed: pids %v alive, ports %v still in use: %w", alive, busy, ctx.Err())
+		case <-deadline.C:
+			return fmt.Errorf("leg death unconfirmed after %s: pids %v alive, ports %v still in use", portWait, alive, busy)
+		case <-tick.C:
 		}
 	}
-	for _, sub := range []string{"electron", "data"} {
+}
+
+// wipeLeg runs only after killLeg confirmed death. Logs and ownership remain.
+func wipeLeg(dir string) error {
+	o, err := readOwned(dir)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && o.State == "cleaned" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, sub := range []string{"electron", "data", "home"} {
 		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
 			return err
 		}
@@ -604,44 +864,111 @@ func cleanLeg(ctx context.Context, sys sysOps, dir string, checkPorts bool) erro
 	return writeOwned(dir, o)
 }
 
-func waitPortsFree(ctx context.Context, sys sysOps, ports ...int) error {
-	deadline := time.Now().Add(portWait)
-	for {
-		var busy []int
-		for _, p := range ports {
-			if p > 0 && sys.portBusy(p) {
-				busy = append(busy, p)
-			}
-		}
-		if len(busy) == 0 {
-			return nil
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("ports %v still in use after cleanup", busy)
-		}
-		time.Sleep(50 * time.Millisecond)
+// All cleanup paths confirm death before deleting profile and app data.
+func cleanLeg(ctx context.Context, sys sysOps, dir string, beforeWipe ...func() error) error {
+	if err := killLeg(ctx, sys, dir); err != nil {
+		return err
 	}
+	for _, inspect := range beforeWipe {
+		if err := inspect(); err != nil {
+			return err
+		}
+	}
+	return wipeLeg(dir)
+}
+
+// Every service path that deletes a leg home captures forks before deletion.
+func (s *Service) cleanLeg(ctx context.Context, id, leg string) error {
+	dir := s.store.legDir(id, leg)
+	if err := cleanLeg(ctx, s.sys, dir, func() error {
+		_, err := s.legHomeForksBeforeWipe(id, leg)
+		return err
+	}); err != nil {
+		return err
+	}
+	var errs []error
+	for _, sub := range []string{"agents", "lib", "bin", "shell", "home", "uv", "pipx"} {
+		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s state for %s: %w", sub, leg, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // teardown stops a run's engines and targets, removes their private state (the worktrees their private AO
 // made go with it), prunes the shared clones those worktrees were registered in and checks the ports are free.
 func (s *Service) teardown(ctx context.Context, run Run) error {
-	defer func() {
-		if line := s.ownerLoginStatus(context.WithoutCancel(ctx), run); line != "" {
-			_ = s.store.WriteFile(run.ID, "run.log", []byte(line+"\n"))
+	unlock := s.lockRun(run.ID)
+	defer unlock()
+	current, err := s.store.Get(run.ID)
+	if err != nil {
+		return err
+	}
+	if current.TeardownComplete {
+		if err := s.finishHomeGuard(run.ID); err != nil {
+			return err
 		}
-	}()
+		return s.refreshHomeChangesVerdictLocked(run.ID)
+	}
+	run = current
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TeardownBudget)
+	defer cancel()
 	if s.closeEngine != nil {
 		s.closeEngine(run.ID)
 	}
-	errs := make([]error, 0, 2+len(run.Legs))
+	errs := make([]error, 0, 8+len(run.Legs))
+	stopped := true
+	cleaned := map[string]bool{}
 	for _, leg := range []string{"head", "base"} {
-		errs = append(errs, cleanLeg(ctx, s.sys, s.store.legDir(run.ID, leg), true))
+		if err := s.cleanLeg(ctx, run.ID, leg); err != nil {
+			stopped = false
+			errs = append(errs, err)
+			continue
+		}
+		cleaned[leg] = true
 	}
 	for _, l := range run.Legs {
 		errs = append(errs, s.pruneClone(ctx, l.Worktree))
 	}
+	complete := errors.Join(errs...) == nil
+	if len(run.Legs) > 0 || complete {
+		_, err := s.update(run.ID, func(cur *Run) {
+			cur.TeardownComplete = complete
+			for i := range cur.Legs {
+				if cleaned[cur.Legs[i].Name] {
+					cur.Legs[i].State = "cleaned"
+				}
+			}
+		})
+		errs = append(errs, err)
+	}
+	if stopped {
+		if err := s.finishHomeGuard(run.ID); err != nil {
+			errs = append(errs, err)
+		} else {
+			errs = append(errs, s.refreshHomeChangesVerdictLocked(run.ID))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// An open run can launch again after stale cleanup. Invalidate its previous
+// completion before spawning so a later close stops the new target and scans home again.
+func (s *Service) resetTeardown(id string) error {
+	unlock := s.lockRun(id)
+	defer unlock()
+	path := filepath.Join(s.store.root, id, homeChangesFile)
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil && !strings.HasSuffix(string(data), pendingHomeReportSuffix) && !strings.HasSuffix(string(data), incompleteHomeReportSuffix) {
+		if err := s.store.WriteFile(id, homeChangesFile, append(data, []byte("\n"+pendingHomeReportSuffix)...)); err != nil {
+			return err
+		}
+	}
+	_, err = s.update(id, func(cur *Run) { cur.TeardownComplete = false })
+	return err
 }
 
 // Cleanup stops both legs, deletes their private state and closes the run. It
@@ -658,6 +985,7 @@ func (s *Service) Cleanup(ctx context.Context, sessionID string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	s.warnOwnerLogin(ctx, sessionID)
 	s.mu.Lock()
 	done, err := s.markBusy(run.ID, "cleanup")
 	s.mu.Unlock()
@@ -667,46 +995,155 @@ func (s *Service) Cleanup(ctx context.Context, sessionID string) (Run, error) {
 	defer done()
 	run = s.stopRecording(ctx, run) // while the engines are still alive
 	failed := s.teardown(ctx, run)
+	s.warnOwnerLogin(ctx, sessionID)
 	out, err := s.update(run.ID, func(cur *Run) {
-		for i := range cur.Legs {
-			if failed == nil {
-				cur.Legs[i].State = "cleaned"
-			}
-		}
 		if failed == nil && !cur.State.Closed() {
 			cur.State = RunCleaned
 		}
 	})
+	if err == nil && out.State.Closed() && s.sweepAfterClose != nil {
+		s.sweepAfterClose()
+	}
 	return out, errors.Join(failed, err)
 }
 
-// SweepStale stops targets left behind by an earlier daemon: every leg whose owned.json is
-// not marked cleaned. Called once when the daemon starts.
+// SweepStale stops targets left behind by an earlier daemon and finishes pending
+// home reports, including closed runs that never launched. Also runs after a run closes.
 func SweepStale(dataDir string, log *slog.Logger) { sweepStale(dataDir, realSys(), log) }
 
 func sweepStale(dataDir string, sys sysOps, log *slog.Logger) {
-	store := NewStore(dataDir)
-	files, _ := filepath.Glob(filepath.Join(store.root, "*", "*", "owned.json"))
-	for _, f := range files {
-		dir := filepath.Dir(f)
-		o, err := readOwned(dir)
-		if err != nil || o.State == "cleaned" {
+	guard := &Service{store: NewStore(dataDir), sys: sys, runner: execRunner{}, clock: time.Now, busy: map[string]busyVerb{}}
+	guard.sweepStale(log)
+}
+
+func (s *Service) sweepStale(log *slog.Logger) {
+	s.staleSweepMu.Lock()
+	defer s.staleSweepMu.Unlock()
+	store := s.store
+	entries, err := os.ReadDir(store.root)
+	if err != nil && !os.IsNotExist(err) {
+		log.Warn("litmus: could not scan leftover targets", "error", err)
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if err := cleanLeg(context.Background(), sys, dir, false); err != nil {
-			log.Warn("litmus: could not stop a leftover target", "run", o.RunID, "leg", o.Leg, "error", err)
+		done, ok := s.beginStaleSweep(entry.Name())
+		if !ok {
 			continue
 		}
-		log.Info("litmus: stopped a leftover target", "run", o.RunID, "leg", o.Leg)
-		if run, err := store.Get(o.RunID); err == nil {
-			for i := range run.Legs {
-				if run.Legs[i].Name == o.Leg {
-					run.Legs[i].State = "cleaned"
+		unlock := s.lockRun(entry.Name())
+		stopped, complete := false, true
+		guard := s
+		ctx, cancel := context.WithTimeout(context.Background(), TeardownBudget)
+		cleaned := map[string]bool{}
+		for _, leg := range []string{"head", "base"} {
+			dir := store.legDir(entry.Name(), leg)
+			info, err := os.Lstat(dir)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil || !info.IsDir() {
+				complete = false
+				log.Warn("litmus: cannot verify leftover leg directory", "dir", dir, "error", err)
+				continue
+			}
+			o, err := readOwned(dir)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				complete = false
+				log.Warn("litmus: cannot read leftover target ownership", "dir", dir, "error", err)
+				continue
+			}
+			run, runErr := store.Get(entry.Name())
+			if runErr == nil && run.TeardownComplete {
+				cleaned[leg] = true
+				continue
+			}
+			if err := guard.cleanLeg(ctx, entry.Name(), leg); err != nil {
+				complete = false
+				log.Warn("litmus: could not stop a leftover target", "run", o.RunID, "leg", o.Leg, "error", err)
+				continue
+			}
+			stopped = true
+			cleaned[leg] = true
+			if o.State != "cleaned" {
+				log.Info("litmus: stopped a leftover target", "run", o.RunID, "leg", o.Leg)
+			}
+		}
+		run, runErr := store.Get(entry.Name())
+		reportReady := stopped
+		if runErr == nil {
+			if run.State.Closed() || run.TeardownComplete {
+				reportReady = true // A blocked submission may never have launched a leg.
+			}
+			for _, leg := range run.Legs {
+				if !cleaned[leg.Name] && leg.State != "cleaned" && !(leg.State == "prepared" && leg.PID == 0) {
+					complete = false
+					log.Warn("litmus: cannot confirm leftover leg cleanup without ownership", "run", run.ID, "leg", leg.Name)
 				}
 			}
-			_ = store.Save(run)
+		}
+		if stopped {
+			if runErr == nil {
+				for i := range run.Legs {
+					if err := guard.pruneClone(ctx, run.Legs[i].Worktree); err != nil {
+						complete = false
+						log.Warn("litmus: could not prune leftover worktrees", "run", run.ID, "leg", run.Legs[i].Name, "error", err)
+					}
+				}
+				_, err := guard.update(run.ID, func(cur *Run) {
+					cur.TeardownComplete = complete
+					for i := range cur.Legs {
+						if cleaned[cur.Legs[i].Name] {
+							cur.Legs[i].State = "cleaned"
+						}
+					}
+				})
+				if err != nil {
+					log.Warn("litmus: could not save stale cleanup leg states", "run", run.ID, "error", err)
+				}
+			} else if !os.IsNotExist(runErr) {
+				log.Warn("litmus: could not read stale cleanup run", "run", entry.Name(), "error", runErr)
+			}
+		}
+		if reportReady && complete {
+			if err := guard.finishHomeGuard(entry.Name()); err != nil {
+				log.Warn("litmus: could not compare owner home after stale cleanup", "run", entry.Name(), "error", err)
+			} else if err := guard.refreshHomeChangesVerdictLocked(entry.Name()); err != nil {
+				log.Warn("litmus: could not refresh owner home verdict after stale cleanup", "run", entry.Name(), "error", err)
+			}
+		}
+		cancel()
+		unlock()
+		done()
+	}
+}
+
+// Reserve cleanup under the same mutex as launches, so adoption cannot race the sweep.
+func (s *Service) beginStaleSweep(id string) (func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run, err := s.store.Get(id); err == nil {
+		// Completed teardown only needs a pending or timed-out home report
+		// retried. Do not reserve a sweep that would block an owner's post with
+		// no work to do.
+		if run.TeardownComplete {
+			report, err := os.ReadFile(filepath.Join(s.store.root, id, homeChangesFile))
+			if err == nil && len(report) > 0 && !homeReportNeedsRetry(string(report)) {
+				return nil, false
+			}
+		}
+		// This daemon still owns engines/recorders until its teardown finishes.
+		if s.ownedRuns[id] && (!run.State.Closed() || !run.TeardownComplete) {
+			return nil, false
 		}
 	}
+	done, err := s.markBusy(id, "sweep")
+	return done, err == nil
 }
 
 // RecipeValidate parses a recipe file. With a "@<sha>" suffix on the path (see
@@ -728,13 +1165,22 @@ func (s *Service) RecipeValidate(ctx context.Context, ref string) (Recipe, error
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RecipeValidateBudget)
 	defer cancel()
 	id, w := fmt.Sprintf("validate_%d", time.Now().Unix()), newLaps()
+	s.mu.Lock()
+	done, err := s.markBusy(id, "launch head")
+	s.mu.Unlock()
+	if err != nil {
+		return Recipe{}, err
+	}
+	defer done()
 	leg, err := s.prepareLeg(ctx, cmp.Or(r.Repo, DefaultRepo), r, "head", sha)
 	w.lap("prepare")
 	if err == nil {
-		_, err = s.startLeg(ctx, id, 0, r, leg, w, nil)
+		_, err = s.startLeg(ctx, id, 0, r, leg, w, nil, false, "recipe validation")
 	}
 	if err == nil {
-		err = cleanLeg(ctx, s.sys, s.store.legDir(id, "head"), true)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), TeardownBudget)
+		err = s.cleanLeg(cleanupCtx, id, "head")
+		cancel()
 		w.lap("cleanup")
 	}
 	if err != nil {

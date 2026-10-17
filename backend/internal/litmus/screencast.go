@@ -45,6 +45,7 @@ type screencast struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	dir             string
+	file            string // recording path relative to the run directory
 	clock           func() time.Time
 	elapsed         func() time.Duration
 	resolve         func(context.Context) (string, error)
@@ -319,8 +320,8 @@ func frameConcatList(dir string, frames []screencastFrame, meta screencastManife
 
 func screencastArgs(list, out string, duration time.Duration) []string {
 	return []string{"-y", "-f", "concat", "-safe", "0", "-i", list,
-		"-vf", "scale=1320:780:force_original_aspect_ratio=decrease,pad=1320:780:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=5",
-		"-r", "5", "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", "5", "-movflags", "+faststart",
+		"-vf", fmt.Sprintf("scale=1320:780:force_original_aspect_ratio=decrease,pad=1320:780:(ow-iw)/2:(oh-ih)/2,format=yuv420p,fps=%d", recordingFPS),
+		"-r", fmt.Sprint(recordingFPS), "-fps_mode", "cfr", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-g", fmt.Sprint(recordingFPS), "-movflags", "+faststart",
 		// fps fills sparse holds before output trim. JPEG EOF duration can be
 		// guessed from the previous gap, so bound that tail to the wall interval.
 		"-t", fmt.Sprintf("%.3f", duration.Seconds()), out}
@@ -393,8 +394,20 @@ func readRecording(dir string, started time.Time) (screencastManifest, []screenc
 	return meta, frames, nil
 }
 
+type frameConcatListFunc func(string, []screencastFrame, screencastManifest) (string, error)
+
+type recordingBuildOptions struct {
+	drawTimeout func(int) time.Duration
+	concat      frameConcatListFunc
+}
+
 func (s *Service) buildRecording(ctx context.Context, runID, leg string) error {
-	dir := filepath.Join(s.store.root, runID, leg)
+	return s.buildRecordingWithOptions(ctx, runID, leg, recordingBuildOptions{})
+}
+
+// The options keep drawing, frame-list generation, and ffmpeg's deadlines
+// independently testable without invoking ffmpeg.
+func (s *Service) buildRecordingWithOptions(ctx context.Context, runID, leg string, options recordingBuildOptions) error {
 	var started time.Time
 	if run, err := s.store.Get(runID); err == nil {
 		for _, l := range run.Legs {
@@ -404,31 +417,100 @@ func (s *Service) buildRecording(ctx context.Context, runID, leg string) error {
 			}
 		}
 	}
-	meta, frames, err := readRecording(dir, started)
-	if err != nil {
+	return s.buildRecordingSegment(ctx, runID, leg, RecordSegment{File: filepath.Join(leg, leg+".mp4"), StartedAt: started}, options)
+}
+
+func (s *Service) buildRecordingSegment(ctx context.Context, runID, leg string, segment RecordSegment, options recordingBuildOptions) error {
+	runDir := filepath.Join(s.store.root, runID)
+	dir := segmentCaptureDir(runDir, leg, segment.File)
+	if options.drawTimeout == nil {
+		options.drawTimeout = recordingEncodeTimeout
+	}
+	if options.concat == nil {
+		options.concat = frameConcatList
+	}
+	var meta screencastManifest
+	var frames []screencastFrame
+	var plainList string
+	if err := videoStep(ctx, runID, leg, "frame-index", videoTimeout, func(context.Context) error {
+		var err error
+		meta, frames, err = readRecording(dir, segment.StartedAt)
+		if err == nil {
+			plainList, err = options.concat(dir, frames, meta)
+		}
+		return err
+	}); err != nil {
 		return err
 	}
-	list, err := frameConcatList(dir, frames, meta)
-	if err != nil {
+	if segment.StartedAt.IsZero() {
+		segment.StartedAt = meta.StartedWall
+	}
+	outputFrames := recordingOutputFrameCount(recordingLength(meta))
+	problem := func(err error) {
+		message := "pointer overlay: " + clip(cell(err.Error()), 400)
+		s.engineLog(runID, leg, "recording: "+message)
+		if !slices.Contains(meta.Problems, message) {
+			meta.Problems = append(meta.Problems, message)
+			data, writeErr := json.MarshalIndent(meta, "", "  ")
+			if writeErr == nil {
+				writeErr = writeAtomic(filepath.Join(dir, "manifest.json"), data)
+			}
+			if writeErr != nil {
+				s.engineLog(runID, leg, "recording: save pointer problem: "+writeErr.Error())
+			}
+		}
+	}
+	list := plainList
+	var deferCopies string
+	defer func() {
+		if deferCopies != "" {
+			if err := os.RemoveAll(deferCopies); err != nil {
+				problem(fmt.Errorf("remove drawn frames: %w", err))
+			}
+		}
+	}()
+	drawErr := videoStep(ctx, runID, leg, "frame-draw", options.drawTimeout(outputFrames), func(drawCtx context.Context) error {
+		actions, err := readPointerActions(runDir)
+		if err != nil {
+			return err
+		}
+		actions = segmentActions(actions, leg, segment, recordingLength(meta))
+		var copies string
+		var drawn []screencastFrame
+		copies, drawn, err = drawPointerFrames(drawCtx, dir, leg, frames, meta, actions)
+		if copies != "" {
+			// These files must outlive this step, through the raw encode.
+			deferCopies = copies
+			if err == nil {
+				err = drawCtx.Err()
+			}
+			if err == nil {
+				list, err = options.concat(copies, drawn, meta)
+			}
+		}
 		return err
+	})
+	if drawErr != nil {
+		// Cursor rendering must not discard otherwise playable evidence. Its
+		// failure remains in the recording manifest and engine log.
+		list = plainList
+		problem(drawErr)
 	}
 	listPath := filepath.Join(dir, "frames-concat.txt")
-	if err := os.WriteFile(listPath, []byte(list), 0o600); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, recordingEncodeTimeout(len(frames)))
-	defer cancel()
-	out := recordingPath(filepath.Join(s.store.root, runID), leg)
+	out := filepath.Join(runDir, segment.File)
 	length := recordingLength(meta)
-	if err := s.media.Run(ctx, screencastArgs(listPath, out, length)...); err != nil {
+	if err := videoStep(ctx, runID, leg, "raw-encode", recordingEncodeTimeout(outputFrames), func(ctx context.Context) error {
+		if err := os.WriteFile(listPath, []byte(list), 0o600); err != nil {
+			return err
+		}
+		return s.media.Run(ctx, screencastArgs(listPath, out, length)...)
+	}); err != nil {
 		_ = os.Remove(out)
 		return err
 	}
-	duration, ok := s.recordingDuration(ctx, out)
-	want := length.Seconds()
-	if !ok || duration < want-2 || duration > want+2 {
+	if _, err := s.probeVideo(ctx, out, length); err != nil {
 		_ = os.Remove(out)
-		return fmt.Errorf("recording duration %.3fs, expected %.3fs within 2s; keeping frames", duration, want)
+		return err
 	}
 	return os.RemoveAll(filepath.Join(dir, "frames"))
 }
@@ -445,12 +527,19 @@ func (s *Service) engineLog(runID, leg, line string) {
 }
 
 func (s *Service) startRecording(ctx context.Context, runID string, leg Leg) Leg {
+	started, err := s.startRecordingSegment(ctx, runID, leg)
+	if err != nil {
+		s.recordingProblem(runID, leg.Name, err)
+	}
+	return started
+}
+
+func (s *Service) startRecordingSegment(ctx context.Context, runID string, leg Leg) (Leg, error) {
 	e := s.engineFor(runID, leg)
 	// Pin once; reconnect discovery does not hold the action lock.
 	url, resolve, err := e.recordingPageResolver(ctx)
 	if err != nil {
-		s.recordingProblem(runID, leg.Name, err)
-		return leg
+		return leg, err
 	}
 	first := true
 	lookup := func(ctx context.Context) (string, error) {
@@ -460,21 +549,41 @@ func (s *Service) startRecording(ctx context.Context, runID string, leg Leg) Leg
 		}
 		return resolve(ctx)
 	}
-	leg.RecordStartedAt, leg.RecordStoppedAt = s.clock(), time.Time{}
+	leg.RecordSegments = recordingSegments(leg)
+	file := filepath.Join(leg.Name, leg.Name+".mp4")
+	if len(leg.RecordSegments) > 0 {
+		file = filepath.Join(leg.Name, fmt.Sprintf("%s.seg%d.mp4", leg.Name, len(leg.RecordSegments)+1))
+	}
+	started := s.clock()
+	dir := segmentCaptureDir(filepath.Join(s.store.root, runID), leg.Name, file)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return leg, fmt.Errorf("create recording directory: %w", err)
+	}
+	if leg.RecordStartedAt.IsZero() {
+		leg.RecordStartedAt = started
+	}
+	leg.RecordStoppedAt = time.Time{}
+	leg.RecordSegments = append(leg.RecordSegments, RecordSegment{File: file, StartedAt: started})
 	s.recorderMu.Lock()
 	defer s.recorderMu.Unlock()
 	if s.recorders == nil {
 		s.recorders = map[string]*screencast{}
 	}
-	s.recorders[runID+"/"+leg.Name] = newScreencast(e.life, s.store.legDir(runID, leg.Name), leg.RecordStartedAt, s.clock, nil, lookup,
+	factory := s.newRecorder
+	if factory == nil {
+		factory = newScreencast
+	}
+	r := factory(e.life, dir, started, s.clock, nil, lookup,
 		func(err error) { s.engineLog(runID, leg.Name, "recording: "+clip(cell(err.Error()), 400)) })
-	return leg
+	r.file = file
+	s.recorders[runID+"/"+leg.Name] = r
+	return leg, nil
 }
 
 func (s *Service) recordingProblem(runID, leg string, err error) {
 	s.engineLog(runID, leg, "recording: "+clip(cell(err.Error()), 400))
 	build := map[string]string{"head": "PR", "base": "main"}[leg]
-	note := s.scrub("The " + build + " build's recording was not available: " + strings.TrimRight(clip(cell(err.Error()), 400), ".") + ".")
+	note := "The " + build + " build's recording was not available."
 	_, _ = s.update(runID, func(run *Run) {
 		if !slices.Contains(run.Gaps, note) {
 			run.Gaps = append(run.Gaps, note)
@@ -485,67 +594,109 @@ func (s *Service) recordingProblem(runID, leg string, err error) {
 // stopRecording settles both captures before encoding. Capture trouble goes to
 // engine.log; only an absent playable recording adds a verdict gap.
 func (s *Service) stopRecording(ctx context.Context, run Run) Run {
-	stopped, started := map[string]time.Time{}, map[string]time.Time{}
-	var build []string
-	for _, leg := range run.Legs {
-		key := run.ID + "/" + leg.Name
-		s.recorderMu.Lock()
-		r := s.recorders[key]
-		delete(s.recorders, key)
-		s.recorderMu.Unlock()
-		dir := s.store.legDir(run.ID, leg.Name)
-		orphan := fileExists(filepath.Join(dir, "frames.jsonl")) && isRecordingFrameDir(filepath.Join(dir, "frames"))
-		if r == nil && !orphan && (leg.RecordStartedAt.IsZero() || !leg.RecordStoppedAt.IsZero()) {
-			continue
-		}
-		stopped[leg.Name] = s.clock()
+	runDir := filepath.Join(s.store.root, run.ID)
+	// Stop every capture before starting any encode.
+	for i := range run.Legs {
+		leg := &run.Legs[i]
+		r := s.takeRecorder(run.ID, leg.Name)
 		if r != nil {
-			if err := r.stop(stopped[leg.Name]); err != nil {
+			if err := r.stop(s.clock()); err != nil {
 				s.engineLog(run.ID, leg.Name, "recording: "+err.Error())
 			}
-			started[leg.Name], stopped[leg.Name] = r.meta.StartedWall, r.meta.StoppedWall
-		} else if orphan {
-			meta, _, err := readRecording(dir, leg.RecordStartedAt)
-			if err == nil {
-				started[leg.Name], stopped[leg.Name] = meta.StartedWall, meta.StoppedWall
+			if leg.RecordStartedAt.IsZero() {
+				leg.RecordStartedAt = r.meta.StartedWall
 			}
-		} else {
-			if !s.probeRecording(ctx, recordingPath(filepath.Join(s.store.root, run.ID), leg.Name)) {
-				s.recordingProblem(run.ID, leg.Name, fmt.Errorf("capture is no longer running"))
+			leg.RecordStoppedAt = r.meta.StoppedWall
+		}
+		for _, segment := range recordingSegments(*leg) {
+			dir := segmentCaptureDir(runDir, leg.Name, segment.File)
+			if isRecordingFrameDir(filepath.Join(dir, "frames")) {
+				if meta, _, err := readRecording(dir, segment.StartedAt); err == nil {
+					if leg.RecordStartedAt.IsZero() {
+						leg.RecordStartedAt = meta.StartedWall
+					}
+					leg.RecordStoppedAt = meta.StoppedWall
+				}
 			}
-			continue
 		}
-		build = append(build, leg.Name)
-	}
-	for _, leg := range build {
-		// A previous encode can already have succeeded before a daemon restart.
-		if s.probeRecording(ctx, recordingPath(filepath.Join(s.store.root, run.ID), leg)) {
-			_ = os.RemoveAll(filepath.Join(s.store.legDir(run.ID, leg), "frames"))
-			continue
+		// Recover recordings made before segment metadata was introduced.
+		if leg.RecordStartedAt.IsZero() {
+			dir := s.store.legDir(run.ID, leg.Name)
+			if meta, _, err := readRecording(dir, time.Time{}); err == nil {
+				leg.RecordStartedAt, leg.RecordStoppedAt = meta.StartedWall, meta.StoppedWall
+			}
 		}
-		if err := s.buildRecording(ctx, run.ID, leg); err != nil {
-			s.recordingProblem(run.ID, leg, fmt.Errorf("build recording: %w", err))
+		if !leg.RecordStartedAt.IsZero() && leg.RecordStoppedAt.IsZero() {
+			leg.RecordStoppedAt = s.clock()
 		}
-	}
-
-	if len(stopped) == 0 {
-		return run
 	}
 	out, err := s.update(run.ID, func(cur *Run) {
-		for i, leg := range cur.Legs {
-			if at, ok := started[leg.Name]; ok && leg.RecordStartedAt.IsZero() {
-				cur.Legs[i].RecordStartedAt = at
-			}
-			if at, ok := stopped[leg.Name]; ok && leg.RecordStoppedAt.IsZero() {
-				cur.Legs[i].RecordStoppedAt = at
+		for i := range cur.Legs {
+			for _, leg := range run.Legs {
+				if cur.Legs[i].Name == leg.Name {
+					cur.Legs[i].RecordStartedAt = leg.RecordStartedAt
+					cur.Legs[i].RecordStoppedAt = leg.RecordStoppedAt
+				}
 			}
 		}
 	})
 	if err != nil {
-		s.engineLog(run.ID, "head", "could not save recording stop time: "+err.Error())
+		s.recordingProblem(run.ID, "head", fmt.Errorf("save recording stop time: %w", err))
 		return run
 	}
+	for _, leg := range run.Legs {
+		if leg.RecordJoined {
+			continue
+		}
+		for _, segment := range recordingSegments(leg) {
+			path := segmentSourcePath(runDir, leg.Name, segment.File)
+			dir := segmentCaptureDir(runDir, leg.Name, segment.File)
+			if s.probeRecording(ctx, path) {
+				if err := os.RemoveAll(filepath.Join(dir, "frames")); err != nil {
+					s.recordingProblem(run.ID, leg.Name, fmt.Errorf("remove encoded frames: %w", err))
+				}
+				continue
+			}
+			if err := s.buildRecordingSegment(ctx, run.ID, leg.Name, segment, recordingBuildOptions{}); err != nil {
+				s.recordingProblem(run.ID, leg.Name, fmt.Errorf("build recording: %w", err))
+			}
+		}
+		if len(leg.RecordSegments) > 1 {
+			if err := s.joinRecordingSegments(ctx, run.ID, leg); err != nil {
+				s.engineLog(run.ID, leg.Name, "recording: join segments: "+clip(cell(err.Error()), 400))
+				var note string
+				if _, saveErr := s.update(run.ID, func(cur *Run) {
+					build := map[string]string{"head": "PR", "base": "main"}[leg.Name]
+					note = fmt.Sprintf("The %s build's recording segments could not be joined; the segment files were kept.", build)
+					for _, saved := range cur.Legs {
+						if saved.Name == leg.Name && saved.RecordJoined {
+							note = fmt.Sprintf("The %s build's recording was joined, but its segment files could not be removed.", build)
+						}
+					}
+					note = s.scrub(note)
+					if !slices.Contains(cur.Gaps, note) {
+						cur.Gaps = append(cur.Gaps, note)
+					}
+				}); saveErr != nil {
+					s.engineLog(run.ID, leg.Name, "recording: save join failure: "+saveErr.Error())
+				}
+				s.engineLog(run.ID, leg.Name, note)
+			}
+		}
+	}
+	if latest, err := s.store.Get(run.ID); err == nil {
+		return latest
+	}
 	return out
+}
+
+func (s *Service) takeRecorder(runID, leg string) *screencast {
+	s.recorderMu.Lock()
+	defer s.recorderMu.Unlock()
+	key := runID + "/" + leg
+	r := s.recorders[key]
+	delete(s.recorders, key)
+	return r
 }
 
 func isRecordingFrameDir(path string) bool {

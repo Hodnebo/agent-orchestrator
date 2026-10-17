@@ -1,0 +1,3182 @@
+[
+  {
+    "id": "c1",
+    "name": "Attached open PR branches",
+    "expect": "Branch header matches the attached open PR head and nondefault base.",
+    "state": "pass",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "The session Branch header now shows the attached PR's head and base branches instead of the session's saved initial branch.",
+    "attribution": "pr",
+    "note": "After attaching private fixture PR #1 through task chat, Summary shows feature/open -\u003e release, matching its PR card instead of ao/run-only-ao/root -\u003e main. Setup attempts inside AO state folders were invalid; importing there is blocked. I enabled Developer mode while looking for PR controls, but the header needs no setting.",
+    "receipts": [
+      {
+        "seq": 2,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e21"
+        ],
+        "beforePath": "run/receipts/head-before.png",
+        "at": "2026-10-17T05:49:15.149624+05:30",
+        "targetRole": "button",
+        "targetName": "Open a local folder",
+        "box": {
+          "x": 789,
+          "y": 319.5,
+          "w": 302,
+          "h": 56,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "reason": "the leg's app target is unavailable: tab probe failed: killed: context deadline exceeded",
+        "ms": 714
+      },
+      {
+        "seq": 4,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"input\")).map(e=\u003e({placeholder:e.placeholder,type:e.type,value:e.value}))"
+        ],
+        "beforePath": "run/receipts/head-before.png",
+        "afterPath": "run/receipts/4-after.png",
+        "at": "2026-10-17T05:49:17.789651+05:30",
+        "ms": 17
+      },
+      {
+        "seq": 5,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e10"
+        ],
+        "beforePath": "run/receipts/4-after.png",
+        "afterPath": "run/receipts/5-after.png",
+        "at": "2026-10-17T05:49:22.623562+05:30",
+        "targetRole": "button",
+        "targetName": "New project",
+        "box": {
+          "x": 215,
+          "y": 160,
+          "w": 24,
+          "h": 24,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 277
+      },
+      {
+        "seq": 7,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e34"
+        ],
+        "beforePath": "run/receipts/5-after.png",
+        "afterPath": "run/receipts/7-after.png",
+        "at": "2026-10-17T05:49:28.444035+05:30",
+        "targetRole": "button",
+        "targetName": "Clone a repo",
+        "box": {
+          "x": 398,
+          "y": 311,
+          "w": 524,
+          "h": 76,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 73
+      },
+      {
+        "seq": 10,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e43",
+          "https://github.com/Rishet11/litmus-6827-ao246.git"
+        ],
+        "beforePath": "run/receipts/7-after.png",
+        "afterPath": "run/receipts/10-after.png",
+        "at": "2026-10-17T05:49:33.823908+05:30",
+        "targetRole": "textbox",
+        "targetName": "Repository URL",
+        "ms": 131
+      },
+      {
+        "seq": 11,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e45",
+          "run/scratch/ui-head"
+        ],
+        "beforePath": "run/receipts/10-after.png",
+        "afterPath": "run/receipts/11-after.png",
+        "at": "2026-10-17T05:49:35.311487+05:30",
+        "targetRole": "textbox",
+        "targetName": "Clone into",
+        "ms": 79
+      },
+      {
+        "seq": 12,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e42"
+        ],
+        "beforePath": "run/receipts/11-after.png",
+        "afterPath": "run/receipts/12-after.png",
+        "at": "2026-10-17T05:49:36.466912+05:30",
+        "targetRole": "button",
+        "targetName": "Continue",
+        "box": {
+          "x": 838.859375,
+          "y": 495.5,
+          "w": 84.140625,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 151
+      },
+      {
+        "seq": 14,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e42"
+        ],
+        "beforePath": "run/receipts/12-after.png",
+        "afterPath": "run/receipts/14-after.png",
+        "at": "2026-10-17T05:49:40.694976+05:30",
+        "targetRole": "button",
+        "targetName": "Continue",
+        "box": {
+          "x": 838.859375,
+          "y": 495.5,
+          "w": 84.140625,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 83
+      },
+      {
+        "seq": 18,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e41"
+        ],
+        "beforePath": "run/receipts/14-after.png",
+        "afterPath": "run/receipts/18-after.png",
+        "at": "2026-10-17T05:49:49.851319+05:30",
+        "targetRole": "button",
+        "targetName": "Close clone repository dialog",
+        "box": {
+          "x": 891,
+          "y": 217.5,
+          "w": 32,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 142
+      },
+      {
+        "seq": 19,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e25"
+        ],
+        "beforePath": "run/receipts/18-after.png",
+        "afterPath": "run/receipts/19-after.png",
+        "at": "2026-10-17T05:49:51.060484+05:30",
+        "targetRole": "button",
+        "targetName": "Sample project 246",
+        "box": {
+          "x": 9,
+          "y": 190,
+          "w": 234,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 288
+      },
+      {
+        "seq": 21,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e58"
+        ],
+        "beforePath": "run/receipts/19-after.png",
+        "afterPath": "run/receipts/21-after.png",
+        "at": "2026-10-17T05:49:58.155581+05:30",
+        "targetRole": "button",
+        "targetName": "Open Sample chat 246",
+        "box": {
+          "x": 25,
+          "y": 226,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 99
+      },
+      {
+        "seq": 24,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e79"
+        ],
+        "beforePath": "run/receipts/21-after.png",
+        "afterPath": "run/receipts/24-after.png",
+        "at": "2026-10-17T05:50:05.611305+05:30",
+        "targetRole": "button",
+        "targetName": "Session actions",
+        "box": {
+          "x": 368,
+          "y": 9.5,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 261
+      },
+      {
+        "seq": 26,
+        "leg": "head",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/24-after.png",
+        "afterPath": "run/receipts/26-after.png",
+        "at": "2026-10-17T05:50:09.81106+05:30",
+        "ms": 68
+      },
+      {
+        "seq": 27,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e63"
+        ],
+        "beforePath": "run/receipts/26-after.png",
+        "afterPath": "run/receipts/27-after.png",
+        "at": "2026-10-17T05:50:10.743841+05:30",
+        "targetRole": "button",
+        "targetName": "Open inspector panel",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 159
+      },
+      {
+        "seq": 29,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText"
+        ],
+        "beforePath": "run/receipts/27-after.png",
+        "afterPath": "run/receipts/29-after.png",
+        "at": "2026-10-17T05:50:11.60506+05:30",
+        "ms": 19
+      },
+      {
+        "seq": 30,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e29"
+        ],
+        "beforePath": "run/receipts/29-after.png",
+        "afterPath": "run/receipts/30-after.png",
+        "at": "2026-10-17T05:50:19.162494+05:30",
+        "targetRole": "button",
+        "targetName": "Project actions for Sample project 246",
+        "box": {
+          "x": 216,
+          "y": 194,
+          "w": 24,
+          "h": 24,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 150
+      },
+      {
+        "seq": 32,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Network.getResponseBody",
+          "{\"requestId\":\"52165.930\"}"
+        ],
+        "beforePath": "run/receipts/30-after.png",
+        "afterPath": "run/receipts/32-after.png",
+        "at": "2026-10-17T05:50:26.395533+05:30",
+        "reason": "Network.getResponseBody: No resource with given identifier found",
+        "ms": 20
+      },
+      {
+        "seq": 33,
+        "leg": "head",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/32-after.png",
+        "afterPath": "run/receipts/33-after.png",
+        "at": "2026-10-17T05:50:27.576177+05:30",
+        "ms": 94
+      },
+      {
+        "seq": 34,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e10"
+        ],
+        "beforePath": "run/receipts/33-after.png",
+        "afterPath": "run/receipts/34-after.png",
+        "at": "2026-10-17T05:50:28.56969+05:30",
+        "targetRole": "button",
+        "targetName": "New project",
+        "box": {
+          "x": 216,
+          "y": 160,
+          "w": 24,
+          "h": 24,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 172
+      },
+      {
+        "seq": 36,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e108"
+        ],
+        "beforePath": "run/receipts/34-after.png",
+        "afterPath": "run/receipts/36-after.png",
+        "at": "2026-10-17T05:50:35.043827+05:30",
+        "targetRole": "button",
+        "targetName": "Clone a repo",
+        "box": {
+          "x": 398,
+          "y": 311,
+          "w": 524,
+          "h": 76,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 65
+      },
+      {
+        "seq": 38,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e117",
+          "https://github.com/Rishet11/litmus-6827-ao246.git"
+        ],
+        "beforePath": "run/receipts/36-after.png",
+        "afterPath": "run/receipts/38-after.png",
+        "at": "2026-10-17T05:50:42.551951+05:30",
+        "targetRole": "textbox",
+        "targetName": "Repository URL",
+        "ms": 56
+      },
+      {
+        "seq": 40,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e116"
+        ],
+        "beforePath": "run/receipts/38-after.png",
+        "afterPath": "run/receipts/40-after.png",
+        "at": "2026-10-17T05:50:47.069552+05:30",
+        "targetRole": "button",
+        "targetName": "Continue",
+        "box": {
+          "x": 838.859375,
+          "y": 495.5,
+          "w": 84.140625,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 68
+      },
+      {
+        "seq": 42,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-2600)"
+        ],
+        "beforePath": "run/receipts/40-after.png",
+        "afterPath": "run/receipts/42-after.png",
+        "at": "2026-10-17T05:50:47.977805+05:30",
+        "ms": 18
+      },
+      {
+        "seq": 43,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e115"
+        ],
+        "beforePath": "run/receipts/42-after.png",
+        "afterPath": "run/receipts/43-after.png",
+        "at": "2026-10-17T05:50:54.764972+05:30",
+        "targetRole": "button",
+        "targetName": "Close clone repository dialog",
+        "box": {
+          "x": 891,
+          "y": 217.5,
+          "w": 32,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 115
+      },
+      {
+        "seq": 44,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e13"
+        ],
+        "beforePath": "run/receipts/43-after.png",
+        "afterPath": "run/receipts/44-after.png",
+        "at": "2026-10-17T05:50:55.741844+05:30",
+        "targetRole": "button",
+        "targetName": "Settings",
+        "box": {
+          "x": 9,
+          "y": 736,
+          "w": 235,
+          "h": 36,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 159
+      },
+      {
+        "seq": 46,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e142"
+        ],
+        "beforePath": "run/receipts/44-after.png",
+        "afterPath": "run/receipts/46-after.png",
+        "at": "2026-10-17T05:51:07.451633+05:30",
+        "targetRole": "switch",
+        "targetName": "Developer mode",
+        "box": {
+          "x": 1241,
+          "y": 711,
+          "w": 32,
+          "h": 16,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 265
+      },
+      {
+        "seq": 47,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e121"
+        ],
+        "beforePath": "run/receipts/46-after.png",
+        "afterPath": "run/receipts/47-after.png",
+        "at": "2026-10-17T05:51:08.506007+05:30",
+        "targetRole": "button",
+        "targetName": "Back",
+        "box": {
+          "x": 9,
+          "y": 736,
+          "w": 235,
+          "h": 36,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 210
+      },
+      {
+        "seq": 49,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e154"
+        ],
+        "beforePath": "run/receipts/47-after.png",
+        "afterPath": "run/receipts/49-after.png",
+        "at": "2026-10-17T05:51:19.665992+05:30",
+        "targetRole": "button",
+        "targetName": "New project",
+        "box": {
+          "x": 216,
+          "y": 160,
+          "w": 24,
+          "h": 24,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 225
+      },
+      {
+        "seq": 51,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e176"
+        ],
+        "beforePath": "run/receipts/49-after.png",
+        "afterPath": "run/receipts/51-after.png",
+        "at": "2026-10-17T05:51:26.005495+05:30",
+        "targetRole": "button",
+        "targetName": "Open a local folder",
+        "box": {
+          "x": 398,
+          "y": 387,
+          "w": 524,
+          "h": 76,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 879
+      },
+      {
+        "seq": 53,
+        "leg": "head",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/51-after.png",
+        "afterPath": "run/receipts/53-after.png",
+        "at": "2026-10-17T05:51:40.778415+05:30",
+        "ms": 23
+      },
+      {
+        "seq": 55,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchDragEvent",
+          "{\"data\":{\"dragOperationsMask\":1,\"files\":[\"run/scratch/project-head\"],\"items\":[]},\"type\":\"dragEnter\",\"x\":650,\"y\":400}"
+        ],
+        "beforePath": "run/receipts/53-after.png",
+        "afterPath": "run/receipts/55-after.png",
+        "at": "2026-10-17T05:51:41.778337+05:30",
+        "ms": 38
+      },
+      {
+        "seq": 56,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchDragEvent",
+          "{\"data\":{\"dragOperationsMask\":1,\"files\":[\"run/scratch/project-head\"],\"items\":[]},\"type\":\"drop\",\"x\":650,\"y\":400}"
+        ],
+        "beforePath": "run/receipts/55-after.png",
+        "afterPath": "run/receipts/56-after.png",
+        "at": "2026-10-17T05:51:42.712333+05:30",
+        "ms": 18
+      },
+      {
+        "seq": 58,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/56-after.png",
+        "afterPath": "run/receipts/58-after.png",
+        "at": "2026-10-17T05:51:49.14147+05:30",
+        "ms": 514
+      },
+      {
+        "seq": 60,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchDragEvent",
+          "{\"data\":{\"dragOperationsMask\":1,\"files\":[\"run/scratch/project-head\"],\"items\":[]},\"type\":\"dragEnter\",\"x\":650,\"y\":400}"
+        ],
+        "beforePath": "run/receipts/58-after.png",
+        "afterPath": "run/receipts/60-after.png",
+        "at": "2026-10-17T05:51:55.947482+05:30",
+        "ms": 58
+      },
+      {
+        "seq": 61,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchDragEvent",
+          "{\"data\":{\"dragOperationsMask\":1,\"files\":[\"run/scratch/project-head\"],\"items\":[]},\"type\":\"drop\",\"x\":650,\"y\":400}"
+        ],
+        "beforePath": "run/receipts/60-after.png",
+        "afterPath": "run/receipts/61-after.png",
+        "at": "2026-10-17T05:51:56.951055+05:30",
+        "ms": 21
+      },
+      {
+        "seq": 63,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e242"
+        ],
+        "beforePath": "run/receipts/61-after.png",
+        "afterPath": "run/receipts/63-after.png",
+        "at": "2026-10-17T05:52:00.983463+05:30",
+        "targetRole": "button",
+        "targetName": "Open a local folder",
+        "box": {
+          "x": 398,
+          "y": 387,
+          "w": 524,
+          "h": 76,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 60
+      },
+      {
+        "seq": 65,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-3000)"
+        ],
+        "beforePath": "run/receipts/63-after.png",
+        "afterPath": "run/receipts/65-after.png",
+        "at": "2026-10-17T05:52:01.862073+05:30",
+        "ms": 17
+      },
+      {
+        "seq": 66,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e250"
+        ],
+        "beforePath": "run/receipts/65-after.png",
+        "afterPath": "run/receipts/66-after.png",
+        "at": "2026-10-17T05:52:10.445415+05:30",
+        "targetRole": "button",
+        "targetName": "Close project import dialog",
+        "box": {
+          "x": 891,
+          "y": 310.25,
+          "w": 32,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 85
+      },
+      {
+        "seq": 67,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e187"
+        ],
+        "beforePath": "run/receipts/66-after.png",
+        "afterPath": "run/receipts/67-after.png",
+        "at": "2026-10-17T05:52:11.390592+05:30",
+        "targetRole": "button",
+        "targetName": "New project",
+        "box": {
+          "x": 216,
+          "y": 160,
+          "w": 24,
+          "h": 24,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 150
+      },
+      {
+        "seq": 69,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e254"
+        ],
+        "beforePath": "run/receipts/67-after.png",
+        "afterPath": "run/receipts/69-after.png",
+        "at": "2026-10-17T05:52:16.510985+05:30",
+        "targetRole": "button",
+        "targetName": "Clone a repo",
+        "box": {
+          "x": 398,
+          "y": 311,
+          "w": 524,
+          "h": 76,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 68
+      },
+      {
+        "seq": 71,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e263",
+          "https://github.com/Rishet11/litmus-6827-ao246.git"
+        ],
+        "beforePath": "run/receipts/69-after.png",
+        "afterPath": "run/receipts/71-after.png",
+        "at": "2026-10-17T05:52:20.361462+05:30",
+        "targetRole": "textbox",
+        "targetName": "Repository URL",
+        "ms": 51
+      },
+      {
+        "seq": 72,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e265",
+          "fixture/path"
+        ],
+        "beforePath": "run/receipts/71-after.png",
+        "afterPath": "run/receipts/72-after.png",
+        "at": "2026-10-17T05:52:21.30276+05:30",
+        "targetRole": "textbox",
+        "targetName": "Clone into",
+        "ms": 38
+      },
+      {
+        "seq": 74,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e262"
+        ],
+        "beforePath": "run/receipts/72-after.png",
+        "afterPath": "run/receipts/74-after.png",
+        "at": "2026-10-17T05:52:24.931749+05:30",
+        "targetRole": "button",
+        "targetName": "Continue",
+        "box": {
+          "x": 838.859375,
+          "y": 495.5,
+          "w": 84.140625,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 65
+      },
+      {
+        "seq": 79,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e271"
+        ],
+        "beforePath": "run/receipts/74-after.png",
+        "afterPath": "run/receipts/79-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem",
+        "at": "2026-10-17T05:52:35.09765+05:30",
+        "targetRole": "button",
+        "targetName": "Clone",
+        "box": {
+          "x": 799.75,
+          "y": 435,
+          "w": 63.25,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 227
+      },
+      {
+        "seq": 84,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e299"
+        ],
+        "beforePath": "run/receipts/79-after.png",
+        "afterPath": "run/receipts/84-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:52:45.749619+05:30",
+        "targetRole": "button",
+        "targetName": "New task",
+        "box": {
+          "x": 954.7265625,
+          "y": 10.5,
+          "w": 66.859375,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 63
+      },
+      {
+        "seq": 87,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e319"
+        ],
+        "beforePath": "run/receipts/84-after.png",
+        "afterPath": "run/receipts/87-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:52:51.78396+05:30",
+        "targetRole": "button",
+        "targetName": "Model",
+        "box": {
+          "x": 541.984375,
+          "y": 426.5,
+          "w": 91.4765625,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 120
+      },
+      {
+        "seq": 90,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e324"
+        ],
+        "beforePath": "run/receipts/87-after.png",
+        "afterPath": "run/receipts/90-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:52:58.082316+05:30",
+        "targetRole": "menuitem",
+        "targetName": "Haiku 5.5",
+        "box": {
+          "x": 547,
+          "y": 571.5,
+          "w": 214,
+          "h": 34,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 236
+      },
+      {
+        "seq": 91,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "@e315",
+          "Run only: ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/1 . Then stop. Do not edit files, commit, push, or start a review. This private repo is a UI test fixture."
+        ],
+        "beforePath": "run/receipts/90-after.png",
+        "afterPath": "run/receipts/91-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:52:59.02362+05:30",
+        "targetRole": "textbox",
+        "targetName": "Task",
+        "ms": 41
+      },
+      {
+        "seq": 92,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e317"
+        ],
+        "beforePath": "run/receipts/91-after.png",
+        "afterPath": "run/receipts/92-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:00.023223+05:30",
+        "targetRole": "button",
+        "targetName": "Create task",
+        "box": {
+          "x": 829.1171875,
+          "y": 426.5,
+          "w": 97.8828125,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 113
+      },
+      {
+        "seq": 95,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e288"
+        ],
+        "beforePath": "run/receipts/92-after.png",
+        "afterPath": "run/receipts/95-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:07.563575+05:30",
+        "targetRole": "button",
+        "targetName": "Open inspector panel",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 515
+      },
+      {
+        "seq": 96,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-4800)"
+        ],
+        "beforePath": "run/receipts/95-after.png",
+        "afterPath": "run/receipts/96-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:08.649963+05:30",
+        "ms": 32
+      },
+      {
+        "seq": 104,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-2200)"
+        ],
+        "beforePath": "run/receipts/96-after.png",
+        "afterPath": "run/receipts/104-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:23.155446+05:30",
+        "ms": 35
+      },
+      {
+        "seq": 106,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[role=tab]\")).map(e=\u003e({text:e.textContent,selected:e.getAttribute(\"aria-selected\")}))"
+        ],
+        "beforePath": "run/receipts/104-after.png",
+        "afterPath": "run/receipts/106-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:30.184864+05:30",
+        "ms": 32
+      },
+      {
+        "seq": 107,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/106-after.png",
+        "afterPath": "run/receipts/107-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:31.512115+05:30",
+        "ms": 31
+      },
+      {
+        "seq": 108,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[role=tab]:text-is(\"Summary\")"
+        ],
+        "beforePath": "run/receipts/107-after.png",
+        "afterPath": "run/receipts/108-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:40.050555+05:30",
+        "reason": "agent-browser click: exit status 1: ✗ Element not found: [role=tab]:text-is(\"Summary\"). Verify the selector, role, or name is correct and the element exists in the DOM.",
+        "ms": 51
+      },
+      {
+        "seq": 109,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/108-after.png",
+        "afterPath": "run/receipts/109-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:41.144954+05:30",
+        "ms": 25
+      },
+      {
+        "seq": 110,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[data-testid=inspector-branch] [title]\")).map(e=\u003ee.title)"
+        ],
+        "beforePath": "run/receipts/109-after.png",
+        "afterPath": "run/receipts/110-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:42.146315+05:30",
+        "ms": 21
+      },
+      {
+        "seq": 112,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e353"
+        ],
+        "beforePath": "run/receipts/110-after.png",
+        "afterPath": "run/receipts/112-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:48.09893+05:30",
+        "targetRole": "tab",
+        "targetName": "Summary",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 436
+      },
+      {
+        "seq": 113,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/112-after.png",
+        "afterPath": "run/receipts/113-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c1-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c1-dark.png"
+          }
+        ],
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:53:49.394747+05:30",
+        "ms": 33
+      }
+    ]
+  },
+  {
+    "id": "c2",
+    "name": "Attached draft PR branches",
+    "expect": "Branch header matches the attached draft PR head and base.",
+    "state": "pass",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "Regression tests cover open and draft PRs",
+    "attribution": "pr",
+    "note": "Converted fixture PR #1 to draft. After its provider state refreshed, Summary and the draft card both show feature/open -\u003e release. The initial fact-only loading header is covered separately in the fallback check.",
+    "receipts": [
+      {
+        "seq": 121,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[role=combobox]\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),rect:e.getBoundingClientRect().toJSON()}))"
+        ],
+        "beforePath": "run/receipts/113-after.png",
+        "afterPath": "run/receipts/121-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter",
+        "at": "2026-10-17T05:54:32.425495+05:30",
+        "ms": 42
+      },
+      {
+        "seq": 122,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/121-after.png",
+        "afterPath": "run/receipts/122-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:53.041976+05:30",
+        "ms": 576
+      },
+      {
+        "seq": 123,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/122-after.png",
+        "afterPath": "run/receipts/123-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:55.826013+05:30",
+        "ms": 49
+      },
+      {
+        "seq": 124,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/123-after.png",
+        "afterPath": "run/receipts/124-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:07.625241+05:30",
+        "ms": 50
+      },
+      {
+        "seq": 126,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[role=tab]\")).filter(e=\u003ee.textContent===\"Summary\").map(e=\u003e({html:e.outerHTML.slice(0,650),rect:e.getBoundingClientRect().toJSON()}))"
+        ],
+        "beforePath": "run/receipts/124-after.png",
+        "afterPath": "run/receipts/126-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:17.080486+05:30",
+        "ms": 41
+      },
+      {
+        "seq": 127,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/126-after.png",
+        "afterPath": "run/receipts/127-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:22.379597+05:30",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 394
+      },
+      {
+        "seq": 128,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/127-after.png",
+        "afterPath": "run/receipts/128-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:23.349074+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 129,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Dismiss all updates\"]"
+        ],
+        "beforePath": "run/receipts/128-after.png",
+        "afterPath": "run/receipts/129-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c2-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c2-dark.png"
+          }
+        ],
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:31.188072+05:30",
+        "box": {
+          "x": 1277,
+          "y": 50,
+          "w": 32,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 121
+      }
+    ]
+  },
+  {
+    "id": "c3",
+    "name": "Open PR after merged PR",
+    "expect": "With an older merged PR attached, the header shows the open PR's branches.",
+    "state": "pass",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "choosing an open PR over an older merged PR",
+    "attribution": "pr",
+    "note": "With older merged PR #2 and closed PR #1 attached, the header selects open PR #4's feature/open -\u003e release, not feature/draft. Setup: claiming already merged #3 was rejected with PR_NOT_OPEN, so I attached #2 while draft and then merged it.",
+    "receipts": [
+      {
+        "seq": 134,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "[aria-label=\"Message the agent\"]",
+          "Run only: ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/3 then ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/4 . Stop after both. Do not edit files, checkout, commit, push, or review."
+        ],
+        "beforePath": "run/receipts/129-after.png",
+        "afterPath": "run/receipts/134-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:11.119903+05:30",
+        "ms": 418
+      },
+      {
+        "seq": 135,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Send message\"]"
+        ],
+        "beforePath": "run/receipts/134-after.png",
+        "afterPath": "run/receipts/135-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:13.933908+05:30",
+        "box": {
+          "x": 765,
+          "y": 721,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 443
+      },
+      {
+        "seq": 136,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-2400)"
+        ],
+        "beforePath": "run/receipts/135-after.png",
+        "afterPath": "run/receipts/136-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:23.083315+05:30",
+        "ms": 493
+      },
+      {
+        "seq": 137,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-3300)"
+        ],
+        "beforePath": "run/receipts/136-after.png",
+        "afterPath": "run/receipts/137-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:32.863934+05:30",
+        "ms": 139
+      },
+      {
+        "seq": 138,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/137-after.png",
+        "afterPath": "run/receipts/138-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:36.173406+05:30",
+        "box": {
+          "x": 826,
+          "y": 10.5,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 288
+      },
+      {
+        "seq": 139,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/138-after.png",
+        "afterPath": "run/receipts/139-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:37.611751+05:30",
+        "ms": 32
+      },
+      {
+        "seq": 140,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "[aria-label=\"Message the agent\"]",
+          "Run only: ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/2 . Stop after that. No edits, checkout, commit, push, or review."
+        ],
+        "beforePath": "run/receipts/139-after.png",
+        "afterPath": "run/receipts/140-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:51.151806+05:30",
+        "ms": 147
+      },
+      {
+        "seq": 141,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Send message\"]"
+        ],
+        "beforePath": "run/receipts/140-after.png",
+        "afterPath": "run/receipts/141-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:56:52.729862+05:30",
+        "box": {
+          "x": 765,
+          "y": 721,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 304
+      },
+      {
+        "seq": 144,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-2300)"
+        ],
+        "beforePath": "run/receipts/141-after.png",
+        "afterPath": "run/receipts/144-after.png",
+        "consoleTail": "[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton NewTaskDialog NewTaskDialog\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render TopbarArchiveButton ProjectItem ProjectItem\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:57:20.088732+05:30",
+        "ms": 133
+      },
+      {
+        "seq": 146,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/144-after.png",
+        "afterPath": "run/receipts/146-after.png",
+        "at": "2026-10-17T05:57:42.031686+05:30",
+        "ms": 1782
+      },
+      {
+        "seq": 147,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/146-after.png",
+        "afterPath": "run/receipts/147-after.png",
+        "at": "2026-10-17T05:58:01.370562+05:30",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 1361
+      },
+      {
+        "seq": 148,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/147-after.png",
+        "afterPath": "run/receipts/148-after.png",
+        "at": "2026-10-17T05:58:08.743435+05:30",
+        "ms": 199
+      },
+      {
+        "seq": 149,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText})"
+        ],
+        "beforePath": "run/receipts/148-after.png",
+        "afterPath": "run/receipts/149-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c3-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c3-dark.png"
+          }
+        ],
+        "at": "2026-10-17T05:58:16.963349+05:30",
+        "ms": 157
+      }
+    ]
+  },
+  {
+    "id": "c4",
+    "name": "Branch fallback without PR",
+    "expect": "A task without an attached PR still shows its branch and base.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "Changing branch presentation could hide the branch for tasks without PRs.",
+    "attribution": "unknown",
+    "note": "Confirmed visibly in c15: the task without an attached PR shows ao/reply-with-the/root -\u003e main. The original c4 DOM read was from a closed retained inspector, so use c15's screenshots for visual proof. No setting is needed.",
+    "receipts": [
+      {
+        "seq": 174,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Sample chat 246\"]"
+        ],
+        "beforePath": "run/receipts/172-after.png",
+        "afterPath": "run/receipts/174-after.png",
+        "at": "2026-10-17T06:00:43.808925+05:30",
+        "box": {
+          "x": 25,
+          "y": 300,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 386
+      },
+      {
+        "seq": 175,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/174-after.png",
+        "afterPath": "run/receipts/175-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c4-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c4-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:00:45.983814+05:30",
+        "ms": 76
+      }
+    ],
+    "noteHistory": [
+      "Opened the seeded task with no attached PR. Its Branch section still shows ao/reply-with-the/root -\u003e main. No setting is needed for this fallback."
+    ]
+  },
+  {
+    "id": "c5",
+    "name": "Files and branch actions",
+    "expect": "Files navigation and commit or push context still refer to the actual task worktree when the attached PR uses another branch.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "The new PR branch label could contradict file or git actions that still operate on the task worktree.",
+    "attribution": "unknown",
+    "note": "On the actual feature/open worktree, clicking the uncommitted row opens Workspace Changes with ui-note.txt. Branch source switches to PR #4 and shows open.txt; Summary keeps feature/open -\u003e release and offers Commit \u0026 push to #4 plus Commit. I inspected the menu, not commit/push execution. Initial setup was on root, so I switched the fixture before this check. A treeitem selector was invalid; coordinate input opened the file.",
+    "receipts": [
+      {
+        "seq": 198,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Files\"]"
+        ],
+        "beforePath": "run/receipts/196-after.png",
+        "afterPath": "run/receipts/198-after.png",
+        "at": "2026-10-17T06:03:23.324638+05:30",
+        "box": {
+          "x": 922,
+          "y": 10.5,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 309
+      },
+      {
+        "seq": 199,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-3000)"
+        ],
+        "beforePath": "run/receipts/198-after.png",
+        "afterPath": "run/receipts/199-after.png",
+        "at": "2026-10-17T06:03:24.155923+05:30",
+        "ms": 21
+      },
+      {
+        "seq": 200,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"button,[role=combobox],[role=option]\")).filter(e=\u003ee.checkVisibility()).map(e=\u003e({role:e.getAttribute(\"role\"),label:e.getAttribute(\"aria-label\")||e.textContent})).slice(-32)"
+        ],
+        "beforePath": "run/receipts/199-after.png",
+        "afterPath": "run/receipts/200-after.png",
+        "at": "2026-10-17T06:03:32.951264+05:30",
+        "ms": 37
+      },
+      {
+        "seq": 201,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"File source\"]"
+        ],
+        "beforePath": "run/receipts/200-after.png",
+        "afterPath": "run/receipts/201-after.png",
+        "at": "2026-10-17T06:03:38.687943+05:30",
+        "box": {
+          "x": 826,
+          "y": 51,
+          "w": 106.875,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 219
+      },
+      {
+        "seq": 203,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1800)"
+        ],
+        "beforePath": "run/receipts/201-after.png",
+        "afterPath": "run/receipts/203-after.png",
+        "at": "2026-10-17T06:03:39.591343+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 204,
+        "leg": "head",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/203-after.png",
+        "afterPath": "run/receipts/204-after.png",
+        "at": "2026-10-17T06:03:48.452291+05:30",
+        "ms": 126
+      },
+      {
+        "seq": 205,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/204-after.png",
+        "afterPath": "run/receipts/205-after.png",
+        "at": "2026-10-17T06:03:49.886625+05:30",
+        "ms": 547
+      },
+      {
+        "seq": 206,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({controls:Array.from(document.querySelectorAll(\"button\")).filter(e=\u003e/inspector|Summary|Files/.test(e.getAttribute(\"aria-label\")||\"\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),visible:e.checkVisibility()})),files:document.querySelector(\"[aria-label=\\\"Session files\\\"]\")?.innerText})"
+        ],
+        "beforePath": "run/receipts/205-after.png",
+        "afterPath": "run/receipts/206-after.png",
+        "at": "2026-10-17T06:03:57.056726+05:30",
+        "ms": 26
+      },
+      {
+        "seq": 207,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Files\"]"
+        ],
+        "beforePath": "run/receipts/206-after.png",
+        "afterPath": "run/receipts/207-after.png",
+        "at": "2026-10-17T06:04:02.854025+05:30",
+        "box": {
+          "x": 802,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 257
+      },
+      {
+        "seq": 208,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"File source\"]"
+        ],
+        "beforePath": "run/receipts/207-after.png",
+        "afterPath": "run/receipts/208-after.png",
+        "at": "2026-10-17T06:04:03.911976+05:30",
+        "box": {
+          "x": 826,
+          "y": 51,
+          "w": 106.875,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 181
+      },
+      {
+        "seq": 209,
+        "leg": "head",
+        "action": "hover",
+        "args": [
+          "[role=\"menuitem\"]"
+        ],
+        "beforePath": "run/receipts/208-after.png",
+        "afterPath": "run/receipts/209-after.png",
+        "at": "2026-10-17T06:04:04.75773+05:30",
+        "ms": 26
+      },
+      {
+        "seq": 211,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1000)"
+        ],
+        "beforePath": "run/receipts/209-after.png",
+        "afterPath": "run/receipts/211-after.png",
+        "at": "2026-10-17T06:04:05.662596+05:30",
+        "ms": 28
+      },
+      {
+        "seq": 212,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "@e1183"
+        ],
+        "beforePath": "run/receipts/211-after.png",
+        "afterPath": "run/receipts/212-after.png",
+        "at": "2026-10-17T06:04:12.777536+05:30",
+        "targetRole": "menuitem",
+        "targetName": "PR #4 · feature/open",
+        "box": {
+          "x": 995,
+          "y": 90,
+          "w": 172.734375,
+          "h": 33,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 254
+      },
+      {
+        "seq": 213,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1400)"
+        ],
+        "beforePath": "run/receipts/212-after.png",
+        "afterPath": "run/receipts/213-after.png",
+        "at": "2026-10-17T06:04:13.656681+05:30",
+        "ms": 23
+      },
+      {
+        "seq": 215,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"button\")).filter(e=\u003ee.checkVisibility()).map(e=\u003e({label:e.getAttribute(\"aria-label\")||e.textContent,title:e.title})).slice(-15)"
+        ],
+        "beforePath": "run/receipts/213-after.png",
+        "afterPath": "run/receipts/215-after.png",
+        "at": "2026-10-17T06:04:23.380297+05:30",
+        "ms": 22
+      },
+      {
+        "seq": 216,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[role=treeitem]\")).map(e=\u003e({text:e.textContent,html:e.outerHTML.slice(0,350)}))"
+        ],
+        "beforePath": "run/receipts/215-after.png",
+        "afterPath": "run/receipts/216-after.png",
+        "at": "2026-10-17T06:04:30.391431+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 217,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[role=treeitem]"
+        ],
+        "beforePath": "run/receipts/216-after.png",
+        "afterPath": "run/receipts/217-after.png",
+        "at": "2026-10-17T06:04:31.300364+05:30",
+        "reason": "agent-browser click: exit status 1: ✗ Element not found: [role=treeitem]. Verify the selector, role, or name is correct and the element exists in the DOM.",
+        "ms": 37
+      },
+      {
+        "seq": 218,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-800)"
+        ],
+        "beforePath": "run/receipts/217-after.png",
+        "afterPath": "run/receipts/218-after.png",
+        "at": "2026-10-17T06:04:32.185691+05:30",
+        "ms": 27
+      },
+      {
+        "seq": 219,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchMouseEvent",
+          "{\"button\":\"left\",\"clickCount\":1,\"type\":\"mousePressed\",\"x\":1235,\"y\":110}"
+        ],
+        "beforePath": "run/receipts/218-after.png",
+        "afterPath": "run/receipts/219-after.png",
+        "at": "2026-10-17T06:04:43.634745+05:30",
+        "ms": 72
+      },
+      {
+        "seq": 220,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchMouseEvent",
+          "{\"button\":\"left\",\"clickCount\":1,\"type\":\"mouseReleased\",\"x\":1235,\"y\":110}"
+        ],
+        "beforePath": "run/receipts/219-after.png",
+        "afterPath": "run/receipts/220-after.png",
+        "at": "2026-10-17T06:04:45.114206+05:30",
+        "ms": 43
+      },
+      {
+        "seq": 221,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1000)"
+        ],
+        "beforePath": "run/receipts/220-after.png",
+        "afterPath": "run/receipts/221-after.png",
+        "at": "2026-10-17T06:04:46.483648+05:30",
+        "ms": 40
+      },
+      {
+        "seq": 222,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/221-after.png",
+        "afterPath": "run/receipts/222-after.png",
+        "at": "2026-10-17T06:04:48.488324+05:30",
+        "box": {
+          "x": 826,
+          "y": 10.5,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 719
+      },
+      {
+        "seq": 223,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/222-after.png",
+        "afterPath": "run/receipts/223-after.png",
+        "at": "2026-10-17T06:04:49.88376+05:30",
+        "ms": 47
+      },
+      {
+        "seq": 224,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "[aria-label=\"Message the agent\"]",
+          "For this private UI fixture only, create ui-note.txt containing \"local worktree fixture\". Print git branch --show-current. Do not commit, push, checkout, review, or change anything else."
+        ],
+        "beforePath": "run/receipts/223-after.png",
+        "afterPath": "run/receipts/224-after.png",
+        "at": "2026-10-17T06:05:07.246778+05:30",
+        "ms": 171
+      },
+      {
+        "seq": 225,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Send message\"]"
+        ],
+        "beforePath": "run/receipts/224-after.png",
+        "afterPath": "run/receipts/225-after.png",
+        "at": "2026-10-17T06:05:08.946264+05:30",
+        "box": {
+          "x": 765,
+          "y": 721,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 360
+      },
+      {
+        "seq": 229,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/225-after.png",
+        "afterPath": "run/receipts/229-after.png",
+        "at": "2026-10-17T06:05:30.161742+05:30",
+        "ms": 702
+      },
+      {
+        "seq": 230,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1800)"
+        ],
+        "beforePath": "run/receipts/229-after.png",
+        "afterPath": "run/receipts/230-after.png",
+        "at": "2026-10-17T06:05:35.521458+05:30",
+        "ms": 159
+      },
+      {
+        "seq": 232,
+        "leg": "head",
+        "action": "fill",
+        "args": [
+          "[aria-label=\"Message the agent\"]",
+          "Fixture setup: switch to feature/open tracking origin/feature/open, keeping ui-note.txt uncommitted. Print git branch --show-current. Do not commit, push, review, or change file contents."
+        ],
+        "beforePath": "run/receipts/230-after.png",
+        "afterPath": "run/receipts/232-after.png",
+        "at": "2026-10-17T06:06:09.163508+05:30",
+        "ms": 621
+      },
+      {
+        "seq": 233,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Send message\"]"
+        ],
+        "beforePath": "run/receipts/232-after.png",
+        "afterPath": "run/receipts/233-after.png",
+        "at": "2026-10-17T06:06:12.351124+05:30",
+        "box": {
+          "x": 765,
+          "y": 721,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 838
+      },
+      {
+        "seq": 236,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-2300)"
+        ],
+        "beforePath": "run/receipts/233-after.png",
+        "afterPath": "run/receipts/236-after.png",
+        "at": "2026-10-17T06:06:36.258229+05:30",
+        "ms": 268
+      },
+      {
+        "seq": 238,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[data-testid=inspector-branch] button\")).map(e=\u003e({label:e.getAttribute(\"aria-label\")||e.textContent,html:e.outerHTML.slice(0,180)}))"
+        ],
+        "beforePath": "run/receipts/236-after.png",
+        "afterPath": "run/receipts/238-after.png",
+        "at": "2026-10-17T06:06:58.016433+05:30",
+        "ms": 1081
+      },
+      {
+        "seq": 239,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1900)"
+        ],
+        "beforePath": "run/receipts/238-after.png",
+        "afterPath": "run/receipts/239-after.png",
+        "at": "2026-10-17T06:07:19.104952+05:30",
+        "ms": 235
+      },
+      {
+        "seq": 241,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"More git actions\"]"
+        ],
+        "beforePath": "run/receipts/239-after.png",
+        "afterPath": "run/receipts/241-after.png",
+        "at": "2026-10-17T06:07:44.254819+05:30",
+        "box": {
+          "x": 1269,
+          "y": 394,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 811
+      },
+      {
+        "seq": 242,
+        "leg": "head",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/241-after.png",
+        "afterPath": "run/receipts/242-after.png",
+        "at": "2026-10-17T06:07:46.19557+05:30",
+        "ms": 291
+      },
+      {
+        "seq": 243,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[data-testid=\"inspector-branch\"] button"
+        ],
+        "beforePath": "run/receipts/242-after.png",
+        "afterPath": "run/receipts/243-after.png",
+        "at": "2026-10-17T06:07:48.085159+05:30",
+        "box": {
+          "x": 828,
+          "y": 318,
+          "w": 475,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 850
+      },
+      {
+        "seq": 244,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-1000)"
+        ],
+        "beforePath": "run/receipts/243-after.png",
+        "afterPath": "run/receipts/244-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c5-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c5-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:07:49.085352+05:30",
+        "ms": 27
+      }
+    ]
+  },
+  {
+    "id": "c6",
+    "name": "Base fallback while PR details load",
+    "expect": "An attached PR without enriched target-branch details keeps the git-derived base visible.",
+    "state": "fail",
+    "purpose": "risk",
+    "risk": "A fact-only attached PR can have an empty targetBranch and suppress the existing git base label.",
+    "attribution": "pr",
+    "note": "Regression when PR details cannot load: I aborted only the session /pr summary request and reloaded. The fact-only PR header falls back to ao/run-only-ao/root but loses -\u003e main, although workspace data still loads. Earlier raw CDP blocking had no effect; agent-browser network route --abort reproduced it. SessionBranchSummary sets base to undefined for an empty PR targetBranch instead of falling back to facts.base.",
+    "receipts": [
+      {
+        "seq": 153,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Network.enable",
+          "{}"
+        ],
+        "beforePath": "run/receipts/149-after.png",
+        "afterPath": "run/receipts/153-after.png",
+        "at": "2026-10-17T05:59:09.317748+05:30",
+        "ms": 210
+      },
+      {
+        "seq": 154,
+        "leg": "head",
+        "action": "cdp",
+        "args": [
+          "Network.setBlockedURLs",
+          "{\"urls\":[\"*api/v1/sessions/litmus-6827-ao246-2/pr\"]}"
+        ],
+        "beforePath": "run/receipts/153-after.png",
+        "afterPath": "run/receipts/154-after.png",
+        "at": "2026-10-17T05:59:12.679748+05:30",
+        "ms": 63
+      },
+      {
+        "seq": 155,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/154-after.png",
+        "afterPath": "run/receipts/155-after.png",
+        "at": "2026-10-17T05:59:16.62597+05:30",
+        "ms": 1171
+      },
+      {
+        "seq": 156,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText, tabs:Array.from(document.querySelectorAll(\"[role=tab]\")).map(e=\u003e({text:e.getAttribute(\"aria-label\")||e.textContent,selected:e.getAttribute(\"aria-selected\")}))})"
+        ],
+        "beforePath": "run/receipts/155-after.png",
+        "afterPath": "run/receipts/156-after.png",
+        "at": "2026-10-17T05:59:24.266094+05:30",
+        "ms": 160
+      },
+      {
+        "seq": 159,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/156-after.png",
+        "afterPath": "run/receipts/159-after.png",
+        "at": "2026-10-17T05:59:33.318164+05:30",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 573
+      },
+      {
+        "seq": 160,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/159-after.png",
+        "afterPath": "run/receipts/160-after.png",
+        "at": "2026-10-17T05:59:35.045995+05:30",
+        "ms": 52
+      },
+      {
+        "seq": 161,
+        "leg": "head",
+        "action": "network",
+        "args": [
+          "route",
+          "**/api/v1/sessions/litmus-6827-ao246-2/pr",
+          "--abort"
+        ],
+        "beforePath": "run/receipts/160-after.png",
+        "afterPath": "run/receipts/161-after.png",
+        "at": "2026-10-17T05:59:41.671456+05:30",
+        "ms": 56
+      },
+      {
+        "seq": 162,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/161-after.png",
+        "afterPath": "run/receipts/162-after.png",
+        "at": "2026-10-17T05:59:44.654456+05:30",
+        "ms": 943
+      },
+      {
+        "seq": 164,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/162-after.png",
+        "afterPath": "run/receipts/164-after.png",
+        "at": "2026-10-17T05:59:53.41305+05:30",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 573
+      },
+      {
+        "seq": 165,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,baseLabels:Array.from(document.querySelectorAll(\"[data-testid=inspector-branch] span\")).filter(e=\u003ee.textContent.includes(\"→\")).map(e=\u003ee.textContent)})"
+        ],
+        "beforePath": "run/receipts/164-after.png",
+        "afterPath": "run/receipts/165-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c6-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c6-dark.png"
+          }
+        ],
+        "at": "2026-10-17T05:59:54.992533+05:30",
+        "ms": 43
+      }
+    ]
+  },
+  {
+    "id": "c7",
+    "name": "Attached open PR branches",
+    "expect": "Branch header matches the attached open PR head and nondefault base.",
+    "state": "fail",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "The session Branch header now shows the attached PR's head and base branches instead of the session's saved initial branch.",
+    "attribution": "unknown",
+    "note": "With the same private open PR #1 attached through task chat, Summary shows ao/run-only-ao/root -\u003e main while the PR card shows feature/open -\u003e release. Head fixes this mismatch.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 115,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"button\")).filter(e=\u003e/inspector/.test(e.getAttribute(\"aria-label\")||\"\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),rect:e.getBoundingClientRect().toJSON()}))"
+        ],
+        "beforePath": "run/receipts/103-after.png",
+        "afterPath": "run/receipts/115-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:07.853879+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 116,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "Array.from(document.querySelectorAll(\"[role=tab]\")).map(e=\u003e({text:e.textContent,rect:e.getBoundingClientRect().toJSON()}))"
+        ],
+        "beforePath": "run/receipts/115-after.png",
+        "afterPath": "run/receipts/116-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:12.272837+05:30",
+        "ms": 22
+      },
+      {
+        "seq": 117,
+        "leg": "base",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchMouseEvent",
+          "{\"button\":\"left\",\"clickCount\":1,\"type\":\"mousePressed\",\"x\":720,\"y\":25}"
+        ],
+        "beforePath": "run/receipts/116-after.png",
+        "afterPath": "run/receipts/117-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:17.524499+05:30",
+        "ms": 23
+      },
+      {
+        "seq": 118,
+        "leg": "base",
+        "action": "cdp",
+        "args": [
+          "Input.dispatchMouseEvent",
+          "{\"button\":\"left\",\"clickCount\":1,\"type\":\"mouseReleased\",\"x\":720,\"y\":25}"
+        ],
+        "beforePath": "run/receipts/117-after.png",
+        "afterPath": "run/receipts/118-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:18.690298+05:30",
+        "ms": 221
+      },
+      {
+        "seq": 119,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/118-after.png",
+        "afterPath": "run/receipts/119-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c7-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c7-dark.png"
+          }
+        ],
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:54:19.581171+05:30",
+        "ms": 23
+      }
+    ]
+  },
+  {
+    "id": "c8",
+    "name": "Attached draft PR branches",
+    "expect": "Branch header matches the attached draft PR head and base.",
+    "state": "fail",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "Regression tests cover open and draft PRs",
+    "attribution": "unknown",
+    "note": "The attached fixture is now draft PR #1. Its card shows feature/open -\u003e release, but main's header remains ao/run-only-ao/root -\u003e main. The PR build shows the draft branches correctly.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 130,
+        "leg": "base",
+        "action": "reload",
+        "beforePath": "run/receipts/119-after.png",
+        "afterPath": "run/receipts/130-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:34.613259+05:30",
+        "ms": 731
+      },
+      {
+        "seq": 131,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/130-after.png",
+        "afterPath": "run/receipts/131-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:43.087895+05:30",
+        "box": {
+          "x": 706,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 740
+      },
+      {
+        "seq": 132,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/131-after.png",
+        "afterPath": "run/receipts/132-after.png",
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:44.933145+05:30",
+        "ms": 74
+      },
+      {
+        "seq": 133,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Dismiss all updates\"]"
+        ],
+        "beforePath": "run/receipts/132-after.png",
+        "afterPath": "run/receipts/133-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c8-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c8-dark.png"
+          }
+        ],
+        "consoleTail": "[warning] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.\n[error] Cannot update a component (`%s`) while rendering a different component (`%s`). To locate the bad setState() call inside `%s`, follow the stack trace as described in https://react.dev/link/setstate-in-render ProjectTerminationFeedback NotificationCenter NotificationCenter\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}\n[debug] [vite] connecting...\n[debug] [vite] connected.\n[info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold\n[warning] %cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"cloud:sessionChanged\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…  at Object.onSessionChanged (\u003canonymous\u003e:589:25)\", ...}\n[warning] {name: \"MaxListenersExceededWarning\", emitter: IpcRenderer, type: \"app:shortcut\", count: 11, stack: \"MaxListenersExceededWarning: Possible EventEmitter…56)\n    at Object.onShortcut (\u003canonymous\u003e:169:25)\", ...}",
+        "at": "2026-10-17T05:55:52.278729+05:30",
+        "box": {
+          "x": 1277,
+          "y": 50,
+          "w": 32,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 179
+      }
+    ]
+  },
+  {
+    "id": "c9",
+    "name": "Open PR after merged PR",
+    "expect": "With an older merged PR attached, the header shows the open PR's branches.",
+    "state": "fail",
+    "claim": true,
+    "purpose": "claim",
+    "claimSentence": "choosing an open PR over an older merged PR",
+    "attribution": "unknown",
+    "note": "Confirmed visibly in c14 before opening Files: main's header shows ao/run-only-ao/root -\u003e main above open #4's feature/open -\u003e release and merged #2. The original c9 read came from a closed retained inspector, so use c14's receipt for visual proof.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 150,
+        "leg": "base",
+        "action": "reload",
+        "beforePath": "run/receipts/145-after.png",
+        "afterPath": "run/receipts/150-after.png",
+        "at": "2026-10-17T05:58:38.106405+05:30",
+        "ms": 2031
+      },
+      {
+        "seq": 151,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/150-after.png",
+        "afterPath": "run/receipts/151-after.png",
+        "at": "2026-10-17T05:58:55.971072+05:30",
+        "reason": "agent-browser click: exit status 1: ✗ Element not found: [aria-label=\"Summary\"]. Verify the selector, role, or name is correct and the element exists in the DOM.",
+        "ms": 170
+      },
+      {
+        "seq": 152,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/151-after.png",
+        "afterPath": "run/receipts/152-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c9-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c9-dark.png"
+          }
+        ],
+        "at": "2026-10-17T05:58:58.108009+05:30",
+        "ms": 51
+      }
+    ],
+    "noteHistory": [
+      "With the same open #4, merged #2, and closed #1 attached, main keeps ao/run-only-ao/root -\u003e main. The open card shows feature/open -\u003e release. A Summary click during reload found no target; the next receipt shows Summary had already opened."
+    ]
+  },
+  {
+    "id": "c10",
+    "name": "Base fallback while PR details load",
+    "expect": "An attached PR without enriched target-branch details keeps the git-derived base visible.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "A fact-only attached PR can have an empty targetBranch and suppress the existing git base label.",
+    "attribution": "unknown",
+    "note": "Visible confirmation is in c13, receipt 193: main keeps -\u003e main with only /pr details aborted. The original DOM read was from a closed retained inspector and was not valid visual proof.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 167,
+        "leg": "base",
+        "action": "network",
+        "args": [
+          "route",
+          "**/api/v1/sessions/litmus-6827-ao246-2/pr",
+          "--abort"
+        ],
+        "beforePath": "run/receipts/152-after.png",
+        "afterPath": "run/receipts/167-after.png",
+        "at": "2026-10-17T06:00:09.121564+05:30",
+        "ms": 152
+      },
+      {
+        "seq": 168,
+        "leg": "base",
+        "action": "reload",
+        "beforePath": "run/receipts/167-after.png",
+        "afterPath": "run/receipts/168-after.png",
+        "at": "2026-10-17T06:00:13.941787+05:30",
+        "ms": 2681
+      },
+      {
+        "seq": 169,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Summary\"]"
+        ],
+        "beforePath": "run/receipts/168-after.png",
+        "afterPath": "run/receipts/169-after.png",
+        "at": "2026-10-17T06:00:26.860504+05:30",
+        "reason": "agent-browser click: exit status 1: ✗ Element not found: [aria-label=\"Summary\"]. Verify the selector, role, or name is correct and the element exists in the DOM.",
+        "ms": 128
+      },
+      {
+        "seq": 170,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,baseLabels:Array.from(document.querySelectorAll(\"[data-testid=inspector-branch] span\")).filter(e=\u003ee.textContent.includes(\"→\")).map(e=\u003ee.textContent)})"
+        ],
+        "beforePath": "run/receipts/169-after.png",
+        "afterPath": "run/receipts/170-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c10-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c10-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:00:29.206042+05:30",
+        "ms": 59
+      }
+    ],
+    "noteHistory": [
+      "Under the same aborted /pr summary request, main keeps ao/run-only-ao/root -\u003e main with fact-only PR cards. The PR build loses the base label. The first Summary click during reload had no target; the next receipt shows Summary already open."
+    ]
+  },
+  {
+    "id": "c11",
+    "name": "Branch fallback without PR",
+    "expect": "A task without an attached PR still shows its branch and base.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "Changing branch presentation could hide the branch for tasks without PRs.",
+    "attribution": "unknown",
+    "note": "Opened the seeded task without a PR and expanded its inspector. Branch shows ao/ready-reply/root -\u003e main. It stays visible after workspace facts load.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 176,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Toggle Sample project 246 sessions\"]"
+        ],
+        "beforePath": "run/receipts/173-after.png",
+        "afterPath": "run/receipts/176-after.png",
+        "at": "2026-10-17T06:00:58.965242+05:30",
+        "box": {
+          "x": 9,
+          "y": 264,
+          "w": 36,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 238
+      },
+      {
+        "seq": 177,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Sample chat 246\"]"
+        ],
+        "beforePath": "run/receipts/176-after.png",
+        "afterPath": "run/receipts/177-after.png",
+        "at": "2026-10-17T06:01:00.054915+05:30",
+        "box": {
+          "x": 25,
+          "y": 300,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 156
+      },
+      {
+        "seq": 178,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/177-after.png",
+        "afterPath": "run/receipts/178-after.png",
+        "at": "2026-10-17T06:01:01.026946+05:30",
+        "ms": 20
+      },
+      {
+        "seq": 179,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.querySelector(\"[data-testid=inspector-branch]\")?.innerText"
+        ],
+        "beforePath": "run/receipts/178-after.png",
+        "afterPath": "run/receipts/179-after.png",
+        "at": "2026-10-17T06:01:16.137071+05:30",
+        "ms": 55
+      },
+      {
+        "seq": 180,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open inspector panel\"]"
+        ],
+        "beforePath": "run/receipts/179-after.png",
+        "afterPath": "run/receipts/180-after.png",
+        "at": "2026-10-17T06:01:35.204603+05:30",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 287
+      },
+      {
+        "seq": 181,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:!!document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/180-after.png",
+        "afterPath": "run/receipts/181-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c11-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c11-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:01:36.04819+05:30",
+        "ms": 21
+      }
+    ]
+  },
+  {
+    "id": "c12",
+    "name": "Visible PR-details fallback",
+    "expect": "With PR details unavailable and Summary visibly open, the header keeps the git-derived base.",
+    "state": "fail",
+    "purpose": "risk",
+    "risk": "A fact-only PR may remove the base label when its summary request fails.",
+    "attribution": "pr",
+    "note": "Same regression as c6, not a second bug. Use c6's head screenshot and c13's base screenshots. Receipt 195 confirms head visibly loses -\u003e main after selecting Summary. The first attempt targeted Open inspector while Browser was active and was invalid; I then selected Summary and checked visibility explicitly.",
+    "receipts": [
+      {
+        "seq": 182,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Run only: ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/1 . Then stop. Do n\"]"
+        ],
+        "beforePath": "run/receipts/175-after.png",
+        "afterPath": "run/receipts/182-after.png",
+        "at": "2026-10-17T06:02:00.066679+05:30",
+        "box": {
+          "x": 25,
+          "y": 226,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 470
+      },
+      {
+        "seq": 183,
+        "leg": "head",
+        "action": "network",
+        "args": [
+          "route",
+          "**/api/v1/sessions/litmus-6827-ao246-2/pr",
+          "--abort"
+        ],
+        "beforePath": "run/receipts/182-after.png",
+        "afterPath": "run/receipts/183-after.png",
+        "at": "2026-10-17T06:02:01.053868+05:30",
+        "ms": 21
+      },
+      {
+        "seq": 184,
+        "leg": "head",
+        "action": "reload",
+        "beforePath": "run/receipts/183-after.png",
+        "afterPath": "run/receipts/184-after.png",
+        "at": "2026-10-17T06:02:02.392127+05:30",
+        "ms": 436
+      },
+      {
+        "seq": 185,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open inspector panel\"]"
+        ],
+        "beforePath": "run/receipts/184-after.png",
+        "afterPath": "run/receipts/185-after.png",
+        "at": "2026-10-17T06:02:27.423616+05:30",
+        "reason": "agent-browser click: exit status 1: ✗ Element not found: [aria-label=\"Open inspector panel\"]. Verify the selector, role, or name is correct and the element exists in the DOM.",
+        "ms": 75
+      },
+      {
+        "seq": 186,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/185-after.png",
+        "afterPath": "run/receipts/186-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c12-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c12-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:02:28.598112+05:30",
+        "ms": 20
+      }
+    ],
+    "noteHistory": [
+      "With Summary visibly open, aborting only the task's /pr request removes the -\u003e main label from the header. The workspace /files request still returns 200. This confirms the empty-targetBranch regression seen in c6. The network fault is deliberate, not a test-environment failure.",
+      "Confirmed visibly in receipt 195 after selecting Summary: the header loses -\u003e main when only /pr details are aborted. Main keeps it in c13. The first attempt targeted Open inspector while Browser was active and was invalid; I then selected Summary and checked visibility explicitly. c6 has the valid head screenshot."
+    ]
+  },
+  {
+    "id": "c13",
+    "name": "Visible PR-details fallback",
+    "expect": "With PR details unavailable and Summary visibly open, the header keeps the git-derived base.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "A fact-only PR may remove the base label when its summary request fails.",
+    "attribution": "unknown",
+    "note": "With the inspector visibly open and only the PR-details request aborted, main retains -\u003e main above the fact-only PR cards. Head visibly loses it. This is the visual confirmation of c10; its first read was from a closed retained inspector.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 187,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Run only: ao session claim-pr https://github.com/Rishet11/litmus-6827-ao246/pull/1 . Then stop. Do n\"]"
+        ],
+        "beforePath": "run/receipts/181-after.png",
+        "afterPath": "run/receipts/187-after.png",
+        "at": "2026-10-17T06:02:31.343253+05:30",
+        "box": {
+          "x": 25,
+          "y": 226,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 525
+      },
+      {
+        "seq": 188,
+        "leg": "base",
+        "action": "network",
+        "args": [
+          "route",
+          "**/api/v1/sessions/litmus-6827-ao246-2/pr",
+          "--abort"
+        ],
+        "beforePath": "run/receipts/187-after.png",
+        "afterPath": "run/receipts/188-after.png",
+        "at": "2026-10-17T06:02:32.17287+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 189,
+        "leg": "base",
+        "action": "reload",
+        "beforePath": "run/receipts/188-after.png",
+        "afterPath": "run/receipts/189-after.png",
+        "at": "2026-10-17T06:02:33.316592+05:30",
+        "ms": 365
+      },
+      {
+        "seq": 190,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({controls:Array.from(document.querySelectorAll(\"button\")).filter(e=\u003e/inspector|Summary/.test(e.getAttribute(\"aria-label\")||\"\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),visible:e.checkVisibility()})),branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/189-after.png",
+        "afterPath": "run/receipts/190-after.png",
+        "at": "2026-10-17T06:02:53.912741+05:30",
+        "ms": 26
+      },
+      {
+        "seq": 192,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open inspector panel\"]"
+        ],
+        "beforePath": "run/receipts/190-after.png",
+        "afterPath": "run/receipts/192-after.png",
+        "at": "2026-10-17T06:03:02.777526+05:30",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 205
+      },
+      {
+        "seq": 193,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/192-after.png",
+        "afterPath": "run/receipts/193-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c13-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c13-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:03:03.696242+05:30",
+        "ms": 20
+      }
+    ]
+  },
+  {
+    "id": "c14",
+    "name": "Files and branch actions",
+    "expect": "Files navigation and commit or push context still refer to the actual task worktree when the attached PR uses another branch.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "The new PR branch label could contradict file or git actions that still operate on the task worktree.",
+    "attribution": "unknown",
+    "note": "On feature/open, Workspace Changes contains ui-note.txt and switching Branch to PR #4 shows its PR file list. The git menu offers Commit and Commit \u0026 push to #4. Commit/push execution was not tested. The visibly open Summary still labels the saved root -\u003e main despite the real worktree and open PR using feature/open, confirming c9's mismatch.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 245,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/240-after.png",
+        "afterPath": "run/receipts/245-after.png",
+        "at": "2026-10-17T06:08:07.852126+05:30",
+        "ms": 195
+      },
+      {
+        "seq": 246,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"More git actions\"]"
+        ],
+        "beforePath": "run/receipts/245-after.png",
+        "afterPath": "run/receipts/246-after.png",
+        "at": "2026-10-17T06:08:09.47277+05:30",
+        "box": {
+          "x": 1269,
+          "y": 394,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 494
+      },
+      {
+        "seq": 247,
+        "leg": "base",
+        "action": "press",
+        "args": [
+          "Escape"
+        ],
+        "beforePath": "run/receipts/246-after.png",
+        "afterPath": "run/receipts/247-after.png",
+        "at": "2026-10-17T06:08:10.620242+05:30",
+        "ms": 152
+      },
+      {
+        "seq": 248,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[data-testid=\"inspector-branch\"] button"
+        ],
+        "beforePath": "run/receipts/247-after.png",
+        "afterPath": "run/receipts/248-after.png",
+        "at": "2026-10-17T06:08:11.854135+05:30",
+        "box": {
+          "x": 820,
+          "y": 318,
+          "w": 483,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 357
+      },
+      {
+        "seq": 249,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-800)"
+        ],
+        "beforePath": "run/receipts/248-after.png",
+        "afterPath": "run/receipts/249-after.png",
+        "at": "2026-10-17T06:08:12.829467+05:30",
+        "ms": 21
+      },
+      {
+        "seq": 250,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"File source\"]"
+        ],
+        "beforePath": "run/receipts/249-after.png",
+        "afterPath": "run/receipts/250-after.png",
+        "at": "2026-10-17T06:08:21.781349+05:30",
+        "box": {
+          "x": 826,
+          "y": 51,
+          "w": 158.90625,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 370
+      },
+      {
+        "seq": 252,
+        "leg": "base",
+        "action": "hover",
+        "args": [
+          "@e638"
+        ],
+        "beforePath": "run/receipts/250-after.png",
+        "afterPath": "run/receipts/252-after.png",
+        "at": "2026-10-17T06:08:26.357497+05:30",
+        "targetRole": "menuitem",
+        "targetName": "Branch",
+        "ms": 33
+      },
+      {
+        "seq": 254,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "@e639"
+        ],
+        "beforePath": "run/receipts/252-after.png",
+        "afterPath": "run/receipts/254-after.png",
+        "at": "2026-10-17T06:08:37.990998+05:30",
+        "targetRole": "menuitem",
+        "targetName": "PR #4 · feature/open",
+        "box": {
+          "x": 995,
+          "y": 202,
+          "w": 172.734375,
+          "h": 33,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 231
+      },
+      {
+        "seq": 255,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "document.body.innerText.slice(-350)"
+        ],
+        "beforePath": "run/receipts/254-after.png",
+        "afterPath": "run/receipts/255-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c14-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c14-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:08:38.854263+05:30",
+        "ms": 39
+      }
+    ]
+  },
+  {
+    "id": "c15",
+    "name": "Visible branch fallback without PR",
+    "expect": "A visibly open Summary for a task without PRs shows its branch and base.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "Branch fallback could disappear for ordinary tasks without PRs.",
+    "attribution": "unknown",
+    "note": "With Summary visibly expanded on the task without a PR, Branch shows ao/reply-with-the/root -\u003e main. This confirms c4 visually; its earlier DOM read was from a closed retained inspector.",
+    "receipts": [
+      {
+        "seq": 256,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Sample chat 246\"]"
+        ],
+        "beforePath": "run/receipts/244-after.png",
+        "afterPath": "run/receipts/256-after.png",
+        "at": "2026-10-17T06:08:41.011901+05:30",
+        "box": {
+          "x": 25,
+          "y": 300,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 203
+      },
+      {
+        "seq": 257,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({controls:Array.from(document.querySelectorAll(\"button\")).filter(e=\u003e/inspector|Summary/.test(e.getAttribute(\"aria-label\")||\"\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),visible:e.checkVisibility()})),branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/256-after.png",
+        "afterPath": "run/receipts/257-after.png",
+        "at": "2026-10-17T06:08:42.109852+05:30",
+        "ms": 24
+      },
+      {
+        "seq": 258,
+        "leg": "head",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open inspector panel\"]"
+        ],
+        "beforePath": "run/receipts/257-after.png",
+        "afterPath": "run/receipts/258-after.png",
+        "at": "2026-10-17T06:08:53.18295+05:30",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 280
+      },
+      {
+        "seq": 259,
+        "leg": "head",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/258-after.png",
+        "afterPath": "run/receipts/259-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c15-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c15-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:08:54.149899+05:30",
+        "ms": 18
+      }
+    ]
+  },
+  {
+    "id": "c16",
+    "name": "Visible branch fallback without PR",
+    "expect": "A visibly open Summary for a task without PRs shows its branch and base.",
+    "state": "pass",
+    "purpose": "risk",
+    "risk": "Branch fallback could disappear for ordinary tasks without PRs.",
+    "attribution": "unknown",
+    "note": "With Summary visibly open on the task without PRs, main shows ao/ready-reply/root -\u003e main. Both builds preserve the fallback. Cleanup: private repo Rishet11/litmus-6827-ao246 remains because deletion returned 403 for missing delete_repo scope. I did not change login scopes. No extra host services were started.",
+    "leg": "base",
+    "receipts": [
+      {
+        "seq": 260,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open Sample chat 246\"]"
+        ],
+        "beforePath": "run/receipts/255-after.png",
+        "afterPath": "run/receipts/260-after.png",
+        "at": "2026-10-17T06:08:56.115589+05:30",
+        "box": {
+          "x": 25,
+          "y": 300,
+          "w": 219,
+          "h": 32,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 275
+      },
+      {
+        "seq": 261,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility(),controls:Array.from(document.querySelectorAll(\"button\")).filter(e=\u003e/inspector|Summary/.test(e.getAttribute(\"aria-label\")||\"\")).map(e=\u003e({label:e.getAttribute(\"aria-label\"),visible:e.checkVisibility()}))})"
+        ],
+        "beforePath": "run/receipts/260-after.png",
+        "afterPath": "run/receipts/261-after.png",
+        "at": "2026-10-17T06:08:57.179208+05:30",
+        "ms": 95
+      },
+      {
+        "seq": 262,
+        "leg": "base",
+        "action": "click",
+        "args": [
+          "[aria-label=\"Open inspector panel\"]"
+        ],
+        "beforePath": "run/receipts/261-after.png",
+        "afterPath": "run/receipts/262-after.png",
+        "at": "2026-10-17T06:09:16.520971+05:30",
+        "box": {
+          "x": 1249,
+          "y": 11,
+          "w": 28,
+          "h": 28,
+          "viewportWidth": 1320,
+          "viewportHeight": 780
+        },
+        "ms": 200
+      },
+      {
+        "seq": 263,
+        "leg": "base",
+        "action": "eval",
+        "args": [
+          "({branch:document.querySelector(\"[data-testid=inspector-branch]\")?.innerText,visible:document.querySelector(\"[data-testid=inspector-branch]\")?.checkVisibility()})"
+        ],
+        "beforePath": "run/receipts/262-after.png",
+        "afterPath": "run/receipts/263-after.png",
+        "themeShots": [
+          {
+            "theme": "light",
+            "path": "run/receipts/c16-light.png"
+          },
+          {
+            "theme": "dark",
+            "path": "run/receipts/c16-dark.png"
+          }
+        ],
+        "at": "2026-10-17T06:09:17.330048+05:30",
+        "ms": 20
+      }
+    ],
+    "noteHistory": [
+      "With Summary visibly open on the task without PRs, main shows ao/ready-reply/root -\u003e main. Both builds preserve the no-PR branch fallback."
+    ]
+  }
+]

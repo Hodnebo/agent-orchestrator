@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -18,6 +21,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -41,7 +45,8 @@ const (
 	bigFiles = 30
 	bigLines = 2000 // changed lines: added plus deleted
 	// gapNoWords opens the gap of a run that never read the PR's text; its verdict is held for approval (see closeRun).
-	gapNoWords = "I could not read the PR's text on GitHub"
+	gapNoWords    = "I could not read the PR's text on GitHub"
+	intakeLogFile = "intake.log"
 )
 
 // GH runs the gh CLI and returns its stdout. Intake only reads through it.
@@ -181,9 +186,19 @@ type intakeData struct {
 	issues []IssueRef
 	repo   string // as gh reports it, so a renamed repo resolves to its new name
 	gaps   []string
+	// diagnostics are retained in the run's private intake.log and are
+	// available to the local verdict, but do not become public comment limits.
+	diagnostics []string
 
-	headDir, baseDir string // where prepare will put the two builds' checkouts
-	gates            string // the gate notes of the touched UI files, composed from the head commit; "" when none or not scannable
+	headDir, baseDir string              // where prepare will put the two builds' checkouts
+	gates            string              // the gate notes of the touched UI files, composed from the head commit; "" when none or not scannable
+	headFiles        map[string][]string // PR-head content read for UI classification and gate notes
+}
+
+func (s *Service) addIntakeDiagnostic(d *intakeData, message string) {
+	if clean := strings.TrimSpace(s.scrub(message)); clean != "" && !slices.Contains(d.diagnostics, clean) {
+		d.diagnostics = append(d.diagnostics, clean)
+	}
 }
 
 // Intake pins the PR, saves its changes and writes context-pack.md. The session's run starts its clock
@@ -212,6 +227,10 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 	defer done()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), IntakeBudget) // a cold mirror clone outlives the CLI's call; a retry waits for this one
 	defer cancel()
+	if err := s.snapshotIntakeHome(id); err != nil {
+		_, saveErr := s.update(id, func(cur *Run) { cur.Error = err.Error() })
+		return run, errors.Join(err, saveErr)
+	}
 
 	d, ferr := s.pullWords(ctx, repo, number)                 // network, so the service lock is not held
 	if ferr != nil && !isCode(ferr, "TESTING_GH_NOT_FOUND") { // gh down, slow, rate-limited or logged out: the ids come from git
@@ -231,8 +250,9 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 	if ferr == nil {
 		d.headDir, d.baseDir = filepath.Join(s.store.reposDir(d.repo), d.pr.HeadRefOid), filepath.Join(s.store.reposDir(d.repo), d.pr.BaseRefOid)
 		var gerr error
-		if d.gates, gerr = s.gateNotes(ctx, mirror, d); gerr != nil {
-			d.gaps = append(d.gaps, "The gate scan could not run: "+gerr.Error()+", so the pack may lack notes on how the touched features are gated.")
+		if d.gates, gerr = s.gateNotes(ctx, mirror, &d); gerr != nil {
+			s.addIntakeDiagnostic(&d, "Gate scan failed: "+gerr.Error())
+			d.gaps = append(d.gaps, "The gate scan could not run, so the pack may lack notes on how the touched features are gated.")
 		}
 	}
 
@@ -246,8 +266,16 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 		return Run{}, conflict("TESTING_RUN_EXISTS", "run "+id+" changed while intake was fetching")
 	}
 	if ferr == nil {
-		pack := renderPack(d, s.store.recipeText(d.repo))
-		for name, data := range map[string]string{"files.txt": filesText(d.files), "diff.patch": d.diff, "context-pack.md": pack} {
+		recipe, recipeErr := s.store.recipeText(d.repo)
+		if recipeErr != nil {
+			s.addIntakeDiagnostic(&d, "I could not read the recipe for "+d.repo+": "+recipeErr.Error()+".")
+		}
+		pack := renderPack(d, recipe)
+		files := map[string]string{"intake-claims.json": intakeClaimsJSON(d), "files.txt": filesText(d.files), "diff.patch": d.diff, "context-pack.md": pack}
+		if len(d.diagnostics) > 0 {
+			files[intakeLogFile] = strings.Join(d.diagnostics, "\n") + "\n"
+		}
+		for name, data := range files {
 			if ferr = s.store.WriteFile(id, name, []byte(data)); ferr != nil {
 				break
 			}
@@ -261,7 +289,7 @@ func (s *Service) Intake(ctx context.Context, sessionID, prRef string) (Run, err
 		return run, ferr
 	}
 	run.Areas, run.Issues, run.Gaps = areasOf(paths(d.files)), d.issues, d.gaps
-	run.Title = clip(strings.TrimSpace(d.pr.Title), 200)
+	run.Title = strings.TrimSpace(d.pr.Title)
 	run.Repo, run.BaseSHA, run.HeadSHA, run.BaseRef, run.Error = d.repo, d.pr.BaseRefOid, d.pr.HeadRefOid, d.pr.BaseRefName, blocked
 	return run, s.store.Save(run)
 }
@@ -319,6 +347,9 @@ func (s *Service) claimIntake(ctx context.Context, id, sessionID, repo string, n
 // claim creates the session's run, or restarts a failed intake in place. Any
 // other existing run, pinned or closed, is a conflict. Callers hold s.mu.
 func (s *Service) claim(id, sessionID, repo string, number int, commentMode, evidenceMode string) (Run, error) {
+	if _, sweeping := s.busy[id+" sweep"]; sweeping {
+		return Run{}, conflict("TESTING_RUN_BUSY", "stale cleanup is in progress for "+id)
+	}
 	prev, err := s.store.Get(id)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -391,6 +422,7 @@ func (s *Service) pullWords(ctx context.Context, repo string, number int) (intak
 			err = errors.New("gh returned an unreadable issue")
 		}
 		if err != nil { // a deleted, private or moved issue, or a mention of something gh cannot read
+			s.addIntakeDiagnostic(&d, fmt.Sprintf("Could not read linked issue %s: %s", k.name(d.repo), err))
 			d.gaps = append(d.gaps, fmt.Sprintf("I could not read the linked issue %s (%s).", k.name(d.repo), ghReason(err)))
 			continue
 		}
@@ -416,8 +448,7 @@ func ghReason(err error) string {
 	case isCode(e, "TESTING_GH_NOT_FOUND"):
 		return "not found"
 	}
-	line, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
-	return clip(line, 120)
+	return "gh request failed"
 }
 
 // pullIDs is intake without GitHub's words: the head id from refs/pull/N/head and the base from the default branch's
@@ -425,6 +456,9 @@ func ghReason(err error) string {
 // nothing can be tested. why is the gh failure, said in the gap.
 func (s *Service) pullIDs(ctx context.Context, repo string, number int, why error) (intakeData, error) {
 	d := intakeData{repo: repo, number: number}
+	if why != nil {
+		s.addIntakeDiagnostic(&d, "GitHub PR read failed: "+why.Error())
+	}
 	mirror := s.store.mirrorDir(repo)
 	mu := s.mirrorLock(mirror)
 	mu.Lock()
@@ -524,12 +558,14 @@ func (s *Service) pullCode(ctx context.Context, d *intakeData) (string, error) {
 	files, filesErr := s.changedFiles(ctx, mirror, fork, head)
 	d.files = files
 	if filesErr != nil {
-		d.gaps = append(d.gaps, "I could not read the PR's file list with git ("+gitReason(filesErr)+"), so the areas it changes are unknown.")
+		s.addIntakeDiagnostic(d, "Could not read PR file list with git: "+filesErr.Error())
+		d.gaps = append(d.gaps, "I could not read the PR's file list with git, so the areas it changes are unknown.")
 	}
 	patch, cut, patchErr := s.gitCapped(ctx, mirror, maxPatch, append(slices.Clone(patchArgs), fork, head)...)
 	switch {
 	case patchErr != nil:
-		d.gaps = append(d.gaps, "I could not read the PR's changes with git ("+gitReason(patchErr)+"); diff.patch is empty.")
+		s.addIntakeDiagnostic(d, "Could not read PR patch with git: "+patchErr.Error())
+		d.gaps = append(d.gaps, "I could not read the PR's changes with git; diff.patch is empty.")
 	case cut:
 		if i := strings.LastIndexByte(patch, '\n'); i > 0 {
 			patch = patch[:i]
@@ -661,14 +697,22 @@ func bodyIssues(body, repo string) (out []issueKey) {
 	return out
 }
 
-// recipeText returns the stored recipe for repo, or "" when none exists:
-// <dataDir>/litmus/recipes/<owner>__<name>.yaml.
-func (s *Store) recipeText(repo string) string {
-	data, err := os.ReadFile(s.recipePath(repo))
+// recipeText returns the resolved recipe YAML for the intake pack. A missing
+// non-default recipe is normal during intake and renders as "none yet";
+// unreadable or invalid YAML is returned so intake can record the real gap.
+func (s *Store) recipeText(repo string) (string, error) {
+	data, err := s.readRecipe(repo)
 	if err != nil {
-		return ""
+		var missing *apierr.Error
+		if errors.As(err, &missing) && missing.Code == "TESTING_RECIPE_MISSING" {
+			return "", nil
+		}
+		return "", err
 	}
-	return strings.TrimSpace(string(data))
+	if _, err := ParseRecipe(data); err != nil {
+		return "", apierr.Invalid("TESTING_RECIPE_INVALID", err.Error(), nil)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // capWords keeps the first limit words of s with its original spacing.
@@ -686,6 +730,21 @@ func capWords(s string, limit int) string {
 	return s
 }
 
+// intakeDiagnostics reads private intake details for local reports. A missing
+// log is normal for runs without diagnostics; any other read failure is
+// returned so the local verdict can record it. Intake failures that contain
+// paths or parser output must never be copied into a public PR comment.
+func intakeDiagnostics(runDir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(runDir, intakeLogFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(strings.Split(string(data), "\n"), func(line string) bool { return strings.TrimSpace(line) == "" }), nil
+}
+
 func quote(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
 	if s == "" {
@@ -697,6 +756,7 @@ func quote(s string) string {
 type fileDiff struct {
 	path    string // from the "diff --git" header; "" for a diff without one
 	lines   []string
+	head    []string // PR-head content, when intake read it
 	added   int
 	deleted bool // the whole file went
 }
@@ -705,16 +765,23 @@ func splitDiff(diff string) (files []fileDiff) {
 	if strings.TrimSpace(diff) == "" {
 		return nil
 	}
+	inHunk := false
 	for _, l := range strings.Split(strings.TrimRight(diff, "\n"), "\n") {
 		if strings.HasPrefix(l, "diff --git ") || len(files) == 0 {
 			files = append(files, fileDiff{})
+			inHunk = false
 			if _, b, ok := strings.Cut(l, " b/"); ok {
 				files[len(files)-1].path = b
 			}
 		}
 		f := &files[len(files)-1]
 		f.lines = append(f.lines, l)
-		if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++ ") {
+		if strings.HasPrefix(l, "@@") {
+			inHunk = true
+		}
+		// The file header is the only metadata line that starts with "+++ ".
+		// Inside a hunk that prefix is the diff marker plus a real source line.
+		if strings.HasPrefix(l, "+") && (inHunk || !strings.HasPrefix(l, "+++ ")) {
 			f.added++
 		}
 		if strings.HasPrefix(l, "deleted file mode") {
@@ -740,9 +807,9 @@ func churnOnly(path string) bool {
 // names next, the rest, then deletions and churn-only files last. names reports whether the PR text mentions a path.
 func excerptRank(f fileDiff, names func(path string) bool) int {
 	switch {
-	case f.deleted || churnOnly(f.path):
+	case f.deleted || churnOnly(f.path) || generatedFile(f.head):
 		return 3
-	case isUIFile(f.path):
+	case isUIFile(f.path, f.head):
 		return 0
 	case names(f.path):
 		return 1
@@ -758,7 +825,7 @@ func pickDiff(files []fileDiff, limit int, rank func(fileDiff) int) (lines []str
 		rank = func(fileDiff) int { return 0 }
 	}
 	sort.SliceStable(byAdded, func(i, j int) bool {
-		return cmp.Or(rank(byAdded[i])-rank(byAdded[j]), byAdded[j].added-byAdded[i].added) < 0
+		return cmp.Or(rank(byAdded[i])-rank(byAdded[j]), btoi(areaLabel(byAdded[i].path) == "Tests")-btoi(areaLabel(byAdded[j].path) == "Tests"), byAdded[j].added-byAdded[i].added) < 0
 	})
 	for _, f := range byAdded {
 		room := limit - len(lines)
@@ -885,11 +952,9 @@ func (d intakeData) big() bool {
 	return len(d.files) > bigFiles || changed > bigLines
 }
 
-// suggestedChecks is the "Suggested checks" section at the top of the pack, derived from the PR text and the touched
-// files without a model so the choice of checks is a rule: the headline claim (the title without its prefix, then the
-// body sentence that states it), the linked issue, then one line per touched area. Five lines at most. A big PR gets
-// three checks: the headline, one thing next to it, and a smoke check (its diff is not there to be covered); the
-// author's words and the linked issue are context lines on both branches.
+// suggestedChecks derives the headline from the PR title without its conventional prefix, using the linked issue's
+// title when the PR title is vague. The first body sentence stating what the PR does and the linked issue add context.
+// A big PR also gets a nearby behavior check and an app smoke check.
 func suggestedChecks(d intakeData) string {
 	title := strings.TrimSpace(d.pr.Title)
 	if !d.words {
@@ -911,34 +976,1532 @@ func suggestedChecks(d intakeData) string {
 	}
 	if d.big() {
 		lines = append(lines, "- One thing next to the headline claim still works; pick it from the areas in section 4, not from the diff.", "- Smoke: the app opens and a chat runs.")
-		return "## Suggested checks\n\n" + strings.Join(lines, "\n") + "\n"
-	}
-	for _, a := range areasOf(paths(d.files)) {
-		if len(lines) == 5 {
-			break
-		}
-		if a.Name != "Tests" && a.Name != "Docs" && a.Name != "Project files" {
-			lines = append(lines, "- Something visible in "+areaPhrase(a)+" still works.")
-		}
 	}
 	return "## Suggested checks\n\n" + strings.Join(lines, "\n") + "\n"
 }
 
-// areaPhrase names an area for a person: "the renderer component TitlebarNav" for one file, "the cli package" for a
-// backend package, else its label with up to three file names.
-func areaPhrase(a Area) string {
-	name := strings.ToLower(a.Name)
-	if pkg, ok := strings.CutPrefix(name, "backend "); ok {
-		name = "the " + pkg + " package"
-	} else if a.Files == 1 && len(a.Stems) == 1 {
-		return "the " + singular(name) + " " + a.Stems[0]
+const (
+	maxChangedBranchRunes         = 160
+	maxChangedBranchesPerFunction = 6
+)
+
+var changedBranchWord = regexp.MustCompile(`\b(?:if|else|switch|case)\b`)
+
+// sourceCodeExts is deliberately narrower than the set of files that can
+// contain text. Markdown, stylesheets and data files often contain angle
+// brackets, question marks and colons that look like conditions in a diff.
+var sourceCodeExts = []string{
+	".bash", ".c", ".cc", ".clj", ".cljs", ".cpp", ".cs", ".csh", ".cxx", ".dart", ".ex", ".exs",
+	".fish", ".fs", ".fsx", ".go", ".h", ".hh", ".hpp", ".hs", ".java", ".jl", ".js",
+	".jsx", ".kt", ".kts", ".lua", ".m", ".mm", ".mjs", ".nim", ".php", ".pl", ".pm", ".py",
+	".r", ".rb", ".rs", ".scala", ".sh", ".svelte", ".swift", ".t", ".ts", ".tsx", ".vue", ".zig",
+	".htm", ".html", ".xml",
+}
+
+func isSourceCodePath(path string) bool {
+	return slices.Contains(sourceCodeExts, strings.ToLower(filepath.Ext(path)))
+}
+
+const maxChangedFunctions = 12
+
+type changedLine struct {
+	line  int
+	raw   string
+	code  string
+	added bool
+	hunk  int
+}
+
+type changedFunction struct {
+	path, name string
+	line       int
+	added      int
+	deleted    int
+	rank       int
+	order      int
+	lines      []changedLine
+	start      int
+	end        int
+	found      bool
+}
+
+var diffHunkStart = regexp.MustCompile(`^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@`)
+
+// changedCode reports the head functions touched by product-code changes. Function
+// scopes come from the pinned head source, while the branch list comes only from
+// added lines in the patch.
+func changedCode(d intakeData) string {
+	files := splitDiff(d.diff)
+	names := namedIn(d.pr.Title + "\n" + d.pr.Body)
+	var entries []changedFunction
+	for fileOrder, f := range files {
+		f.head = d.headFiles[f.path]
+		if f.path == "" || !isSourceCodePath(f.path) || areaLabel(f.path) == "Tests" || churnOnly(f.path) || generatedFile(f.head) {
+			continue
+		}
+		lines := changedSourceLines(f)
+		if len(lines) == 0 {
+			continue
+		}
+		goScopes := []sourceFunction(nil)
+		if strings.EqualFold(filepath.Ext(f.path), ".go") {
+			goScopes = goFunctionScopes(f.head)
+		}
+		var braceScrubbed []string
+		if strings.EqualFold(filepath.Ext(f.path), ".go") {
+			// Go uses the parser below.
+		} else if braceLanguage(f.path) {
+			braceScrubbed = scrubbedLines(f.path, f.head)
+		}
+		byScope := map[string]int{}
+		for _, changed := range lines {
+			var start, end int
+			var name string
+			found := false
+			if strings.EqualFold(filepath.Ext(f.path), ".go") {
+				start, end, name, found = goFunctionAt(goScopes, changed.line)
+			} else if braceScrubbed != nil {
+				start, end, name, found = braceFunctionAt(f.head, braceScrubbed, changed.line)
+			}
+			key := "fallback:" + strconv.Itoa(changed.hunk)
+			if found {
+				key = "function:" + strconv.Itoa(start)
+			}
+			i, ok := byScope[key]
+			if !ok {
+				i = len(entries)
+				byScope[key] = i
+				entry := changedFunction{path: f.path, rank: excerptRank(f, names), order: fileOrder*100000 + changed.line, start: start, end: end, found: found}
+				if found {
+					entry.name, entry.line = name, start
+				} else {
+					entry.line = changed.line
+				}
+				entries = append(entries, entry)
+			}
+			entry := &entries[i]
+			entry.lines = append(entry.lines, changed)
+			if changed.added {
+				entry.added++
+			} else {
+				entry.deleted++
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	slices.SortStableFunc(entries, func(a, b changedFunction) int {
+		return cmp.Or(a.rank-b.rank, b.added-a.added, a.order-b.order)
+	})
+	var b strings.Builder
+	if len(entries) > maxChangedFunctions {
+		fmt.Fprintf(&b, "## Changed code (%d of %d changed functions; the rest are in diff.patch)\n\n", maxChangedFunctions, len(entries))
 	} else {
-		name = "the " + name
+		b.WriteString("## Changed code\n\n")
 	}
-	if len(a.Stems) > 0 && len(a.Stems) <= 3 {
-		name += " (" + strings.Join(a.Stems, ", ") + ")"
+	for _, entry := range entries[:min(len(entries), maxChangedFunctions)] {
+		label := entry.name
+		if !entry.found {
+			label = "(enclosing function not found; changed lines only)"
+		}
+		fmt.Fprintf(&b, "- %s:%d %s (+%d/-%d)\n", entry.path, entry.line, label, entry.added, entry.deleted)
+		if branches := changedFunctionBranches(entry.lines); len(branches) > 0 {
+			fmt.Fprintf(&b, "  - branches: %s\n", strings.Join(branches, " | "))
+		}
+		limits := changedFunctionLimits(entry.path, d.headFiles, entry.start, entry.end)
+		paths := changedFunctionAPIPaths(entry.path, d.headFiles[entry.path], entry.start, entry.end)
+		if !entry.found {
+			limits = changedLineLimits(entry.path, entry.lines)
+			paths = changedLineAPIPaths(entry.path, entry.lines)
+		}
+		if len(limits) > 0 {
+			fmt.Fprintf(&b, "  - limits: %s\n", strings.Join(limits, ", "))
+		}
+		if len(paths) > 0 {
+			fmt.Fprintf(&b, "  - API paths: %s\n", strings.Join(paths, ", "))
+		}
 	}
-	return name
+	return b.String()
+}
+
+func changedSourceLines(f fileDiff) []changedLine {
+	var out []changedLine
+	newLine, hunk, inHunk := 0, -1, false
+	scrubber := newBranchScrubber(f.path)
+	for _, line := range f.lines {
+		if strings.HasPrefix(line, "@@") {
+			match := diffHunkStart.FindStringSubmatch(line)
+			if len(match) != 2 {
+				inHunk = false
+				continue
+			}
+			newLine, _ = strconv.Atoi(match[1])
+			hunk++
+			inHunk = true
+			scrubber = newBranchScrubber(f.path)
+			continue
+		}
+		if !inHunk {
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			raw := strings.TrimPrefix(line, "+")
+			out = append(out, changedLine{line: max(newLine, 1), raw: raw, code: strings.TrimSpace(scrubber.code(raw)), added: true, hunk: hunk})
+			newLine++
+			continue
+		}
+		if strings.HasPrefix(line, "-") {
+			out = append(out, changedLine{line: max(newLine, 1), raw: strings.TrimPrefix(line, "-"), added: false, hunk: hunk})
+			continue
+		}
+		if strings.HasPrefix(line, " ") {
+			scrubber.code(strings.TrimPrefix(line, " "))
+			newLine++
+		}
+	}
+	return out
+}
+
+func braceLanguage(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".bash", ".c", ".cc", ".clj", ".cljs", ".cpp", ".cs", ".csh", ".cxx", ".dart", ".ex", ".exs", ".fish", ".fs", ".fsx", ".go", ".h", ".hh", ".hpp", ".java", ".js", ".jsx", ".kt", ".kts", ".m", ".mm", ".mjs", ".nim", ".php", ".rs", ".scala", ".svelte", ".swift", ".ts", ".tsx", ".vue", ".zig", ".htm", ".html", ".xml":
+		return true
+	default:
+		return false
+	}
+}
+
+func scrubbedLines(path string, lines []string) []string {
+	out := make([]string, len(lines))
+	scrubber := newBranchScrubber(path)
+	for i, line := range lines {
+		out[i] = strings.TrimSpace(scrubber.code(line))
+	}
+	return out
+}
+
+type sourceFunction struct {
+	start, end int
+	name       string
+}
+
+func goFunctionScopes(lines []string) []sourceFunction {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "head.go", strings.Join(lines, "\n"), parser.AllErrors)
+	if err != nil {
+		return nil
+	}
+	var out []sourceFunction
+	ast.Inspect(file, func(node ast.Node) bool {
+		decl, ok := node.(*ast.FuncDecl)
+		if !ok || decl.Body == nil {
+			return true
+		}
+		out = append(out, sourceFunction{start: fset.Position(decl.Pos()).Line, end: fset.Position(decl.End()).Line, name: decl.Name.Name})
+		return true
+	})
+	return out
+}
+
+func goFunctionAt(scopes []sourceFunction, changed int) (start, end int, name string, found bool) {
+	bestSpan := int(^uint(0) >> 1)
+	for _, scope := range scopes {
+		if changed >= scope.start && changed <= scope.end && scope.end-scope.start < bestSpan {
+			start, end, name, found, bestSpan = scope.start, scope.end, scope.name, true, scope.end-scope.start
+		}
+	}
+	return start, end, name, found
+}
+
+func braceFunctionAt(lines, scrubbed []string, changed int) (start, end int, name string, found bool) {
+	if changed < 1 || changed > len(lines) {
+		return 0, 0, "", false
+	}
+	startIndex := -1
+	for i := changed - 1; i >= 0; i-- {
+		if i >= len(scrubbed) || strings.TrimSpace(lines[i]) == "" || strings.TrimLeft(lines[i], " \t") != lines[i] {
+			continue
+		}
+		match := hunkFunction.FindStringSubmatch(scrubbed[i])
+		if len(match) == 2 {
+			startIndex, name = i, match[1]
+			break
+		}
+	}
+	if startIndex < 0 {
+		return 0, 0, "", false
+	}
+	endIndex := -1
+	for i := startIndex + 1; i < len(scrubbed); i++ {
+		if strings.TrimLeft(lines[i], " \t") == lines[i] && (scrubbed[i] == "}" || scrubbed[i] == "};") {
+			endIndex = i
+			break
+		}
+	}
+	if endIndex < changed-1 {
+		return 0, 0, "", false
+	}
+	return startIndex + 1, endIndex + 1, name, true
+}
+
+func changedFunctionBranches(lines []changedLine) []string {
+	var branches []string
+	for _, line := range lines {
+		if line.added && changedBranchLineCode(line.code) {
+			branches = append(branches, clipRunes(strings.TrimSpace(line.raw), maxChangedBranchRunes))
+			if len(branches) == maxChangedBranchesPerFunction {
+				break
+			}
+		}
+	}
+	return branches
+}
+
+type numericConstant struct{ name, value, location string }
+
+func changedFunctionLimits(path string, files map[string][]string, start, end int) []string {
+	if start < 1 || end < start {
+		return nil
+	}
+	lines := files[path]
+	scope := lines[max(start-1, 0):min(end, len(lines))]
+	scrubbed := strings.Join(scrubbedLines(path, scope), "\n")
+	values := numericLiterals(scrubbed)
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	references, _ := sourceIdentifiers(scrubbed)
+	constants := numericConstants(path, files)
+	for _, c := range constants {
+		if seen[c.name] || !references[c.name] {
+			continue
+		}
+		seen[c.name] = true
+		values = append(values, c.name+" = "+c.value+" ("+c.location+")")
+	}
+	return values[:min(len(values), 8)]
+}
+
+func numericConstants(path string, files map[string][]string) []numericConstant {
+	ext := strings.ToLower(filepath.Ext(path))
+	dir := filepath.Dir(path)
+	var out []numericConstant
+	if ext == ".go" {
+		paths := make([]string, 0, len(files))
+		for p := range files {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			lines := files[p]
+			if filepath.Dir(p) != dir || strings.ToLower(filepath.Ext(p)) != ".go" || strings.HasSuffix(strings.ToLower(p), "_test.go") {
+				continue
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, p, strings.Join(lines, "\n"), parser.AllErrors)
+			if err != nil {
+				continue
+			}
+			for _, decl := range file.Decls {
+				group, ok := decl.(*ast.GenDecl)
+				if !ok || group.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range group.Specs {
+					values, ok := spec.(*ast.ValueSpec)
+					if !ok || len(values.Values) != len(values.Names) {
+						continue
+					}
+					for i, value := range values.Values {
+						literal, ok := value.(*ast.BasicLit)
+						if ok && (literal.Kind == token.INT || literal.Kind == token.FLOAT) {
+							out = append(out, numericConstant{name: values.Names[i].Name, value: literal.Value, location: fmt.Sprintf("%s:%d", p, fset.Position(literal.Pos()).Line)})
+						}
+					}
+				}
+			}
+		}
+	} else if slices.Contains([]string{".ts", ".tsx", ".js", ".jsx", ".mjs"}, ext) {
+		out = topLevelTSConstants(path, files[path])
+	}
+	return out
+}
+
+func topLevelTSConstants(path string, lines []string) []numericConstant {
+	var out []numericConstant
+	scrubber := newBranchScrubber(path)
+	for i, line := range lines {
+		code := strings.TrimSpace(scrubber.code(line))
+		if strings.TrimLeft(line, " \t") != line || code == "" {
+			continue
+		}
+		for _, prefix := range []string{"export declare ", "declare export ", "export ", "declare "} {
+			code = strings.TrimPrefix(code, prefix)
+		}
+		if !strings.HasPrefix(code, "const ") {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(code, "const "))
+		nameEnd := 0
+		for nameEnd < len(rest) && isIdentifierPart(rest[nameEnd]) {
+			nameEnd++
+		}
+		if nameEnd == 0 || !isIdentifierStart(rest[0]) {
+			continue
+		}
+		name, rest := rest[:nameEnd], strings.TrimSpace(rest[nameEnd:])
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "="))
+		negative := ""
+		if strings.HasPrefix(rest, "-") || strings.HasPrefix(rest, "+") {
+			negative, rest = rest[:1], strings.TrimSpace(rest[1:])
+		}
+		value, end, ok := numericTokenAt(rest, 0)
+		tail := ""
+		if ok {
+			tail = strings.TrimSpace(rest[end:])
+		}
+		if ok && (tail == "" || tail == ";") {
+			out = append(out, numericConstant{name: name, value: negative + strings.TrimSuffix(value, "n"), location: fmt.Sprintf("%s:%d", path, i+1)})
+		}
+	}
+	return out
+}
+
+func isZeroOrOne(value string) bool {
+	clean := strings.TrimSuffix(strings.ReplaceAll(value, "_", ""), "n")
+	if clean == "" {
+		return false
+	}
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") || strings.HasPrefix(clean, "0b") || strings.HasPrefix(clean, "0B") || strings.HasPrefix(clean, "0o") || strings.HasPrefix(clean, "0O") {
+		n, err := strconv.ParseInt(clean, 0, 64)
+		return err == nil && (n == 0 || n == 1)
+	}
+	n, err := strconv.ParseFloat(clean, 64)
+	return err == nil && (n == 0 || n == 1)
+}
+
+// sourceIdentifiers indexes the function once instead of scanning it again for
+// each numeric constant. Work counts the identifier and UTF-8 scan steps.
+func sourceIdentifiers(source string) (map[string]bool, int) {
+	names := map[string]bool{}
+	work := 0
+	for i := 0; i < len(source); {
+		work++
+		if !identifierStartAt(source, i) {
+			_, size := utf8.DecodeRuneInString(source[i:])
+			i += size
+			continue
+		}
+		start := i
+		for i < len(source) && identifierPartAt(source, i) {
+			work++
+			_, size := utf8.DecodeRuneInString(source[i:])
+			i += size
+		}
+		names[source[start:i]] = true
+	}
+	return names, work
+}
+
+func isIdentifierStart(c byte) bool {
+	return c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+func isIdentifierPart(c byte) bool { return isIdentifierStart(c) || c >= '0' && c <= '9' }
+
+func identifierStartAt(source string, i int) bool {
+	if i >= len(source) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(source[i:])
+	return r == '_' || r == '$' || unicode.IsLetter(r)
+}
+
+func identifierPartAt(source string, i int) bool {
+	if i >= len(source) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(source[i:])
+	return identifierStartAt(source, i) || unicode.IsDigit(r)
+}
+
+func identifierPartBefore(source string, i int) bool {
+	if i <= 0 {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(source[:i])
+	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+func numericLiterals(source string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for i := 0; i < len(source); {
+		if !(source[i] >= '0' && source[i] <= '9' || source[i] == '.' && i+1 < len(source) && source[i+1] >= '0' && source[i+1] <= '9') || identifierPartBefore(source, i) {
+			i++
+			continue
+		}
+		value, end, ok := numericTokenAt(source, i)
+		if !ok {
+			i++
+			continue
+		}
+		i = end
+		value = strings.TrimSuffix(value, "n")
+		if !isZeroOrOne(value) && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func numericTokenAt(source string, start int) (string, int, bool) {
+	i := start
+	if i >= len(source) {
+		return "", i, false
+	}
+	if i+1 < len(source) && source[i] == '0' && strings.ContainsRune("xXbBoO", rune(source[i+1])) {
+		base := source[i+1]
+		i += 2
+		digitStart := i
+		for i < len(source) {
+			c := source[i]
+			valid := c == '_' || c >= '0' && c <= '9'
+			if base == 'x' || base == 'X' {
+				valid = valid || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+			} else if base == 'b' || base == 'B' {
+				valid = c == '_' || c == '0' || c == '1'
+			} else {
+				valid = c == '_' || c >= '0' && c <= '7'
+			}
+			if !valid {
+				break
+			}
+			i++
+		}
+		if i == digitStart {
+			return "", start, false
+		}
+	} else {
+		before := i
+		for i < len(source) && (source[i] >= '0' && source[i] <= '9' || source[i] == '_') {
+			i++
+		}
+		if i < len(source) && source[i] == '.' && !(i+1 < len(source) && source[i+1] == '.') {
+			i++
+			for i < len(source) && (source[i] >= '0' && source[i] <= '9' || source[i] == '_') {
+				i++
+			}
+		}
+		if i < len(source) && (source[i] == 'e' || source[i] == 'E') {
+			i++
+			if i < len(source) && (source[i] == '+' || source[i] == '-') {
+				i++
+			}
+			exponentStart := i
+			for i < len(source) && (source[i] >= '0' && source[i] <= '9' || source[i] == '_') {
+				i++
+			}
+			if exponentStart == i {
+				return "", start, false
+			}
+		}
+		if before == i {
+			return "", start, false
+		}
+	}
+	if i < len(source) && source[i] == 'n' {
+		i++
+	}
+	if i < len(source) && isIdentifierPart(source[i]) {
+		return "", start, false
+	}
+	return source[start:i], i, true
+}
+
+func changedFunctionAPIPaths(path string, lines []string, start, end int) []string {
+	if start < 1 || end < start || start > len(lines) {
+		return nil
+	}
+	end = min(end, len(lines))
+	out := quotedAPIPaths(path, lines[start-1:end])
+	return out[:min(len(out), 3)]
+}
+
+func changedLineLimits(_ string, lines []changedLine) []string {
+	var parts []string
+	for _, line := range lines {
+		if line.added {
+			parts = append(parts, line.code)
+		}
+	}
+	values := numericLiterals(strings.Join(parts, "\n"))
+	return values[:min(len(values), 8)]
+}
+
+func changedLineAPIPaths(path string, lines []changedLine) []string {
+	var source []string
+	for _, line := range lines {
+		if line.added {
+			source = append(source, line.raw)
+		}
+	}
+	paths := quotedAPIPaths(path, source)
+	return paths[:min(len(paths), 3)]
+}
+
+func quotedAPIPaths(path string, lines []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	scrubber := newBranchScrubber(path)
+	comments := newBranchScrubber(path).comments
+	blockComment := false
+	for _, line := range lines {
+		if strings.TrimSpace(scrubber.code(line)) == "" {
+			continue
+		}
+		for i := 0; i < len(line); {
+			if blockComment {
+				end := strings.Index(line[i:], "*/")
+				if end < 0 {
+					break
+				}
+				i += end + 2
+				blockComment = false
+				continue
+			}
+			if comments.block && strings.HasPrefix(line[i:], "/*") {
+				blockComment = true
+				i += 2
+				continue
+			}
+			if comments.html && strings.HasPrefix(line[i:], "<!--") {
+				if end := strings.Index(line[i+4:], "-->"); end >= 0 {
+					i += end + 7
+					continue
+				}
+				break
+			}
+			if comments.slashSlash && strings.HasPrefix(line[i:], "//") || comments.dashDash && strings.HasPrefix(line[i:], "--") || comments.semicolon && line[i] == ';' || comments.hash && line[i] == '#' && hashCommentStart(line, i, comments.hashWord) {
+				break
+			}
+			quote := line[i]
+			if quote != '\'' && quote != '"' && quote != '`' {
+				i++
+				continue
+			}
+			start := i + 1
+			closed, interpolated := false, false
+			for i = start; i < len(line); {
+				switch {
+				case line[i] == '\\':
+					if i+1 == len(line) {
+						i = len(line)
+						break
+					}
+					i += 2
+				case quote == '`' && strings.HasPrefix(line[i:], "${"):
+					interpolated = true
+					break
+				case line[i] == quote:
+					closed = true
+					break
+				default:
+					i++
+				}
+				if closed || interpolated || i == len(line) {
+					break
+				}
+			}
+			value := line[start:i]
+			if (closed || interpolated) && strings.HasPrefix(value, "/api/") && !seen[value] {
+				seen[value] = true
+				out = append(out, value)
+			}
+			if closed {
+				i++
+			} else if interpolated {
+				// Skip the expression, then continue to a later literal on the line.
+				if end := strings.IndexByte(line[i+2:], '}'); end >= 0 {
+					i += end + 3
+				} else {
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// authorTestCases extracts names the patch adds to its own test files. It does
+// not inspect unchanged tests or infer coverage from test source text.
+func authorTestCases(diff string) string {
+	var cases []string
+	goTestName := regexp.MustCompile(`^func\s+(Test[A-Za-z0-9_]*)\b`)
+	goSubtestCall := regexp.MustCompile(`\bt\s*\.\s*Run\s*\(\s*lit(?:\W|$)`)
+	jsTestCall := regexp.MustCompile(`\b(?:it|test|describe)\s*\(\s*lit(?:\W|$)`)
+	for _, f := range splitDiff(diff) {
+		if f.path == "" || areaLabel(f.path) != "Tests" {
+			continue
+		}
+		scrubber := newBranchScrubber(f.path)
+		inHunk := false
+		for _, line := range f.lines {
+			if strings.HasPrefix(line, "@@") {
+				inHunk = true
+				scrubber = newBranchScrubber(f.path)
+				continue
+			}
+			if !inHunk || !strings.HasPrefix(line, "+") {
+				if inHunk && strings.HasPrefix(line, " ") {
+					scrubber.code(strings.TrimPrefix(line, " "))
+				}
+				continue
+			}
+			raw := strings.TrimSpace(strings.TrimPrefix(line, "+"))
+			code := strings.TrimSpace(scrubber.code(raw))
+			if code == "" {
+				continue
+			}
+			if strings.EqualFold(filepath.Ext(f.path), ".go") {
+				if match := goTestName.FindStringSubmatch(code); len(match) == 2 {
+					cases = append(cases, escapedTestCaseName(match[1]))
+				}
+				if goSubtestCall.MatchString(code) {
+					if title, ok := firstGoSubtestTitle(raw); ok {
+						cases = append(cases, escapedTestCaseName(title))
+					}
+				}
+			} else if jsTestCall.MatchString(code) {
+				if title, ok := firstJSCaseTitle(raw); ok {
+					cases = append(cases, escapedTestCaseName(title))
+				}
+			}
+		}
+	}
+	if len(cases) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Cases the author's tests name\n\n")
+	for _, name := range cases[:min(len(cases), 15)] {
+		fmt.Fprintf(&b, "- %s\n", name)
+	}
+	return b.String()
+}
+
+func escapedTestCaseName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToValidUTF8(name, "\uFFFD") {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\u2028':
+			b.WriteString(`\u2028`)
+		case '\u2029':
+			b.WriteString(`\u2029`)
+		default:
+			if unicode.IsControl(r) {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else if r == '`' || strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^_{|}~", r) {
+				b.WriteByte('\\')
+				b.WriteRune(r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return clipRunes(b.String(), 100)
+}
+
+func firstJSCaseTitle(line string) (string, bool) {
+	return firstNamedCallTitle(line, []string{"it", "test", "describe"}, false)
+}
+
+func firstGoSubtestTitle(line string) (string, bool) {
+	return firstNamedCallTitle(line, []string{"t"}, true)
+}
+
+func firstNamedCallTitle(line string, names []string, testingReceiver bool) (string, bool) {
+	var regexes *regexLiteralScanner
+	for i := 0; i < len(line); {
+		switch {
+		case strings.HasPrefix(line[i:], "//"), strings.HasPrefix(line[i:], "<!--"):
+			return "", false
+		case strings.HasPrefix(line[i:], "/*"):
+			if end := strings.Index(line[i+2:], "*/"); end >= 0 {
+				i += end + 4
+				continue
+			}
+			return "", false
+		case line[i] == '\'' || line[i] == '"' || line[i] == '`':
+			i = skipQuotedLiteral(line, i)
+		case line[i] == '/':
+			if regexes == nil {
+				regexes = newRegexLiteralScanner(line)
+			}
+			if end, ok := regexes.end(i); ok {
+				i = end
+			} else {
+				i++
+			}
+		default:
+			if !isIdentifierStart(line[i]) {
+				i++
+				continue
+			}
+			start := i
+			for i < len(line) && isIdentifierPart(line[i]) {
+				i++
+			}
+			name := line[start:i]
+			if testingReceiver {
+				if name != "t" || start > 0 && (isIdentifierPart(line[start-1]) || line[start-1] == '.') {
+					continue
+				}
+				j := skipSpace(line, i)
+				if j >= len(line) || line[j] != '.' {
+					continue
+				}
+				j = skipSpace(line, j+1)
+				if !strings.HasPrefix(line[j:], "Run") || j+3 < len(line) && isIdentifierPart(line[j+3]) {
+					continue
+				}
+				i = j + 3
+			} else if !slices.Contains(names, name) {
+				continue
+			}
+			j := skipSpace(line, i)
+			if j >= len(line) || line[j] != '(' {
+				continue
+			}
+			j = skipSpace(line, j+1)
+			if j >= len(line) || !strings.ContainsRune("\"'`", rune(line[j])) {
+				continue
+			}
+			return readQuotedTitle(line, j)
+		}
+	}
+	return "", false
+}
+
+func skipSpace(line string, i int) int {
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	return i
+}
+
+func skipQuotedLiteral(line string, start int) int {
+	quote := line[start]
+	for i := start + 1; i < len(line); i++ {
+		if line[i] == '\\' {
+			i++
+			continue
+		}
+		if line[i] == quote {
+			return i + 1
+		}
+	}
+	return len(line)
+}
+
+func readQuotedTitle(line string, start int) (string, bool) {
+	quote := line[start]
+	for i := start + 1; i < len(line); i++ {
+		if line[i] == '\\' {
+			i++
+			continue
+		}
+		if quote == '`' && strings.HasPrefix(line[i:], "${") {
+			return line[start+1 : i], true
+		}
+		if line[i] == quote {
+			value := line[start+1 : i]
+			unquoted, err := strconv.Unquote(string(quote) + value + string(quote))
+			if err != nil {
+				return value, true
+			}
+			return unquoted, true
+		}
+	}
+	return "", false
+}
+
+// changedBranchLine reports whether a line of added source contains a branch or comparison. The diff marker has
+// already been removed by the caller. Literals and comments are removed before matching so prose in a string or a
+// trailing comment cannot become a suggested branch.
+func changedBranchLine(line string) bool {
+	return changedBranchLineCode(branchCode(line))
+}
+
+func changedBranchLineCode(line string) bool {
+	if strings.TrimSpace(line) == "" {
+		return false
+	}
+	if hasChangedBranchWord(line) || strings.Contains(line, "&&") || strings.Contains(line, "||") {
+		return true
+	}
+	if hasTernary(line) {
+		return true
+	}
+	for _, op := range []string{"===", "!==", "==", "!=", "<=", ">="} {
+		if strings.Contains(line, op) {
+			return true
+		}
+	}
+	return hasAngleComparison(line)
+}
+
+// hasChangedBranchWord ignores control-word-shaped names inside JSX/HTML tags
+// and TypeScript type arguments. It scans angle ranges once so a long line with
+// many tag attributes cannot make each keyword rescan the whole line.
+func hasChangedBranchWord(line string) bool {
+	matches := changedBranchWord.FindAllStringIndex(line, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	ranges, _ := branchAngleSyntaxRanges(line)
+	rangeDelta := make([]int, len(line)+1)
+	for _, angle := range ranges {
+		rangeDelta[angle.start]++
+		rangeDelta[min(angle.end+1, len(line))]--
+	}
+	active, scanned := 0, 0
+	for _, match := range matches {
+		for scanned <= match[0] {
+			active += rangeDelta[scanned]
+			scanned++
+		}
+		if active == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+type angleSyntaxRange struct {
+	start, end int
+	markup     bool
+}
+
+// branchAngleSyntaxRanges returns markup tags and type-argument ranges. The
+// count is the number of source bytes the scan examines, including tag scans,
+// so tests can guard the linear bound without relying on elapsed time.
+func branchAngleSyntaxRanges(line string) ([]angleSyntaxRange, int) {
+	type angleOpen struct {
+		start     int
+		candidate bool
+	}
+	var ranges []angleSyntaxRange
+	var stack []angleOpen
+	lastNonSpace := byte(0)
+	work := 0
+	for i := 0; i < len(line); i++ {
+		work++
+		switch line[i] {
+		case '<':
+			name := i + 1
+			if name < len(line) && line[name] == '/' {
+				name++
+			}
+			if name < len(line) && isMarkupNameStart(line[name]) {
+				end, ok := markupAngleEnd(line, i)
+				if ok {
+					work += end - i
+					ranges = append(ranges, angleSyntaxRange{start: i, end: end, markup: true})
+					lastNonSpace = '>'
+					i = end
+					continue
+				}
+				work += len(line) - i - 1
+				return ranges, work
+			}
+			stack = append(stack, angleOpen{start: i, candidate: isTypeNameEnd(lastNonSpace)})
+		case '>':
+			if i+1 < len(line) && line[i+1] == '=' {
+				break
+			}
+			if len(stack) > 0 {
+				open := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				follows, examined := typeArgumentFollower(line, i+1)
+				work += examined
+				if open.candidate && follows {
+					ranges = append(ranges, angleSyntaxRange{start: open.start, end: i})
+				}
+			}
+		}
+		if line[i] != ' ' && line[i] != '\t' {
+			lastNonSpace = line[i]
+		}
+	}
+	return ranges, work
+}
+
+func typeArgumentFollower(line string, start int) (bool, int) {
+	end := start
+	for end < len(line) && (line[end] == ' ' || line[end] == '\t') {
+		end++
+	}
+	return end == len(line) || strings.ContainsRune("=([{.,;:)>]", rune(line[end])) || strings.HasPrefix(line[end:], "=>"), end - start
+}
+
+func markupAngleEnd(line string, start int) (int, bool) {
+	i := start + 1
+	if i < len(line) && line[i] == '/' {
+		i++
+	}
+	if i >= len(line) || !isMarkupNameStart(line[i]) {
+		return 0, false
+	}
+	braceDepth := 0
+	for i++; i < len(line); i++ {
+		switch line[i] {
+		case '{':
+			braceDepth++
+		case '}':
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case '>':
+			if braceDepth == 0 && (i+1 == len(line) || line[i+1] != '=') {
+				return i, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func isMarkupNameStart(c byte) bool {
+	return c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// branchScrubber keeps source outside literals and comments. It is intentionally
+// a small lexer rather than a language parser. The branch matcher only needs
+// operators and keywords, and preserving spaces keeps adjacent source tokens
+// from joining after a literal is removed.
+type branchScrubber struct {
+	quote             byte
+	quoteLength       int
+	tripleQuotes      bool
+	tripleSingleQuote bool
+	rawTripleQuotes   bool
+	blockComment      bool
+	blockEnd          string
+	comments          branchComments
+}
+
+type branchComments struct {
+	slashSlash bool
+	hash       bool
+	hashWord   bool
+	dashDash   bool
+	semicolon  bool
+	block      bool
+	html       bool
+}
+
+func newBranchScrubber(path string) branchScrubber {
+	ext := strings.ToLower(filepath.Ext(path))
+	s := branchScrubber{comments: branchComments{block: true}}
+	switch ext {
+	case ".py":
+		s.comments = branchComments{hash: true}
+		s.tripleQuotes, s.tripleSingleQuote = true, true
+	case ".kt", ".kts", ".scala":
+		s.comments.slashSlash = true
+		s.tripleQuotes, s.rawTripleQuotes = true, true
+	case ".swift", ".java":
+		s.comments.slashSlash = true
+		s.tripleQuotes = true
+	case ".bash", ".csh", ".fish", ".sh":
+		s.comments = branchComments{hash: true, hashWord: true}
+	case ".clj", ".cljs":
+		s.comments = branchComments{semicolon: true}
+	case ".ex", ".exs", ".jl", ".nim", ".pl", ".pm", ".r", ".rb", ".t":
+		s.comments = branchComments{hash: true}
+	case ".php":
+		s.comments = branchComments{slashSlash: true, hash: true, block: true}
+	case ".hs", ".lua":
+		s.comments = branchComments{dashDash: true}
+	case ".htm", ".html", ".xml":
+		s.comments = branchComments{html: true}
+	case ".svelte", ".vue":
+		s.comments = branchComments{slashSlash: true, block: true, html: true}
+	default:
+		s.comments.slashSlash = true
+	}
+	return s
+}
+
+func (s *branchScrubber) code(line string) string {
+	defer func() {
+		// Backticks and triple quotes carry quote state across source lines.
+		if s.quote != '`' && s.quoteLength != 3 {
+			s.quote = 0
+			s.quoteLength = 0
+		}
+	}()
+	var b strings.Builder
+	var regexes *regexLiteralScanner
+	for i := 0; i < len(line); {
+		if s.blockComment {
+			if end := strings.Index(line[i:], s.blockEnd); end >= 0 {
+				i += end + len(s.blockEnd)
+				s.blockComment = false
+				s.blockEnd = ""
+				continue
+			}
+			return b.String()
+		}
+		if s.quote != 0 {
+			for i < len(line) {
+				if line[i] == '\\' && !(s.quoteLength == 3 && s.rawTripleQuotes) {
+					i += min(2, len(line)-i)
+					continue
+				}
+				if line[i] == s.quote && (s.quoteLength == 1 || hasQuoteDelimiter(line, i, s.quote, s.quoteLength)) {
+					quoteLength := s.quoteLength
+					s.quote = 0
+					s.quoteLength = 0
+					i += quoteLength
+					break
+				}
+				i++
+			}
+			continue
+		}
+		switch {
+		case s.comments.slashSlash && strings.HasPrefix(line[i:], "//"):
+			return b.String()
+		case s.comments.html && strings.HasPrefix(line[i:], "<!--"):
+			s.blockComment, s.blockEnd = true, "-->"
+			i += len("<!--")
+		case s.comments.block && strings.HasPrefix(line[i:], "/*"):
+			s.blockComment, s.blockEnd = true, "*/"
+			i += 2
+		case s.comments.block && strings.HasPrefix(line[i:], "{/*"):
+			s.blockComment, s.blockEnd = true, "*/"
+			i += 2
+		case s.comments.dashDash && strings.HasPrefix(line[i:], "--"):
+			return b.String()
+		case s.comments.semicolon && line[i] == ';':
+			return b.String()
+		case s.comments.hash && line[i] == '#' && hashCommentStart(line, i, s.comments.hashWord):
+			return b.String()
+		case line[i] == '/':
+			if regexes == nil {
+				regexes = newRegexLiteralScanner(line)
+			}
+			if end, ok := regexes.end(i); ok {
+				b.WriteString("lit")
+				i = end
+				continue
+			}
+			b.WriteByte(line[i])
+			i++
+		case line[i] == '\'' || line[i] == '"' || line[i] == '`':
+			s.quote = line[i]
+			s.quoteLength = 1
+			if s.tripleQuotes && (line[i] == '"' || line[i] == '\'' && s.tripleSingleQuote) && hasQuoteDelimiter(line, i, line[i], 3) {
+				s.quoteLength = 3
+				i += 3
+			} else {
+				i++
+			}
+			// Keep a token where the literal was. This distinguishes a real
+			// optional property (`field?: Type`) from a ternary whose arm is a
+			// string (`ready ? "yes" : "no"`).
+			b.WriteString("lit")
+		default:
+			b.WriteByte(line[i])
+			i++
+		}
+	}
+	return b.String()
+}
+
+func hasQuoteDelimiter(line string, start int, quote byte, length int) bool {
+	if start+length > len(line) {
+		return false
+	}
+	for i := start; i < start+length; i++ {
+		if line[i] != quote {
+			return false
+		}
+	}
+	return true
+}
+
+func branchCode(line string) string {
+	// Keep the helper's broad behavior for callers that do not have a path.
+	// Path-aware diff scanning uses newBranchScrubber instead.
+	scrubber := branchScrubber{comments: branchComments{slashSlash: true, block: true, html: true, hash: true, hashWord: true}}
+	return scrubber.code(line)
+}
+
+func hashCommentStart(line string, i int, wordBoundary bool) bool {
+	if !wordBoundary {
+		return true
+	}
+	return i == 0 || unicode.IsSpace(rune(line[i-1])) || strings.ContainsRune(";|&({[", rune(line[i-1]))
+}
+
+type regexLiteralScanner struct {
+	line         string
+	endOutside   []int
+	endClass     []int
+	modifierEnds []int
+	work         int
+}
+
+// newRegexLiteralScanner computes the first unescaped slash from every byte
+// position in both character-class states. Callers that inspect a whole line
+// share the table, so candidate slashes never rescan overlapping suffixes.
+func newRegexLiteralScanner(line string) *regexLiteralScanner {
+	n := len(line)
+	s := &regexLiteralScanner{
+		line:         line,
+		endOutside:   make([]int, n+1),
+		endClass:     make([]int, n+1),
+		modifierEnds: make([]int, n+1),
+	}
+	for i := range s.endOutside {
+		s.work++
+		s.endOutside[i], s.endClass[i] = -1, -1
+	}
+	for i := n - 1; i >= 0; i-- {
+		s.work += 2
+		switch line[i] {
+		case '\\':
+			next := i + 2
+			if next <= n {
+				s.endOutside[i] = s.endOutside[next]
+				s.endClass[i] = s.endClass[next]
+			}
+		case '[':
+			s.endOutside[i] = s.endClass[i+1]
+			s.endClass[i] = s.endClass[i+1]
+		case ']':
+			s.endOutside[i] = s.endOutside[i+1]
+			s.endClass[i] = s.endOutside[i+1]
+		case '/':
+			s.endOutside[i] = i
+			s.endClass[i] = s.endClass[i+1]
+		default:
+			s.endOutside[i] = s.endOutside[i+1]
+			s.endClass[i] = s.endClass[i+1]
+		}
+	}
+	for i := n - 1; i >= 0; i-- {
+		s.work++
+		if i+1 < n && isASCIIAlpha(line[i+1]) {
+			s.modifierEnds[i] = s.modifierEnds[i+1]
+		} else {
+			s.modifierEnds[i] = i + 1
+		}
+	}
+	return s
+}
+
+func (s *regexLiteralScanner) end(start int) (int, bool) {
+	line := s.line
+	if start < 0 || start >= len(line) {
+		return 0, false
+	}
+	prev := start - 1
+	for prev >= 0 {
+		s.work++
+		if line[prev] != ' ' && line[prev] != '\t' {
+			break
+		}
+		prev--
+	}
+	if prev >= 0 {
+		canStart, examined := regexCanStartAfterWork(line, prev)
+		s.work += examined
+		if !canStart {
+			return 0, false
+		}
+	}
+	if start+1 >= len(line) {
+		return 0, false
+	}
+	close := s.endOutside[start+1]
+	if close < 0 {
+		return 0, false
+	}
+	return s.modifierEnds[close], true
+}
+
+func regexLiteralEnd(line string, start int) (int, bool) {
+	// Batch callers build one scanner per line, so overlapping suffixes share
+	// this table. This wrapper is for a single isolated query.
+	return newRegexLiteralScanner(line).end(start)
+}
+
+func isASCIIAlpha(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func regexCanStartAfterWork(line string, i int) (bool, int) {
+	work := 1
+	if strings.ContainsRune("=([{,:;!?&|+-*%^~<>", rune(line[i])) {
+		return true, work
+	}
+	end := i + 1
+	for i >= 0 {
+		work++
+		if !(line[i] == '_' || line[i] == '$' || line[i] >= '0' && line[i] <= '9' || line[i] >= 'a' && line[i] <= 'z' || line[i] >= 'A' && line[i] <= 'Z') {
+			break
+		}
+		i--
+	}
+	return slices.Contains([]string{"await", "case", "do", "else", "return", "throw", "yield"}, line[i+1:end]), work
+}
+
+// hasTernary reports a question/colon pair outside nested literals or
+// containers. A question immediately followed by a colon is an optional
+// property, not a ternary; ?. and ?? are optional chaining and nullish
+// coalescing.
+func hasTernary(line string) bool {
+	found, _ := scanTernary(line)
+	return found
+}
+
+type ternaryDepth struct {
+	paren, bracket, brace int
+}
+
+// scanTernary keeps one pending question per nesting depth. The work count
+// includes each source-byte check and each pending-depth entry invalidated by
+// an unmatched closing delimiter, so the tests can guard the linear bound.
+func scanTernary(line string) (bool, int) {
+	work := 0
+	depth := ternaryDepth{}
+	pending := map[ternaryDepth]struct{}{}
+	byParen := map[int]map[ternaryDepth]struct{}{}
+	byBracket := map[int]map[ternaryDepth]struct{}{}
+	byBrace := map[int]map[ternaryDepth]struct{}{}
+	add := func(key ternaryDepth) {
+		if _, exists := pending[key]; exists {
+			return
+		}
+		pending[key] = struct{}{}
+		for _, entry := range []struct {
+			buckets map[int]map[ternaryDepth]struct{}
+			value   int
+		}{{byParen, key.paren}, {byBracket, key.bracket}, {byBrace, key.brace}} {
+			bucket := entry.buckets[entry.value]
+			if bucket == nil {
+				bucket = map[ternaryDepth]struct{}{}
+				entry.buckets[entry.value] = bucket
+			}
+			bucket[key] = struct{}{}
+			work++
+		}
+	}
+	close := func(buckets map[int]map[ternaryDepth]struct{}, value int) {
+		for key := range buckets[value] {
+			delete(pending, key)
+			work++
+		}
+		delete(buckets, value)
+	}
+	for i := 0; i < len(line); i++ {
+		work++
+		switch line[i] {
+		case '?':
+			if i > 0 {
+				work++
+				if line[i-1] == '?' {
+					continue
+				}
+			}
+			next := i + 1
+			for next < len(line) {
+				work++
+				if line[next] != ' ' && line[next] != '\t' {
+					break
+				}
+				next++
+			}
+			if next < len(line) {
+				work++
+				if line[next] == '?' || line[next] == '.' || line[next] == ':' {
+					continue
+				}
+			}
+			add(depth)
+		case '(':
+			depth.paren++
+		case '[':
+			depth.bracket++
+		case '{':
+			depth.brace++
+		case ')':
+			old := depth.paren
+			depth.paren--
+			close(byParen, old)
+		case ']':
+			old := depth.bracket
+			depth.bracket--
+			close(byBracket, old)
+		case '}':
+			old := depth.brace
+			depth.brace--
+			close(byBrace, old)
+		case ':':
+			if _, ok := pending[depth]; ok {
+				return true, work
+			}
+		case ';':
+			delete(pending, depth)
+		}
+	}
+	return false, work
+}
+
+// hasAngleComparison accepts spaced angle comparisons and the explicit <=/=>=
+// forms handled above. Requiring whitespace or a delimiter around a bare angle
+// keeps JSX/HTML tags out, while the type-argument check also handles spaced
+// TypeScript generics such as `Map < string, number >`.
+func hasAngleComparison(line string) bool {
+	ranges, _ := branchAngleSyntaxRanges(line)
+	genericDelta := make([]int, len(line)+1)
+	markupDelimiter := make([]bool, len(line))
+	for _, angle := range ranges {
+		if angle.markup {
+			markupDelimiter[angle.start] = true
+			markupDelimiter[angle.end] = true
+			continue
+		}
+		genericDelta[angle.start]++
+		genericDelta[angle.end+1]--
+	}
+	insideGeneric := 0
+	for i := 0; i < len(line); i++ {
+		insideGeneric += genericDelta[i]
+		if line[i] != '<' && line[i] != '>' {
+			continue
+		}
+		if insideGeneric > 0 || markupDelimiter[i] {
+			continue
+		}
+		if i > 0 && (line[i-1] == line[i] || line[i-1] == '=' || line[i-1] == '-' || line[i-1] == '<' || line[i-1] == '>') {
+			continue
+		}
+		if i+1 < len(line) && (line[i+1] == line[i] || line[i+1] == '=') {
+			continue
+		}
+		if line[i] == '<' && i+1 < len(line) && line[i+1] == '-' { // Go's receive operator
+			continue
+		}
+		if hasAngleSpace(line, i-1) && hasAngleSpace(line, i+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// markupAngleDelimiter recognizes the closing angle of a JSX/HTML tag. It
+// compares against markupAngleEnd's origin rather than treating every `>` in
+// a tag as markup, so an expression such as `{count > 0}` remains a real
+// comparison.
+func markupAngleDelimiter(line string, position int) bool {
+	for i := 0; i < position; i++ {
+		if line[i] != '<' {
+			continue
+		}
+		if end, ok := markupAngleEnd(line, i); ok && end == position {
+			return true
+		}
+	}
+	return false
+}
+
+// typeArgumentEnd identifies a TypeScript-style type argument whose closing
+// angle is followed by a type or expression delimiter. Ordinary comparisons
+// such as `a < b > c` keep an identifier after the closing angle and do not
+// match this shape.
+func typeArgumentEnd(line string, start int) (int, bool) {
+	prev := start - 1
+	for prev >= 0 && (line[prev] == ' ' || line[prev] == '\t') {
+		prev--
+	}
+	if prev < 0 || !isTypeNameEnd(line[prev]) {
+		return 0, false
+	}
+	depth := 0
+	for i := start; i < len(line); i++ {
+		switch line[i] {
+		case '<':
+			depth++
+		case '>':
+			if i+1 < len(line) && line[i+1] == '=' {
+				continue
+			}
+			depth--
+			if depth != 0 {
+				continue
+			}
+			next := i + 1
+			for next < len(line) && (line[next] == ' ' || line[next] == '\t') {
+				next++
+			}
+			if next == len(line) || strings.ContainsRune("=([{.,;:)>]", rune(line[next])) || strings.HasPrefix(line[next:], "=>") {
+				return i, true
+			}
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+func genericAngleClose(line string, close int) bool {
+	for i := close - 1; i >= 0; i-- {
+		if line[i] == '<' {
+			if end, ok := typeArgumentEnd(line, i); ok && end == close {
+				return true
+			}
+			return false
+		}
+		if strings.ContainsRune(";{}", rune(line[i])) {
+			break
+		}
+	}
+	return false
+}
+
+func isTypeNameEnd(c byte) bool {
+	return c == '_' || c == '$' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == ']' || c == ')'
+}
+
+func hasAngleSpace(line string, i int) bool {
+	return i >= 0 && i < len(line) && (line[i] == ' ' || line[i] == '\t' || strings.ContainsRune("([{=,:;", rune(line[i])))
+}
+
+var hunkFunction = regexp.MustCompile(`(?:\bfunc\b\s*(?:\([^)]*\)\s*)?|\bfunction\b\s+\*?\s*|\b(?:const|let|var)\s+)([A-Za-z_$][A-Za-z0-9_$]*)`)
+
+func clipRunes(s string, limit int) string {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
 }
 
 // uiExts are the source files whose gates the pack looks up.
@@ -947,16 +2510,29 @@ var uiExts = []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".vue", ".svelte"}
 // uiDirs are the directory names that mark a file as user interface code.
 var uiDirs = []string{"renderer", "ui", "components", "views", "pages", "frontend"}
 
-// isUIFile reports whether a path is user interface source that is not a test.
-func isUIFile(path string) bool {
+// generatedFile checks the first five lines for a standard generated-code marker.
+func generatedFile(lines []string) bool {
+	for _, line := range lines[:min(len(lines), 5)] {
+		low := strings.ToLower(line)
+		for _, marker := range []string{"@generated", "do not edit", "auto-generated", "autogenerated", "this file was generated"} {
+			if strings.Contains(low, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isUIFile reports whether a path is handwritten user interface source that is not a test.
+func isUIFile(path string, lines []string) bool {
 	dirs := strings.Split(strings.ToLower(filepath.ToSlash(filepath.Dir(path))), "/")
-	return slices.Contains(uiExts, strings.ToLower(filepath.Ext(path))) && areaLabel(path) != "Tests" && slices.ContainsFunc(dirs, func(d string) bool { return slices.Contains(uiDirs, d) })
+	return !generatedFile(lines) && slices.Contains(uiExts, strings.ToLower(filepath.Ext(path))) && areaLabel(path) != "Tests" && slices.ContainsFunc(dirs, func(d string) bool { return slices.Contains(uiDirs, d) })
 }
 
 // uiFiles are the touched files the gate scan reads: UI source that is not a test, and not a file the PR deleted.
 func uiFiles(d intakeData) (out []string) {
 	for _, f := range d.files {
-		if f.Status != "D" && isUIFile(f.Path) {
+		if f.Status != "D" && isUIFile(f.Path, d.headFiles[f.Path]) {
 			out = append(out, f.Path)
 		}
 	}
@@ -971,33 +2547,54 @@ type codeHit struct {
 
 // codeTree is a read-only view of one commit of the repo: git in the service, a map of files in tests.
 type codeTree interface {
-	file(path string) []string // the file's lines, nil when it does not exist
+	file(path string) []string          // the file's lines, nil when it does not exist
+	list(path string) ([]string, error) // files below a directory, relative to the repository root
 	grep(word string) []codeHit
 }
 
 // gitTree reads one commit of a checkout with git, so intake needs no checkout of the PR build. err is the first git
 // failure; a file or search it could not read looks empty, so the caller says the scan was incomplete.
 type gitTree struct {
-	s     *Service
-	ctx   context.Context
-	dir   string
-	sha   string
-	files map[string][]string
-	err   error
+	s          *Service
+	ctx        context.Context
+	dir        string
+	sha        string
+	files      map[string][]string
+	fileErrors map[string]error
+	err        error
 }
 
 func (g *gitTree) file(path string) []string {
 	if l, ok := g.files[path]; ok {
+		g.err = cmp.Or(g.err, g.fileErrors[path])
 		return l
 	}
-	out, err := g.s.git(g.ctx, g.dir, "show", g.sha+":"+path)
+	out, err := g.s.gitRaw(g.ctx, g.dir, "show", g.sha+":"+path)
 	var lines []string
 	if err == nil {
 		lines = strings.Split(out, "\n")
+	} else if g.fileErrors != nil {
+		g.fileErrors[path] = err
 	}
 	g.err = cmp.Or(g.err, err)
 	g.files[path] = lines
 	return lines
+}
+
+func (g *gitTree) list(path string) ([]string, error) {
+	out, err := g.s.gitRaw(g.ctx, g.dir, "ls-tree", "-r", "--name-only", g.sha, "--", path)
+	g.err = cmp.Or(g.err, err)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, name := range strings.Split(strings.TrimSpace(out), "\n") {
+		if name != "" && filepath.Dir(name) == path {
+			files = append(files, name)
+		}
+	}
+	slices.Sort(files)
+	return files, nil
 }
 
 func (g *gitTree) grep(word string) (hits []codeHit) {
@@ -1019,23 +2616,72 @@ func (g *gitTree) grep(word string) (hits []codeHit) {
 // gateNotes is the body of "How the touched features are gated", or "" when the PR touches no UI file or no gate was
 // found. mirror is the repo's mirror, which holds the head commit once pullCode ran. The error says why a scan git
 // could not finish (wholly or in part) is incomplete.
-func (s *Service) gateNotes(ctx context.Context, mirror string, d intakeData) (string, error) {
-	paths := uiFiles(d)
-	if mirror == "" || len(paths) == 0 {
+func (s *Service) gateNotes(ctx context.Context, mirror string, d *intakeData) (string, error) {
+	if mirror == "" {
 		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	tree := &gitTree{s: s, ctx: ctx, dir: mirror, sha: d.pr.HeadRefOid, files: map[string][]string{}}
-	notes := gateNotes(tree, paths)
+	tree := &gitTree{s: s, ctx: ctx, dir: mirror, sha: d.pr.HeadRefOid, files: map[string][]string{}, fileErrors: map[string]error{}}
+	d.headFiles = tree.files
+	s.loadChangedCodeFiles(tree, d)
+	tree.err = nil
+	touched := uiFiles(*d)
+	if len(touched) == 0 {
+		return "", nil
+	}
+	for _, f := range d.files {
+		if f.Status != "D" && isUIFile(f.Path, nil) {
+			tree.file(f.Path)
+		}
+	}
+	notes := gateNotes(tree, touched)
 	switch {
 	case tree.err == nil:
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return notes, errors.New("it took longer than 30 seconds")
 	default:
-		return notes, errors.New(gitReason(tree.err))
+		return notes, tree.err
 	}
 	return notes, nil
+}
+
+func (s *Service) loadChangedCodeFiles(tree *gitTree, d *intakeData) {
+	var goDirs []string
+	for _, file := range d.files {
+		if file.Status == "D" || !isSourceCodePath(file.Path) || areaLabel(file.Path) == "Tests" || churnOnly(file.Path) {
+			continue
+		}
+		lines := tree.file(file.Path)
+		if err := tree.fileErrors[file.Path]; err != nil {
+			s.addIntakeDiagnostic(d, fmt.Sprintf("Could not read PR-head source file %s: %s", file.Path, err))
+			continue
+		}
+		if generatedFile(lines) {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(file.Path), ".go") {
+			dir := filepath.Dir(file.Path)
+			if !slices.Contains(goDirs, dir) {
+				goDirs = append(goDirs, dir)
+			}
+		}
+	}
+	for _, dir := range goDirs {
+		paths, err := tree.list(dir)
+		if err != nil {
+			s.addIntakeDiagnostic(d, fmt.Sprintf("Could not list PR-head package source files in %s: %s", dir, err))
+			continue
+		}
+		for _, path := range paths {
+			if strings.EqualFold(filepath.Ext(path), ".go") && !strings.HasSuffix(strings.ToLower(path), "_test.go") {
+				tree.file(path)
+				if err := tree.fileErrors[path]; err != nil {
+					s.addIntakeDiagnostic(d, fmt.Sprintf("Could not read PR-head package source file %s: %s", path, err))
+				}
+			}
+		}
+	}
 }
 
 // gateName matches identifiers that look like a gate: ...Enabled, ...Gate, ...Gated, ...Flag, ...Flags, ...Toggle,
@@ -1071,7 +2717,11 @@ func noteLines(lines []string) []string {
 func gateNotes(t codeTree, touched []string) string {
 	var names []string
 	for _, p := range touched {
-		for _, l := range t.file(p) {
+		lines := t.file(p)
+		if generatedFile(lines) {
+			continue
+		}
+		for _, l := range lines {
 			for _, m := range gateName.FindAllStringSubmatch(l, -1) {
 				if !slices.Contains(names, m[1]) {
 					names = append(names, m[1])
@@ -1114,7 +2764,7 @@ func gateEntry(t codeTree, name string, touched []string) string {
 	seen := map[string]bool{}
 	for _, h := range t.grep(name) {
 		lines := t.file(h.path)
-		if areaLabel(h.path) == "Tests" || h.line < 1 || h.line > len(lines) || !slices.Contains(uiExts, strings.ToLower(filepath.Ext(h.path))) && !strings.HasSuffix(h.path, ".go") {
+		if generatedFile(lines) || areaLabel(h.path) == "Tests" || h.line < 1 || h.line > len(lines) || !slices.Contains(uiExts, strings.ToLower(filepath.Ext(h.path))) && !strings.HasSuffix(h.path, ".go") {
 			continue
 		}
 		i, line := h.line-1, lines[h.line-1]
@@ -1198,7 +2848,7 @@ func testedSentences(body string) (out []string) {
 func contextSections(d intakeData) string {
 	var b strings.Builder
 	if d.headDir != "" && d.baseDir != "" {
-		fmt.Fprintf(&b, "## Where the code is\n\n- PR build checkout: %s\n- Main checkout: %s\n\nYou may read any file there (Read, Grep, Glob) to learn how a feature is reached or gated; you cannot change them. Both exist once `ao testing prepare` has run.\n\n", d.headDir, d.baseDir)
+		fmt.Fprintf(&b, "## Where the code is\n\n- PR build checkout: %s\n- Main checkout: %s\n\nYou may read any file there (Read, Grep, Glob) to learn how a feature is reached or gated; you cannot change them. Both exist once `ao testing prepare` has run.\n\nBefore the checkouts exist, read any PR file with `git -C <mirror> show <headSHA>:<path>` (main: `<baseSHA>`).\n\n", d.headDir, d.baseDir)
 	}
 	if d.gates != "" {
 		fmt.Fprintf(&b, "## How the touched features are gated\n\nPaths are inside the PR build checkout. Read these before deciding a feature is out of reach.\n\n%s\n", capWords(d.gates, 450))
@@ -1254,14 +2904,32 @@ func namedIn(text string) func(path string) bool {
 	}
 }
 
+// intakeClaimsJSON saves the PR author's words verbatim. The tester decides which sentences are claims.
+func intakeClaimsJSON(d intakeData) string {
+	var claims []string
+	if d.words {
+		for _, words := range []string{d.pr.Title, d.pr.Body} {
+			if strings.TrimSpace(words) != "" {
+				claims = append(claims, words)
+			}
+		}
+	}
+	data, _ := json.Marshal(claims)
+	return string(data)
+}
+
 // renderPack writes context-pack.md. Sections are word-capped, and the diff
 // excerpt shrinks until the whole pack fits maxPackWords.
 func renderPack(d intakeData, recipe string) string {
 	pr, files, big := d.pr, splitDiff(d.diff), d.big()
+	recipeYAML, recipeNotes, recipeErr := recipePackText(recipe)
 	total := 0
-	for _, f := range files {
-		total += len(f.lines)
+	for i := range files {
+		files[i].head = d.headFiles[files[i].path]
+		total += len(files[i].lines)
 	}
+	changed := changedCode(d)
+	authorTests := authorTestCases(d.diff)
 	build := func(excerpt []string) string {
 		var b strings.Builder
 		p := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
@@ -1273,7 +2941,14 @@ func renderPack(d intakeData, recipe string) string {
 			}
 			p("")
 		}
-		p("%s\n%s## 1. PR\n", suggestedChecks(d), contextSections(d))
+		if len(d.diagnostics) > 0 {
+			p("## Intake diagnostics\n\nPrivate intake details for the local verdict and logs.\n")
+			for _, diagnostic := range d.diagnostics {
+				p("- %s", diagnostic)
+			}
+			p("")
+		}
+		p("%s%s%s%s## 1. PR\n", suggestedChecks(d), contextSections(d), changed, authorTests)
 		if d.words {
 			p("- #%d %s\n- Author: %s | State: %s | Draft: %t", pr.Number, pr.Title, pr.Author.Login, pr.State, pr.IsDraft)
 		} else {
@@ -1291,7 +2966,7 @@ func renderPack(d intakeData, recipe string) string {
 			p("Not available: GitHub's text could not be read (see Gaps). The code is complete; the claims are not.\n")
 		} else {
 			p("### Body\n\n%s\n", quote(capWords(pr.Body, 1500)))
-			p("### Comments and reviews (last 10, newest last)\n")
+			p("### Comments and reviews (context, not PR claims)\n")
 			notes := append(slices.Clone(pr.Comments), pr.Reviews...)
 			sort.SliceStable(notes, func(i, j int) bool { return notes[i].at().Before(notes[j].at()) })
 			notes = notes[max(len(notes)-10, 0):]
@@ -1373,25 +3048,14 @@ func renderPack(d intakeData, recipe string) string {
 		p("\n## 6. Recipe\n")
 		if recipe == "" {
 			p("none yet\n")
+		} else if recipeErr != nil {
+			p("Recipe could not be rendered: %s\n", cell(recipeErr.Error()))
 		} else {
-			p("```yaml\n%s\n```\n", capWords(recipe, 200))
+			p("```yaml\n%s\n```\n", capWords(recipeYAML, 200))
+			if recipeNotes != "" {
+				p("### Tester notes\n\n%s\n", recipeNotes)
+			}
 		}
-		p("## 7. What to do next\n")
-		p("1. Read this pack. The full diff is diff.patch in this run directory; files.txt lists every changed file.")
-		p("2. Decide what the PR claims to change and what it could break.")
-		plan := 6 // pairs, as advice only; a big PR gets fewer, so each pair can be run on both builds
-		if len(d.files) > bigFiles {
-			plan = 4
-		}
-		p("3. Plan at most %d pairs of checks as a guide (4 for a PR over %d files, 6 otherwise), starting from Suggested checks above: `ao testing check add \"<name>\" --expect \"<observable>\"`. One observable thing per check; split a check that mixes two things. Litmus enforces no limit on checks; the time is the limit.", plan, bigFiles)
-		if len(uiFiles(d)) > 0 {
-			p("   The PR touches UI files, so every check is something a user would do in the app, in the order of Suggested checks.")
-		}
-		p("4. Launch both builds: `ao testing launch head`, `ao testing launch base`. If launch prints \"seed step N failed\", that build is up but its sample content is missing: do not fail a check for content the seed should have made, and say the failure may itself be a finding.")
-		p("5. Run each check on the PR build (check start, act, check end), then at once on main with `--leg base`, before the next check. A check is done only when it has a result on both. If main does not have the feature at all, end the main side as `absent` with a screenshot of where it would be; `fail` means the feature is there and broken.")
-		p("6. With time left, add another pair: the next suggested check or the next changed area from section 4. Never add a check that runs on the PR build alone. Stop early only when nothing is left to check.")
-		p("7. `ao testing submit`.")
-		p("%s", browserDataRule)
 		return b.String()
 	}
 	var rank func(fileDiff) int

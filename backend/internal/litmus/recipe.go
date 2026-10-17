@@ -39,7 +39,8 @@ type Recipe struct {
 	Seed      []SeedStep        `json:"seed,omitempty" yaml:"seed,omitempty"`
 	Env       map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 	Isolation bool              `json:"isolation" yaml:"isolation"`
-	Timings   []string          `json:"timings,omitempty" yaml:"-"` // filled by `recipe validate --sha`
+	Notes     string            `json:"notes,omitempty" yaml:"notes,omitempty"` // tester guidance, shown outside the recipe excerpt cap
+	Timings   []string          `json:"timings,omitempty" yaml:"-"`             // filled by `recipe validate --sha`
 }
 
 // Toolchain pins what the target needs on PATH.
@@ -111,8 +112,10 @@ func (s *Store) recipePath(repo string) string {
 	return filepath.Join(filepath.Dir(s.root), "recipes", strings.ReplaceAll(repo, "/", "__")+".yaml")
 }
 
-// LoadRecipe returns the stored recipe for repo, or the embedded default for DefaultRepo.
-func (s *Store) LoadRecipe(repo string) (Recipe, error) {
+// readRecipe resolves the host recipe file and the embedded default. Both the
+// intake pack and recipe validation use this path so they cannot disagree on
+// which recipe applies to a repo.
+func (s *Store) readRecipe(repo string) ([]byte, error) {
 	path := s.recipePath(repo)
 	data, err := os.ReadFile(path)
 	switch {
@@ -120,8 +123,17 @@ func (s *Store) LoadRecipe(repo string) (Recipe, error) {
 	case errors.Is(err, fs.ErrNotExist) && strings.EqualFold(repo, DefaultRepo):
 		data = defaultRecipe
 	case errors.Is(err, fs.ErrNotExist):
-		return Recipe{}, apierr.NotFound("TESTING_RECIPE_MISSING", "no recipe for "+repo+"; save one at "+path)
+		return nil, apierr.NotFound("TESTING_RECIPE_MISSING", "no recipe for "+repo+"; save one at "+path)
 	default:
+		return nil, err
+	}
+	return data, nil
+}
+
+// LoadRecipe returns the stored recipe for repo, or the embedded default for DefaultRepo.
+func (s *Store) LoadRecipe(repo string) (Recipe, error) {
+	data, err := s.readRecipe(repo)
+	if err != nil {
 		return Recipe{}, err
 	}
 	r, err := ParseRecipe(data)
@@ -129,6 +141,34 @@ func (s *Store) LoadRecipe(repo string) (Recipe, error) {
 		return Recipe{}, apierr.Invalid("TESTING_RECIPE_INVALID", err.Error(), nil)
 	}
 	return r, nil
+}
+
+// recipePackText separates tester notes from the word-capped YAML excerpt.
+// A YAML node keeps the other fields and comments without copying notes into
+// the excerpt or relying on where the author placed the notes field.
+func recipePackText(raw string) (excerpt, notes string, err error) {
+	if raw == "" {
+		return "", "", nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		return "", "", err
+	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", "", errors.New("recipe must be a YAML mapping")
+	}
+	root := doc.Content[0]
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value == "notes" {
+			if err := root.Content[i+1].Decode(&notes); err != nil {
+				return "", "", err
+			}
+			root.Content = slices.Delete(root.Content, i, i+2)
+			break
+		}
+	}
+	data, err := yaml.Marshal(&doc)
+	return strings.TrimSpace(string(data)), strings.TrimSpace(notes), err
 }
 
 // RecipeRef joins a recipe path and a SHA into the single string the validate

@@ -1,0 +1,133 @@
+{
+  "run_ao-243": [
+    {
+      "id": "c4",
+      "name": "Spawn orchestrator once",
+      "expect": "A double press in a configured project without an orchestrator creates and opens only one",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "Could not reach a configured project without an orchestrator. Sample setup auto-opened one after configuration. Folder creation opened an undrivable native chooser. Clone showed Could not clone repository; retry did not advance. Private test repo Rishet11/litmus-pr6854-ao243 remains: deletion failed with HTTP 403, missing delete_repo scope. Spawn and double-press deduplication remain untested."
+    },
+    {
+      "id": "c5",
+      "name": "Resume exited orchestrator",
+      "expect": "Cmd+Shift+O reopens the same exited orchestrator",
+      "state": "pass",
+      "claim": true,
+      "purpose": "claim",
+      "note": "Switched the orchestrator to terminal UI, exited it with /exit and Ctrl+D, and observed Exited plus Resume agent. From the worker, Cmd+Shift+O reopened it as Idle at the same session ID, litmus-head-run_ao-243-2. An early /exit was typed during startup; the exited state was checked before testing resume."
+    },
+    {
+      "id": "c6",
+      "name": "No configured agent opens settings",
+      "expect": "Cmd+Shift+O opens project settings when its orchestrator agent is unset",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "The sample project was configured during the running-orchestrator setup. Tried creating another project with Open a local folder, but it opened a native chooser that ao testing could not drive; Escape did not dismiss it. Reload recovered the renderer. No unconfigured head project remains."
+    },
+    {
+      "id": "c15",
+      "name": "Shortcut with native Browser focus",
+      "expect": "From a worker Browser view, Cmd+Shift+O opens the project orchestrator",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "Opened the worker inspector Browser and loaded example.com in its native view. ao testing lists it as t2 but refuses switching away from the app target, so I could not send the chord to the focused native page. A renderer-target press opened the orchestrator but does not prove native Browser forwarding."
+    },
+    {
+      "id": "c19",
+      "name": "Windows and Linux default binding",
+      "expect": "Ctrl+Shift+G opens the in-scope orchestrator on Windows or Linux",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "Both builds run on macOS. Windows/Linux Ctrl+Shift+G and its Open in editor conflict avoidance were not tested on their native platforms."
+    },
+    {
+      "id": "c21",
+      "name": "Cloud orchestrator shortcut",
+      "expect": "The shortcut creates an orchestrator for an AO Cloud project",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "The private test window shows Sign in to AO Cloud. Cloud project creation requires login, so the cloud spawn path was not tested."
+    }
+  ],
+  "run_ao-244": [
+    {
+      "id": "c1",
+      "name": "Standing instructions in Chat",
+      "expect": "Command Code Chat loads AO role instructions alongside repo instructions without adding them to the conversation",
+      "state": "partial",
+      "claim": true,
+      "purpose": "claim",
+      "attribution": "environment",
+      "environmentCause": "Initial model is not in the account plan",
+      "note": "Chat returned 'Implementation worker, CEDAR-6778' without tools on DeepSeek V4 Flash. GPT-5.4 Mini first failed with MODEL_NOT_IN_PLAN, then I changed models and retried. Repo AGENTS.md loaded alongside the AO role. System-prompt placement and compaction survival remain unverified. Local-folder selection was unreachable; clone attempts inside scratch hit AO's state-directory safety rule. Cloning the private fixture to the app's normal projects location worked."
+    },
+    {
+      "id": "c2",
+      "name": "Standing instructions in Terminal",
+      "expect": "Command Code Terminal loads AO role instructions alongside repo instructions",
+      "state": "partial",
+      "claim": true,
+      "purpose": "claim",
+      "attribution": "environment",
+      "environmentCause": "Initial model is not in the account plan",
+      "note": "Terminal returned 'implementation worker, CEDAR-6778' on DeepSeek V4 Flash after /model deepseek-v4-flash. The initial GPT-5.4 Mini turn failed with MODEL_NOT_IN_PLAN. /memory also offered project and user memory. I set the default interface to Terminal. Earlier paste attempts hit a hidden terminal; I corrected the target to the visible terminal."
+    },
+    {
+      "id": "c3",
+      "name": "User mods remain available",
+      "expect": "Command Code lists the same installed user mods on head and base",
+      "state": "fail",
+      "purpose": "risk",
+      "risk": "Redirected HOME could hide installed user mods",
+      "attribution": "pr",
+      "note": "With General > Default session interface set to Terminal, /mods lists 7 built-in mods and no user mod. Command Code v1.84.0. Native keypresses reached the terminal after insert-text left only the hidden textarea changed."
+    },
+    {
+      "id": "c4",
+      "name": "Chat survives mode switch and restore",
+      "expect": "A Command Code conversation keeps its prior answer after switching modes and restoring the session",
+      "state": "skipped",
+      "purpose": "risk",
+      "risk": "Per-session homes could break conversation restore",
+      "note": "ran out of time"
+    },
+    {
+      "id": "c5",
+      "name": "User mods remain available",
+      "expect": "Command Code lists the same installed user mods on head and base",
+      "state": "pass",
+      "purpose": "risk",
+      "risk": "Redirected HOME could hide installed user mods",
+      "note": "Set General > Default session interface to Terminal. Command Code v1.84.0 prints tokenrouter-provider startup and /mods lists 8, including tokenrouter-provider as a user mod. Head lists 7 built-ins and omits both.",
+      "leg": "base"
+    },
+    {
+      "id": "c6",
+      "name": "Standing instructions in Chat",
+      "expect": "Command Code Chat loads AO role instructions alongside repo instructions without adding them to the conversation",
+      "state": "partial",
+      "claim": true,
+      "purpose": "claim",
+      "attribution": "environment",
+      "environmentCause": "Provider request limit",
+      "note": "Cloned the same private fixture and selected DeepSeek V4 Flash in Chat. The role-plus-word request completed with no visible answer. A shorter follow-up failed with TokenRouter HTTP 429, maximum 5 requests per minute. The initial zai turn was interrupted to change models. System-prompt placement and compaction survival remain unverified.",
+      "leg": "base"
+    },
+    {
+      "id": "c7",
+      "name": "Standing instructions in Terminal",
+      "expect": "Command Code Terminal loads AO role instructions alongside repo instructions",
+      "state": "skipped",
+      "claim": true,
+      "purpose": "claim",
+      "note": "ran out of time",
+      "leg": "base"
+    }
+  ]
+}

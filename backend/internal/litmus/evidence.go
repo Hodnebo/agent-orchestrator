@@ -13,6 +13,7 @@ import (
 	_ "image/jpeg" // Register JPEG decoding for evidence images.
 	"image/png"
 	"log/slog"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 // Evidence modes, set on the run by intake. The states a run reports are published, off and failed:<reason>.
@@ -105,25 +108,63 @@ func headAfterShot(checks []Check, seq int) (Receipt, bool) {
 	return Receipt{}, false
 }
 
-// bugImageShot prefers the final receipt's check-end theme shot, without a crop.
-func bugImageShot(c Check, leg string) (r Receipt, theme, ok bool) {
+// bugImageShot selects a recorded theme from the final receipt on this leg.
+func bugImageShot(c Check, leg, theme string) (Receipt, bool) {
 	for i := len(c.Receipts) - 1; i >= 0; i-- {
-		r = c.Receipts[i]
+		r := c.Receipts[i]
 		if r.onLeg() != leg {
 			continue
 		}
-		for _, preference := range []string{"light", "dark"} {
-			for _, shot := range r.ThemeShots {
-				if shot.Theme == preference && fileExists(shot.Path) {
-					r.AfterPath, r.Box = shot.Path, nil
-					return r, true, true
-				}
+		for _, shot := range r.ThemeShots {
+			if shot.Theme == theme && fileExists(shot.Path) {
+				r.AfterPath, r.Box = shot.Path, nil
+				return r, true
 			}
 		}
 		break
 	}
-	r, ok = lastAfterShot(c, leg)
-	return r, false, ok
+	return Receipt{}, false
+}
+
+type bugImagePair struct {
+	pr, base Receipt
+	theme    string
+	selected bool
+}
+
+func (p bugImagePair) caption() string {
+	if p.selected {
+		return "Selected action screenshots in " + p.theme + " theme."
+	}
+	return "Check-end screenshots in " + p.theme + " theme."
+}
+
+// selectBugImage pairs known themes before choosing either panel. A raw
+// selected receipt cannot establish its theme, so it never overrides a pair.
+func selectBugImage(b bugComment, checks []Check) (bugImagePair, error) {
+	candidates := []Check{b.Check}
+	if r, ok := headAfterShot(checks, b.Check.Shot); ok {
+		candidates = append([]Check{{Receipts: []Receipt{r}}}, candidates...)
+	}
+	for i, head := range candidates {
+		for _, theme := range []string{"light", "dark"} {
+			pr, prOK := bugImageShot(head, "head", theme)
+			if !prOK {
+				continue
+			}
+			base, baseOK := Receipt{}, false
+			if b.Base != nil {
+				base, baseOK = bugImageShot(*b.Base, "base", theme)
+			}
+			if !baseOK {
+				base, baseOK = bugImageShot(b.Check, "base", theme)
+			}
+			if baseOK {
+				return bugImagePair{pr: pr, base: base, theme: theme, selected: len(candidates) > 1 && i == 0}, nil
+			}
+		}
+	}
+	return bugImagePair{}, errors.New("the PR and base shots have no recorded common light or dark theme")
 }
 
 func openEvidenceImage(file string) (image.Image, error) {
@@ -206,27 +247,18 @@ func scaleEvidenceImage(src image.Image, w, h int) *image.RGBA {
 	return dst
 }
 
-// makeBugImage writes one 1200x400 comparison image, with main on the left
-// and the PR on the right. Check-end theme shots keep the full frame unless an
-// explicit PR receipt selects a matching region on the base theme shot.
+// makeBugImage writes a 1200x400 comparison of the same recorded theme,
+// with main on the left and the PR on the right.
 func makeBugImage(b bugComment, checks []Check, out string) error {
-	pr, _, prOK := bugImageShot(b.Check, "head")
-	if b.Check.Shot > 0 {
-		pr, prOK = headAfterShot(checks, b.Check.Shot)
+	pair, err := selectBugImage(b, checks)
+	if err != nil {
+		return err
 	}
-	if !prOK {
-		return errors.New("bug has no PR after-shot")
-	}
-	base, baseTheme, baseOK := Receipt{}, false, false
-	if b.Base != nil {
-		base, baseTheme, baseOK = bugImageShot(*b.Base, "base")
-	}
-	if !baseOK {
-		base, baseTheme, baseOK = bugImageShot(b.Check, "base")
-	}
-	if !baseOK {
-		return errors.New("bug has no base after-shot")
-	}
+	return writeBugImage(pair, out)
+}
+
+func writeBugImage(pair bugImagePair, out string) error {
+	pr, base := pair.pr, pair.base
 	left, err := openEvidenceImage(base.AfterPath)
 	if err != nil {
 		return err
@@ -237,15 +269,6 @@ func makeBugImage(b bugComment, checks []Check, out string) error {
 	}
 	lb, lok := receiptCropBox(base)
 	rb, rok := receiptCropBox(pr)
-	if b.Check.Shot > 0 && baseTheme {
-		lb, lok = rb, rok
-		if lb.vw <= 0 {
-			lb.vw = float64(right.Bounds().Dx())
-		}
-		if lb.vh <= 0 {
-			lb.vh = float64(right.Bounds().Dy())
-		}
-	}
 	left = cropEvidenceImage(left, lb, lok)
 	right = cropEvidenceImage(right, rb, rok)
 	canvas := image.NewRGBA(image.Rect(0, 0, 1200, 400))
@@ -267,14 +290,18 @@ func makeBugImage(b bugComment, checks []Check, out string) error {
 
 // baseTwin is the index of the base-leg check that gives head check c its base result, or -1.
 func baseTwin(checks []Check, c Check) int {
+	if replacementRetired(checks, c) {
+		return -1
+	}
 	return slices.IndexFunc(checks, func(b Check) bool {
-		return b.onLeg() == "base" && strings.EqualFold(b.Name, c.Name) && slices.Contains(outcomes, b.State)
+		return !replacementRetired(checks, b) && b.onLeg() == "base" && strings.EqualFold(b.Name, c.Name) && slices.Contains(outcomes, b.State)
 	})
 }
 
 // planShots picks, per table row, the last after-shot on each side (the base twin's, or the row's own base receipts)
 // for its lead image, then every other after-shot as an extra, in check order, at most maxShots images in all.
 func planShots(checks []Check) (heroes []hero, extras []shot) {
+	checks = activeReplacementChecks(checks)
 	used := map[int]bool{}
 	pick := func(c Check, leg, label string) *shot {
 		r, ok := lastAfterShot(c, leg)
@@ -467,23 +494,21 @@ func (s *Service) stageEvidence(ctx context.Context, run Run, v Verdict, dir str
 		return f
 	}
 	main := run.baseName()
+	allChecks := v.Checks
 	v = plainVerdict(run, v)
 	bugs := failingBugComments(v.Checks)
-	s.numberBugComments(run, bugs)
+	numberBugComments(bugs)
 	for _, b := range bugs {
 		file := fmt.Sprintf("bug-%d.png", b.Number)
-		local := filepath.Join(s.store.root, run.ID, "comments", file)
-		var err error
-		if fileExists(local) {
-			err = copyFile(local, filepath.Join(dir, file))
-		} else {
-			err = makeBugImage(b, v.Checks, filepath.Join(dir, file))
+		pair, err := selectBugImage(b, allChecks)
+		if err == nil {
+			err = writeBugImage(pair, filepath.Join(dir, file))
 		}
 		if err != nil {
 			note(err)
 			continue
 		}
-		items = append(items, evItem{file: file, alt: "base branch on the left, PR build on the right", caption: fmt.Sprintf("Bug %d of %d: %s", b.Number, b.Total, b.Check.Name), check: b.Check.Name, kind: kindBug})
+		items = append(items, evItem{file: file, alt: "base branch on the left, PR build on the right", caption: fmt.Sprintf("Bug %d of %d: %s. %s", b.Number, b.Total, mdText(b.Check.Name, math.MaxInt), pair.caption()), check: b.Check.Name, kind: kindBug})
 	}
 	heroes, extras := planShots(v.Checks)
 	for _, h := range heroes {
@@ -558,10 +583,10 @@ func (s *Service) stageEvidence(ctx context.Context, run Run, v Verdict, dir str
 }
 
 // heroCaption names the sides of a lead image, since the side-by-side has no labels on it, and says what each side
-// showed in the tester's words, 90 characters each (the plain names alone when a note is missing).
+// showed in the tester's words (the plain names alone when a note is missing).
 func heroCaption(run Run, h hero) string {
 	if h.pr != nil && h.base != nil {
-		left, right := mdText(clause(sentences(h.baseNote, 90), 90), 200), mdText(clause(sentences(h.prNote, 90), 90), 200)
+		left, right := mdText(strings.TrimRight(h.baseNote, " .;:"), math.MaxInt), mdText(strings.TrimRight(h.prNote, " .;:"), math.MaxInt)
 		if left == "" || right == "" {
 			return recase(run.baseName(), true) + " on the left, PR build on the right."
 		}
@@ -571,7 +596,7 @@ func heroCaption(run Run, h hero) string {
 	if h.pr != nil {
 		leg, note = "head", h.prNote
 	}
-	if note = mdText(clause(sentences(note, 200), 200), 400); note == "" {
+	if note = mdText(strings.TrimRight(note, " .;:"), math.MaxInt); note == "" {
 		return recase(run.sideName(leg), true) + "."
 	}
 	return captionNote(run, sideLabel(run, leg), note) + "."
@@ -790,11 +815,61 @@ func (s *Service) evidenceFailed(run Run, err error) evidence {
 	s.commentLogf(run, "evidence: %v", err)
 	reason, _, _ := strings.Cut(s.scrub(err.Error()), "\n")
 	reason = clip(strings.TrimSpace(reason), 120)
-	return evidence{state: "failed:" + reason, limits: []string{"I could not publish the screenshots and recordings. The error was " + mdText(reason, 120) + "."}}
+	return evidence{state: "failed:" + reason, limits: []string{"I could not publish the screenshots and recordings."}}
 }
 
-// scrub hides the data dir and the home dir in a message that goes into a public comment or the pack.
+var outputBearer = regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+`)
+var outputCredential = regexp.MustCompile(`(?i)(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|password|secret|token)["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)`)
+
+// redactNamedJSONValues hides cookie values where the browser reports a
+// cookie's name and value as separate JSON fields.
+func redactNamedJSONValues(msg string) string {
+	var value any
+	if json.Unmarshal([]byte(msg), &value) != nil || !redactNamedValues(value) {
+		return msg
+	}
+	redacted, err := json.Marshal(value)
+	if err != nil {
+		return msg
+	}
+	return string(redacted)
+}
+
+func redactNamedValues(value any) bool {
+	changed := false
+	switch value := value.(type) {
+	case map[string]any:
+		_, hasName := value["name"]
+		_, hasValue := value["value"]
+		if hasName && hasValue {
+			value["value"] = "[REDACTED]"
+			changed = true
+		}
+		for _, child := range value {
+			changed = redactNamedValues(child) || changed
+		}
+	case []any:
+		for _, child := range value {
+			changed = redactNamedValues(child) || changed
+		}
+	}
+	return changed
+}
+
+// scrub hides paths and credentials before text reaches run artifacts or comments.
 func (s *Service) scrub(msg string) string {
+	secrets := map[string]string{}
+	for _, kv := range os.Environ() {
+		name, value, _ := strings.Cut(kv, "=")
+		upper := strings.ToUpper(name)
+		if slices.Contains([]string{"TOKEN", "PASSWORD", "SECRET", "API_KEY"}, upper) || strings.HasSuffix(upper, "_TOKEN") || strings.HasSuffix(upper, "_KEY") || strings.HasSuffix(upper, "_SECRET") || strings.HasSuffix(upper, "_PASSWORD") {
+			secrets[name] = value
+		}
+	}
+	msg = agentlaunch.RedactValues(msg, secrets)
+	msg = redactNamedJSONValues(msg)
+	msg = outputBearer.ReplaceAllString(msg, "${1}[REDACTED]")
+	msg = outputCredential.ReplaceAllString(msg, `${1}"[REDACTED]"`)
 	if d := s.store.dataDir(); d != "" {
 		msg = strings.ReplaceAll(msg, d, "<data dir>")
 	}

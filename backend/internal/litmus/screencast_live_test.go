@@ -34,7 +34,7 @@ func TestLiveScreencastEncode25Minutes(t *testing.T) {
 	if os.Getenv("LITMUS_SCREENCAST_ENCODE") != "1" {
 		t.Skip("set LITMUS_SCREENCAST_ENCODE=1")
 	}
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	runID, leg := "run_encode", "head"
 	dir := svc.store.legDir(runID, leg)
 	is(t, "")(nil, os.MkdirAll(filepath.Join(dir, "frames"), 0o750))
@@ -113,7 +113,7 @@ func TestLiveScreencastSparseEncode(t *testing.T) {
 	if os.Getenv("LITMUS_SCREENCAST_ENCODE") != "1" {
 		t.Skip("set LITMUS_SCREENCAST_ENCODE=1")
 	}
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	dir := svc.store.legDir("run_sparse", "head")
 	is(t, "")(nil, os.MkdirAll(filepath.Join(dir, "frames"), 0o750))
 	for i, ink := range []color.RGBA{{R: 255, A: 255}, {B: 255, A: 255}} {
@@ -167,7 +167,7 @@ func TestLiveScreencastElectron25Minutes(t *testing.T) {
 	src, _ := filepath.Abs("../../..")
 	data, err := os.MkdirTemp("/tmp", "lv-sc")
 	is(t, "")(nil, err)
-	svc := New(NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
+	svc := newTestService(t, NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
 	if svc.binary, err = resolveBinary(filepath.Join(src, "frontend", "agent-browser", "agent-browser"), ""); err != nil {
@@ -182,8 +182,8 @@ func TestLiveScreencastElectron25Minutes(t *testing.T) {
 	// The normal run budget starts at prepare. Give this opt-in proof enough room for the build/launch tail plus the
 	// full 25-minute recording window, so the screenshot calls are not rejected by the run deadline near the end.
 	is(t, "")(nil, svc.store.Save(Run{ID: "run_live", SessionID: "live", Repo: DefaultRepo, PRNumber: 6394, HeadSHA: sha, State: RunPrepared, CreatedAt: time.Now(), Deadline: time.Now().Add((liveScreencastMinutes + 10) * time.Minute), Legs: []Leg{leg}}))
-	is(t, "")(svc.CheckAdd(context.Background(), "live", "open chat", "the sample chat opens", ""))
-	is(t, "")(svc.CheckAdd(context.Background(), "live", "model menu", "the model control opens", ""))
+	is(t, "")(svc.CheckAdd(context.Background(), "live", "open chat", "the sample chat opens", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(context.Background(), "live", "model menu", "the model control opens", "", "", "", CheckClassification{Purpose: "explore"}))
 	run, err := svc.Launch(context.Background(), "live", "head")
 	is(t, "")(nil, err)
 	if len(run.Legs) != 1 || run.Legs[0].RecordStartedAt.IsZero() {
@@ -272,7 +272,7 @@ func TestLiveScreencastStandalone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("proof data: %s", data)
-	svc := New(NewStore(data), nil)
+	svc := newTestService(t, NewStore(data), nil)
 	const runID, leg = "run_standalone", "head"
 	legDir := filepath.Join(svc.store.root, runID, leg)
 	if err := os.MkdirAll(legDir, 0o750); err != nil {

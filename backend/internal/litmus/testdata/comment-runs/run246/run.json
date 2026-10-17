@@ -1,0 +1,89 @@
+{
+  "id": "run_ao-246",
+  "sessionId": "ao-246",
+  "projectId": "ao",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6827,
+  "title": "fix(frontend): show attached PR branch in session branch header",
+  "baseSha": "64930a0d92e01e5b8cd78a28def71c9fc594e5e1",
+  "headSha": "e8b4f174635477db65451e49ad29b8e8a5f69ee1",
+  "issues": [
+    {
+      "number": 6636,
+      "title": "bug(scm): Pull request panel header shows session root branch instead of attached PR head",
+      "url": "https://github.com/orchestratorinc/agent-orchestrator/issues/6636"
+    }
+  ],
+  "areas": [
+    {
+      "name": "Renderer components",
+      "files": 2,
+      "stems": [
+        "SessionBranchSummary",
+        "SessionInspector"
+      ]
+    },
+    {
+      "name": "Tests",
+      "files": 1
+    }
+  ],
+  "baseRef": "main",
+  "state": "submitted",
+  "createdAt": "2026-10-17T05:46:15.929235+05:30",
+  "deadline": "2026-10-17T06:13:04.405477+05:30",
+  "legs": [
+    {
+      "name": "head",
+      "worktree": "fixture/path",
+      "buildManifest": "fixture/path",
+      "pid": 51967,
+      "pidStart": "2026-10-17T05:48:16+05:30",
+      "dataDir": "run/head/data",
+      "daemonPort": 54929,
+      "debugPort": 54930,
+      "runFile": "run/head/running.json",
+      "engine": {
+        "binary": "fixture/path",
+        "runDir": "fixture/path",
+        "session": "head-f465fe",
+        "namespace": "head-f465fe",
+        "endpoint": "http://127.0.0.1:54930",
+        "socketDir": "fixture/socket",
+        "appOrigin": "http://localhost:5173"
+      },
+      "state": "cleaned",
+      "recordStartedAt": "2026-10-17T05:48:48.715834+05:30",
+      "recordStoppedAt": "2026-10-17T06:10:41.175867+05:30"
+    },
+    {
+      "name": "base",
+      "worktree": "fixture/path",
+      "buildManifest": "fixture/path",
+      "pid": 52863,
+      "pidStart": "2026-10-17T05:48:35+05:30",
+      "dataDir": "run/base/data",
+      "daemonPort": 55093,
+      "debugPort": 55094,
+      "runFile": "run/base/running.json",
+      "engine": {
+        "binary": "fixture/path",
+        "runDir": "fixture/path",
+        "session": "base-a687c0",
+        "namespace": "base-a687c0",
+        "endpoint": "http://127.0.0.1:55094",
+        "socketDir": "fixture/socket",
+        "appOrigin": "http://localhost:5174"
+      },
+      "state": "cleaned",
+      "recordStartedAt": "2026-10-17T05:49:11.328166+05:30",
+      "recordStoppedAt": "2026-10-17T06:10:41.181996+05:30"
+    }
+  ],
+  "comment": "off",
+  "commentState": "off",
+  "evidence": "off",
+  "evidenceState": "off",
+  "videoState": "off"
+}

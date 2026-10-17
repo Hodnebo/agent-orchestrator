@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,14 +38,14 @@ func TestBugImageUsesSelectedReceiptFromAnotherHeadCheck(t *testing.T) {
 	}
 	whitePNG(t, later, 1000, 700)
 	whitePNG(t, base, 1000, 700)
-	earlier := Receipt{Seq: 11, Leg: "head", AfterPath: head, Box: &ElementBox{X: 850, Y: 550, W: 80, H: 60, ViewportWidth: 1000, ViewportHeight: 700}}
+	earlier := Receipt{Seq: 11, Leg: "head", AfterPath: head, ThemeShots: []ThemeShot{{Theme: "light", Path: head}}, Box: &ElementBox{X: 850, Y: 550, W: 80, H: 60, ViewportWidth: 1000, ViewportHeight: 700}}
 	check := Check{ID: "c9", Shot: 11, Receipts: []Receipt{
 		{Seq: 42, Leg: "head", AfterPath: later},
 		{Seq: 43, Leg: "head", AfterPath: later},
 		{Seq: 44, Leg: "head", AfterPath: later},
 	}}
 	checks := []Check{{ID: "c2", Leg: "head", Receipts: []Receipt{earlier}}, check}
-	baseCheck := &Check{Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: base}}}
+	baseCheck := &Check{Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: base, ThemeShots: []ThemeShot{{Theme: "light", Path: base}}}}}
 	for _, tc := range []struct {
 		name  string
 		check Check
@@ -99,10 +100,11 @@ func TestBugImagePrefersCheckEndThemeShots(t *testing.T) {
 	baseLarge := write("c14-large.png", 2400, 1600, blue, red)
 	missing := filepath.Join(dir, "missing.png")
 	box := &ElementBox{X: 800, Y: 500, W: 80, H: 60}
-	cropped := image.Rect(540, 330, 1140, 730)
 	for _, tc := range []struct {
 		name                   string
 		headThemes, baseThemes []ThemeShot
+		selectedThemes         []ThemeShot
+		wantErr                bool
 		shot                   int
 		cssBox, ownBase        bool
 		wantHead, wantBase     string
@@ -127,24 +129,43 @@ func TestBugImagePrefersCheckEndThemeShots(t *testing.T) {
 			wantHead:   headDark, wantBase: baseDark,
 		},
 		{
-			name:     "last receipt without themes uses cropped after",
-			wantHead: headAfter, wantBase: baseAfter, headCrop: cropped, baseCrop: cropped,
+			name:    "last receipt without themes cannot establish a match",
+			wantErr: true,
 		},
 		{
-			name:       "explicit shot overrides theme and crops base theme",
+			name:       "unlabeled explicit shot cannot override a common theme",
 			headThemes: []ThemeShot{{Theme: "light", Path: headLight}},
 			baseThemes: []ThemeShot{{Theme: "light", Path: baseLight}}, shot: 11,
-			wantHead: headAfter, wantBase: baseLight, headCrop: cropped, baseCrop: cropped,
+			wantHead: headLight, wantBase: baseLight,
 		},
 		{
-			name:       "explicit shot scales base theme box",
+			name:       "unlabeled explicit shot cannot pair with base theme",
 			baseThemes: []ThemeShot{{Theme: "light", Path: baseLarge}}, shot: 11,
-			wantHead: headAfter, wantBase: baseLarge, headCrop: cropped, baseCrop: image.Rect(1380, 860, 1980, 1260),
+			wantErr: true,
 		},
 		{
-			name:       "explicit shot scales CSS box",
+			name:       "CSS box cannot establish an explicit shot theme",
 			baseThemes: []ThemeShot{{Theme: "light", Path: baseLarge}}, shot: 11, cssBox: true,
-			wantHead: headAfter, wantBase: baseLarge, headCrop: cropped, baseCrop: image.Rect(1380, 860, 1980, 1260),
+			wantErr: true,
+		},
+		{
+			name:       "asymmetric availability uses common dark",
+			headThemes: []ThemeShot{{Theme: "light", Path: missing}, {Theme: "dark", Path: headDark}},
+			baseThemes: []ThemeShot{{Theme: "light", Path: baseLight}, {Theme: "dark", Path: baseDark}},
+			wantHead:   headDark, wantBase: baseDark,
+		},
+		{
+			name:           "selected matching dark precedes check-end light",
+			selectedThemes: []ThemeShot{{Theme: "dark", Path: headDark}}, shot: 11,
+			headThemes: []ThemeShot{{Theme: "light", Path: headLight}},
+			baseThemes: []ThemeShot{{Theme: "light", Path: baseLight}, {Theme: "dark", Path: baseDark}},
+			wantHead:   headDark, wantBase: baseDark,
+		},
+		{
+			name:       "disjoint themes are not compared",
+			headThemes: []ThemeShot{{Theme: "light", Path: headLight}},
+			baseThemes: []ThemeShot{{Theme: "dark", Path: baseDark}},
+			wantErr:    true,
 		},
 		{
 			name:       "base falls back to own receipts",
@@ -165,15 +186,34 @@ func TestBugImagePrefersCheckEndThemeShots(t *testing.T) {
 			base := Check{ID: "c14", Leg: "base", State: CheckPass, Receipts: []Receipt{
 				{Seq: 103, Leg: "base", AfterPath: baseAfter, Box: box, ThemeShots: tc.baseThemes},
 			}}
-			checks := []Check{{ID: "c2", Receipts: []Receipt{{Seq: 11, AfterPath: headAfter, Box: &selectedBox}}}, head, base}
+			checks := []Check{{ID: "c2", Receipts: []Receipt{{Seq: 11, AfterPath: headAfter, Box: &selectedBox, ThemeShots: tc.selectedThemes}}}, head, base}
 			bug := bugComment{Check: head, Base: &base}
 			if tc.ownBase {
 				bug.Check.Receipts = append(bug.Check.Receipts, base.Receipts...)
 				bug.Base = &Check{Leg: "base"}
 			}
 			out := filepath.Join(t.TempDir(), "bug.png")
-			if err := makeBugImage(bug, checks, out); err != nil {
+			err := makeBugImage(bug, checks, out)
+			if tc.wantErr {
+				if err == nil || fileExists(out) {
+					t.Fatalf("unmatched themes produced an image: %v", err)
+				}
+				body := bugCommentBody(commentRun, Verdict{Checks: checks}, bug, "", "", false)
+				if !strings.Contains(body, "A comparison image could not be made.") {
+					t.Fatalf("missing fixed comparison-image note: %s", body)
+				}
+				return
+			}
+			if err != nil {
 				t.Fatal(err)
+			}
+			theme := "light"
+			if tc.wantHead == headDark {
+				theme = "dark"
+			}
+			body := bugCommentBody(commentRun, Verdict{Checks: checks}, bug, "bug.png", "", false)
+			if !strings.Contains(body, "screenshots in "+theme+" theme.") {
+				t.Fatalf("caption lost selected theme: %s", body)
 			}
 			got, err := openEvidenceImage(out)
 			if err != nil {
@@ -231,7 +271,7 @@ func TestBugComparisonKeepsBaseLeftAndDoesNotInventMissingEvidence(t *testing.T)
 	red, blue := color.RGBA{R: 255, A: 255}, color.RGBA{B: 255, A: 255}
 	writeImage(base, red)
 	writeImage(head, blue)
-	b := bugComment{Check: Check{Receipts: []Receipt{{AfterPath: head}}}, Base: &Check{Receipts: []Receipt{{Leg: "base", AfterPath: base}}}}
+	b := bugComment{Check: Check{Receipts: []Receipt{{AfterPath: head, ThemeShots: []ThemeShot{{Theme: "light", Path: head}}}}}, Base: &Check{Receipts: []Receipt{{Leg: "base", AfterPath: base, ThemeShots: []ThemeShot{{Theme: "light", Path: base}}}}}}
 	if err := makeBugImage(b, nil, out); err != nil {
 		t.Fatal(err)
 	}

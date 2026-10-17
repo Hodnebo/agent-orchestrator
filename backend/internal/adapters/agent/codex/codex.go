@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
@@ -134,6 +135,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendTestingServiceTierFlag(&providerArgs, cfg.DataDir, cfg.WorkspacePath)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -173,6 +175,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
+	appendTestingServiceTierFlag(&providerArgs, cfg.DataDir, cfg.Session.WorkspacePath)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -186,6 +189,13 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		ProviderArgs:     providerArgs,
 	})
+}
+
+func appendTestingServiceTierFlag(args *[]string, dataDir, workspacePath string) {
+	if litmus.IsRunDir(dataDir, workspacePath) {
+		// "default" explicitly clears an inherited priority tier for this tester.
+		*args = append(*args, "-c", `service_tier="default"`)
+	}
 }
 
 func appendReasoningEffortFlag(args *[]string, effort string) {

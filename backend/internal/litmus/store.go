@@ -17,6 +17,12 @@ import (
 // run.json, checks.json, actions.jsonl, receipts/, context-pack.md, verdict.md.
 type Store struct{ root string }
 
+// storedRun keeps finalization metadata out of the public Run response.
+type storedRun struct {
+	Run
+	Submission *submitInputs `json:"submission,omitempty"`
+}
+
 // NewStore returns a store rooted under dataDir. Nothing is created until a run is saved.
 func NewStore(dataDir string) *Store {
 	return &Store{root: filepath.Join(dataDir, "litmus", "runs")}
@@ -49,12 +55,15 @@ func (s *Store) Save(run Run) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	return s.put(run.ID, "run.json", run)
+	return s.put(run.ID, "run.json", storedRun{Run: run, Submission: run.submission})
 }
 
 // Get loads one run. A missing run wraps fs.ErrNotExist.
 func (s *Store) Get(id string) (run Run, err error) {
-	err = s.read(id, "run.json", &run)
+	var saved storedRun
+	err = s.read(id, "run.json", &saved)
+	run = saved.Run
+	run.submission = saved.Submission
 	return run, err
 }
 

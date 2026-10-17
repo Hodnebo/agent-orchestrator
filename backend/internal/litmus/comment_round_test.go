@@ -36,15 +36,15 @@ func TestPerBugCommentEligibilityAndDraftFiles(t *testing.T) {
 	}
 	basePath := writeShot("base.png", color.RGBA{R: 255, A: 255})
 	headPath := writeShot("head.png", color.RGBA{B: 255, A: 255})
-	svc := New(NewStore(dir), func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) })
+	svc := newTestService(t, NewStore(dir), func() time.Time { return time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC) })
 	run := Run{ID: "run_comments", Repo: "o/r", PRNumber: 7, HeadSHA: "abc", CreatedAt: time.Date(2026, 10, 15, 11, 0, 0, 0, time.UTC)}
 	if err := svc.store.Save(run); err != nil {
 		t.Fatal(err)
 	}
-	headFail := Check{ID: "menu-head", Name: "menu opens", Expect: "the menu stays open", State: CheckFail, Receipts: []Receipt{{Leg: "head", AfterPath: headPath}}}
-	basePass := Check{ID: "menu-base", Name: "menu opens", State: CheckPass, Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: basePath}}}
-	preExisting := Check{ID: "old-head", Name: "old failure", State: CheckFail}
-	preExistingBase := Check{ID: "old-base", Name: "old failure", State: CheckFail, Leg: "base"}
+	headFail := Check{ID: "menu-head", Name: "menu opens", Expect: "the menu stays open", State: CheckFail, Receipts: []Receipt{{Leg: "head", AfterPath: headPath, ThemeShots: []ThemeShot{{Theme: "light", Path: headPath}}}}}
+	basePass := Check{ID: "menu-base", Name: "menu opens", State: CheckPass, Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: basePath, ThemeShots: []ThemeShot{{Theme: "light", Path: basePath}}}}}
+	preExisting := Check{ID: "old-head", Name: "old failure", Purpose: "risk", State: CheckFail}
+	preExistingBase := Check{ID: "old-base", Name: "old failure", State: CheckFail, Leg: "base", SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: basePath}}}
 	v := Verdict{Overall: CheckFail, Checks: []Check{headFail, basePass, preExisting, preExistingBase}}
 	bugs := failingBugComments(v.Checks)
 	if len(bugs) != 1 || bugs[0].Check.Name != "menu opens" {
@@ -65,22 +65,21 @@ func TestPerBugCommentEligibilityAndDraftFiles(t *testing.T) {
 	}
 }
 
-func TestPerBugNumberSurvivesAFollowingRun(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+func TestPerBugNumbersDescribeTheCurrentRun(t *testing.T) {
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	old := Run{ID: "old", Repo: "o/r", PRNumber: 7, Comments: []PostedComment{{Name: "removed check", Number: 1, Fixed: true}, {Name: "menu opens", Number: 2, ID: 22}}}
 	if err := svc.store.Save(old); err != nil {
 		t.Fatal(err)
 	}
-	run := Run{ID: "new", Repo: old.Repo, PRNumber: old.PRNumber}
 	bugs := []bugComment{{Check: Check{Name: "menu opens"}}, {Check: Check{Name: "new check"}}}
-	svc.numberBugComments(run, bugs)
-	if bugs[0].Number != 2 || bugs[1].Number != 3 || bugs[0].Total != 3 || bugs[1].Total != 3 {
+	numberBugComments(bugs)
+	if bugs[0].Number != 1 || bugs[1].Number != 2 || bugs[0].Total != 2 || bugs[1].Total != 2 {
 		t.Fatalf("numbered bugs = %#v", bugs)
 	}
 }
 
 func TestPerBugMarkerFollowsTheExistingComment(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	old := Run{ID: "old", Repo: "o/r", PRNumber: 7, Comments: []PostedComment{
 		{Name: "A", ID: 101, URL: "https://github.com/o/r/pull/7#issuecomment-101", Number: 1},
 		{Name: "B", ID: 102, URL: "https://github.com/o/r/pull/7#issuecomment-102", Number: 2},
@@ -108,7 +107,7 @@ func TestPerBugMarkerFollowsTheExistingComment(t *testing.T) {
 }
 
 func TestPerBugPublishReusesIdsAndMarkerByCheckName(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	old := Run{ID: "old", Repo: "o/r", PRNumber: 7, Comments: []PostedComment{
 		{Name: "A", ID: 101, URL: "https://github.com/o/r/pull/7#issuecomment-101", Number: 1},
 		{Name: "B", ID: 102, URL: "https://github.com/o/r/pull/7#issuecomment-102", Number: 2},
@@ -150,7 +149,7 @@ func TestPerBugPublishReusesIdsAndMarkerByCheckName(t *testing.T) {
 }
 
 func TestPerBugPassMarksOnlyTheKnownBugFixed(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	run := Run{ID: "run_comments", Repo: "o/r", PRNumber: 7, HeadSHA: "new", Comments: []PostedComment{{Name: "A", ID: 101, URL: "https://github.com/o/r/pull/7#issuecomment-101", Number: 1}}}
 	if err := svc.store.Save(run); err != nil {
 		t.Fatal(err)
@@ -177,7 +176,7 @@ func TestPerBugPassMarksOnlyTheKnownBugFixed(t *testing.T) {
 }
 
 func TestPerBugDoesNotFixASkippedOrMissingCheck(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	run := Run{ID: "run_comments", Repo: "o/r", PRNumber: 7, HeadSHA: "new", Comments: []PostedComment{{Name: "A", ID: 101, URL: "https://github.com/o/r/pull/7#issuecomment-101", Number: 1}}}
 	if err := svc.store.Save(run); err != nil {
 		t.Fatal(err)
@@ -201,7 +200,7 @@ func TestPerBugDoesNotFixASkippedOrMissingCheck(t *testing.T) {
 }
 
 func TestPerBugDraftPreservesHandEditedFixedText(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	run := Run{ID: "run_comments", Repo: "o/r", PRNumber: 7, HeadSHA: "new", Comments: []PostedComment{{Name: "A", ID: 101, URL: "https://github.com/o/r/pull/7#issuecomment-101", Number: 1}}}
 	if err := svc.store.Save(run); err != nil {
 		t.Fatal(err)
@@ -225,7 +224,7 @@ func TestPerBugDraftPreservesHandEditedFixedText(t *testing.T) {
 }
 
 func TestPerBugDraftRemovesUnavailableGeneratedLinks(t *testing.T) {
-	svc := New(NewStore(t.TempDir()), nil)
+	svc := newTestService(t, NewStore(t.TempDir()), nil)
 	run := Run{ID: "run_comments", Repo: "o/r", PRNumber: 7, HeadSHA: "new"}
 	if err := svc.store.Save(run); err != nil {
 		t.Fatal(err)

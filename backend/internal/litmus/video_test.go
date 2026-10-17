@@ -52,9 +52,28 @@ func TestStepCaptionsSayWhatWasDoneInTheReadersWords(t *testing.T) {
 
 func TestParseRefsReadsRoleAndNameFromASnapshot(t *testing.T) {
 	snap := "- generic [ref=e1]\n  - button \"Go back\" [ref=e7]\n  - link \"Say \\\"hi\\\"\" [level=2, ref=e8]\n  - button [disabled, ref=e11]\nnot a node ref=e5\n"
-	want := map[string]refInfo{"@e1": {"generic", ""}, "@e7": {"button", "Go back"}, "@e8": {"link", `Say "hi"`}, "@e11": {"button", ""}}
+	want := map[string]refInfo{"@e1": {role: "generic"}, "@e7": {role: "button", name: "Go back"}, "@e8": {role: "link", name: `Say "hi"`}, "@e11": {role: "button"}}
 	if got := parseRefs(snap); !reflect.DeepEqual(got, want) {
 		t.Fatalf("refs %v, want %v", got, want)
+	}
+}
+
+func TestPlannedRelaunchJumpsSkipFailedActions(t *testing.T) {
+	svc, _, _, runDir := driveSvc(t)
+	start := time.Unix(1000, 0).UTC()
+	run, err := svc.update("run_s1", func(run *Run) { run.Legs[0].RecordStartedAt = start })
+	is(t, "")(nil, err)
+	svc.runner, svc.media = &videoProbeRunner{duration: "12"}, &fakeMedia{}
+	writeFile(t, recordingPath(runDir, "head"), "video")
+	for _, action := range []actionRec{
+		{Leg: "head", Action: "relaunch", Planned: true, Error: "launch failed", RecordSegment: "head/head.mp4", At: start.Add(time.Second)},
+		{Leg: "head", Action: "relaunch", Planned: true, Reason: "wording may change", RecordSegment: "head/head.seg2.mp4", At: start.Add(2 * time.Second)},
+	} {
+		svc.logAction(run.ID, &action)
+	}
+	line := videoLine(svc.finishVideo(ctx, runDir, run))
+	if !strings.Contains(line, "video jumps at actions 2") || strings.Contains(line, "video jumps at actions 1") {
+		t.Fatalf("failed relaunch was labeled as a video jump: %s", line)
 	}
 }
 

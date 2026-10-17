@@ -18,10 +18,13 @@ type TestingService interface {
 	Intake(ctx context.Context, sessionID, prURL string) (litmus.Run, error)
 	Prepare(ctx context.Context, sessionID string) (litmus.Run, error)
 	Launch(ctx context.Context, sessionID, leg string) (litmus.Run, error)
+	Relaunch(ctx context.Context, sessionID, leg string) (litmus.Run, error)
+	AgentVersion(ctx context.Context, sessionID, leg, agent, version string) (litmus.Run, error)
 	Status(ctx context.Context, sessionID string) (litmus.RunStatus, error)
-	CheckAdd(ctx context.Context, sessionID, name, expect, leg string) (litmus.Check, error)
-	CheckStart(ctx context.Context, sessionID, id string) (litmus.Check, error)
-	CheckEnd(ctx context.Context, sessionID, id string, result litmus.CheckState, note string, sameFault bool, shot int) (litmus.Check, error)
+	CheckAdd(ctx context.Context, sessionID, name, expect, leg, replaces, reason string, classification ...litmus.CheckClassification) (litmus.Check, error)
+	CheckStart(ctx context.Context, sessionID, id string, classification ...litmus.CheckClassification) (litmus.Check, error)
+	CheckReclassify(ctx context.Context, sessionID, id string, classification litmus.CheckClassification, reason string) (litmus.Check, error)
+	CheckEnd(ctx context.Context, sessionID, id string, result litmus.CheckState, note string, sameFault bool, shot int, attribution ...litmus.CheckAttribution) (litmus.Check, error)
 	Compare(ctx context.Context, sessionID, checkID string) (map[string]any, error)
 	Replay(ctx context.Context, sessionID, checkID, leg string) (map[string]any, error)
 	Submit(ctx context.Context, sessionID, summary, skipBase string) (litmus.Verdict, error)
@@ -107,14 +110,26 @@ func (c *TestingController) Register(r chi.Router) {
 	r.Post("/testing/launch", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
 		return s.Launch(r.Context(), in.SessionID, in.Leg)
 	}))
+	r.Post("/testing/relaunch", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
+		return s.Relaunch(r.Context(), in.SessionID, in.Leg)
+	}))
+	r.Post("/testing/agent-version", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
+		return s.AgentVersion(r.Context(), in.SessionID, in.Leg, in.Agent, in.Version)
+	}))
 	r.Post("/testing/checks", testingPost(func(r *http.Request, in TestingRequest) (litmus.Check, error) {
-		return s.CheckAdd(r.Context(), in.SessionID, in.Name, in.Expect, in.Leg)
+		return s.CheckAdd(r.Context(), in.SessionID, in.Name, in.Expect, in.Leg, in.Replaces, in.Reason, optionalCheckClassification(in)...)
 	}))
 	r.Post("/testing/checks/{id}/start", testingPost(func(r *http.Request, in TestingRequest) (litmus.Check, error) {
-		return s.CheckStart(r.Context(), in.SessionID, chi.URLParam(r, "id"))
+		return s.CheckStart(r.Context(), in.SessionID, chi.URLParam(r, "id"), optionalCheckClassification(in)...)
+	}))
+	r.Post("/testing/checks/{id}/reclassify", testingPost(func(r *http.Request, in TestingRequest) (litmus.Check, error) {
+		return s.CheckReclassify(r.Context(), in.SessionID, chi.URLParam(r, "id"), litmus.CheckClassification{Purpose: in.Purpose, ClaimSentence: in.ClaimSentence, Risk: in.Risk}, in.Reason)
 	}))
 	r.Post("/testing/checks/{id}/end", testingPost(func(r *http.Request, in TestingRequest) (litmus.Check, error) {
-		return s.CheckEnd(r.Context(), in.SessionID, chi.URLParam(r, "id"), litmus.CheckState(in.Result), in.Note, in.SameFault, in.Shot)
+		if in.Attribution == "" && in.SameBug == "" {
+			return s.CheckEnd(r.Context(), in.SessionID, chi.URLParam(r, "id"), litmus.CheckState(in.Result), in.Note, in.SameFault, in.Shot)
+		}
+		return s.CheckEnd(r.Context(), in.SessionID, chi.URLParam(r, "id"), litmus.CheckState(in.Result), in.Note, in.SameFault, in.Shot, litmus.CheckAttribution{Kind: in.Attribution, Cause: in.EnvironmentCause, Receipt: in.AttributionReceipt, SameBug: in.SameBug})
 	}))
 	r.Post("/testing/checks/{id}/compare", testingPost(func(r *http.Request, in TestingRequest) (map[string]any, error) {
 		return s.Compare(r.Context(), in.SessionID, chi.URLParam(r, "id"))
@@ -177,6 +192,13 @@ func (c *TestingController) setProjectSettings(w http.ResponseWriter, r *http.Re
 	}
 	out, err := c.Svc.SetProjectSettings(r.Context(), projectID, stored)
 	writeTesting(w, r, out, err)
+}
+
+func optionalCheckClassification(in TestingRequest) []litmus.CheckClassification {
+	if strings.TrimSpace(in.Purpose) == "" && strings.TrimSpace(in.ClaimSentence) == "" && strings.TrimSpace(in.Risk) == "" {
+		return nil
+	}
+	return []litmus.CheckClassification{{Purpose: in.Purpose, ClaimSentence: in.ClaimSentence, Risk: in.Risk}}
 }
 
 // testingPost decodes a strict JSON body, calls the verb, and renders the result or error.

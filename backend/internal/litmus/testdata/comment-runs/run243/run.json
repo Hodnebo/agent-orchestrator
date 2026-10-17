@@ -1,0 +1,105 @@
+{
+  "id": "run_ao-243",
+  "sessionId": "ao-243",
+  "projectId": "ao",
+  "repo": "orchestratorinc/agent-orchestrator",
+  "requestedRepo": "orchestratorinc/agent-orchestrator",
+  "prNumber": 6854,
+  "title": "feat(shortcuts): add Open orchestrator keybind (⌘⇧O / Ctrl+Shift+G)",
+  "baseSha": "1620f621b16037aac8346f1579f9d59bd88278c4",
+  "headSha": "10b72abf7fef8043fc3b460b15f5a4dd881d9682",
+  "areas": [
+    {
+      "name": "Renderer i18n",
+      "files": 9,
+      "stems": [
+        "de",
+        "en",
+        "es",
+        "fr",
+        "ja",
+        "key-maps",
+        "ko",
+        "pt-BR"
+      ]
+    },
+    {
+      "name": "Tests",
+      "files": 4
+    },
+    {
+      "name": "Renderer components",
+      "files": 1,
+      "stems": [
+        "ShellTopbar"
+      ]
+    },
+    {
+      "name": "Shared",
+      "files": 1,
+      "stems": [
+        "shortcuts"
+      ]
+    }
+  ],
+  "baseRef": "main",
+  "state": "submitted",
+  "createdAt": "2026-10-17T04:37:46.693637+05:30",
+  "deadline": "2026-10-17T05:04:27.721542+05:30",
+  "legs": [
+    {
+      "name": "head",
+      "worktree": "fixture/path",
+      "buildManifest": "fixture/path",
+      "pid": 20424,
+      "pidStart": "2026-10-17T04:39:30+05:30",
+      "dataDir": "run/head/data",
+      "daemonPort": 49589,
+      "debugPort": 49590,
+      "runFile": "run/head/running.json",
+      "engine": {
+        "binary": "fixture/path",
+        "runDir": "fixture/path",
+        "session": "head-d1fdf7",
+        "namespace": "head-d1fdf7",
+        "endpoint": "http://127.0.0.1:49590",
+        "socketDir": "fixture/socket",
+        "appOrigin": "http://localhost:5173"
+      },
+      "state": "cleaned",
+      "recordStartedAt": "2026-10-17T04:40:05.267673+05:30",
+      "recordStoppedAt": "2026-10-17T04:55:21.59095+05:30"
+    },
+    {
+      "name": "base",
+      "worktree": "fixture/path",
+      "buildManifest": "fixture/path",
+      "pid": 22505,
+      "pidStart": "2026-10-17T04:40:05+05:30",
+      "dataDir": "run/base/data",
+      "daemonPort": 49886,
+      "debugPort": 49887,
+      "runFile": "run/base/running.json",
+      "engine": {
+        "binary": "fixture/path",
+        "runDir": "fixture/path",
+        "session": "base-a5c61e",
+        "namespace": "base-a5c61e",
+        "endpoint": "http://127.0.0.1:49887",
+        "socketDir": "fixture/socket",
+        "appOrigin": "http://localhost:5174"
+      },
+      "state": "cleaned",
+      "recordStartedAt": "2026-10-17T04:40:53.53994+05:30",
+      "recordStoppedAt": "2026-10-17T04:55:21.598526+05:30"
+    }
+  ],
+  "comment": "off",
+  "commentState": "off",
+  "evidence": "off",
+  "evidenceState": "off",
+  "videoState": "off",
+  "gaps": [
+    "The PR branched from main 1 commit ago; 'main' in this report is that branch point (1620f621), not today's main."
+  ]
+}

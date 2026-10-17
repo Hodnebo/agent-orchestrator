@@ -1,0 +1,16 @@
+[
+  {"id":"c1","name":"Worker agent management","state":"pass","claim":true,"purpose":"claim"},
+  {"id":"c2","name":"Orchestrator agent management","state":"pass","claim":true,"purpose":"claim"},
+  {"id":"c3","name":"Resume cloned-project setup","state":"pass","claim":true,"purpose":"claim"},
+  {"id":"c4","name":"Clone cancellation cleanup","state":"pass","claim":true,"purpose":"claim"},
+  {"id":"c5","name":"Existing-folder setup","state":"partial","purpose":"risk","attribution":"unknown"},
+  {"id":"c6","name":"Ordinary Settings navigation","state":"pass","purpose":"risk"},
+  {"id":"c7","name":"Worker agent management","leg":"base","state":"fail","claim":true,"purpose":"claim","receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c8","name":"Orchestrator agent management","leg":"base","state":"fail","claim":true,"purpose":"claim","receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c9","name":"Resume cloned-project setup","leg":"base","state":"partial","claim":true,"purpose":"claim","receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c10","name":"Clone cancellation cleanup","leg":"base","state":"pass","claim":true,"purpose":"claim","receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c11","name":"Ordinary Settings navigation","leg":"base","state":"pass","purpose":"risk","receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c12","name":"Existing-folder setup","leg":"base","state":"partial","purpose":"risk","sameFault":true,"receipts":[{"leg":"base","afterPath":"base-after.png"}]},
+  {"id":"c13","name":"New project menu navigation","state":"pass","purpose":"risk"},
+  {"id":"c14","name":"New project menu navigation","leg":"base","state":"pass","purpose":"risk","receipts":[{"leg":"base","afterPath":"base-after.png"}]}
+]
