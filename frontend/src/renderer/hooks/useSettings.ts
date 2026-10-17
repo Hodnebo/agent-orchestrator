@@ -127,10 +127,28 @@ export function useUpdateCardSummaries() {
 		mutationFn: async (enabled: boolean) => {
 			const { data, error } = await apiClient.PATCH("/api/v1/settings/card-summaries", { body: { enabled } });
 			if (error) throw error;
-			return data;
+			return data?.cardSummaries ?? enabled;
 		},
-		// Refetch rather than writing the value in locally: the daemon owns it.
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+		onMutate: async (enabled) => {
+			await queryClient.cancelQueries({ queryKey: settingsQueryKey, exact: true });
+			const previous = queryClient.getQueryData<Settings>(settingsQueryKey)?.cardSummaries;
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: enabled } : current);
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			const previous = context?.previous;
+			if (previous === undefined) return;
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: previous } : current);
+		},
+		onSuccess: (enabled) => {
+			queryClient.setQueryData<Settings>(settingsQueryKey, (current) => current ? { ...current, cardSummaries: enabled } : current);
+			// Summary visibility comes from the session list; do not wait for its next poll.
+			void queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+		},
+		onSettled: () => {
+			// Reconcile in the background without holding the switch disabled for a second round trip.
+			void queryClient.invalidateQueries({ queryKey: settingsQueryKey, exact: true });
+		},
 	});
 
 	return {
