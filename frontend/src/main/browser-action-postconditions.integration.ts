@@ -386,7 +386,16 @@ async function run(): Promise<void> {
 			`);
 			assert.equal(await deadline(opener.executeJavaScript("window.authComplete")), true);
 			await deadline(closed);
-			assert.equal(await opener.executeJavaScript("window.authPopup.closed"), true);
+			// Main can observe destruction before the opener updates its WindowProxy.
+			assert.equal(await deadline(opener.executeJavaScript(`
+				new Promise(resolve => {
+					const checkClosed = () => {
+						if (window.authPopup.closed) resolve(true);
+						else setTimeout(checkClosed, 25);
+					};
+					checkClosed();
+				})
+			`)), true);
 			const remaining = await host.execute("integration-session", "tabs") as BrowserTabsState;
 			assert.equal(remaining.tabs.length, 1, "self-closed guest must leave AO's tab registry");
 			assert.equal(remaining.activeTabId, remaining.tabs[0].id);
