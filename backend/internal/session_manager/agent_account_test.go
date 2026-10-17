@@ -23,6 +23,7 @@ type transitionAccounts struct {
 	validateErrs    []error // consumed one per ValidateAccount call
 	bindErr         error
 	launchOverrides []string
+	onLaunchWith    func() // runs as SessionLaunchEnvWith resolves, outside the lock
 }
 
 func newTransitionAccounts(log *[]string) *transitionAccounts {
@@ -48,9 +49,14 @@ func (a *transitionAccounts) SessionLaunchEnv(_ context.Context, id domain.Sessi
 
 func (a *transitionAccounts) SessionLaunchEnvWith(_ context.Context, _ domain.SessionID, accountID string) (map[string]string, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	hook := a.onLaunchWith
 	a.launchOverrides = append(a.launchOverrides, accountID)
-	return a.env(accountID), nil
+	env := a.env(accountID)
+	a.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return env, nil
 }
 
 func (a *transitionAccounts) BindSession(_ context.Context, id domain.SessionID, _ domain.AgentHarness, accountID string) error {
@@ -65,6 +71,10 @@ func (a *transitionAccounts) BindSession(_ context.Context, id domain.SessionID,
 	*a.log = append(*a.log, "bind:"+accountID)
 	a.bound[id] = accountID
 	return nil
+}
+
+func (a *transitionAccounts) CommitSession(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, accountID string) error {
+	return a.BindSession(ctx, id, harness, accountID)
 }
 
 func (a *transitionAccounts) SessionAccountID(_ context.Context, id domain.SessionID, _ domain.AgentHarness) (string, error) {
@@ -280,6 +290,62 @@ func TestAccountTransitionRecoveryStopsAnUncommittedTarget(t *testing.T) {
 	}
 	if accounts.boundTo("session-1") != "device-claude" {
 		t.Fatal("recovery moved the binding")
+	}
+}
+
+// A daemon exit after the binding committed but before the transition row
+// moved on leaves the target as the session's agent: recovery keeps it.
+func TestAccountTransitionRecoveryKeepsACommittedTarget(t *testing.T) {
+	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
+	accounts.bound["session-1"] = "acct-b"
+	now := time.Now()
+	if _, _, err := store.CreateSessionInterfaceTransition(context.Background(), domain.SessionInterfaceTransition{
+		ID: "move-1", SessionID: "session-1", SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeTUI,
+		Policy: domain.SessionInterfaceTransitionDrain, HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
+		Phase: domain.SessionInterfaceTransitionTargetStarting, NativeConversationID: "native-1",
+		SourceAccountID: "device-claude", TargetAccountID: "acct-b", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := manager.recoverInterruptedInterfaceTransitions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].Phase != domain.SessionInterfaceTransitionRecovery ||
+		!strings.Contains(recovered[0].ErrorDetail, "stays on its new account") {
+		t.Fatalf("recovered = %+v", recovered)
+	}
+	if len(*log) != 0 {
+		t.Fatalf("recovery touched the committed agent: %v", *log)
+	}
+	if accounts.boundTo("session-1") != "acct-b" {
+		t.Fatal("recovery moved the binding")
+	}
+}
+
+// The preflight resolves the target account's env while the source agent still
+// runs. A restart of that agent meanwhile must keep the session's own account.
+func TestAccountPreflightEnvLeavesOtherLaunchesOnTheBoundAccount(t *testing.T) {
+	manager, store, _, _, accounts, _ := newAccountTransitionManager(t, domain.SessionModeTUI)
+	rec, _, err := store.GetSession(context.Background(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var concurrent map[string]string
+	accounts.onLaunchWith = func() {
+		concurrent = manager.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, nil)
+	}
+
+	env, err := manager.runtimeEnvOnAccount(rec, nil, "acct-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["CLAUDE_CONFIG_DIR"] != "/accounts/b" {
+		t.Fatalf("preflight env = %v, want the target account's folder", env)
+	}
+	if _, set := concurrent["CLAUDE_CONFIG_DIR"]; set {
+		t.Fatalf("a launch during the preflight got %v, want the bound account's environment", concurrent)
 	}
 }
 

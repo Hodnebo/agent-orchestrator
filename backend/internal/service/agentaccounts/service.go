@@ -149,6 +149,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
 	if provider == nil {
 		return
 	}
+	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	r := &reading{at: s.now()}
@@ -171,6 +172,12 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
 		} else {
 			r.limits = &limits
 		}
+	}
+	// A caller that went away (a closed request, a cancelled move) says nothing
+	// about the account; caching its failure would refuse the account for the
+	// rest of the cache window.
+	if caller.Err() != nil {
+		return
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
@@ -455,6 +462,24 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 	return s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now())
 }
 
+// CommitSession records that the session now uses accountID, once its agent
+// already runs there. The account was validated before the move; probing its
+// CLI again here could only turn a live agent into a rollback.
+func (s *Service) CommitSession(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, accountID string) error {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return ports.ErrAgentAccountProviderMismatch
+	}
+	account, err := s.find(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account.Provider != p {
+		return ports.ErrAgentAccountProviderMismatch
+	}
+	return s.store.BindSessionAgentAccount(ctx, id, p, account.ID, s.now())
+}
+
 // ValidateAccount checks that accountID can run harness now.
 func (s *Service) ValidateAccount(ctx context.Context, harness domain.AgentHarness, accountID string) error {
 	_, err := s.pick(ctx, harness, accountID)
@@ -476,12 +501,17 @@ func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, account
 	if account.Provider != p {
 		return domain.AgentAccount{}, ports.ErrAgentAccountProviderMismatch
 	}
-	if s.needsReading(account.ID, false) {
-		s.read(ctx, account)
-	}
 	s.mu.Lock()
 	r := s.readings[account.ID]
 	s.mu.Unlock()
+	// A failed reading may be transient (a timeout under load); read again
+	// rather than refuse the account on it for the rest of the cache window.
+	if r == nil || r.identityErr != "" || s.now().Sub(r.at) > freshFor {
+		s.read(ctx, account)
+		s.mu.Lock()
+		r = s.readings[account.ID]
+		s.mu.Unlock()
+	}
 	if r == nil || !r.identity.SignedIn {
 		return domain.AgentAccount{}, ports.ErrAgentAccountSignedOut
 	}

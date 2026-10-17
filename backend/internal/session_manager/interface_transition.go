@@ -627,7 +627,7 @@ func (m *Manager) runInterfaceTransition(
 	}
 	if transition.AccountMove() {
 		// Commit: the new agent is live, so the session now belongs to the account.
-		if err := m.agentAccounts.BindSession(ctx, rec.ID, rec.Harness, transition.TargetAccountID); err != nil {
+		if err := m.agentAccounts.CommitSession(ctx, rec.ID, rec.Harness, transition.TargetAccountID); err != nil {
 			fail("ACCOUNT_BIND_FAILED", err)
 			return
 		}
@@ -1734,11 +1734,23 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 				// A target may have started under the new account before its
 				// binding committed. Stop it so nothing runs on an account the
 				// session does not name; resume restarts it on the bound one.
+				// A binding that already names the target is the commit, so the
+				// running target is the session's agent and stays.
 				rec, found, readErr := m.store.GetSession(ctx, transition.SessionID)
 				if readErr != nil {
 					return nil, readErr
 				}
-				if found && !rec.IsTerminated {
+				committed := false
+				if found && m.agentAccounts != nil {
+					bound, bindErr := m.agentAccounts.SessionAccountID(ctx, transition.SessionID, rec.Harness)
+					if bindErr != nil {
+						return nil, bindErr
+					}
+					committed = bound == transition.TargetAccountID
+				}
+				if committed {
+					detail = "The daemon restarted just after the account switch finished; the agent stays on its new account."
+				} else if found && !rec.IsTerminated {
 					if stopErr := m.stopTransitionTargetConclusive(ctx, *transition); stopErr != nil {
 						if err := m.retainUnconfirmedTransitionTarget(*transition, stopErr); err != nil {
 							return nil, err

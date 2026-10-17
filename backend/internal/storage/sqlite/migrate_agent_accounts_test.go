@@ -27,7 +27,7 @@ func TestMigrationAgentAccountsKeepsExistingSessionsOnTheComputersLogin(t *testi
 		t.Fatalf("seed transition: %v", err)
 	}
 
-	upTo(t, db, 202)
+	upTo(t, db, 211)
 
 	rows, err := db.Query(`SELECT session_id, provider, account_id, bound_at FROM session_agent_accounts ORDER BY session_id, provider`)
 	if err != nil {

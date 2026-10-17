@@ -5901,6 +5901,18 @@ func spawnEnvForOS(id domain.SessionID, project domain.ProjectID, issue domain.I
 // When the pin cannot be applied the inherited PATH is kept and a warning is
 // logged so the degradation isn't silent.
 func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string) map[string]string {
+	env, err := m.runtimeEnvChecked(id, project, issue, projectEnv, m.accountOverride(id))
+	if err != nil {
+		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
+	}
+	return env
+}
+
+// runtimeEnvChecked is runtimeEnv that also reports why the session's account
+// environment could not be resolved, for callers that must not go on under
+// another login (an account move's preflight). A nonempty accountID replaces
+// the session's binding.
+func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	// Project configuration must never redirect AO-owned hook callbacks to a
@@ -5917,39 +5929,39 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
-	m.applyAgentAccountEnv(id, env, caseInsensitive)
+	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {
 		m.logger.Warn("session PATH not pinned to the daemon binary; `ao hooks` callbacks may resolve to a different ao and activity tracking will stall",
 			"session", id, "error", err)
-		return env
+		return env, accountErr
 	}
 	setProtectedEnv(env, "PATH", path, caseInsensitive)
-	return env
+	return env, accountErr
 }
 
 // applyAgentAccountEnv runs each provider's CLI under the session's account.
 // It wins over project env, because a project value would silently launch the
-// agent under a different login than the one the session shows.
-func (m *Manager) applyAgentAccountEnv(id domain.SessionID, env map[string]string, caseInsensitive bool) {
+// agent under a different login than the one the session shows. A nonempty
+// accountID replaces the session's binding. An error means the env may lack an
+// account's variables.
+func (m *Manager) applyAgentAccountEnv(id domain.SessionID, accountID string, env map[string]string, caseInsensitive bool) error {
 	if m.agentAccounts == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var accountEnv map[string]string
 	var err error
-	if override := m.accountOverride(id); override != "" {
-		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, override)
+	if accountID != "" {
+		accountEnv, err = m.agentAccounts.SessionLaunchEnvWith(ctx, id, accountID)
 	} else {
 		accountEnv, err = m.agentAccounts.SessionLaunchEnv(ctx, id)
-	}
-	if err != nil {
-		m.logger.Warn("session agent account env incomplete", "session", id, "error", err)
 	}
 	for key, value := range accountEnv {
 		setProtectedEnv(env, key, value, caseInsensitive)
 	}
+	return err
 }
 
 func deleteProtectedEnv(env map[string]string, key string, caseInsensitive bool) {

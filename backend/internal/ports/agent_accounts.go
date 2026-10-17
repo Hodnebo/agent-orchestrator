@@ -71,6 +71,9 @@ type AgentAccountLaunchEnv interface {
 	// BindSession pins the session to accountID, or to the provider's default
 	// when accountID is empty.
 	BindSession(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, accountID string) error
+	// CommitSession records that the session now uses accountID, with no
+	// sign-in probe: a move calls it once its agent already runs there.
+	CommitSession(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, accountID string) error
 	// SessionAccountID is the account the session uses for harness's provider,
 	// or "" when the harness has no accounts.
 	SessionAccountID(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness) (string, error)

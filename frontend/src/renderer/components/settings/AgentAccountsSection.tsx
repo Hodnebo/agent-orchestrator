@@ -151,10 +151,20 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 			{windows.map((window) => <LimitRow key={window.id} window={window} locale={i18n.language} />)}
 		</div> : null}
 		{extra?.enabled && extra.usedCredits != null && extra.monthlyLimit != null ? <p className="text-muted-foreground tabular-nums">{t("settings.agentAccounts.extraUsage", {
-			used: new Intl.NumberFormat(i18n.language, { style: "currency", currency: extra.currency || "USD" }).format(extra.usedCredits),
-			limit: new Intl.NumberFormat(i18n.language, { style: "currency", currency: extra.currency || "USD" }).format(extra.monthlyLimit),
+			used: formatMoney(extra.usedCredits, extra.currency, i18n.language),
+			limit: formatMoney(extra.monthlyLimit, extra.currency, i18n.language),
 		})}</p> : null}
 	</div>;
+}
+
+/** Formats an amount in the server's currency. A code Intl does not know
+ * throws, so it falls back to the bare number and the code. */
+function formatMoney(value: number, currency: string | undefined, locale: string): string {
+	try {
+		return new Intl.NumberFormat(locale, { style: "currency", currency: currency || "USD" }).format(value);
+	} catch {
+		return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value)} ${currency ?? ""}`.trim();
+	}
 }
 
 function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale: string }) {
@@ -192,7 +202,7 @@ function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 	return <div className="overflow-hidden rounded-md border border-border bg-terminal" data-settings-inline-edit="" data-testid="agent-account-login-terminal">
 		<div className="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3 py-2">
 			<p className="truncate text-xs font-medium text-foreground">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</p>
-			<button type="button" aria-label={t("settings.codexAccounts.loginClose")} className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground" onClick={() => onClose(login)}><X className="size-4" aria-hidden="true" /></button>
+			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.codexAccounts.loginClose")} className="shrink-0 text-muted-foreground" onClick={() => onClose(login)}><X aria-hidden="true" /></Button>
 		</div>
 		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
 		<div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">

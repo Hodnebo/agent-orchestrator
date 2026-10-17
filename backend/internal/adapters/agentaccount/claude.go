@@ -140,7 +140,8 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 	}
 	defer func() {
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		// The whole group: whatever the CLI started for the probe goes with it.
+		_ = cmd.Cancel()
 		_ = cmd.Wait()
 	}()
 	if _, err := stdin.Write([]byte(request)); err != nil {
@@ -319,22 +320,24 @@ func dropLoginKeys(settings map[string]json.RawMessage) bool {
 // home's .claude.json, the file that also holds the account's own sign-in, so
 // no other key is touched.
 func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
-	device, err := readObject(c.DeviceConfig)
-	if err != nil {
-		device = nil
-	}
-	source := map[string]json.RawMessage{}
-	for _, key := range []string{"mcpServers", "theme"} {
-		if value, ok := device[key]; ok {
-			source[key] = value
-		}
-	}
 	path := filepath.Join(home, ".claude.json")
 	account, err := readObject(path)
 	if err != nil {
 		return err // Claude's to repair; never overwrite it
 	}
-	changed := shareKeys(account, source, l.keys(".claude.json", account, source), map[string]bool{"mcpServers": true})
+	changed := false
+	// An unreadable ~/.claude.json (Claude rewrites it often, and can leave it
+	// empty for a moment) is not one with no MCP servers: sharing it would
+	// remove every shared server from the account. Share again next launch.
+	if device, err := readObject(c.DeviceConfig); err == nil {
+		source := map[string]json.RawMessage{}
+		for _, key := range []string{"mcpServers", "theme"} {
+			if value, ok := device[key]; ok {
+				source[key] = value
+			}
+		}
+		changed = shareKeys(account, source, l.keys(".claude.json", account, source), map[string]bool{"mcpServers": true})
+	}
 	if _, ok := account["hasCompletedOnboarding"]; !ok {
 		account["hasCompletedOnboarding"], changed = json.RawMessage("true"), true
 	}
@@ -346,6 +349,8 @@ func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
 
 func (c *Claude) command(ctx context.Context, bin, home string, args ...string) *exec.Cmd {
 	cmd := aoprocess.CommandContext(ctx, bin, args...)
+	// A timeout or kill stops the CLI's whole process tree, not only its leader.
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Env = os.Environ()
 	for key, value := range c.LaunchEnv(home) {
 		cmd.Env = append(cmd.Env, key+"="+value)

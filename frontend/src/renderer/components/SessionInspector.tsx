@@ -1105,7 +1105,8 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 
 	// An account move stops the old agent before the new one starts. That stop
 	// is not the session ending, so the move stands in for "Exited" meanwhile.
-	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id);
+	// The session's own host: a remote session's id means nothing to the local daemon.
+	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id, hostId);
 	const accountMoving = Boolean(transition?.targetAccountId) && interfaceTransitionIsActive(transition);
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }

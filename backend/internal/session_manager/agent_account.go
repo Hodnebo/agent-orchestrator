@@ -144,14 +144,12 @@ func (m *Manager) preflightAccountTarget(
 }
 
 // runtimeEnvOnAccount is runtimeEnv as the session's agent would get it on
-// accountID, for checks made before the move.
+// accountID, for checks made before the move. It leaves the account override
+// alone: the source agent still runs, and a restart of it must keep its own
+// account. An account env that cannot be resolved fails the check: the env
+// would name another login, and every probe below would pass against it.
 func (m *Manager) runtimeEnvOnAccount(rec domain.SessionRecord, projectEnv map[string]string, accountID string) (map[string]string, error) {
-	if m.accountOverride(rec.ID) != "" {
-		return nil, fmt.Errorf("session %s is already starting on another account", rec.ID)
-	}
-	m.setAccountOverride(rec.ID, accountID)
-	defer m.clearAccountOverride(rec.ID)
-	return m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, projectEnv), nil
+	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID)
 }
 
 // The account override makes the session's launches use accountID instead of
