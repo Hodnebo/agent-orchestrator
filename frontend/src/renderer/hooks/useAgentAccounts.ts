@@ -35,14 +35,23 @@ export function useAgentAccounts(enabled = true) {
 	return useQuery({ queryKey: agentAccountsQueryKey, queryFn: () => fetchAgentAccounts(), refetchInterval: 60_000, enabled });
 }
 
-/** Names an account in status text: "This computer" for the computer's own
- * login, so a move reads clearly even when two accounts share an email. */
+export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
+
+type AccountNameT = (key: "settings.agentAccounts.cliLoginOf", options: { provider: string }) => string;
+
+/** An account's name: its email, or "Claude Code CLI login" for a CLI's own
+ * login that reports none (a token login). */
+export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">, t: AccountNameT): string {
+	return account.email || t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
+}
+
+/** Names an account by id in status text, such as "Moved from … to …". */
 export function useAgentAccountLabel(enabled = true) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(enabled);
 	return (id: string | undefined) => {
 		const account = accounts.data?.find((candidate) => candidate.id === id);
-		return account && !account.device && account.email ? account.email : t("settings.agentAccounts.thisComputer");
+		return account ? agentAccountName(account, t) : t("settings.agentAccounts.removedAccount");
 	};
 }
 

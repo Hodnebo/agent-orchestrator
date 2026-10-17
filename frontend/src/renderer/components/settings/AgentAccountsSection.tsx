@@ -1,15 +1,7 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-	useAgentAccountActions,
-	useAgentAccounts,
-	useAgentAccountUsage,
-	type AgentAccount,
-	type AgentAccountLimitWindow,
-	type AgentAccountLogin,
-	type AgentAccountProvider,
-} from "../../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
 import { useResolvedTheme } from "../../stores/ui-store";
@@ -21,7 +13,7 @@ import { AgentProviderGroup } from "./AgentProviderGroup";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
 import { SettingsSection } from "./SettingsSection";
 
-const providerNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
+const providerNames = agentAccountProviderNames;
 
 // One sign-in per provider, kept outside the page so leaving Settings does not
 // lose a browser sign-in in progress.
@@ -110,7 +102,7 @@ export function AgentAccountsSection({ titleHidden }: { titleHidden?: boolean })
 		</div>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
-			description={t("settings.agentAccounts.removeDescription", { email: accountName(removing, t) })}
+			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
 			confirmLabel={t("settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
@@ -120,9 +112,6 @@ export function AgentAccountsSection({ titleHidden }: { titleHidden?: boolean })
 	</SettingsSection>;
 }
 
-function accountName(account: AgentAccount, t: (key: "settings.agentAccounts.thisComputer") => string): string {
-	return account.email || t("settings.agentAccounts.thisComputer");
-}
 
 function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemove }: {
 	account: AgentAccount;
@@ -136,7 +125,7 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemo
 	const plan = formatPlanName(account.plan);
 	const resets = account.limits?.resetCredits ?? 0;
 	const meta = [
-		account.device ? t("settings.agentAccounts.thisComputer") : null,
+		account.device ? t("settings.agentAccounts.cliLogin") : null,
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
 		account.signedIn ? null : t("settings.agentAccounts.signedOut"),
 		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
@@ -144,7 +133,7 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemo
 	return <div className="px-4 py-3" data-agent-account={account.id}>
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
-				<p className="truncate text-sm font-medium text-foreground">{account.email || t("settings.agentAccounts.thisComputer")}</p>
+				<p className="truncate text-sm font-medium text-foreground">{agentAccountName(account, t)}</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">

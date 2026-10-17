@@ -1,7 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
+import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import type { WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -74,7 +74,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 				<Select value={currentId ?? ""} disabled={moving || options.length < 2} onValueChange={(value) => void move(value)}>
 					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 					<SelectContent align="end">
-						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{option.email || t("settings.agentAccounts.thisComputer")}</SelectItem>)}
+						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountName(option, t)}</SelectItem>)}
 					</SelectContent>
 				</Select>
 			</div>
