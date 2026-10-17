@@ -124,6 +124,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				clipboard: {
 					writeText: async () => undefined,
 					readText: async () => "",
+					writeImage: async () => undefined,
+				},
+				chatImage: {
+					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+					save: async () => true,
 				},
 				daemon: {
 					getStatus: async () => status,
@@ -993,7 +998,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setWindowTranslucent: async () => undefined,
 				},
 				menu: { action: async () => undefined, notifyShellFocus: () => undefined },
-				clipboard: { writeText: async () => undefined, readText: async () => "" },
+				clipboard: { writeText: async () => undefined, readText: async () => "", writeImage: async () => undefined },
+				chatImage: {
+					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+					save: async () => true,
+				},
 				daemon: {
 					getStatus: async () => status,
 					start: async () => status,

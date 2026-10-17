@@ -4135,27 +4135,19 @@ html.sidebar-reordering * {
  * (gap width + x-transform). Dragging updates --ao-inspector-w directly. */
 
 .session-inspector__topbar {
-	/* Width the tab list needs (its tabs, their gaps and the leading pad).
-	   The centered field never grows past what is left once both side tracks
-	   hold that much, so it cannot overlap the last tab. */
-	--inspector-tabs-reserve: calc(var(--inspector-tab-count, 4) * (var(--size-control-md) + var(--space-1)));
 	background: var(--bg);
 	color: var(--fg);
 	user-select: none;
 }
 
-/* In browser mode, use equal side tracks so the address field is centered in
-   the inspector itself. Flex centering only centers it in the leftover space,
-   which shifts it right because the tab controls are wider than the actions. */
+/* In browser mode, center the address field in the space between the tabs and
+   the pinned actions. Intrinsic side tracks follow the tab count, so the field
+   stays centered in that gap as Files or Artifacts tabs appear. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, clamp(120px, calc(100cqw - 2 * var(--inspector-tabs-reserve)), 240px)) minmax(0, 1fr);
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
 	padding-left: 0;
-	transition: grid-template-columns var(--duration-fast) ease;
-}
-
-.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(120px, min(52cqw, calc(100cqw - 2 * var(--inspector-tabs-reserve))), 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -4165,7 +4157,13 @@ html.sidebar-reordering * {
 
 .session-inspector__topbar > .browser-panel__topbar-host {
 	grid-column: 2;
-	width: 100%;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
+}
+
+.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) > .browser-panel__topbar-host {
+	width: min(100%, 52cqw, 560px);
 }
 
 .session-inspector__topbar--browser > .session-inspector__trailing {
@@ -6137,9 +6135,11 @@ html[data-window-translucent="true"] body {
 }
 
 /* Floating surfaces sit above the material: back to solid theme values.
- * `.z-overlay` covers custom floating menus built on the shared menu recipe. */
+ * `.z-overlay` covers custom floating menus; update notices also need solid
+ * fills so the decorative stack stays behind the front card. */
 html[data-window-translucent="true"] :is(
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
@@ -6160,6 +6160,7 @@ html[data-window-translucent="true"] :is(
 html[data-window-translucent="true"] :is(
 	body,
 	.z-overlay,
+	.harness-update-notice,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],

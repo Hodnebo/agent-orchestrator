@@ -66,8 +66,8 @@ describe("FileContentPane", () => {
 
 	it("previews a workspace SVG while keeping its source editable", async () => {
 		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "diagram.svg", status: "unmodified", additions: 0, deletions: 0, size: 6, binary: false, deleted: false, content: "<svg/>", contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "svg-1" } });
-		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="diagram.svg" sessionId="sess-1" split={false} />);
-		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("/preview/files/diagram.svg?raw=true"));
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="rendered" path="diagram.svg" sessionId="sess-1" split={false} />);
+		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
 		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
 		expect(screen.getByRole("textbox", { name: "Edit diagram.svg" })).toHaveValue("<svg/>");
 	});

@@ -154,7 +154,7 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 							<DropdownMenuSeparator />
 						</>
 					) : null}
-					{!fileMediaKind(artifact.path) || /\.svg$/i.test(artifact.path) ? (
+					{!fileMediaKind(artifact.path) ? (
 						<DropdownMenuItem onSelect={() => void copy()}>
 							<Copy aria-hidden="true" />
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}

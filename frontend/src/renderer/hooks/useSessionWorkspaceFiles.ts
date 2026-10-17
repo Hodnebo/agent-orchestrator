@@ -6,6 +6,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { fileMediaKind } from "../lib/file-media";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
 import {
 	getWorkspaceFileConnectionState,
@@ -150,17 +151,17 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
-// workspace-files endpoint. rawUrl (from the artifact list response) fetches
-// raw bytes on the artifact preview origin, a distinct host from the
-// workspace preview origin — unlike the legacy __ao_artifacts__/ path-prefix
-// form, a workspace-relative path of the same name can never resolve there.
+// workspace-files endpoint. Local preview hostnames can resolve to ::1, where
+// another app may own the daemon's port. Read through the trusted daemon API
+// instead, explicitly selecting the artifact root. Remote proxy and cloud URLs
+// already identify their content endpoint and must keep their original routing.
 async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl: string | undefined, errorMessage: string): Promise<WorkspaceFileDetail> {
 	if (!rawUrl) throw new Error(errorMessage);
-	// SVG keeps its editable text source as well as its image preview.
-	const media = fileMediaKind(path) && !/\.svg$/i.test(path);
-	// Native media elements stream the body themselves, including range requests
-	// when seeking. Only fetch metadata here; text limits do not apply to media.
-	const response = media ? await fetch(rawUrl, { method: "HEAD" }) : await fetch(rawUrl);
+	const contentUrl = artifactContentUrl(sessionId, path, rawUrl);
+	if (!contentUrl) throw new Error(errorMessage);
+	const media = fileMediaKind(path);
+	// Native media elements stream and seek themselves; only read metadata here.
+	const response = media ? await fetch(contentUrl, { method: "HEAD" }) : await fetch(contentUrl);
 	if (!response.ok) throw new Error(errorMessage);
 	const { binary, bytes, content, size, truncated } = media
 		? { binary: true, bytes: new Uint8Array(), content: "", size: Number(response.headers.get("content-length")) || 0, truncated: false }
@@ -178,6 +179,7 @@ async function fetchSessionArtifactFile(sessionId: string, path: string, rawUrl:
 		diffTruncated: false,
 		editable,
 		fileFingerprint: editable ? await artifactFingerprint(bytes) : "",
+		imageMediaType: media === "image" ? response.headers.get("content-type") ?? "image" : undefined,
 		mediaVersion: media ? response.headers.get("etag") ?? response.headers.get("last-modified") ?? undefined : undefined,
 		path,
 		sessionId,

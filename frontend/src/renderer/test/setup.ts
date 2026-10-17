@@ -171,6 +171,11 @@ if (typeof window !== "undefined") {
 		clipboard: {
 			writeText: async () => undefined,
 			readText: async () => "",
+			writeImage: async () => undefined,
+		},
+		chatImage: {
+			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+			save: async () => true,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),

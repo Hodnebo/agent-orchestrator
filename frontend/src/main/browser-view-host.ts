@@ -1,5 +1,4 @@
 import type {
-  Clipboard,
   IpcMain,
   IpcMainEvent,
   IpcMainInvokeEvent,
@@ -466,7 +465,9 @@ export type BrowserViewHostOptions = {
   browserHistoryStore?: BrowserHistoryStore;
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
-  clipboard?: Pick<Clipboard, "writeImage">;
+  // Electron 44 removed clipboard.writeImage; main.ts adapts the async
+  // ClipboardItem API to this narrow image-only writer.
+  clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
   // Called after a page view is appended to the window so the composition can
   // keep a raised shell (open dialog/notice) above the new view.
   onNativeViewAdded?: () => void;
@@ -3320,7 +3321,7 @@ export function createBrowserViewHost(
     if (!entry || !options.clipboard) return false;
     const image = await capturePageImage(entry);
     if (!image) return false;
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
     return true;
   };
 
@@ -3593,7 +3594,7 @@ export function createBrowserViewHost(
         "The browser page could not be captured",
       );
     }
-    options.clipboard.writeImage(image);
+    await options.clipboard.writeImage(image);
   });
   handle("browser:downloads:list", (event) => {
     if (event.sender.id !== shellWebContents.id) return { downloads: [] };

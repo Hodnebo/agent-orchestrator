@@ -45,6 +45,8 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { MarkdownEditor } from "./MarkdownEditor";
+import { SvgFileView } from "./SvgFileView";
+import { isSvgPath } from "../lib/image-files";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
 // height with small text and icons so they do not dwarf the toolbar.
@@ -60,6 +62,10 @@ const createReviewEditor: EditorFactory<"feedback", undefined> = (editorType, op
 
 function canRenderMarkdown(path: string, detail: WorkspaceFileDetail): boolean {
 	return !detail.deleted && !detail.binary && !detail.contentTruncated && /\.(md|markdown)$/i.test(path);
+}
+
+function canRenderSvg(path: string, detail: WorkspaceFileDetail): boolean {
+	return !detail.deleted && !detail.binary && !detail.contentTruncated && isSvgPath(path);
 }
 
 export function FileContentPane({
@@ -300,10 +306,11 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	const mediaKind = source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && (detail.binary || /\.svg$/i.test(path)) && (scope === "combined" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
-	const renderedAvailable = canRenderMarkdown(path, detail);
+	const markdownAvailable = canRenderMarkdown(path, detail);
+	const renderedAvailable = markdownAvailable || canRenderSvg(path, detail);
 	const hasDisplayModeChoice = !singleView && !mediaOnly && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
 	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
@@ -328,11 +335,14 @@ export function FileContentPane({
 			commitSha={commitSha}
 			hostId={hostId}
 			source={source}
-			markdownEditing={editing && renderedAvailable}
+			markdownEditing={editing && markdownAvailable}
 			mediaKind={mediaKind}
 			version={detail.mediaVersion ?? (mediaKind === "image" ? query.dataUpdatedAt : detail.fileFingerprint || detail.size)}
 		/>
 	);
+	const renderedView = markdownAvailable
+		? <MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+		: <SvgFileView content={detail.content} path={path} />;
 	const beginEditing = () => {
 		setMode("file");
 		cancelFileAnnotations(annotation, (target) => target.surface !== "review" && target.path === detail.path);
@@ -497,7 +507,7 @@ export function FileContentPane({
 						hideFileHeader
 					/>
 				) : effectiveMode === "rendered" && renderedAvailable ? (
-					<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+					renderedView
 				) : (
 					fileView
 				)}
@@ -511,9 +521,7 @@ export function FileContentPane({
 		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
-			{effectiveMode === "rendered" && renderedAvailable ? (
-				<MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
-			) : fileView}
+			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
 			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
@@ -566,5 +574,18 @@ function CompleteFileView({ annotation, commitSha, detail, editing, markdownEdit
 		);
 	}
 	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+}
+
+// An artifact image loads from its raw URL. The load time joins the URL so a
+// rewritten image refetches instead of showing the cached bytes.
+function artifactImageUrl(source: FilesSource, version: number | string): string | undefined {
+	if (source.kind !== "artifact" || !source.rawUrl) return undefined;
+	try {
+		const url = new URL(source.rawUrl);
+		url.searchParams.set("v", String(version));
+		return url.toString();
+	} catch {
+		return undefined;
+	}
 }

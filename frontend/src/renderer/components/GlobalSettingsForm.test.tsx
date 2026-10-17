@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
@@ -51,6 +51,7 @@ const {
 	getTelemetryPolicy,
 	setTelemetryEvents,
 	onTelemetryPolicy,
+	isMacPlatform,
 	isWindowsPlatform,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
@@ -80,6 +81,7 @@ const {
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
+	isMacPlatform: vi.fn(() => false),
 	isWindowsPlatform: vi.fn(() => true),
 }));
 
@@ -93,7 +95,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../lib/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/platform")>();
-	return { ...actual, isWindowsPlatform };
+	return { ...actual, isMacPlatform, isWindowsPlatform };
 });
 
 vi.mock("../lib/bridge", () => ({
@@ -175,6 +177,7 @@ beforeEach(async () => {
 		getTelemetryPolicy,
 		setTelemetryEvents,
 		onTelemetryPolicy,
+		isMacPlatform,
 		isWindowsPlatform,
 	]) {
 		m.mockReset();
@@ -218,12 +221,33 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
+		isMacPlatform.mockReturnValue(true);
+		const user = userEvent.setup();
+		renderForm("general");
+		const appearance = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
+		const transparency = within(appearance).getByRole("switch", { name: "Window transparency" });
+		await user.click(transparency);
+		expect(window.localStorage.getItem("ao.windowTranslucency")).toBe("true");
+		const developerMode = screen.getByRole("switch", { name: "Developer mode" });
+		await user.click(developerMode);
+		await user.click(developerMode);
+		expect(transparency).toHaveAttribute("aria-checked", "true");
+		expect(useUiStore.getState().windowTranslucency).toBe(true);
+	});
+
+	it("hides window transparency on platforms without native vibrancy", async () => {
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByRole("switch", { name: "Window transparency" })).not.toBeInTheDocument();
+	});
+
 	it("propagates a Harness focus target through the settings catalog", async () => {
 		renderForm("harness", "cursor");
 

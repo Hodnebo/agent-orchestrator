@@ -8,6 +8,7 @@ import {
 	BaseWindow,
 	BrowserWindow,
 	clipboard,
+	ClipboardItem,
 	dialog,
 	ipcMain,
 	Menu,
@@ -158,6 +159,7 @@ import {
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -422,6 +424,11 @@ let windowTranslucent = false;
 
 function syncNativeWindowBackground(): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
+	// Keep vibrancy and the native background in sync after window/renderer
+	// lifecycle changes, as well as theme updates.
+	if (process.platform === "darwin") {
+		mainWindow.setVibrancy(windowTranslucent ? "under-window" : null);
+	}
 	if (windowTranslucent) {
 		mainWindow.setBackgroundColor("#00000000");
 		return;
@@ -533,6 +540,14 @@ function windowIconPath(): string | undefined {
 	return existsSync(fallback) ? fallback : undefined;
 }
 
+// Electron 44 removed clipboard.writeImage in favour of the W3C-style
+// ClipboardItem API; the browser host and chat images share this adapter.
+function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
+	return clipboard.write([
+		new ClipboardItem({ "image/png": new Blob([new Uint8Array(image.toPNG())], { type: "image/png" }) }),
+	]);
+}
+
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
 	// Unpackaged runs keep Electron's default dock icon so the dev window is
@@ -542,7 +557,7 @@ function applyRuntimeAppIcon(): void {
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
 	if (!icon.isEmpty()) {
-		app.dock.setIcon(icon);
+		app.dock?.setIcon(icon);
 	}
 }
 
@@ -779,8 +794,8 @@ async function createWindowInternal(): Promise<void> {
 						titleBarStyle: "hiddenInset" as const,
 						// Window transparency: an opaque window keeps Chromium's compositor
 						// opaque, hiding the vibrancy view. Transparent windows still paint
-						// the theme colour via setBackgroundColor unless the Developer Mode
-						// window transparency flag is on.
+						// the theme colour via setBackgroundColor unless window transparency
+						// is enabled in Appearance.
 						transparent: true,
 						// Keep the window-transparency blur vivid when the window loses focus.
 						visualEffectState: "active" as const,
@@ -976,7 +991,7 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => shellWebContents.send("browser:downloadsChanged", state),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
-		clipboard,
+		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
 	browserProfileImporter = profileImporter;
@@ -1025,11 +1040,14 @@ async function createWindowInternal(): Promise<void> {
 
 	const syncWindowChrome = () => {
 		if (!mainWindow || shellWebContents.isDestroyed()) return;
+		syncNativeWindowBackground();
 		if (process.platform === "darwin") syncMacWindowButtons(mainWindow, shellWebContents);
 		shellWebContents.send("window:zoom", shellWebContents.getZoomFactor());
 	};
 	// Resize/zoom and fullscreen exit can reset AppKit's button placement.
 	mainWindow.on("resize", syncWindowChrome);
+	mainWindow.on("show", syncWindowChrome);
+	mainWindow.on("restore", syncWindowChrome);
 	shellWebContents.on("did-finish-load", syncWindowChrome);
 	shellWebContents.on("zoom-changed", () => setTimeout(syncWindowChrome, 0));
 
@@ -1037,6 +1055,7 @@ async function createWindowInternal(): Promise<void> {
 	// the renderer keeps the same header height and navigation centerline.
 	const pushFullScreen = () => {
 		if (!mainWindow) return;
+		syncNativeWindowBackground();
 		getShellWebContents()?.send("window:fullscreen", mainWindow.isFullScreen());
 	};
 	const pushMaximized = () => {
@@ -1073,9 +1092,6 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
-		// Vibrancy belongs to the closed window. The shell of a recreated window
-		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
-		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -2378,7 +2394,6 @@ ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
 	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
-	mainWindow.setVibrancy(enabled ? "under-window" : null);
 	syncNativeWindowBackground();
 });
 
@@ -2699,13 +2714,22 @@ ipcMain.handle("app:checkGitHubRepositoryAvailability", async (_event, input: { 
 		return { available: false, message: "Could not check this repository name. Confirm GitHub CLI is signed in." };
 	}
 });
-ipcMain.handle("clipboard:writeText", (_event, text: string) => {
-	clipboard.writeText(text, "clipboard");
+ipcMain.handle("clipboard:writeText", async (_event, text: string) => {
+	// Electron 44: writeText is async and the Linux selection clipboard moved
+	// to the clipboard.selection sub-namespace.
+	await clipboard.writeText(text);
 	if (process.platform === "linux") {
-		clipboard.writeText(text, "selection");
+		await clipboard.selection.writeText(text);
 	}
 });
 ipcMain.handle("clipboard:readText", () => clipboard.readText());
+registerChatImageIpc({
+	ipcMain,
+	clipboard: { writeImage: writeClipboardImage },
+	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
+	dialog,
+	downloadsDirectory: () => app.getPath("downloads"),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

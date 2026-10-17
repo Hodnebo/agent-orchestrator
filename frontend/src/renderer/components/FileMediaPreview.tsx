@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useHostConnection } from "../hooks/useHostConnection";
 import type { FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import { getApiBaseUrl } from "../lib/api-client";
+import { artifactContentUrl } from "../lib/artifact-content-url";
 import type { FileMediaKind } from "../lib/file-media";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
@@ -20,7 +21,7 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	// Use the streamed preview route: the image-diff blob route buffers whole
 	// revisions and caps them at 16 MiB, which is too small for recordings.
-	const rawUrl = source.kind === "artifact" ? source.rawUrl : base === undefined ? undefined
+	const rawUrl = source.kind === "artifact" ? artifactContentUrl(sessionId, path, source.rawUrl) : base === undefined ? undefined
 		: `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true&v=${encodeURIComponent(version)}`;
 	const src = source.kind === "artifact" && rawUrl ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}` : rawUrl;
 	if (!src || failedSrc === src) {
