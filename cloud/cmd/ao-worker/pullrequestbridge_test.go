@@ -92,3 +92,40 @@ func TestPullRequestHelpMentionsRepositoriesOnlyWhenThereAreSome(t *testing.T) {
 		t.Fatalf("multi-repo help lacks the repository field: %s", multi)
 	}
 }
+
+// The bridge never pushes a repository's base branch: not the main
+// repository's default branch, not the base a request names, and not an
+// additional repository's own base.
+func TestPullRequestBridgeRefusesToPushABaseBranch(t *testing.T) {
+	pushed := false
+	previousPush, previousBase := pushBranch, branchIsRepositoryBase
+	pushBranch = func(context.Context, worker.GitRunner, string, string, worker.CheckoutGrantResponse) error {
+		pushed = true
+		return nil
+	}
+	branchIsRepositoryBase = func(_ context.Context, dir, _, branch string) bool {
+		return dir == "/home/dev/work/voice-calling-ai" && branch == "trunk"
+	}
+	t.Cleanup(func() { pushBranch, branchIsRepositoryBase = previousPush, previousBase })
+	launch := worker.LaunchContext{
+		RepositoryURL: "https://github.com/acme/alice", DefaultBranch: "main",
+		ExtraRepos: []worker.RepoRef{{URL: "https://github.com/acme/voice-calling-ai"}, {URL: "https://github.com/acme/julian", Branch: "develop"}},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, body := range []string{
+		`{"branch":"main","title":"t"}`,
+		`{"branch":"MAIN","title":"t"}`,
+		`{"branch":"develop","title":"t","repository":"julian"}`,
+		`{"branch":"release","title":"t","base":"release"}`,
+		`{"branch":"trunk","title":"t","repository":"acme/voice-calling-ai"}`,
+	} {
+		pushed = false
+		client := &fakePullRequestClient{}
+		recorder := httptest.NewRecorder()
+		handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request", strings.NewReader(body)),
+			client, "/home/dev/work/alice", launch, logger)
+		if recorder.Code != http.StatusBadRequest || pushed || len(client.raised) != 0 {
+			t.Fatalf("%s: status %d pushed %v raised %d, want a refusal before any push", body, recorder.Code, pushed, len(client.raised))
+		}
+	}
+}

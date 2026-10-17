@@ -108,6 +108,14 @@ func handlePullRequestBridgeRequest(
 		repository = checkout.FullName
 	}
 	ctx := r.Context()
+	// The branch must be the session's work, never a repository's base: a push
+	// of HEAD to the base would land the work there directly.
+	if strings.EqualFold(input.Branch, input.Base) ||
+		(checkout.Main && strings.EqualFold(input.Branch, strings.TrimSpace(launch.DefaultBranch))) ||
+		(!checkout.Main && branchIsRepositoryBase(ctx, checkout.Path, checkout.Branch, input.Branch)) {
+		writeBridgeError(w, http.StatusBadRequest, "refusing to push "+input.Branch+": it is the base branch of "+checkout.Name+"; commit on the session branch instead")
+		return
+	}
 	grant, err := apiClient.pushGrant(ctx)
 	if err != nil {
 		logger.Error("pull request bridge: push grant failed", "error", err)
@@ -159,6 +167,12 @@ type pullRequestBridgeClient interface {
 
 // pushBranch is worker.PushBranch; tests replace it.
 var pushBranch = worker.PushBranch
+
+// branchIsRepositoryBase is worker.SessionBranchIsBase on the checkout at dir;
+// tests replace it.
+var branchIsRepositoryBase = func(ctx context.Context, dir, configured, branch string) bool {
+	return worker.SessionBranchIsBase(ctx, worker.ExecGitRunner{}, dir, configured, branch)
+}
 
 func writeBridgeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")

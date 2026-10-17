@@ -289,9 +289,11 @@ func TestConfigureWorkerGitContinuesRemoteBranch(t *testing.T) {
 	}
 }
 
-// Local changes that block switching to the remote branch do not stop the
-// worker: the branch is cut at HEAD as before and the changes are kept.
-func TestConfigureWorkerGitFallsBackWhenLocalChangesBlockRemoteBranch(t *testing.T) {
+// Local changes that block switching to the pushed branch stop the startup
+// with ErrSessionBranchSwitch instead of quietly cutting the branch from the
+// default branch (which would hide the remote work and fail every push); the
+// local changes are kept.
+func TestConfigureWorkerGitFailsWhenLocalChangesBlockRemoteBranch(t *testing.T) {
 	t.Parallel()
 	requireGit(t)
 	upstream := upstreamRepository(t)
@@ -309,19 +311,53 @@ func TestConfigureWorkerGitFallsBackWhenLocalChangesBlockRemoteBranch(t *testing
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	base := gitOutput(t, workspace, "rev-parse", "HEAD")
-	if err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x"); err != nil {
-		t.Fatalf("ConfigureWorkerGit: %v", err)
+	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x")
+	if !errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchSwitch", err)
 	}
-	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "feature/x" {
-		t.Fatalf("branch = %q, want feature/x", branch)
+	if !strings.Contains(err.Error(), "feature/x") {
+		t.Fatalf("error %q does not name the branch", err)
 	}
-	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != base {
-		t.Fatalf("HEAD = %s, want the cloned base %s", head, base)
+	if _, err := exec.Command("git", "-C", workspace, "rev-parse", "--verify", "--quiet", "refs/heads/feature/x").Output(); err == nil {
+		t.Fatal("a feature/x branch was cut from the default branch")
 	}
 	if content, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(content) != "local edit\n" {
 		t.Fatalf("local change lost: %q, %v", content, err)
+	}
+}
+
+// A restarted worker whose agent left HEAD on another branch switches back to
+// the session branch as it is, instead of resetting it to that HEAD.
+func TestConfigureWorkerGitRestartKeepsSessionBranchCommits(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	configure := func() error {
+		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+	}
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, workspace, "add", "WORK.md")
+	gitRun(t, workspace, "commit", "-qm", "session work")
+	work := gitOutput(t, workspace, "rev-parse", "HEAD")
+	gitRun(t, workspace, "checkout", "-q", "main")
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "ao/session-1" {
+		t.Fatalf("branch = %q, want ao/session-1", branch)
+	}
+	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != work {
+		t.Fatalf("restart reset the session branch to %s, want its commit %s", head, work)
 	}
 }
 

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,5 +250,41 @@ func TestSessionRepoCheckoutsSkipsDotFoldersAndCollisions(t *testing.T) {
 	skipped := SkippedExtraRepos(workspace, "https://github.com/acme/web", extras)
 	if len(skipped) != 3 {
 		t.Fatalf("skipped = %+v, want .aws, other/app and fork/web", skipped)
+	}
+}
+
+// A session branch named like an additional repository's base branch (the
+// configured branch, or origin's default) is never checked out or pushed
+// there: the repository stays at its base and the caller is told why.
+func TestPrepareExtraRepoRefusesTheBaseBranchAsSessionBranch(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, configured, branch string
+	}{
+		{"configured base", "develop", "develop"},
+		{"origin default", "", "main"},
+		{"case-insensitive", "", "MAIN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := seedExtraRepoSource(t)
+			if tc.configured != "" {
+				gitRun(t, src, "branch", tc.configured)
+			}
+			dest := filepath.Join(t.TempDir(), "extra")
+			err := prepareExtra(ctx, dest, RepoRef{URL: "file://" + src, Branch: tc.configured}, tc.branch)
+			if !errors.Is(err, ErrSessionBranchIsBase) {
+				t.Fatalf("PrepareExtraRepo = %v, want ErrSessionBranchIsBase", err)
+			}
+			want := tc.configured
+			if want == "" {
+				want = "main"
+			}
+			if branch := gitOutput(t, dest, "rev-parse", "--abbrev-ref", "HEAD"); branch != want {
+				t.Fatalf("checked out %q, want the base %q", branch, want)
+			}
+			if !SessionBranchIsBase(ctx, ExecGitRunner{}, dest, tc.configured, tc.branch) {
+				t.Fatal("SessionBranchIsBase did not recognise the base branch")
+			}
+		})
 	}
 }
