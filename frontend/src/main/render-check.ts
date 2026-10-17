@@ -56,10 +56,9 @@ const SETTLE_MS = 300;
 
 // The same measurement the reader frame reports (render_bootstrap.js report()):
 // a page shorter than the viewport reports its own height, not the viewport's.
-// A horizontal scrollbar takes up height in addition to the page's content.
 export const CONTENT_HEIGHT_SCRIPT = `(() => {
 	const r = document.documentElement;
-	return Math.ceil((r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height) + (window.innerHeight - r.clientHeight));
+	return Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
 })()`;
 
 // Every check on a network shares its partition's session, so it is proxied once.

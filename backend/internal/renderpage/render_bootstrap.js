@@ -69,15 +69,10 @@
     e.preventDefault();
     window.parent.postMessage({ jsonrpc: "2.0", id: "ao-link-" + (++seq), method: "ui/open-link", params: { url: url.href } }, "*");
   }, true);
-  var last, previousFilled = false;
+  var last;
   function report() {
     var r = document.documentElement;
-    var contentHeight = r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height;
-    var filled = contentHeight === window.innerHeight;
-    var h = Math.ceil(contentHeight + (window.innerHeight - r.clientHeight));
-    // A viewport-sized page follows the frame's resize; do not add its gutter again.
-    if (previousFilled && filled && window.innerHeight === last) h = last;
-    previousFilled = filled;
+    var h = Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
     if (h === last) return;
     last = h;
     window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: h } }, "*");

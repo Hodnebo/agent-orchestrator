@@ -6,17 +6,11 @@ const sessionId = "chat-render-wrap";
 const title = "Branch comparison";
 const renderPath = `/api/v1/sessions/${sessionId}/renders/wide-table`;
 const bootstrap = readFileSync("../backend/internal/renderpage/render_bootstrap.js", "utf8");
-const baseCSS = readFileSync("../backend/internal/renderpage/renderpage.go", "utf8").match(/const baseCSS = `([^`]+)`/)?.[1];
-if (!baseCSS) throw new Error("render page base styles not found");
-
-// Headless Chromium otherwise suppresses the scrollbars this test exercises.
-test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
 
 function renderPage(loadId: number) {
 	return `<!doctype html><html data-load-id="${loadId}"><head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style id="ao-theme">:root{--background:#fff;--foreground:#111}</style>
-<style>${baseCSS}</style>
 <script>${bootstrap}</script>
 <style>
 body{margin:0;font:14px/1.5 sans-serif;background:var(--background);color:var(--foreground)}
@@ -48,14 +42,6 @@ async function overflow(frame: Locator) {
 			root: root.scrollWidth - root.clientWidth,
 			wrapper: wrapper.scrollWidth - wrapper.clientWidth,
 		};
-	});
-}
-
-async function horizontalScrollbars(frame: Locator) {
-	return frame.contentFrame().locator("html").evaluate((root) => {
-		const wrapper = root.querySelector<HTMLElement>(".table-scroll");
-		if (!wrapper) throw new Error("rendered table wrapper not found");
-		return { root: window.innerHeight - root.clientHeight, wrapper: wrapper.offsetHeight - wrapper.clientHeight };
 	});
 }
 
@@ -118,28 +104,14 @@ for (const width of [390, 1440]) {
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		await expect.poll(async () => (await overflow(inline)).root).toBeGreaterThan(0);
 		await expect.poll(async () => (await overflow(inline)).wrapper).toBeGreaterThan(0);
-		await expect.poll(async () => (await horizontalScrollbars(inline)).root).toBeGreaterThan(0);
-		await expect.poll(async () => (await horizontalScrollbars(inline)).wrapper).toBeGreaterThan(0);
 		const authoredHeight = await inlineRoot.locator(".report").evaluate((report) => Math.ceil(report.getBoundingClientRect().height));
-		const scrollbarHeight = (await horizontalScrollbars(inline)).root;
-		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(authoredHeight + scrollbarHeight);
-		await expect.poll(() => inlineRoot.evaluate((root) => root.scrollHeight - root.clientHeight)).toBe(0);
-		await inline.scrollIntoViewIfNeeded();
-		const bounds = await inline.boundingBox();
-		if (!bounds) throw new Error("render frame bounds not found");
-		await page.mouse.move(bounds.x + 12, bounds.y + bounds.height - scrollbarHeight / 2);
-		await page.mouse.down();
-		await page.mouse.move(bounds.x + 100, bounds.y + bounds.height - scrollbarHeight / 2);
-		await page.mouse.up();
-		await expect.poll(() => inlineRoot.evaluate((root) => root.scrollLeft)).toBeGreaterThan(0);
-		await inlineRoot.evaluate((root) => { root.scrollLeft = 0; });
+		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(authoredHeight);
 		const originalHeight = await inline.evaluate((frame) => frame.getBoundingClientRect().height);
 		const wrap = page.getByRole("button", { name: "Wrap content", exact: true });
 		await expect(wrap).toHaveAttribute("aria-pressed", "false");
 		await wrap.click();
 		await expect(wrap).toHaveAttribute("aria-pressed", "true");
 		await expect.poll(() => overflow(inline)).toEqual({ root: 0, wrapper: 0 });
-		await expect.poll(() => horizontalScrollbars(inline)).toEqual({ root: 0, wrapper: 0 });
 		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBeGreaterThan(originalHeight);
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		expect(renderLoads).toBe(1);
@@ -197,22 +169,6 @@ for (const width of [390, 1440]) {
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		expect(renderLoads).toBe(2);
 
-		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(originalHeight);
-		const fittedHeight = await inline.evaluate((frame) => frame.getBoundingClientRect().height);
-		await inlineRoot.locator(".report").evaluate((report) => { report.style.minHeight = "100vh"; });
-		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(fittedHeight + scrollbarHeight);
-		const settledHeights = await inline.evaluate(async (frame) => {
-			const heights = [];
-			for (let i = 0; i < 10; i++) {
-				await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-				heights.push(frame.getBoundingClientRect().height);
-			}
-			return heights;
-		});
-		expect(settledHeights).toEqual(Array.from({ length: 10 }, () => fittedHeight + scrollbarHeight));
-		await inlineRoot.locator(".report").evaluate((report) => { report.style.minHeight = ""; });
-		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBe(fittedHeight);
-
 		const image = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="blue"/></svg>')}`;
 		await inlineRoot.locator(".report").evaluate((report, src) => {
 			report.insertAdjacentHTML("beforeend", `<img src="${src}" width="1200" height="600" alt="Chart with HTML dimensions">
@@ -226,7 +182,6 @@ for (const width of [390, 1440]) {
 		}));
 		const authoredSizes = Array.from({ length: 3 }, () => ({ width: 1200, height: 600 }));
 		await expect.poll(mediaSizes).toEqual(authoredSizes);
-		await expect.poll(() => inlineRoot.evaluate((root) => window.innerWidth - root.clientWidth)).toBeGreaterThan(0);
 		await wrap.click();
 		await expect.poll(async () => (await mediaSizes()).every(({ width, height }) =>
 			width > 0 && width < 1200 && Math.abs(width / height - 2) < 0.01,
