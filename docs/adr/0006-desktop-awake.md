@@ -210,3 +210,12 @@ SIGKILL, helper stall recovery, login, updates and shutdown. Optional pause,
 audio, network and browser actions need their own device tests, including
 user changes, recording, crashes between journal and mutation, and failed
 restoration. Do not infer macOS 13/14/15/27 device coverage from compilation.
+
+## Optional service startup failures
+
+If the persisted Awake document cannot be read or decoded, uses an unsupported
+version, or cannot durably end interrupted intent, the daemon logs a warning and
+disables the Awake service for that run. Awake routes return 501; other daemon
+services continue starting. No wake policy loop or host action starts, and the
+original document is retained for repair or a compatible newer build rather than
+being reset. Restart after correcting the storage/document problem.

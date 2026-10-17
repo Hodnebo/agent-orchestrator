@@ -936,7 +936,7 @@ func Run() error {
 		bs.KeepAwake = ka
 	}
 	awakeHost := awakesvc.NewHost(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir)
-	awakeSvc, err := awakesvc.New(ctx, store, awakeHost, awakesvc.BindingFuncs{
+	awakeSvc, stopAwake := startAwake(ctx, store, awakeHost, awakesvc.BindingFuncs{
 		Session: func(ctx context.Context, id string) (bool, error) {
 			row, found, err := store.GetSession(ctx, domain.SessionID(id))
 			return found && !row.IsTerminated, err
@@ -945,14 +945,8 @@ func Run() error {
 		Interrupted: chatSvc.InterruptedAwakeAgents,
 		Reconnect:   sessMgr.ReconnectAwakeAgent,
 		App:         awakeHost.AppAlive,
-	})
-	if err != nil {
-		return fmt.Errorf("initialize Stay Awake: %w", err)
-	}
-	awakeCtx, awakeCancel := context.WithCancel(ctx)
-	awakeDone := make(chan struct{})
-	go func() { defer close(awakeDone); awakeSvc.Run(awakeCtx) }()
-	defer func() { awakeCancel(); <-awakeDone }()
+	}, log)
+	defer stopAwake()
 	var nativeSessions ports.AgentNativeSessionResolver
 	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
