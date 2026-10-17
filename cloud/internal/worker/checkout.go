@@ -640,11 +640,10 @@ func PrepareExtraRepo(
 		}
 		base := extraRepoBaseBranch(ctx, runner, dest, repo.Branch)
 		if branch != "" {
-			from := base
-			if remoteBranchExists(ctx, runner, dest, branch) {
-				from = branch
-			}
-			if _, err := adoptExistingCheckout(ctx, runner, dest, opts.SessionID, branch, from); err != nil {
+			// Adoption continues origin/<branch> when it was pushed and
+			// otherwise starts the branch from base; this repository was
+			// fetched above, so the created branch needs no later move.
+			if _, _, err := adoptExistingCheckout(ctx, runner, dest, opts.SessionID, branch, base); err != nil {
 				return false, err
 			}
 		}
