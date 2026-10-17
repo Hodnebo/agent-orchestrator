@@ -9,9 +9,8 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { AgentProviderGroup } from "./AgentProviderGroup";
+import { HarnessDetailGroup } from "./harness/harness-ui";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
-import { SettingsSection } from "./SettingsSection";
 
 const providerNames = agentAccountProviderNames;
 
@@ -21,17 +20,21 @@ let pendingLogins: Partial<Record<AgentAccountProvider, AgentAccountLogin>> = {}
 
 /** Every Claude Code and Codex account with all of its limits. Each account is
  * a config folder of the CLI itself; "This computer" is the CLI's own login. */
-export function AgentAccountsSection({ titleHidden }: { titleHidden?: boolean }) {
+/** One CLI's subscription accounts on its Harness Account tab: the CLI's own
+ * login and the accounts added in AO, with their limits, default and sign-in. */
+export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvider }) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts();
 	const usage = useAgentAccountUsage();
 	const actions = useAgentAccountActions();
 	const [logins, setLogins] = useState(() => pendingLogins);
-	const [loginNotes, setLoginNotes] = useState<Partial<Record<AgentAccountProvider, string>>>({});
+	const [loginNote, setLoginNote] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
+	const rows = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const login = logins[provider];
 
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
 		setBusy(key);
@@ -45,61 +48,48 @@ export function AgentAccountsSection({ titleHidden }: { titleHidden?: boolean })
 		}
 	}, []);
 
-	const setLogin = (provider: AgentAccountProvider, login: AgentAccountLogin | undefined) =>
-		setLogins((current) => (pendingLogins = { ...current, [provider]: login }));
-	const startLogin = (provider: AgentAccountProvider) => run(`login:${provider}`, async () => {
-		const previous = logins[provider];
-		setLogin(provider, undefined);
-		if (previous) await actions.cancelLogin(previous.operationId).catch(() => undefined);
-		setLoginNotes((current) => ({ ...current, [provider]: "" }));
-		setLogin(provider, await actions.startLogin(provider));
+	const setLogin = (next: AgentAccountLogin | undefined) =>
+		setLogins((current) => (pendingLogins = { ...current, [provider]: next }));
+	const startLogin = () => run(`login:${provider}`, async () => {
+		if (login) await actions.cancelLogin(login.operationId).catch(() => undefined);
+		setLogin(undefined);
+		setLoginNote("");
+		setLogin(await actions.startLogin(provider));
 	});
-	const checkLogin = (login: AgentAccountLogin) => void run(`verify:${login.provider}`, async () => {
-		const result = await actions.verifyLogin(login.operationId);
-		if (result.status === "waiting") setLoginNotes((current) => ({ ...current, [login.provider]: t("settings.agentAccounts.loginWaiting") }));
+	const checkLogin = (current: AgentAccountLogin) => void run(`verify:${provider}`, async () => {
+		const result = await actions.verifyLogin(current.operationId);
+		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
 		else {
-			setLogin(login.provider, undefined);
+			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 		}
 	});
-	const closeLogin = (login: AgentAccountLogin) => {
-		setLogin(login.provider, undefined);
-		void actions.cancelLogin(login.operationId).catch(() => undefined);
+	const closeLogin = (current: AgentAccountLogin) => {
+		setLogin(undefined);
+		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
 
-	return <SettingsSection title={t("settings.codexAccounts.title")} sectionId="agent-accounts" titleHidden={titleHidden}>
-		<div className="space-y-3">
-			{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
-			{(["claude", "codex"] as const).map((provider) => {
-				const rows = (accounts.data ?? []).filter((account) => account.provider === provider);
-				return <AgentProviderGroup
-					key={provider}
-					provider={provider === "claude" ? "claude-code" : "codex"}
-					name={providerNames[provider]}
-					expanded
-					collapsible={false}
-					onExpandedChange={() => undefined}
-					action={<div className="flex items-center gap-1">
-						<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.refresh")} disabled={busy !== null} onClick={() => void run("refresh", actions.refresh)}>{busy === "refresh" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.refresh")}</TooltipContent></Tooltip>
-						<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin(provider)}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
-					</div>}
-				>
-					{logins[provider] ? <div className="border-t border-border px-4 py-3"><LoginTerminal login={logins[provider]} note={loginNotes[provider] ?? ""} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
-					{accounts.isLoading ? <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
-					<div className="divide-y divide-border border-t border-border">
-						{rows.map((account) => <AccountRow
-							key={account.id}
-							account={account}
-							aoTokens={tokensByAccount.get(account.id)}
-							busy={busy}
-							onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
-							onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
-							onRemove={() => setRemoving(account)}
-						/>)}
-					</div>
-				</AgentProviderGroup>;
-			})}
-		</div>
+	return <>
+		<HarnessDetailGroup
+			title={t("settings.codexAccounts.title")}
+			action={<div className="flex items-center gap-1">
+				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.refresh")} disabled={busy !== null} onClick={() => void run("refresh", actions.refresh)}>{busy === "refresh" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.refresh")}</TooltipContent></Tooltip>
+				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
+			</div>}
+		>
+			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
+			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
+			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
+			{rows.map((account) => <AccountRow
+				key={account.id}
+				account={account}
+				aoTokens={tokensByAccount.get(account.id)}
+				busy={busy}
+				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
+				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
+				onRemove={() => setRemoving(account)}
+			/>)}
+		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
 			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
@@ -109,9 +99,8 @@ export function AgentAccountsSection({ titleHidden }: { titleHidden?: boolean })
 			onConfirm={() => void run(`remove:${removing.id}`, async () => { await actions.remove(removing.id); setRemoving(null); })}
 			onOpenChange={(open) => { if (!open) setRemoving(null); }}
 		/> : null}
-	</SettingsSection>;
+	</>;
 }
-
 
 function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemove }: {
 	account: AgentAccount;
@@ -130,7 +119,7 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemo
 		account.signedIn ? null : t("settings.agentAccounts.signedOut"),
 		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
 	].filter(Boolean).join(" · ");
-	return <div className="px-4 py-3" data-agent-account={account.id}>
+	return <div className="px-3 py-2.5" data-agent-account={account.id}>
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
 				<p className="truncate text-sm font-medium text-foreground">{agentAccountName(account, t)}</p>

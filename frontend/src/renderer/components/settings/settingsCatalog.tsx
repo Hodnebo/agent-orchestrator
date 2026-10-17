@@ -6,7 +6,7 @@ import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
-import { AgentAccountsSection } from "./AgentAccountsSection";
+import { CodexAccountsSection } from "./CodexAccountsSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -76,7 +76,10 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "agents",
 		icon: BadgeCheck,
 		label: (t) => t("settings.agents"),
-		render: (_t, titleHidden) => <AgentAccountsSection titleHidden={titleHidden} />,
+		// In developer mode, subscription accounts live on each CLI's Harness
+		// Account tab instead.
+		visible: ({ developerMode }) => !developerMode,
+		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",
