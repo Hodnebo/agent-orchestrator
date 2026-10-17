@@ -267,6 +267,43 @@ func TestCreateWorkerChildRequiresOrchestratorScope(t *testing.T) {
 	}
 }
 
+// An orchestrator can start a worker on a named branch (for example one an
+// earlier worker already pushed); the branch reaches the session create.
+func TestCreateWorkerChildPassesRequestedBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"continue the work","branch":" ao/1a2b3c4d "}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.Branch != "ao/1a2b3c4d" {
+		t.Fatalf("child branch = %q, want ao/1a2b3c4d", store.captured.Branch)
+	}
+}
+
+// The store refuses a branch it cannot use; the orchestrator gets a specific
+// error rather than a generic constraint violation.
+func TestCreateWorkerChildReportsInvalidBranch(t *testing.T) {
+	t.Parallel()
+	store := &stubChildStore{
+		credentialAvailable: true, parentProvider: sandbox.ProviderNodeOps, createErr: postgres.ErrInvalidBranch,
+	}
+	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
+
+	rec := httptest.NewRecorder()
+	body := `{"displayName":"resume","prompt":"work","branch":"main"}`
+	srv.createWorkerChild(rec, childRequestBody(t, []string{"worker:orchestrate"}, body))
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "invalid_branch") {
+		t.Fatalf("status = %d, body = %s; want 422 invalid_branch", rec.Code, rec.Body.String())
+	}
+}
+
 // A parent that is not an active orchestrator (terminated or missing) surfaces
 // ErrForbidden from the provider lookup, which the handler maps to 403 and does
 // not provision a child.

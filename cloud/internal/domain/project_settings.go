@@ -471,3 +471,27 @@ func ProjectSessionPrefix(raw json.RawMessage) (string, error) {
 	}
 	return settings.SessionPrefix, nil
 }
+
+// ValidSessionBranch reports whether name can be a requested session branch.
+// It must follow git's branch-name rules (git check-ref-format --branch), so
+// it never reaches git as an option or as a ref git would refuse. It must not
+// be the project's default branch, which a worker would push to directly, or
+// the session prefix, whose ref would conflict with every generated
+// <prefix>/<short id> branch.
+func ValidSessionBranch(name, defaultBranch, prefix string) bool {
+	if len(name) > 255 || name == "@" || name == "HEAD" || name == defaultBranch || name == prefix ||
+		strings.HasPrefix(name, "-") || strings.HasSuffix(name, ".") ||
+		strings.Contains(name, "..") || strings.Contains(name, "@{") ||
+		strings.ContainsAny(name, " ~^:?*[\\\x7f") ||
+		strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 }) {
+		return false
+	}
+	// An empty component is an empty name or a leading, trailing, or doubled
+	// slash.
+	for _, component := range strings.Split(name, "/") {
+		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
+}

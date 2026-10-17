@@ -9,7 +9,7 @@ with `SCOPE_REQUIRED`.
 ## ao spawn — create a worker session
 
 ```
-ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--mode standard|trusted]
+ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--mode standard|trusted] [--branch <branch>]
 ```
 
 - `--name` (required): the label the human sees in the sidebar. Keep it short
@@ -26,10 +26,19 @@ ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--
   omitted, the project-configured worker harness is used; when the project has
   no worker harness, the control plane falls back to `claude-code`.
 - `--mode`: `trusted` (default) or `standard`.
+- `--branch`: the git branch the worker works on. Use it only when the human
+  asks for a specific branch, or to resume work a stopped worker already
+  pushed (`ao list --all` shows each worker's branch). A branch that already
+  exists on the remote is checked out with its commits; a new name starts from
+  the default branch. It cannot be the project's default branch. Omit it for
+  ordinary tasks. To resume another worker's branch, `ao kill` that worker
+  first so the two never share the branch, and if it already opened a pull
+  request, tell the new worker to run `ao claim-pr <number>` instead of
+  opening another one.
 
 Prints `spawned <session-id> (<status>)`. The worker provisions its own
-sandbox, checks out the project repository on a fresh branch, and starts on the
-prompt — typically live within ~10 seconds. You do not need to wait: a `send`
+sandbox, checks out the project repository on a fresh branch (or the
+`--branch` you named), and starts on the prompt — typically live within ~10 seconds. You do not need to wait: a `send`
 issued before it is ready is queued and delivered on startup.
 
 Errors: `agent_provider_required` means the org has no validated credential for

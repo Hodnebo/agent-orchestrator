@@ -327,14 +327,41 @@ func ConfigureWorkerGit(
 		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
 		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
 		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-		{"checkout", "-B", branch},
 	}
 	for _, command := range commands {
 		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
 			return fmt.Errorf("configure worker Git repository: %w", err)
 		}
 	}
+	// A branch that already exists on the remote is continued from its commits.
+	// When local files block that switch (for example agent configuration
+	// written before the clone), the session still starts, cut at HEAD as
+	// before; pushing the branch then fails until it merges origin/<branch>. A
+	// restarted worker already has the local branch and stays on it.
+	if _, err := runner.Run(ctx, workspace, nil, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		if remote := remoteBranchRef(ctx, runner, workspace, branch); remote != "" {
+			if _, err := runner.Run(ctx, workspace, nil, "checkout", "--no-track", "-B", branch, remote); err == nil {
+				return nil
+			}
+		}
+	}
+	if _, err := runner.Run(ctx, workspace, nil, "checkout", "-B", branch); err != nil {
+		return fmt.Errorf("configure worker Git repository: %w", err)
+	}
 	return nil
+}
+
+// remoteBranchRef returns refs/remotes/origin/<branch> when the checkout has
+// that remote-tracking branch, and "" otherwise.
+func remoteBranchRef(ctx context.Context, runner GitRunner, dir, branch string) string {
+	if branch = strings.TrimSpace(branch); branch == "" {
+		return ""
+	}
+	ref := "refs/remotes/origin/" + branch
+	if _, err := runner.Run(ctx, dir, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+		return ""
+	}
+	return ref
 }
 
 // writeWorkerGitTooling writes the session's git credential helper and gh

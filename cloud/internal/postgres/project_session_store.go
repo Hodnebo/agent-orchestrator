@@ -715,8 +715,9 @@ func createSessionTx(
 		}
 	}
 	var projectConfig json.RawMessage
-	if err := tx.QueryRow(ctx, `SELECT config FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig); err != nil {
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Session{}, ErrNotFound
 		}
@@ -743,6 +744,9 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, ErrInvalid
 	}
+	if input.Branch != "" && !domain.ValidSessionBranch(input.Branch, defaultBranch, prefix) {
+		return domain.Session{}, ErrInvalidBranch
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
@@ -751,7 +755,7 @@ func createSessionTx(
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
 			auto_review_enabled
 		)
-		SELECT id, $1, $2, $3, $4, $5, $15 || '/' || left(id::text, 8),
+		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
 			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
 		RETURNING `+sessionInsertReturning,
@@ -771,6 +775,7 @@ func createSessionTx(
 		agentConfigJSON,
 		prefix,
 		autoReview,
+		input.Branch,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)

@@ -92,6 +92,11 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, r, http.StatusConflict, "STALE_TURN", "The turn is owned by another worker attempt.")
 	case errors.Is(err, postgres.ErrInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The request violates a resource constraint.")
+	case errors.Is(err, postgres.ErrInvalidBranch):
+		writeError(
+			w, r, http.StatusUnprocessableEntity, "invalid_branch",
+			"The branch name is invalid, or it is the project's default branch or session prefix.",
+		)
 	case errors.Is(err, postgres.ErrIdempotencyMismatch):
 		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for another request.")
 	case errors.Is(err, postgres.ErrSandboxQuotaExceeded):

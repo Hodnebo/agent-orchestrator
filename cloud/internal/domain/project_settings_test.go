@@ -227,3 +227,20 @@ func TestProjectSettingsScripts(t *testing.T) {
 		t.Fatalf("valid scripts rejected: %v", err)
 	}
 }
+
+func TestValidSessionBranch(t *testing.T) {
+	for _, name := range []string{"ao/1a2b3c4d", "feature/x", "fix-data-load", "release/v1.2"} {
+		if !ValidSessionBranch(name, "main", "ao") {
+			t.Errorf("ValidSessionBranch(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{
+		"", "main", "ao", "-f", "HEAD", "@", "/lead", "trail/", "a//b", "a..b", "end.", "x.lock", "dir/.hidden",
+		"has space", "tab\there", "a~1", "a^", "a:b", "a?", "a*", "a[b", `a\b`, "a@{1}", "del\x7f",
+		strings.Repeat("b", 256),
+	} {
+		if ValidSessionBranch(name, "main", "ao") {
+			t.Errorf("ValidSessionBranch(%q) = true, want false", name)
+		}
+	}
+}

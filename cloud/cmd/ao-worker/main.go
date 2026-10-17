@@ -743,8 +743,11 @@ func prepareReusedWorkspace(
 		return fmt.Errorf("refresh the reused repository checkout: %w", err)
 	}
 	if reuse.AdoptedNow {
-		if err := worker.AdvanceAdoptedCheckout(ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch); err != nil {
-			logger.Warn("checkout reuse: could not fast-forward the session branch to the latest base", "error", err)
+		if err := worker.AdvanceAdoptedCheckout(
+			ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.Branch, bootstrap.Launch.DefaultBranch,
+			reuse.BranchCreated,
+		); err != nil {
+			logger.Warn("checkout reuse: could not move the session branch to the latest remote commits", "error", err)
 		}
 	}
 	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap.Launch.ExtraRepos, workspace, dataDir)

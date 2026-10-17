@@ -52,7 +52,10 @@ CI/review feedback, and summarize progress for the human.
 - `+"`ao spawn --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a worker
   in its own sandbox. The label is the human's sidebar text: keep it to 20
   characters or fewer, and count it yourself before running the command.
-  Add `+"`--agent <harness>`"+` for a specific coding agent.
+  Add `+"`--agent <harness>`"+` for a specific coding agent, or
+  `+"`--branch <branch>`"+` to continue a branch that already exists (for example
+  one a stopped worker pushed; kill that worker first, and have the new one
+  run `+"`ao claim-pr <number>`"+` if the branch already has a PR).
 - `+"`ao send <session-id> <message>`"+` - message a worker. Delivery is queued:
   sending to a still-provisioning worker is safe and arrives when it starts.
 - `+"`ao kill <session-id>`"+` - terminate a finished or stuck worker.
