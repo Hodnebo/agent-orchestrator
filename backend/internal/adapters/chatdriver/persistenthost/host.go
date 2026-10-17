@@ -540,7 +540,10 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
+	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
+	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
+	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
