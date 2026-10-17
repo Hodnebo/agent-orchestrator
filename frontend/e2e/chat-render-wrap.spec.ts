@@ -25,7 +25,13 @@ code{white-space:pre}
 <tr><td>When the switch happens</td><td>After the agent starts, if it follows the instruction</td><td>Before the agent starts, done by AO</td></tr>
 <tr><td>Branch shown in the UI</td><td>The original session branch remains visible in the supervisor</td><td><code>ao_spawn_--branch_feature/this-is-a-long-unbroken-branch-name-that-must-wrap-inside-the-table-cell</code></td></tr>
 <tr><td>Link PR to the session</td><td>Only through the worker's reported branches</td><td>Direct match on the session's branch</td></tr>
-</tbody></table></div></main></body></html>`;
+</tbody></table></div>
+<div id="diagram" style="white-space:pre">alpha\n    beta</div>
+<span id="code-lines" style="display:block;white-space:pre-wrap">alpha\n    beta</span>
+<div id="line-breaks" style="white-space:pre-line">alpha\n    beta</div>
+<pre id="pre-lines">alpha\n    beta</pre>
+<textarea aria-label="Code editor" style="white-space:pre">alpha\n    beta</textarea>
+</main></body></html>`;
 }
 
 async function overflow(frame: Locator) {
@@ -109,6 +115,27 @@ for (const width of [390, 1440]) {
 		await expect.poll(() => inline.evaluate((frame) => frame.getBoundingClientRect().height)).toBeGreaterThan(originalHeight);
 		await expect(inlineRoot).toHaveAttribute("data-load-id", "1");
 		expect(renderLoads).toBe(1);
+		for (const id of ["diagram", "code-lines", "line-breaks", "pre-lines"]) {
+			const layout = await inlineRoot.locator(`#${id}`).evaluate((element) => {
+				const text = element.firstChild;
+				if (!(text instanceof Text)) throw new Error("whitespace sample text not found");
+				const range = document.createRange();
+				range.setStart(text, 0);
+				range.setEnd(text, 1);
+				const first = range.getBoundingClientRect();
+				const secondStart = text.data.indexOf("beta");
+				range.setStart(text, secondStart);
+				range.setEnd(text, secondStart + 1);
+				const second = range.getBoundingClientRect();
+				return { lineOffset: second.top - first.top, indentation: second.left - first.left };
+			});
+			expect(layout.lineOffset, `${id} preserves its newline`).toBeGreaterThan(0);
+			if (id === "line-breaks") expect(layout.indentation).toBe(0);
+			else expect(layout.indentation, `${id} preserves its indentation`).toBeGreaterThan(0);
+		}
+		const editor = inline.contentFrame().getByRole("textbox", { name: "Code editor" });
+		await expect(editor).toHaveCSS("white-space-collapse", "preserve");
+		await expect(editor).toHaveCSS("text-wrap-mode", "wrap");
 		await inline.evaluate((frame: HTMLIFrameElement) => frame.contentWindow?.postMessage({
 			jsonrpc: "2.0", method: "ui/notifications/host-context-changed",
 			params: { theme: "light", styles: { variables: { "--background": "#123456" } } },
