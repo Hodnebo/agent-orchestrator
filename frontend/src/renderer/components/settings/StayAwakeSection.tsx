@@ -1,5 +1,5 @@
 import { CalendarClock, ChevronRight, Coffee, Plus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	awakeCapability,
@@ -195,6 +195,11 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [app, setApp] = useState("");
 	const [rules, setRules] = useState<AwakeRule[]>([]);
 	const [dirty, setDirty] = useState(false);
+	const rulesRevision = useRef(0);
+	const markRulesDirty = () => {
+		rulesRevision.current += 1;
+		setDirty(true);
+	};
 	useEffect(() => {
 		if (!dirty && state?.rules) setRules(state.rules);
 	}, [state?.rules, dirty]);
@@ -246,7 +251,7 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 		</details>
 	);
 	const changeRule = (index: number, next: Partial<AwakeRule>) => {
-		setDirty(true);
+		markRulesDirty();
 		setRules((current) =>
 			current.map((rule, i) => (i === index ? { ...rule, ...next } : rule)),
 		);
@@ -513,7 +518,7 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 									size="icon-sm"
 									aria-label={t("awake.removeRule", "Remove rule")}
 									onClick={() => {
-										setDirty(true);
+										markRulesDirty();
 										setRules((current) =>
 											current.filter((_, i) => i !== index),
 										);
@@ -624,7 +629,7 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 							variant="footer"
 							disabled={awake.busy || rules.length >= 50}
 							onClick={() => {
-								setDirty(true);
+								markRulesDirty();
 								setRules((current) => [
 									...current,
 									{
@@ -644,12 +649,18 @@ export function StayAwakeSection({ titleHidden }: { titleHidden?: boolean }) {
 						<Button
 							variant="footer-primary"
 							disabled={awake.busy || !dirty}
-							onClick={() =>
+							onClick={() => {
+								const submittedRevision = rulesRevision.current;
 								awake.act(
 									{ kind: "rules", rules },
-									{ onSuccess: () => setDirty(false) },
-								)
-							}
+									{
+										onSuccess: () => {
+											// A response only acknowledges the submitted draft.
+											if (rulesRevision.current === submittedRevision) setDirty(false);
+										},
+									},
+								);
+							}}
 						>
 							{t("awake.saveRules", "Save rules")}
 						</Button>
