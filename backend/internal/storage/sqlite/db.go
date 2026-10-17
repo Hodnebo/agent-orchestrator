@@ -312,6 +312,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedUsageCostMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered usage-cost migration history: %w", err)
 	}
+	if err := repairRenumberedUsageLimitMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered usage-limit migration history: %w", err)
+	}
 	if err := prepareCancelledConversationTurnsMigration(db); err != nil {
 		return fmt.Errorf("prepare cancelled conversation-turn migration: %w", err)
 	}
@@ -362,6 +365,48 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 	return reconcileSchema(db)
+}
+
+// Preview builds applied this schema at 0201 before its reservation moved to
+// 0213. Keep the old receipt: another branch may also have used version 0201.
+func repairRenumberedUsageLimitMigrationHistory(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	var legacyApplied, canonicalApplied int
+	if err := db.QueryRow(`
+SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 201 ORDER BY id DESC LIMIT 1), 0),
+       COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 213 ORDER BY id DESC LIMIT 1), 0)`,
+	).Scan(&legacyApplied, &canonicalApplied); err != nil {
+		return err
+	}
+	if legacyApplied != 1 || canonicalApplied == 1 {
+		return nil
+	}
+	var quotaShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM pragma_table_info('conversation_turns')
+        WHERE (name = 'usage_limit_resets_at' AND upper(type) = 'TIMESTAMP' AND "notnull" = 0)
+           OR (name = 'usage_limit_auto_resume' AND upper(type) = 'INTEGER' AND "notnull" = 1 AND dflt_value = '0')
+           OR (name = 'usage_limit_resume_error' AND upper(type) = 'TEXT' AND "notnull" = 1 AND dflt_value = quote('')))
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'index'
+        AND name = 'conversation_turns_auto_resume' AND tbl_name = 'conversation_turns'
+        AND instr(sql, 'usage_limit_resets_at') > 0 AND instr(sql, 'usage_limit_auto_resume = 1') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger'
+        AND name = 'conversation_turns_auto_resume_cdc_update' AND tbl_name = 'conversation_turns'
+        AND instr(sql, 'usage_limit_auto_resume') > 0 AND instr(sql, 'usage_limit_resume_error') > 0
+        AND instr(sql, 'INSERT INTO change_log') > 0)`).Scan(&quotaShape); err != nil {
+		return err
+	}
+	if quotaShape != 5 {
+		return nil
+	}
+	_, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (213, 1)`)
+	return err
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
