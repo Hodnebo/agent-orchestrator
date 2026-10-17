@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,8 +37,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 
 const fetchMock = vi.fn();
 
-function renderWithQuery(ui: ReactNode) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderWithQuery(ui: ReactNode, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>{ui}</TooltipProvider>
@@ -97,6 +96,34 @@ describe("ArtifactFileView", () => {
 			expect(media).toHaveAttribute("preload", "metadata");
 			expect(media).not.toHaveAttribute("autoplay");
 		}
+	});
+
+	it.each(["recording.mp4", "voice.wav"])("preserves %s playback until its ETag changes within the same Last-Modified second", async (path) => {
+		let etag = '"1000-1791979200123456789"';
+		fetchMock.mockImplementation(() => Promise.resolve(new Response(null, {
+			headers: { "Content-Length": "1000", "Last-Modified": "Wed, 14 Oct 2026 12:00:00 GMT", ETag: etag },
+		})));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderWithQuery(<ArtifactFileView artifactName={path} path={path} rawUrl={RAW_URL} sessionId="sess-1" />, client);
+		const player = await screen.findByLabelText<HTMLMediaElement>(path);
+		const src = player.src;
+		expect(new URL(src).searchParams.get("v")).toBe(etag);
+		player.currentTime = 12;
+
+		await act(() => client.invalidateQueries({ queryKey: ["session-artifact-file"] }));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(screen.getByLabelText(path)).toBe(player);
+		expect(player.src).toBe(src);
+		expect(player.currentTime).toBe(12);
+
+		etag = '"1000-1791979200123456790"';
+		await act(() => client.invalidateQueries({ queryKey: ["session-artifact-file"] }));
+		await waitFor(() => expect(screen.getByLabelText(path)).not.toBe(player));
+		const replacement = screen.getByLabelText<HTMLMediaElement>(path);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(replacement.src).not.toBe(src);
+		expect(new URL(replacement.src).searchParams.get("v")).toBe(etag);
+		expect(replacement.currentTime).toBe(0);
 	});
 
 	it("previews SVGs as images while keeping their text source editable", async () => {
