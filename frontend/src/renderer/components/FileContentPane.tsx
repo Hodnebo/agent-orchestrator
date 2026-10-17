@@ -313,6 +313,7 @@ export function FileContentPane({
 		mediaOnly || (detail.status === "unmodified" && mode === "diff") || (mode === "rendered" && !renderedAvailable)
 			? "file"
 			: mode;
+	const mediaPreview = mediaKind && !editing && effectiveMode === "file";
 	const fileView = (
 		<CompleteFileView
 			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
@@ -475,7 +476,7 @@ export function FileContentPane({
 			/>
 		);
 		return (
-			<div className="relative min-w-0">
+			<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 				{toolbarNode}
 				<EditProvider createEditor={createReviewEditor}>
 				{effectiveMode === "diff" ? (
@@ -507,7 +508,7 @@ export function FileContentPane({
 		);
 	}
 	return (
-		<div className="relative min-w-0">
+		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? (

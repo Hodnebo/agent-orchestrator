@@ -28,11 +28,11 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	}
 	const onError = () => setFailedSrc(src);
 	return (
-		<div className="grid min-w-0 place-items-center p-3">
+		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
 			{kind === "image" ? (
-				<img alt={path} aria-label={path} className="max-h-[70vh] max-w-full object-contain" key={src} onError={onError} src={src} />
+				<img alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
 			) : kind === "video" ? (
-				<video aria-label={path} className="max-h-[70vh] max-w-full" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
+				<video aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
 			) : (
 				<audio aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
 			)}
