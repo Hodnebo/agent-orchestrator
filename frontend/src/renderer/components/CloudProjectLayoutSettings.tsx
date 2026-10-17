@@ -84,17 +84,16 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
-	return { mutation, savedAt, edited: () => setSavedAt(false) };
+	return { mutation, edited: () => setSavedAt(false) };
 }
 
-function SaveFooter({ dirty, saved, disabled, error }: { dirty: boolean; saved: boolean; disabled: boolean; error?: string }) {
+function SaveFooter({ dirty, disabled, error }: { dirty: boolean; disabled: boolean; error?: string }) {
 	const { t } = useTranslation();
 	return <>
 		{/* Pinned to the bottom of the scrolling page so Save stays in view however long the page is. */}
 		<div className="sticky -bottom-(--size-modal-padding) z-[1] -mx-(--size-modal-padding) -mb-(--size-modal-padding) border-t border-border bg-card px-(--size-modal-padding) py-4">
 			{error ? <p role="alert" className="mb-3 text-sm text-error">{error}</p> : null}
 			<div className="flex items-center justify-end gap-3">
-				<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{saved && !dirty ? t("settings.project.saved") : ""}</span>
 				<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
 			</div>
 		</div>
@@ -164,7 +163,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const reposInvalid = additionalReposProblem(project.repositoryUrl, extras) !== undefined || removedInUse.length > 0;
 	const workingDirectoryError = workingDirectoryProblem(workingDirectory, { standalone });
 	const workingDirectoryInvalid = workingDirectoryError !== undefined;
-	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState);
+	const { mutation, edited } = useSettingsPageSave(project, dirty, reposInvalid || workingDirectoryInvalid, onSaveState);
 	const locked = readOnly || mutation.isPending;
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
@@ -239,7 +238,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			</Field>
 		) : null}
 		<div className="flex-1" />
-		<SaveFooter dirty={dirty} saved={savedAt} disabled={locked || reposInvalid || workingDirectoryInvalid}
+		<SaveFooter dirty={dirty} disabled={locked || reposInvalid || workingDirectoryInvalid}
 			error={mutation.isError ? mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed") : undefined} />
 	</form>;
 }
@@ -259,7 +258,7 @@ function InstructionsForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const [saved, setSaved] = useState(() => ({ agentRules: projectConfigText(project.config, "agentRules"), orchestratorRules: projectConfigText(project.config, "orchestratorRules") }));
 	const dirty = agentRules !== saved.agentRules || orchestratorRules !== saved.orchestratorRules;
 	const tooLong = utf8Bytes(agentRules) > MAX_PROJECT_RULES_BYTES || utf8Bytes(orchestratorRules) > MAX_PROJECT_RULES_BYTES;
-	const { mutation, savedAt, edited } = useSettingsPageSave(project, dirty, tooLong, onSaveState);
+	const { mutation, edited } = useSettingsPageSave(project, dirty, tooLong, onSaveState);
 	const locked = readOnly || mutation.isPending;
 	const submit = () => {
 		if (tooLong) return;
@@ -286,7 +285,7 @@ function InstructionsForm({ project, readOnly, onSaveState }: LoadedProps) {
 			t("settings.cloudProject.orchestratorInstructionsHint", { defaultValue: "Added to the orchestrator's prompt." }),
 			orchestratorRules, setOrchestratorRules)}
 		<div className="flex-1" />
-		<SaveFooter dirty={dirty} saved={savedAt} disabled={locked || tooLong}
+		<SaveFooter dirty={dirty} disabled={locked || tooLong}
 			error={mutation.isError ? mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed") : undefined} />
 	</form>;
 }

@@ -264,7 +264,6 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		</Tabs>
 		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 		<div className="flex items-center justify-end gap-3 border-t border-border pt-4">
-			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{savedAt && !dirty ? t("settings.project.saved") : ""}</span>
 			<Button disabled={!dirty || locked} type="submit">{t("settings.project.saveChanges")}</Button>
 		</div>
 	</form>;
