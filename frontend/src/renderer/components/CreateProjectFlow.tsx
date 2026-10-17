@@ -1762,7 +1762,7 @@ function CloudProjectCard({
 						/>
 						<p id="cloudStandaloneNameHint" className={onboardingFieldHintClass}>
 							{t("createProject.cloudStandaloneHint", {
-								defaultValue: "Sessions start in an empty folder with no repository to clone. Use a sandbox template that sets up its own code, or add Setup scripts in the project's settings.",
+								defaultValue: "Sessions start in an empty folder",
 							})}
 						</p>
 						<button
