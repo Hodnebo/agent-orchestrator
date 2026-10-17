@@ -226,7 +226,14 @@ describe("describeUnreachableCode", () => {
 		const copy = describeUnreachableCode([lan, tunnel], "ios");
 		expect(copy.message).toContain("over the internet");
 		expect(copy.message).not.toMatch(/same Wi-Fi/);
-		expect(copy.showLocalNetworkHint).toBe(false);
+		// A briefly-down tunnel plus a denied Local Network prompt fails both
+		// probes, and granting the permission is what recovers the LAN path.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("shows the Local Network hint for a tunnel code only where it can help", () => {
+		expect(describeUnreachableCode([lan, tunnel], "android").showLocalNetworkHint).toBe(false);
+		expect(describeUnreachableCode([tunnel], "ios").showLocalNetworkHint).toBe(false);
 	});
 });
 

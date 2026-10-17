@@ -249,15 +249,16 @@ export function describeUnreachableCode(
 		platform,
 	});
 	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
-		// Every path failed, the internet one included, so neither Wi-Fi nor the
-		// Local Network permission explains it.
+		// Every path failed, the internet one included, so this is not a Wi-Fi
+		// problem. The Local Network hint stays (base keeps it for an iOS code
+		// with a LAN address): a tunnel that is briefly down plus a denied
+		// permission fails both probes, and granting the permission recovers.
 		return {
 			...base,
 			hint: "Make sure Orchestrator is running on that machine.",
 			message:
 				"Couldn't reach your machine on this network or over the internet. " +
 				"Make sure Orchestrator is running there with Connect Mobile on, then try again.",
-			showLocalNetworkHint: false,
 		};
 	}
 	// Tailscale is a remote path too, just not a public one: it works from any
