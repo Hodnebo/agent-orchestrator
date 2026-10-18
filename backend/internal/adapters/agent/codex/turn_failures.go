@@ -23,6 +23,14 @@ var _ ports.TranscriptTurnFailureDetector = (*Plugin)(nil)
 // window with no boundary at all reports nothing.
 const codexTurnTailWindow = 256 << 10
 
+// codexTurnBoundaryTypes are the quoted event_msg payload types that start or
+// end a turn. Matching them as substrings skips the JSON decode for the
+// messages, reasoning and token counts that make up most of a rollout.
+var codexTurnBoundaryTypes = [][]byte{
+	[]byte(`"task_started"`), []byte(`"turn_started"`), []byte(`"turn_aborted"`),
+	[]byte(`"task_complete"`), []byte(`"turn_complete"`),
+}
+
 // LastTurnFailure reads the end of a Codex rollout. Codex runs its Stop hook
 // only on a turn whose model request succeeded (codex-rs core session/turn.rs):
 // a turn that ends on a usage limit, an unsupported model or an expired
@@ -115,8 +123,8 @@ func lastCodexTurnFailure(records []byte) (ports.TurnFailure, bool) {
 // newer than the current prompt and idle a turn that is still running.
 func codexTurnBoundary(line []byte) (failure ports.TurnFailure, boundary, failed bool) {
 	// Cheap filter before decoding: large tool output records are never
-	// turn boundaries.
-	if !bytes.Contains(line, []byte(`"event_msg"`)) {
+	// turn boundaries, and neither is an event_msg of any other type.
+	if !bytes.Contains(line, []byte(`"event_msg"`)) || !containsCodexTurnBoundaryType(line) {
 		return ports.TurnFailure{}, false, false
 	}
 	var record struct {
@@ -152,4 +160,13 @@ func codexTurnBoundary(line []byte) (failure ports.TurnFailure, boundary, failed
 		return ports.TurnFailure{}, true, false
 	}
 	return ports.TurnFailure{At: at, Message: detail.Message}, true, true
+}
+
+func containsCodexTurnBoundaryType(line []byte) bool {
+	for _, kind := range codexTurnBoundaryTypes {
+		if bytes.Contains(line, kind) {
+			return true
+		}
+	}
+	return false
 }

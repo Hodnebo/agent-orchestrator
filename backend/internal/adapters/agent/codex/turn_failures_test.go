@@ -115,3 +115,25 @@ func TestLastTurnFailureReadsOnlyCodexRollouts(t *testing.T) {
 		}
 	}
 }
+
+// Event records of other types are skipped before decoding, even when they
+// name a turn (turn_id) or are not valid JSON, and do not hide the boundary
+// before them.
+func TestLastTurnFailureSkipsOtherEventRecords(t *testing.T) {
+	agentMessage := `{"timestamp":"2026-10-18T10:00:02.400Z","type":"event_msg","payload":{"type":"agent_message","turn_id":"1","message":"hi"}}`
+	garbled := `{"timestamp":"2026-10-18T10:00:02.500Z","type":"event_msg","payload":{"type":"agent_reasoning"`
+	path := writeRollout(t, lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutTokenCount, agentMessage, garbled))
+	if _, ok, err := New().LastTurnFailure(context.Background(), path); !ok || err != nil {
+		t.Fatalf("LastTurnFailure = ok %v err %v, want the failure", ok, err)
+	}
+	for _, line := range []string{rolloutTokenCount, agentMessage, garbled, rolloutUserMessage} {
+		if containsCodexTurnBoundaryType([]byte(line)) {
+			t.Fatalf("pre-filter kept a non-boundary record: %s", line)
+		}
+	}
+	for _, line := range []string{rolloutTaskStarted, rolloutFailed, rolloutSucceeded, rolloutNextStarted, rolloutAborted} {
+		if !containsCodexTurnBoundaryType([]byte(line)) {
+			t.Fatalf("pre-filter dropped a boundary record: %s", line)
+		}
+	}
+}
