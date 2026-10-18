@@ -74,6 +74,8 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		turn, sendErr := c.Svc.Send(ctx, sessionID, message)
 		if sendErr != nil {
 			w.Header().Set(providerSwitchedHeader, "1")
+			// The renderer calls the daemon cross-origin, so it reads the header only if exposed.
+			w.Header().Set("Access-Control-Expose-Headers", providerSwitchedHeader)
 			writeConversationError(w, r, sendErr)
 			return
 		}

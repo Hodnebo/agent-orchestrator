@@ -124,7 +124,8 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 	// A send that fails after the switch is flagged, so the client keeps the
 	// message as an unsent send rather than an unswitched one.
 	svc = &fakeConversationService{sendErr: ports.ErrSessionNotFound}
-	if rec = route(svc, withMessage); rec.Code != http.StatusNotFound || rec.Header().Get("X-AO-Provider-Switched") != "1" {
+	if rec = route(svc, withMessage); rec.Code != http.StatusNotFound || rec.Header().Get("X-AO-Provider-Switched") != "1" ||
+		rec.Header().Get("Access-Control-Expose-Headers") != "X-AO-Provider-Switched" {
 		t.Fatalf("failed send = %d header %q, want 404 marked switched", rec.Code, rec.Header().Get("X-AO-Provider-Switched"))
 	}
 
