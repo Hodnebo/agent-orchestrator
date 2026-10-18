@@ -485,17 +485,14 @@ type workspaceBuild struct {
 	Reason     string              `json:"reason"`
 	Deadline   *time.Time          `json:"deadline"`
 	Resources  []workspaceResource `json:"resources"`
-	CreatedAt  time.Time           `json:"created_at"`
-	UpdatedAt  time.Time           `json:"updated_at"`
 }
 
 // workspaceBuildJob is the provisioner job behind a build; its error explains
 // a failed build (a template error, a cloud quota) in the provider's words.
 type workspaceBuildJob struct {
-	Status      string     `json:"status"`
-	Error       string     `json:"error"`
-	ErrorCode   string     `json:"error_code"`
-	CompletedAt *time.Time `json:"completed_at"`
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 type workspaceResource struct {
@@ -668,13 +665,7 @@ func (c *Client) Get(ctx context.Context, id sandbox.ID) (sandbox.Environment, e
 			return sandbox.Environment{}, err
 		}
 	}
-	environment := c.toEnvironment(view)
-	if environment.Failure != nil && buildStatus(view.LatestBuild) == buildStatusFailed {
-		// The job error is usually only "terraform apply: exit status 1"; the
-		// build log names the real cause (a cloud quota, a bad parameter).
-		environment.Failure.Err.Message = buildFailedMessage(view.LatestBuild.Job.Error, c.buildErrorLines(ctx, view.LatestBuild.ID))
-	}
-	return environment, nil
+	return c.toEnvironment(view), nil
 }
 
 // FindBySession recovers a workspace after a control-plane crash between

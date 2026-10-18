@@ -35,7 +35,8 @@ const sandboxColumns = `sandbox.session_id, sandbox.org_id, sandbox.provider,
 	sandbox.worker_last_seen_at, sandbox.startup_started_at,
 	sandbox.startup_attempts,
 	sandbox.deletion_requested_at,
-	sandbox.last_error, sandbox.startup_error_code, sandbox.updated_at`
+	sandbox.last_error, sandbox.startup_error_code, sandbox.startup_error_at,
+	COALESCE(sandbox.bootstrap_context ->> 'providerFailureId', ''), sandbox.updated_at`
 
 // ClaimSandboxes leases up to limit due sandboxes for reconciliation. The
 // SKIP LOCKED claim is what makes the reconcile loop safe to run under multiple
@@ -1491,12 +1492,41 @@ func (s *Store) RecordSandboxStartupError(
 	})
 }
 
+// RecordSandboxProviderFailure stores what the reconciler did about a failed
+// provider build (domain.Sandbox.ProviderFailureID) under the providerFailureId
+// key of the sandbox's bootstrap_context, which is otherwise written only when
+// the session is created, so no schema change is needed. It is fenced by the
+// reconcile lease like every other reconciler write.
+func (s *Store) RecordSandboxProviderFailure(
+	ctx context.Context,
+	owner, orgID, sessionID, failureID string,
+) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(
+			ctx,
+			`UPDATE ao_sandboxes
+			SET bootstrap_context = bootstrap_context || jsonb_build_object('providerFailureId', $4::text)
+			WHERE session_id = $1 AND org_id = $2
+				AND reconcile_lease_owner = $3
+				AND reconcile_lease_until > now()`,
+			sessionID, orgID, owner, failureID,
+		)
+		if err != nil {
+			return fmt.Errorf("record sandbox provider failure: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrSandboxLeaseLost
+		}
+		return nil
+	})
+}
+
 // RetrySessionStartup re-arms a session whose worker never started: it resets
 // the startup window, repair count, failure backoff and startup error, and
 // puts a parked (terminated) or failed sandbox back into provisioning so the
 // reconciler re-runs the worker bootstrap against the existing environment.
-// The new startup window is also what tells the reconciler that a failed
-// workspace build predates the retry, so it starts a new build.
+// The reopened window is what lets the reconciler start one new build of a
+// failed workspace it has already reported.
 // It is a no-op returning ErrConflict when the worker has already checked in or
 // the session is not meant to be running, so it cannot disturb a live session.
 func (s *Store) RetrySessionStartup(
@@ -1564,6 +1594,8 @@ func scanSandbox(row rowScanner) (domain.Sandbox, error) {
 		&record.DeletionRequestedAt,
 		&record.LastError,
 		&record.StartupErrorCode,
+		&record.StartupErrorAt,
+		&record.ProviderFailureID,
 		&record.UpdatedAt,
 		&record.KeepAlive,
 	); err != nil {

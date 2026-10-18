@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
@@ -28,7 +27,7 @@ var vcpuLimitBuildLog = []buildLogLine{
 
 // failedBuildServer serves one workspace whose latest build ended with status
 // and transition, and the build log (or a 500 when logs is nil).
-func failedBuildServer(t *testing.T, status, transition string, completedAt time.Time, logs []buildLogLine) (*httptest.Server, *atomic.Int32) {
+func failedBuildServer(t *testing.T, status, transition string, logs []buildLogLine) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var logReads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -38,9 +37,8 @@ func failedBuildServer(t *testing.T, status, transition string, completedAt time
 			view.LatestBuild = workspaceBuild{
 				ID: testBuildID, Status: status, Transition: transition,
 				Job: workspaceBuildJob{
-					Status: status, Error: "terraform apply: exit status 1", CompletedAt: &completedAt,
+					Status: status, Error: "terraform apply: exit status 1",
 				},
-				CreatedAt: completedAt.Add(-time.Minute), UpdatedAt: completedAt,
 			}
 			writer.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(writer).Encode(view); err != nil {
@@ -64,62 +62,113 @@ func failedBuildServer(t *testing.T, status, transition string, completedAt time
 	return server, &logReads
 }
 
-func TestGetReportsFailedStartBuildWithBuildLogReason(t *testing.T) {
+// Get reports a failed start build with a generic reason and never reads
+// the build log: it runs on every reconcile pass.
+func TestGetReportsFailedStartBuildWithoutReadingItsLog(t *testing.T) {
 	t.Parallel()
-	completedAt := time.Date(2026, 10, 18, 15, 26, 23, 0, time.UTC)
-	server, _ := failedBuildServer(t, "failed", "start", completedAt, vcpuLimitBuildLog)
-	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if environment.State != sandbox.StateFailed || environment.Failure == nil {
-		t.Fatalf("environment = %+v, want failed with a failure", environment)
-	}
-	failure := environment.Failure
-	if failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed || !failure.At.Equal(completedAt) {
-		t.Fatalf("failure = %+v at %s", failure.Err, failure.At)
-	}
-	const want = "The workspace failed to build: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 32 allows"
-	if !strings.HasPrefix(failure.Err.Message, want) {
-		t.Fatalf("message = %q, want prefix %q", failure.Err.Message, want)
-	}
-	if strings.Contains(failure.Err.Message, "RequestID") || strings.Contains(failure.Err.Message, "main.tf") ||
-		len(failure.Err.Message) > len("The workspace failed to build: ")+buildFailureMessageLimit {
-		t.Fatalf("message is not a short, single cause: %q", failure.Err.Message)
-	}
-}
-
-func TestGetFallsBackToJobErrorWhenBuildLogIsUnavailable(t *testing.T) {
-	t.Parallel()
-	server, logReads := failedBuildServer(t, "failed", "start", time.Now(), nil)
-	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if environment.State != sandbox.StateFailed || environment.Failure == nil ||
-		environment.Failure.Err.Message != "The workspace failed to build: terraform apply: exit status 1" {
-		t.Fatalf("environment = %+v failure = %+v", environment, environment.Failure)
-	}
-	if logReads.Load() != 1 {
-		t.Fatalf("build log reads = %d, want 1", logReads.Load())
-	}
-}
-
-func TestGetReportsCanceledStartBuild(t *testing.T) {
-	t.Parallel()
-	completedAt := time.Date(2026, 10, 18, 15, 30, 0, 0, time.UTC)
-	server, logReads := failedBuildServer(t, "canceled", "start", completedAt, vcpuLimitBuildLog)
-	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if environment.State != sandbox.StateFailed || environment.Failure == nil ||
-		environment.Failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed ||
-		!strings.Contains(environment.Failure.Err.Message, "canceled") || !environment.Failure.At.Equal(completedAt) {
-		t.Fatalf("environment = %+v failure = %+v", environment, environment.Failure)
+	server, logReads := failedBuildServer(t, "failed", "start", vcpuLimitBuildLog)
+	client := newTestClient(t, server.URL, nil)
+	for range 3 {
+		environment, err := client.Get(context.Background(), testWorkspaceID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		failure := environment.Failure
+		if environment.State != sandbox.StateFailed || failure == nil || failure.ID != testBuildID || failure.Canceled ||
+			failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed || failure.Err.Message != buildFailedGeneric {
+			t.Fatalf("environment = %+v failure = %+v", environment, failure)
+		}
 	}
 	if logReads.Load() != 0 {
-		t.Fatalf("a canceled build read its log %d times; the cancel is the reason", logReads.Load())
+		t.Fatalf("Get read the build log %d times, want 0", logReads.Load())
+	}
+}
+
+func describe(t *testing.T, logs []buildLogLine, customerOwned bool) (*sandbox.StartupError, int32) {
+	t.Helper()
+	server, logReads := failedBuildServer(t, "failed", "start", logs)
+	client := newTestClient(t, server.URL, nil)
+	environment, err := client.Get(context.Background(), testWorkspaceID)
+	if err != nil || environment.Failure == nil {
+		t.Fatalf("get: %+v %v", environment, err)
+	}
+	return client.DescribeFailure(context.Background(), testWorkspaceID, *environment.Failure, customerOwned), logReads.Load()
+}
+
+// A customer's own workspace shows the build log's cause line, without the
+// request id or the Terraform location lines.
+func TestDescribeFailureShowsCustomerTheBuildLogCause(t *testing.T) {
+	t.Parallel()
+	described, logReads := describe(t, vcpuLimitBuildLog, true)
+	const want = "The workspace failed to build: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 32 allows"
+	if described == nil || described.Code != sandbox.StartupErrorWorkspaceBuildFailed || !strings.HasPrefix(described.Message, want) {
+		t.Fatalf("described = %+v, want prefix %q", described, want)
+	}
+	if strings.Contains(described.Message, "RequestID") || strings.Contains(described.Message, "main.tf") ||
+		len(described.Message) > len("The workspace failed to build: ")+buildFailureMessageLimit {
+		t.Fatalf("message is not a short, single cause: %q", described.Message)
+	}
+	if logReads != 1 {
+		t.Fatalf("build log reads = %d, want 1", logReads)
+	}
+}
+
+// AO's own workspace shows only the cloud API's error code: never AO's
+// accounts, limits, roles or hosts. The cause line stays in Err for operators.
+func TestDescribeFailureHidesManagedInfrastructure(t *testing.T) {
+	t.Parallel()
+	described, _ := describe(t, vcpuLimitBuildLog, false)
+	const want = "The workspace failed to build: VcpuLimitExceeded (cloud capacity limit). Try again shortly."
+	if described == nil || described.Message != want {
+		t.Fatalf("described = %+v, want %q", described, want)
+	}
+	if described.Err == nil || !strings.Contains(described.Err.Error(), "vCPU limit of 32") {
+		t.Fatalf("operator error = %v, want the cause line", described.Err)
+	}
+
+	internal := []buildLogLine{{Level: "error", Output: "Error: creating role: AccessDenied for arn:aws:iam::123456789012:role/ao-coder on ao-coder-internal.example.net"}}
+	described, _ = describe(t, internal, false)
+	if described == nil || strings.Contains(described.Message, "arn:") || strings.Contains(described.Message, "123456789012") ||
+		strings.Contains(described.Message, "example.net") {
+		t.Fatalf("managed message leaked infrastructure: %+v", described)
+	}
+
+	azure := []buildLogLine{{Level: "error", Output: `Error: creating Linux Virtual Machine "vm" (Subscription: "0000-1111"; Resource Group: "ao-rg"): Code="SkuNotAvailable" Message="The requested size is not available"`}}
+	described, _ = describe(t, azure, false)
+	if described == nil || described.Message != "The workspace failed to build: SkuNotAvailable (cloud capacity limit). Try again shortly." {
+		t.Fatalf("azure described = %+v", described)
+	}
+}
+
+// When the build log cannot be read, the job error explains a customer's
+// build, and AO's own build gets the generic reason.
+func TestDescribeFailureFallsBackToJobError(t *testing.T) {
+	t.Parallel()
+	described, logReads := describe(t, nil, true)
+	if described == nil || described.Message != "The workspace failed to build: terraform apply: exit status 1" || logReads != 1 {
+		t.Fatalf("described = %+v, log reads = %d", described, logReads)
+	}
+	described, _ = describe(t, nil, false)
+	if described == nil || described.Message != buildFailedGeneric+tryAgainShortly {
+		t.Fatalf("managed described = %+v", described)
+	}
+}
+
+func TestCanceledStartBuildIsReportedWithoutItsLog(t *testing.T) {
+	t.Parallel()
+	server, logReads := failedBuildServer(t, "canceled", "start", vcpuLimitBuildLog)
+	client := newTestClient(t, server.URL, nil)
+	environment, err := client.Get(context.Background(), testWorkspaceID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if environment.State != sandbox.StateFailed || environment.Failure == nil || !environment.Failure.Canceled ||
+		environment.Failure.ID != testBuildID {
+		t.Fatalf("environment = %+v failure = %+v", environment, environment.Failure)
+	}
+	described := client.DescribeFailure(context.Background(), testWorkspaceID, *environment.Failure, true)
+	if described == nil || described.Message != buildCanceledMessage || logReads.Load() != 0 {
+		t.Fatalf("described = %+v, log reads = %d", described, logReads.Load())
 	}
 }
 
@@ -128,7 +177,7 @@ func TestGetReportsCanceledStartBuild(t *testing.T) {
 func TestFailedStopBuildCarriesNoStartupFailure(t *testing.T) {
 	t.Parallel()
 	for _, transition := range []string{"stop", "delete"} {
-		server, logReads := failedBuildServer(t, "failed", transition, time.Now(), vcpuLimitBuildLog)
+		server, logReads := failedBuildServer(t, "failed", transition, vcpuLimitBuildLog)
 		environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
 		if err != nil {
 			t.Fatalf("%s: get: %v", transition, err)
@@ -140,19 +189,16 @@ func TestFailedStopBuildCarriesNoStartupFailure(t *testing.T) {
 	}
 }
 
-func TestBuildFailedMessageRedactsAndBounds(t *testing.T) {
+func TestDescribeFailureRedactsAndBounds(t *testing.T) {
 	t.Parallel()
-	message := buildFailedMessage("", []string{
-		"",
-		"Error: provider rejected the request: password=hunter2-very-secret " + strings.Repeat("word ", 200),
-	})
-	if strings.Contains(message, "hunter2") {
-		t.Fatalf("message leaked a secret: %q", message)
+	described, _ := describe(t, []buildLogLine{
+		{Level: "error", Output: ""},
+		{Level: "error", Output: "Error: provider rejected the request: password=hunter2-very-secret " + strings.Repeat("word ", 200)},
+	}, true)
+	if described == nil || strings.Contains(described.Message, "hunter2") {
+		t.Fatalf("message leaked a secret: %+v", described)
 	}
-	if !strings.HasSuffix(message, "...") || len(message) > len("The workspace failed to build: ")+buildFailureMessageLimit {
-		t.Fatalf("message was not bounded: %d bytes", len(message))
-	}
-	if got := buildFailedMessage("", nil); got != "The workspace failed to build in Coder." {
-		t.Fatalf("empty message = %q", got)
+	if !strings.HasSuffix(described.Message, "...") || len(described.Message) > len("The workspace failed to build: ")+buildFailureMessageLimit {
+		t.Fatalf("message was not bounded: %d bytes", len(described.Message))
 	}
 }

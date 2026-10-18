@@ -67,8 +67,9 @@ func TestSandboxStartupErrorLifecycle(t *testing.T) {
 	for _, record := range claimed {
 		if record.SessionID == fixture.sessionID {
 			found = true
-			if record.StartupErrorCode != "workspace_not_ready" {
-				t.Fatalf("claimed startup error code = %q", record.StartupErrorCode)
+			if record.StartupErrorCode != "workspace_not_ready" ||
+				record.StartupErrorAt == nil || !record.StartupErrorAt.Equal(firstAt) {
+				t.Fatalf("claimed startup error = %q at %v, want at %s", record.StartupErrorCode, record.StartupErrorAt, firstAt)
 			}
 		}
 	}
@@ -168,5 +169,60 @@ func TestSandboxFailureOpensStartupWindowForUnstartedWorker(t *testing.T) {
 	fail()
 	if at := startedAt(); at != nil {
 		t.Fatalf("a checked-in worker's failure opened a startup window at %v", at)
+	}
+}
+
+// The failed build the reconciler acted on is stored under the reconcile
+// lease, as one key of bootstrap_context, and read back on the next claim, so
+// each failure is acted on once.
+func TestSandboxProviderFailureIsFencedAndClaimed(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	const owner = "provider-failure-test-owner"
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running',
+		bootstrap_context = bootstrap_context || '{"kept": "yes"}'::jsonb,
+		reconcile_lease_owner = $3, reconcile_lease_until = now() + interval '1 minute'
+		WHERE session_id = $1 AND org_id = $2`, fixture.sessionID, fixture.orgID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, "someone-else", fixture.orgID, fixture.sessionID,
+		"build-1"); !errors.Is(err, ErrSandboxLeaseLost) {
+		t.Fatalf("record without the lease = %v, want ErrSandboxLeaseLost", err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, owner, fixture.orgID, fixture.sessionID, "build-1#restarted"); err != nil {
+		t.Fatalf("record provider failure: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET reconcile_lease_owner = '', reconcile_lease_until = NULL,
+		reconcile_after = now() - interval '1 hour' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimSandboxes(ctx, owner, 100, time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	found := false
+	for _, record := range claimed {
+		if record.SessionID == fixture.sessionID {
+			found = true
+			if record.ProviderFailureID != "build-1#restarted" {
+				t.Fatalf("claimed provider failure = %q", record.ProviderFailureID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("sandbox was not claimed")
+	}
+	// It is one key of bootstrap_context: the rest of the object is kept, and
+	// a second write replaces the key.
+	if err := store.RecordSandboxProviderFailure(ctx, owner, fixture.orgID, fixture.sessionID, "build-2"); err != nil {
+		t.Fatalf("record second provider failure: %v", err)
+	}
+	var stored, other string
+	if err := admin.QueryRow(ctx, `SELECT bootstrap_context ->> 'providerFailureId', bootstrap_context ->> 'kept'
+		FROM ao_sandboxes WHERE session_id = $1`, fixture.sessionID).Scan(&stored, &other); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "build-2" || other != "yes" {
+		t.Fatalf("bootstrap_context providerFailureId = %q kept = %q", stored, other)
 	}
 }
