@@ -1586,6 +1586,27 @@ func (q *Queries) NextConversationSequence(ctx context.Context, arg NextConversa
 	return latest_sequence, err
 }
 
+const postponeConversationTurnAutoResume = `-- name: PostponeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = ?1
+WHERE id = ?2 AND conversation_id = ?3
+  AND usage_limit_auto_resume = 1
+`
+
+type PostponeConversationTurnAutoResumeParams struct {
+	ResetsAt       sql.NullTime
+	ID             string
+	ConversationID string
+}
+
+func (q *Queries) PostponeConversationTurnAutoResume(ctx context.Context, arg PostponeConversationTurnAutoResumeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, postponeConversationTurnAutoResume, arg.ResetsAt, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recomputeConversationCompactedAt = `-- name: RecomputeConversationCompactedAt :exec
 UPDATE conversations
 SET compacted_at = (

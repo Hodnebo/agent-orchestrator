@@ -47,42 +47,48 @@ func (u *usageLimitTracker) observe(n notification, rootThread string, now time.
 			RateLimits json.RawMessage `json:"rateLimits"`
 		}
 		var wire capacityWireBucket
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(n.Params, &p) != nil || json.Unmarshal(p.RateLimits, &wire) != nil || json.Unmarshal(p.RateLimits, &fields) != nil {
+		if json.Unmarshal(n.Params, &p) != nil || json.Unmarshal(p.RateLimits, &wire) != nil {
 			return
 		}
 		if wire.LimitID == nil || *wire.LimitID != "codex" {
 			u.ambiguous = true
 			return
 		}
-		_, primaryReported := fields["primary"]
-		_, secondaryReported := fields["secondary"]
-		if u.ambiguous || !primaryReported || !secondaryReported ||
-			(wire.SpendControlReached != nil && *wire.SpendControlReached) ||
-			(wire.RateLimitReachedType != nil && *wire.RateLimitReachedType != "rate_limit_reached" && *wire.RateLimitReachedType != "") {
+		if u.ambiguous {
 			return
 		}
-		var latest time.Time
-		for _, window := range []*capacityWireWindow{wire.Primary, wire.Secondary} {
-			if window == nil {
-				continue
-			}
-			normalized := normalizeCapacityWindow(window)
-			if normalized == nil {
-				return
-			}
-			if normalized.UsedPercent < 100 {
-				continue
-			}
-			if normalized.ResetsAt == nil || !normalized.ResetsAt.After(now) {
-				return
-			}
-			if normalized.ResetsAt.After(latest) {
-				latest = *normalized.ResetsAt
-			}
-		}
-		u.resetAt = latest
+		u.resetAt = codexUsageLimitResetAt(wire, now)
 	}
+}
+
+// codexUsageLimitResetAt is shared by turn notifications and account reads.
+// Display-normalized capacity alone cannot distinguish rolling and spend caps.
+func codexUsageLimitResetAt(wire capacityWireBucket, now time.Time) time.Time {
+	if wire.LimitID == nil || *wire.LimitID != "codex" || !wire.primaryReported || !wire.secondaryReported ||
+		(wire.SpendControlReached != nil && *wire.SpendControlReached) ||
+		(wire.RateLimitReachedType != nil && *wire.RateLimitReachedType != "rate_limit_reached" && *wire.RateLimitReachedType != "") {
+		return time.Time{}
+	}
+	var latest time.Time
+	for _, window := range []*capacityWireWindow{wire.Primary, wire.Secondary} {
+		if window == nil {
+			continue
+		}
+		normalized := normalizeCapacityWindow(window)
+		if normalized == nil {
+			return time.Time{}
+		}
+		if normalized.UsedPercent < 100 {
+			continue
+		}
+		if normalized.ResetsAt == nil || !normalized.ResetsAt.After(now) {
+			return time.Time{}
+		}
+		if normalized.ResetsAt.After(latest) {
+			latest = *normalized.ResetsAt
+		}
+	}
+	return latest
 }
 
 func (u *usageLimitTracker) decorate(ev ports.ChatEvent, now time.Time) ports.ChatEvent {

@@ -3065,7 +3065,7 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if !enabled && resumeError != "" {
+	if enabled || resumeError != "" {
 		turn, err := s.qw.SelectConversationTurnByID(ctx, turnID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ErrNoConversationTurn
@@ -3077,8 +3077,28 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 			return domain.ErrNoConversationTurn
 		}
 		// A manual retry or cancellation may have consumed the scanned intent.
-		if turn.UsageLimitAutoResume == 0 {
+		if !enabled && turn.UsageLimitAutoResume == 0 {
 			return nil
+		}
+		if enabled {
+			_, retryErr := s.qw.SelectConversationRetryTurnIDBySource(ctx, gen.SelectConversationRetryTurnIDBySourceParams{
+				ConversationID: conversationID, RetryOfTurnID: sql.NullString{String: turnID, Valid: true},
+			})
+			if retryErr == nil {
+				return domain.ErrNoConversationTurn
+			}
+			if !errors.Is(retryErr, sql.ErrNoRows) {
+				return fmt.Errorf("read turn retry receipt: %w", retryErr)
+			}
+			changed, err := s.qw.SessionAgentAccountChangedSince(ctx, gen.SessionAgentAccountChangedSinceParams{
+				SessionID: turn.HandledBySessionID, RequestedAt: turn.RequestedAt,
+			})
+			if err != nil {
+				return fmt.Errorf("read turn account binding: %w", err)
+			}
+			if changed {
+				return ports.ErrAgentAccountChanged
+			}
 		}
 	}
 	var armed int64
@@ -3099,6 +3119,19 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 		return domain.ErrNoConversationTurn
 	}
 	return nil
+}
+
+// PostponeTurnAutoResume moves an armed deadline without restoring consumed consent.
+func (s *Store) PostponeTurnAutoResume(ctx context.Context, conversationID, turnID string, resetAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.PostponeConversationTurnAutoResume(ctx, gen.PostponeConversationTurnAutoResumeParams{
+		ID: turnID, ConversationID: conversationID, ResetsAt: timeToNullTime(resetAt),
+	})
+	if err != nil {
+		return false, fmt.Errorf("postpone turn auto-resume: %w", err)
+	}
+	return n > 0, nil
 }
 
 // AutoResumeTurns reads durable intent and deadlines so a sweep can skip future

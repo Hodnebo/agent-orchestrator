@@ -126,6 +126,7 @@ func TestSetTurnAutoResumeRoute(t *testing.T) {
 		{"wrong type", `{"enabled":"yes"}`, http.StatusBadRequest, nil, nil},
 		{"unknown reset", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitResetUnknown},
 		{"superseded", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitAutoResumeInvalid},
+		{"account changed", `{"enabled":true}`, http.StatusConflict, boolPointer(true), ports.ErrAgentAccountChanged},
 		{"wrong turn", `{"enabled":true}`, http.StatusNotFound, boolPointer(true), domain.ErrNoConversationTurn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

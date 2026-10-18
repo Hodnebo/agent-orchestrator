@@ -88,6 +88,7 @@ type Service struct {
 	backgroundWakes    map[domain.SessionID]bool
 	autoResumeMu       sync.Mutex
 	autoResumeRetryAt  map[string]time.Time
+	usageLimitAccounts usageLimitAccountReader
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)
 	promptSuggestionSlots chan struct{}

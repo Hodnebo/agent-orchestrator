@@ -209,6 +209,7 @@ var shippedMigrations = map[int64]string{
 	211: "0211_account_transitions.sql",
 	212: "0212_session_runtime_released.sql",
 	213: "0213_usage_limit_auto_resume.sql",
+	214: "0214_usage_limit_reset_cdc.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

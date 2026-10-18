@@ -20,8 +20,20 @@ const usageLimitAutoResumeBackoff = 30 * time.Second
 
 type usageLimitStore interface {
 	SetTurnAutoResume(context.Context, string, string, *time.Time, bool, string) error
+	PostponeTurnAutoResume(context.Context, string, string, time.Time) (bool, error)
 	AutoResumeTurns(context.Context) ([]domain.ConversationTurn, error)
 	LatestAutoResumeTurn(context.Context, string) (domain.ConversationTurn, error)
+}
+
+type usageLimitAccountReader interface {
+	SessionLimits(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error)
+}
+
+// SetUsageLimitAccounts shares the account service's provider readings with recovery.
+func (s *Service) SetUsageLimitAccounts(accounts usageLimitAccountReader) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usageLimitAccounts = accounts
 }
 
 // SetTurnAutoResume arms one failed human prompt, rather than a session-wide
@@ -33,7 +45,8 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if !ok {
 		return ErrUsageLimitAutoResumeInvalid
 	}
-	if _, found, err := s.sessions.GetSession(ctx, id); err != nil {
+	record, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
 		return err
 	} else if !found {
 		return ports.ErrSessionNotFound
@@ -59,7 +72,7 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 		}
 		return err
 	}
-	if err := s.validateUsageLimitSession(ctx, id); err != nil {
+	if err := validateUsageLimitSession(record); err != nil {
 		return err
 	}
 	if err := validateUsageLimitSource(ctx, s.store, store, source, id); err != nil {
@@ -72,10 +85,9 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	return err
 }
 
-func (s *Service) validateUsageLimitSession(ctx context.Context, id domain.SessionID) error {
-	record, err := s.requireChatSession(ctx, id)
-	if err != nil {
-		return err
+func validateUsageLimitSession(record domain.SessionRecord) error {
+	if domain.NormalizeSessionMode(record.Mode) != domain.SessionModeChat {
+		return ErrNotChatMode
 	}
 	if record.IsTerminated || record.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		return fmt.Errorf("%w: this session is no longer ready", ErrUsageLimitAutoResumeInvalid)
@@ -84,6 +96,35 @@ func (s *Service) validateUsageLimitSession(ctx context.Context, id domain.Sessi
 		return fmt.Errorf("%w: the agent needs input", ErrUsageLimitAutoResumeInvalid)
 	}
 	return nil
+}
+
+// Account readings can extend a known deadline, never shorten it or create consent.
+func (s *Service) postponeUsageLimit(ctx context.Context, store usageLimitStore, source domain.ConversationTurn, harness domain.AgentHarness) (bool, error) {
+	s.mu.RLock()
+	accounts := s.usageLimitAccounts
+	s.mu.RUnlock()
+	if accounts == nil {
+		return false, nil
+	}
+	// An optional quota probe must not hold up the already-authorized retry.
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	_, limits, err := accounts.SessionLimits(readCtx, source.HandledBySessionID, harness, true)
+	cancel()
+	if errors.Is(err, ports.ErrAgentAccountChanged) {
+		return false, err
+	}
+	if err != nil {
+		s.log.Debug("usage-limit account refresh unavailable; using turn reset", "session", source.HandledBySessionID, "error", err)
+		limits.AutoResumeResetsAt = nil
+	}
+	if limits.AutoResumeResetsAt == nil || !limits.AutoResumeResetsAt.After(s.now()) ||
+		!limits.AutoResumeResetsAt.After(*source.UsageLimit.ResetsAt) {
+		return false, nil
+	}
+	// A retry or account move may consume consent during the probe. A zero-row
+	// update leaves it consumed and ends this attempt without dispatching.
+	_, err = store.PostponeTurnAutoResume(ctx, source.ConversationID, source.ID, *limits.AutoResumeResetsAt)
+	return err == nil, err
 }
 
 func validateUsageLimitSource(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn, sessionID domain.SessionID) error {
@@ -161,6 +202,7 @@ func permanentUsageLimitResumeError(err error) bool {
 		errors.Is(err, ErrRetryDeliveryUncertain) ||
 		errors.Is(err, ErrRetryContentInvalid) ||
 		errors.Is(err, ErrRetryUnsupported) ||
+		errors.Is(err, ports.ErrAgentAccountChanged) ||
 		errors.Is(err, ports.ErrChatAuthRequired)
 }
 
@@ -207,6 +249,7 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 			}
 			// A cancellation or manual retry can consume intent after the scan.
 			source, err := s.store.TurnByID(ctx, candidate.ID)
+			var record domain.SessionRecord
 			if err == nil {
 				if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
 					delete(s.autoResumeRetryAt, candidate.ID)
@@ -215,10 +258,20 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 				if source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
 					return nil
 				}
-				err = s.validateUsageLimitSession(ctx, source.HandledBySessionID)
+				record, err = s.requireChatSession(ctx, source.HandledBySessionID)
+				if err == nil {
+					err = validateUsageLimitSession(record)
+				}
 			}
 			if err == nil {
 				err = validateUsageLimitSource(ctx, s.store, store, source, source.HandledBySessionID)
+			}
+			if err == nil {
+				var postponed bool
+				postponed, err = s.postponeUsageLimit(ctx, store, source, record.Harness)
+				if postponed {
+					return nil
+				}
 			}
 			if err == nil {
 				// Hibernation recovery already permits a 60-second native wake.

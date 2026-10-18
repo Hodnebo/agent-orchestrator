@@ -1615,6 +1615,12 @@ SET usage_limit_resets_at = COALESCE(sqlc.narg(resets_at), usage_limit_resets_at
     usage_limit_resume_error = sqlc.arg(resume_error)
 WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id);
 
+-- name: PostponeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = sqlc.arg(resets_at)
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
+  AND usage_limit_auto_resume = 1;
+
 -- name: SelectAutoResumeConversationTurns :many
 SELECT * FROM conversation_turns
 WHERE usage_limit_auto_resume = 1

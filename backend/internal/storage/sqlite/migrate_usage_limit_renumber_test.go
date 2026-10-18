@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (201, 1);`)
 				if err := migrate(db); err != nil {
 					t.Fatalf("migrate: %v", err)
 				}
-				assertAppliedMigrations(t, db, 206, 213)
+				assertAppliedMigrations(t, db, 206, 213, 214)
 				assertUsageLimitMigrationApplied(t, db)
 				var receipts int
 				if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&receipts); err != nil {
@@ -74,7 +75,7 @@ VALUES ('quota-message', 'quota-conversation', 'quota-turn', 1, 'user', 'human',
 		if err := migrate(db); err != nil {
 			t.Fatalf("migrate legacy usage-limit schema: %v", err)
 		}
-		assertAppliedMigrations(t, db, 201, 206, 213)
+		assertAppliedMigrations(t, db, 201, 206, 213, 214)
 		assertUsageLimitMigrationApplied(t, db)
 		var oldReceipt int64
 		if err := db.QueryRow(`SELECT id FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&oldReceipt); err != nil || oldReceipt != receiptID {
@@ -118,6 +119,29 @@ func TestUsageLimitRenumberRefusesIncompleteSchema(t *testing.T) {
 				t.Fatalf("incomplete schema marked as applied: receipts=%d err=%v", receipts, err)
 			}
 		})
+	}
+}
+
+func TestMigrateUsageLimitResetCDCFrom213(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 213)
+	var trigger string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'conversation_turns_auto_resume_cdc_update'`).Scan(&trigger); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(trigger, "usage_limit_resets_at") {
+		t.Fatal("213 fixture already has reset CDC")
+	}
+	for range 2 {
+		if err := migrate(db); err != nil {
+			t.Fatal(err)
+		}
+		assertAppliedMigrations(t, db, 213, 214)
+		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'conversation_turns_auto_resume_cdc_update'`).Scan(&trigger); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(trigger, "OLD.usage_limit_resets_at IS NOT NEW.usage_limit_resets_at") {
+			t.Fatalf("214 did not upgrade reset CDC: %s", trigger)
+		}
 	}
 }
 
