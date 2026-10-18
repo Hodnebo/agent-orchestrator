@@ -1071,7 +1071,11 @@ export interface paths {
          *     authenticated worker and epoch. `chat.assistant_delta` is fenced by both
          *     the token epoch and the claimed turn attempt. `workspace.setup` reports
          *     the outcome of the project's Setup commands and is appended to the
-         *     session's event stream.
+         *     session's event stream. `workspace.script.step` reports one step of a
+         *     Setup run (its start, live output updates and outcome, and the steps a
+         *     failure skipped); its output is redacted again and bounded before it
+         *     is appended. A control plane that predates an event type refuses it
+         *     with 400 `INVALID_EVENT_TYPE`.
          *      */
         post: operations["publishWorkerEvent"];
         delete?: never;
@@ -2218,6 +2222,58 @@ export interface components {
             type: "workspace.setup";
             payload: components["schemas"]["WorkerSetupPayload"];
         };
+        /** @description One step of a project's Setup or Cleanup run. The newest event for a run's step carries everything needed to show it: a live update repeats the step's facts with the latest output tail. */
+        ScriptStepPayload: {
+            /** @enum {string} */
+            phase: "setup" | "cleanup";
+            /** @description The same for every step of one run of the whole list. */
+            runId: string;
+            /** @description 1-based. */
+            step: number;
+            /** @description Number of steps in the run. */
+            total: number;
+            /** @description The step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. Empty when a Cleanup run's output no longer names it. */
+            command: string;
+            /** @description The repository folder the step ran in; empty for the main repository. */
+            repository: string;
+            /**
+             * @description skipped is a step that never ran because an earlier one failed; it is sent once, at the end of the run.
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "failed" | "timed_out" | "skipped";
+            /** @description Set once the step finished (not on running or skipped); -1 when it timed out or could not run. */
+            exitCode?: number;
+            /**
+             * Format: date-time
+             * @description When the step started. Absent on a skipped step and on a Cleanup step whose start the output no longer shows.
+             */
+            startedAt?: string;
+            /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
+            durationMs?: number;
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step. */
+            output: string;
+            /** @description True when the output's beginning was dropped. */
+            outputTruncated: boolean;
+            /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
+            logPath?: string;
+            /** @description The Linux user a failed or timed-out step ran as. */
+            user?: string;
+            /** @description The Linux groups a failed or timed-out step ran with. */
+            groups?: string[];
+            /** @description The directory a failed or timed-out step ran in. */
+            dir?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
+        };
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself. */
+        WorkerScriptStepEventInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"];
+        };
         /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
         WorkerWorkspaceStartupPayload: {
             /** @enum {string} */
@@ -2240,7 +2296,7 @@ export interface components {
             type: "workspace.startup";
             payload: components["schemas"]["WorkerWorkspaceStartupPayload"];
         };
-        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"];
+        WorkerEventInput: components["schemas"]["WorkerActivityEventInput"] | components["schemas"]["WorkerReadyEventInput"] | components["schemas"]["WorkerOutputEventInput"] | components["schemas"]["WorkerSetupEventInput"] | components["schemas"]["WorkerWorkspaceStartupEventInput"] | components["schemas"]["WorkerScriptStepEventInput"];
         WorkerOKResponse: {
             /** @constant */
             ok: true;
@@ -2923,7 +2979,18 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"];
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. */
+        ScriptStepEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "workspace.script.step";
+            payload: components["schemas"]["ScriptStepPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;

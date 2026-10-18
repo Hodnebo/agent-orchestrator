@@ -1514,7 +1514,11 @@ paths:
         authenticated worker and epoch. `chat.assistant_delta` is fenced by both
         the token epoch and the claimed turn attempt. `workspace.setup` reports
         the outcome of the project's Setup commands and is appended to the
-        session's event stream.
+        session's event stream. `workspace.script.step` reports one step of a
+        Setup run (its start, live output updates and outcome, and the steps a
+        failure skipped); its output is redacted again and bounded before it
+        is appended. A control plane that predates an event type refuses it
+        with 400 `INVALID_EVENT_TYPE`.
       requestBody:
         required: true
         content:
@@ -3981,6 +3985,88 @@ components:
           const: workspace.setup
         payload:
           $ref: "#/components/schemas/WorkerSetupPayload"
+    ScriptStepPayload:
+      type: object
+      additionalProperties: false
+      required: [phase, runId, step, total, command, repository, status, output, outputTruncated]
+      description: >-
+        One step of a project's Setup or Cleanup run. The newest event for a
+        run's step carries everything needed to show it: a live update repeats
+        the step's facts with the latest output tail.
+      properties:
+        phase:
+          type: string
+          enum: [setup, cleanup]
+        runId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The same for every step of one run of the whole list.
+        step:
+          type: integer
+          minimum: 1
+          description: 1-based.
+        total:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Number of steps in the run.
+        command:
+          type: string
+          maxLength: 300
+          description: The step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. Empty when a Cleanup run's output no longer names it.
+        repository:
+          type: string
+          description: The repository folder the step ran in; empty for the main repository.
+        status:
+          type: string
+          enum: [running, succeeded, failed, timed_out, skipped]
+          description: skipped is a step that never ran because an earlier one failed; it is sent once, at the end of the run.
+        exitCode:
+          type: integer
+          description: Set once the step finished (not on running or skipped); -1 when it timed out or could not run.
+        startedAt:
+          type: string
+          format: date-time
+          description: When the step started. Absent on a skipped step and on a Cleanup step whose start the output no longer shows.
+        durationMs:
+          type: integer
+          minimum: 0
+          description: Set once the step finished, except on a Cleanup step whose start the output no longer shows.
+        output:
+          type: string
+          description: Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step.
+        outputTruncated:
+          type: boolean
+          description: True when the output's beginning was dropped.
+        logPath:
+          type: string
+          description: The file in the sandbox with the full output (for Cleanup, the whole run's).
+        user:
+          type: string
+          description: The Linux user a failed or timed-out step ran as.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The Linux groups a failed or timed-out step ran with.
+        dir:
+          type: string
+          description: The directory a failed or timed-out step ran in.
+        hint:
+          type: string
+          description: What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH).
+    WorkerScriptStepEventInput:
+      type: object
+      additionalProperties: false
+      required: [type, payload]
+      description: A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself.
+      properties:
+        type:
+          type: string
+          const: workspace.script.step
+        payload:
+          $ref: "#/components/schemas/ScriptStepPayload"
     WorkerWorkspaceStartupPayload:
       type: object
       additionalProperties: false
@@ -4021,6 +4107,7 @@ components:
         - $ref: "#/components/schemas/WorkerOutputEventInput"
         - $ref: "#/components/schemas/WorkerSetupEventInput"
         - $ref: "#/components/schemas/WorkerWorkspaceStartupEventInput"
+        - $ref: "#/components/schemas/WorkerScriptStepEventInput"
       discriminator:
         propertyName: type
         mapping:
@@ -4029,6 +4116,7 @@ components:
           chat.assistant_delta: "#/components/schemas/WorkerOutputEventInput"
           workspace.setup: "#/components/schemas/WorkerSetupEventInput"
           workspace.startup: "#/components/schemas/WorkerWorkspaceStartupEventInput"
+          workspace.script.step: "#/components/schemas/WorkerScriptStepEventInput"
     WorkerOKResponse:
       type: object
       additionalProperties: false
@@ -5529,6 +5617,29 @@ components:
         createdAt:
           type: string
           format: date-time
+    ScriptStepEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        One step of a project's Setup (reported by the worker, live) or
+        Cleanup (reported by the control plane after the run, before the
+        workspace is deleted) run. Group by payload.runId; the newest event
+        per (runId, step) wins.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: workspace.script.step
+        payload:
+          $ref: "#/components/schemas/ScriptStepPayload"
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -5539,6 +5650,7 @@ components:
         - $ref: "#/components/schemas/TurnAbortedEvent"
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
+        - $ref: "#/components/schemas/ScriptStepEvent"
     ClientEventPage:
       type: object
       additionalProperties: false

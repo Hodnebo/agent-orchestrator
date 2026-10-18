@@ -91,6 +91,9 @@ var workerEventTypes = map[string]struct{}{
 	// workspace.startup reports whether the worker could prepare the
 	// session's workspace; a failure becomes the session's startup error.
 	worker.WorkspaceStartupEventType: {},
+	// workspace.script.step reports one step of a Setup run with its output,
+	// live while it runs.
+	worker.ScriptStepEventType: {},
 }
 
 const (
@@ -1127,6 +1130,25 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		payload, err := json.Marshal(outcome)
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
+			return
+		}
+		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
+			s.writeWorkerStoreError(w, r, err)
+			return
+		}
+	case worker.ScriptStepEventType:
+		// A worker reports only its Setup steps: Cleanup runs while the
+		// control plane deletes the workspace, which reports those itself.
+		// The step's output is redacted again and bounded before it is kept.
+		var step worker.ScriptStepEvent
+		if err := json.Unmarshal(input.Payload, &step); err != nil ||
+			!worker.ValidScriptStepEvent(step) || step.Phase != worker.ScriptPhaseSetup {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
+			return
+		}
+		payload, err := json.Marshal(worker.SanitizeScriptStepEvent(step))
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
 			return
 		}
 		if _, err := s.store.AppendSessionEvent(r.Context(), claims.OrgID, claims.SessionID, input.Type, payload); err != nil {
