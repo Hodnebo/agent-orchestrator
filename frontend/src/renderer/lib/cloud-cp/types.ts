@@ -941,6 +941,12 @@ export interface CloudCpSessionChildrenResponse {
 // Pull requests and AO reviews (`pull_request_handlers.go`)
 // ---------------------------------------------------------------------------
 
+export interface CloudCpPullRequestOpener {
+	name: string;
+	githubLogin?: string;
+	avatarUrl?: string;
+}
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -951,6 +957,8 @@ export interface CloudCpPullRequestSummary {
 	repository: string;
 	author: string;
 	authorAvatarUrl?: string;
+	/** The person behind a pull request the AO GitHub App opened for them. */
+	openedBy?: CloudCpPullRequestOpener;
 	sourceBranch: string;
 	targetBranch: string;
 	headSha: string;

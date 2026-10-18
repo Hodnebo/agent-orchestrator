@@ -1018,6 +1018,7 @@
 	"pr.ci.noFailingLink": "Kein Link zu fehlgeschlagenem Check gefunden",
 	"pr.ci.passing": "Erfolgreich",
 	"pr.ci.pending": "Ausstehend",
+	"pr.openedVia": "über AO",
 	"pr.merge.action": "Mergen",
 	"pr.merge.actionFor": "PR #{{number}} mergen",
 	"pr.merge.blocked": "Blockiert",

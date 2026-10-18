@@ -1018,6 +1018,7 @@
 	"pr.ci.noFailingLink": "실패한 검사 링크가 없습니다",
 	"pr.ci.passing": "통과",
 	"pr.ci.pending": "대기 중",
+	"pr.openedVia": "AO 경유",
 	"pr.merge.action": "병합",
 	"pr.merge.actionFor": "PR #{{number}} 병합",
 	"pr.merge.blocked": "차단됨",

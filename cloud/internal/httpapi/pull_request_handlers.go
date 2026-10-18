@@ -238,6 +238,26 @@ type pullRequestSummaryResponse struct {
 	ObservedAt       time.Time                              `json:"observedAt"`
 	CIObservedAt     time.Time                              `json:"ciObservedAt"`
 	ReviewObservedAt time.Time                              `json:"reviewObservedAt"`
+	// OpenedBy is the person who started the session, set when the AO GitHub
+	// App opened the pull request for them so Author is the App's bot.
+	OpenedBy *pullRequestOpenerResponse `json:"openedBy,omitempty"`
+}
+
+type pullRequestOpenerResponse struct {
+	Name        string `json:"name"`
+	GitHubLogin string `json:"githubLogin,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+}
+
+// openedByAO reports whether a pull request's GitHub author is a bot account,
+// the AO GitHub App in practice: it opens pull requests for sessions whose
+// person never connected their own GitHub account to AO.
+func (s *Server) openedByAO(author string) bool {
+	login := strings.ToLower(strings.TrimSpace(author))
+	if login == "" {
+		return false
+	}
+	return strings.HasSuffix(login, "[bot]") || s.github.IsAppAccount(login)
 }
 
 func toPullRequestSummaryResponse(pr domain.PullRequest, snapshot domain.PullRequestSnapshot) pullRequestSummaryResponse {
@@ -412,6 +432,10 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items := make([]pullRequestSummaryResponse, 0, len(pullRequests))
+	var (
+		opener       *pullRequestOpenerResponse
+		openerLoaded bool
+	)
 	for _, pr := range pullRequests {
 		snapshot, err := s.store.PullRequestSnapshot(r.Context(), orgID, pr.ID)
 		if err != nil {
@@ -419,6 +443,20 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		item := toPullRequestSummaryResponse(pr, snapshot)
+		if s.openedByAO(item.Author) {
+			if !openerLoaded {
+				openerLoaded = true
+				resolved, err := s.store.SessionPullRequestOpener(r.Context(), orgID, sessionID)
+				if err != nil {
+					s.logger.Warn("resolve pull request opener", "error", err, "request_id", requestID(r))
+				} else if resolved.Name != "" || resolved.GitHubLogin != "" {
+					opener = &pullRequestOpenerResponse{
+						Name: resolved.Name, GitHubLogin: resolved.GitHubLogin, AvatarURL: resolved.AvatarURL,
+					}
+				}
+			}
+			item.OpenedBy = opener
+		}
 		if s.github != nil && pr.Provider == "github" && (pr.State == contract.PRStateOpen || pr.State == contract.PRStateDraft) {
 			_, _, err := s.store.GitHubInstallationForRepository(r.Context(), orgID, pr.Repository)
 			if errors.Is(err, postgres.ErrNotFound) {

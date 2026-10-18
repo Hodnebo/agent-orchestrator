@@ -961,14 +961,18 @@ func (s *Service) RaisePullRequest(
 			postgres.ErrInvalid,
 		)
 	}
-	pr, err := s.client.CreatePullRequest(ctx, access.Token, owner, repo, CreatePullRequestInput{
+	create := CreatePullRequestInput{
 		Title: title,
 		Body:  input.Body,
 		Head:  head,
 		Base:  base,
-	})
-	if err != nil {
-		return domain.PullRequest{}, err
+	}
+	pr, opened := s.createPullRequestAsSessionUser(ctx, authorization, owner, repo, create)
+	if !opened {
+		pr, err = s.client.CreatePullRequest(ctx, access.Token, owner, repo, create)
+		if err != nil {
+			return domain.PullRequest{}, err
+		}
 	}
 	record, err := s.store.CreatePullRequestRecord(
 		ctx,
@@ -981,6 +985,52 @@ func (s *Service) RaisePullRequest(
 		return domain.PullRequest{}, err
 	}
 	return record, nil
+}
+
+// IsAppAccount reports whether a GitHub login is this App's bot account. The
+// REST API names it "<slug>[bot]" and GraphQL plain "<slug>".
+func (s *Service) IsAppAccount(login string) bool {
+	if s == nil || s.client == nil || s.client.appSlug == "" {
+		return false
+	}
+	login = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+	return login == strings.ToLower(s.client.appSlug)
+}
+
+// createPullRequestAsSessionUser opens the pull request with the GitHub user
+// token of the person who started the session, so GitHub shows them as its
+// author instead of the App's bot account. It reports false, and the caller
+// opens it with the installation token, when that person never connected
+// GitHub to AO or GitHub refuses their token (for example, they cannot push to
+// the repository). The branch is already pushed, so either way the same pull
+// request is opened.
+func (s *Service) createPullRequestAsSessionUser(
+	ctx context.Context,
+	authorization domain.GitHubCheckoutContext,
+	owner, repo string,
+	input CreatePullRequestInput,
+) (PullRequestResponse, bool) {
+	userID := strings.TrimSpace(authorization.SessionUserID)
+	if userID == "" {
+		return PullRequestResponse{}, false
+	}
+	_, token, err := s.githubUserAccessToken(ctx, userID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return PullRequestResponse{}, false
+	}
+	if err != nil {
+		s.logger.Warn("GitHub user token unavailable; opening the pull request as the App",
+			"org_id", authorization.OrgID, "session_id", authorization.SessionID, "error", err)
+		return PullRequestResponse{}, false
+	}
+	pr, err := s.client.CreatePullRequest(ctx, token, owner, repo, input)
+	if err != nil {
+		s.logger.Warn("opening the pull request as the session's GitHub user failed; opening it as the App",
+			"org_id", authorization.OrgID, "session_id", authorization.SessionID,
+			"repository", owner+"/"+repo, "error", err)
+		return PullRequestResponse{}, false
+	}
+	return pr, true
 }
 
 // ClaimPullRequest records a pull request that worker-side tooling already

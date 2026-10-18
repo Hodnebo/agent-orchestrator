@@ -1018,6 +1018,7 @@
 	"pr.ci.noFailingLink": "失敗したチェックのリンクは見つかりませんでした",
 	"pr.ci.passing": "成功",
 	"pr.ci.pending": "保留中",
+	"pr.openedVia": "AO 経由",
 	"pr.merge.action": "マージ",
 	"pr.merge.actionFor": "PR #{{number}} をマージ",
 	"pr.merge.blocked": "ブロック中",
