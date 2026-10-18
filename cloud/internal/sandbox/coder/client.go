@@ -478,20 +478,24 @@ type workspaceHealth struct {
 }
 
 type workspaceBuild struct {
-	ID        string              `json:"id"`
-	Status    string              `json:"status"`
-	Job       workspaceBuildJob   `json:"job"`
-	Reason    string              `json:"reason"`
-	Deadline  *time.Time          `json:"deadline"`
-	Resources []workspaceResource `json:"resources"`
+	ID         string              `json:"id"`
+	Status     string              `json:"status"`
+	Transition string              `json:"transition"`
+	Job        workspaceBuildJob   `json:"job"`
+	Reason     string              `json:"reason"`
+	Deadline   *time.Time          `json:"deadline"`
+	Resources  []workspaceResource `json:"resources"`
+	CreatedAt  time.Time           `json:"created_at"`
+	UpdatedAt  time.Time           `json:"updated_at"`
 }
 
 // workspaceBuildJob is the provisioner job behind a build; its error explains
 // a failed build (a template error, a cloud quota) in the provider's words.
 type workspaceBuildJob struct {
-	Status    string `json:"status"`
-	Error     string `json:"error"`
-	ErrorCode string `json:"error_code"`
+	Status      string     `json:"status"`
+	Error       string     `json:"error"`
+	ErrorCode   string     `json:"error_code"`
+	CompletedAt *time.Time `json:"completed_at"`
 }
 
 type workspaceResource struct {
@@ -664,7 +668,13 @@ func (c *Client) Get(ctx context.Context, id sandbox.ID) (sandbox.Environment, e
 			return sandbox.Environment{}, err
 		}
 	}
-	return c.toEnvironment(view), nil
+	environment := c.toEnvironment(view)
+	if environment.Failure != nil && buildStatus(view.LatestBuild) == buildStatusFailed {
+		// The job error is usually only "terraform apply: exit status 1"; the
+		// build log names the real cause (a cloud quota, a bad parameter).
+		environment.Failure.Err.Message = buildFailedMessage(view.LatestBuild.Job.Error, c.buildErrorLines(ctx, view.LatestBuild.ID))
+	}
+	return environment, nil
 }
 
 // FindBySession recovers a workspace after a control-plane crash between
@@ -777,6 +787,9 @@ func (c *Client) toEnvironment(view workspace) sandbox.Environment {
 		ID: sandbox.ID(view.ID), Name: view.Name, State: state, Target: agent.ID,
 		Resource: domain.ResourceProfile{}, Deadline: view.LatestBuild.Deadline,
 	}
+	if state == sandbox.StateFailed {
+		environment.Failure = buildFailure(view.LatestBuild)
+	}
 	if state == sandbox.StateStopped {
 		switch strings.ToLower(strings.TrimSpace(view.LatestBuild.Reason)) {
 		case "autostop", "dormancy":
@@ -796,6 +809,11 @@ func normalizeState(status string) string {
 		return sandbox.StateDeleting
 	case "deleted":
 		return sandbox.StateDeleted
+	case buildStatusFailed, buildStatusCanceled:
+		// A failed or canceled build never finishes on its own. Reporting it
+		// as provisioning left a session waiting out its whole startup budget
+		// with no reason, and a retry restarted nothing.
+		return sandbox.StateFailed
 	default:
 		return sandbox.StateProvisioning
 	}

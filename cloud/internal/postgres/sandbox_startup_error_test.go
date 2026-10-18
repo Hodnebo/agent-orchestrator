@@ -117,3 +117,56 @@ func TestSandboxStartupErrorLifecycle(t *testing.T) {
 		t.Fatalf("retry after check-in = %v, want ErrConflict", err)
 	}
 }
+
+// A failure opens the startup window of a sandbox whose worker never checked
+// in, without moving one already open, so compute that keeps failing to be
+// created is bounded by the startup budget. A checked-in worker's sandbox is
+// not given a startup window by a failed probe.
+func TestSandboxFailureOpensStartupWindowForUnstartedWorker(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	const owner = "startup-window-test-owner"
+	arm := func(query string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET `+query+`,
+			reconcile_lease_owner = $3, reconcile_lease_until = now() + interval '1 minute'
+			WHERE session_id = $1 AND org_id = $2`, fixture.sessionID, fixture.orgID, owner); err != nil {
+			t.Fatalf("update sandbox: %v", err)
+		}
+	}
+	startedAt := func() *time.Time {
+		t.Helper()
+		var at *time.Time
+		if err := admin.QueryRow(ctx, `SELECT startup_started_at FROM ao_sandboxes WHERE session_id = $1`,
+			fixture.sessionID).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	fail := func() {
+		t.Helper()
+		if err := store.RecordSandboxFailure(ctx, owner, fixture.orgID, fixture.sessionID, "", "create failed"); err != nil {
+			t.Fatalf("record failure: %v", err)
+		}
+	}
+
+	arm(`desired_state = 'running', observed_state = 'requested', provider_environment_id = NULL,
+		worker_last_seen_at = NULL, startup_started_at = NULL`)
+	fail()
+	opened := startedAt()
+	if opened == nil || time.Since(*opened) > time.Minute {
+		t.Fatalf("startup window after a failed create = %v, want opened now", opened)
+	}
+
+	arm(`startup_started_at = now() - interval '7 minutes'`)
+	fail()
+	if at := startedAt(); at == nil || time.Since(*at) < 6*time.Minute {
+		t.Fatalf("a repeated failure moved the startup window to %v", at)
+	}
+
+	arm(`observed_state = 'running', worker_last_seen_at = now(), startup_started_at = NULL`)
+	fail()
+	if at := startedAt(); at != nil {
+		t.Fatalf("a checked-in worker's failure opened a startup window at %v", at)
+	}
+}
