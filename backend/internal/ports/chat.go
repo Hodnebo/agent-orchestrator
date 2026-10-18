@@ -1145,6 +1145,12 @@ type ChatEvent struct {
 	Err error
 }
 
+// ChatInstallChecker is implemented by chat drivers that can tell, without
+// starting anything, that the adapter they need is missing.
+type ChatInstallChecker interface {
+	CheckChatInstall(ctx context.Context) error
+}
+
 // ChatDriver opens conversations for one harness.
 type ChatDriver interface {
 	// Harness is the agent this driver serves.

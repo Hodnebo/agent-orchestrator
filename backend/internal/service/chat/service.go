@@ -2162,6 +2162,24 @@ func capabilityAdmissionError(
 	}
 }
 
+// ChatUnavailable maps each of harnesses whose chat adapter is missing to the
+// reason. It starts nothing, so it is cheap enough for a picker to ask.
+func (s *Service) ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string {
+	out := map[domain.AgentHarness]string{}
+	for _, harness := range harnesses {
+		driver, err := s.drivers.Driver(harness)
+		if err != nil {
+			continue
+		}
+		if checker, ok := driver.(ports.ChatInstallChecker); ok {
+			if err := checker.CheckChatInstall(ctx); err != nil {
+				out[harness] = err.Error()
+			}
+		}
+	}
+	return out
+}
+
 // prewarmTimeout bounds one background readiness check.
 const prewarmTimeout = 30 * time.Second
 

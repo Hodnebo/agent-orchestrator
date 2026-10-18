@@ -131,6 +131,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/queue/reorder", c.reorderQueuedTurns)
 	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
 	r.Post("/agents/{agent}/chat/prewarm", c.prewarmAgent)
+	r.Get("/agents/chat/unavailable", c.unavailableChatAgents)
 	r.Get("/sessions/{sessionId}/conversation/models", c.models)
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
@@ -666,6 +667,35 @@ func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Re
 	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
 	prewarmer.PrewarmChat(domain.AgentHarness(agent))
 	envelope.WriteJSON(w, http.StatusAccepted, PrewarmChatAgentResponse{Agent: agent})
+}
+
+// chatAvailability reports agents whose chat adapter is missing.
+type chatAvailability interface {
+	ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string
+}
+
+// unavailableChatAgents lists which of the asked agents cannot run a chat
+// because an adapter they need is not installed. It starts nothing.
+func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r *http.Request) {
+	checker, ok := c.Svc.(chatAvailability)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/chat/unavailable")
+		return
+	}
+	var harnesses []domain.AgentHarness
+	for _, agent := range strings.Split(r.URL.Query().Get("agents"), ",") {
+		if agent = strings.TrimSpace(agent); agent != "" && len(harnesses) < 64 {
+			harnesses = append(harnesses, domain.AgentHarness(agent))
+		}
+	}
+	unavailable := checker.ChatUnavailable(r.Context(), harnesses)
+	response := UnavailableChatAgentsResponse{Agents: []UnavailableChatAgent{}}
+	for _, harness := range harnesses {
+		if reason, missing := unavailable[harness]; missing {
+			response.Agents = append(response.Agents, UnavailableChatAgent{Agent: string(harness), Reason: reason})
+		}
+	}
+	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
 // models serves the provider's catalog for this session plus the current choice.

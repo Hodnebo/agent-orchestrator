@@ -192,6 +192,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/chat/unavailable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List which agents cannot run a chat because an adapter they need is not installed */
+        get: operations["listUnavailableChatAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/codex/account-switches": {
         parameters: {
             query?: never;
@@ -6846,6 +6863,13 @@ export interface components {
             reviews: components["schemas"]["PRReviewState"][];
             runs: components["schemas"]["ReviewRun"][];
         };
+        UnavailableChatAgent: {
+            agent: string;
+            reason: string;
+        };
+        UnavailableChatAgentsResponse: {
+            agents: components["schemas"]["UnavailableChatAgent"][];
+        };
         UnregisterPushDeviceResponse: {
             deleted: boolean;
             token: string;
@@ -7694,6 +7718,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listUnavailableChatAgents: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated agent adapter identifiers. */
+                agents?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnavailableChatAgentsResponse"];
                 };
             };
             /** @description Not Implemented */

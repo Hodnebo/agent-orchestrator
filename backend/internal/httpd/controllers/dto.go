@@ -101,6 +101,22 @@ type AgentIDParam struct {
 	Agent string `path:"agent" description:"Agent adapter identifier."`
 }
 
+// UnavailableChatAgentsQuery names the agents to check.
+type UnavailableChatAgentsQuery struct {
+	Agents string `query:"agents" description:"Comma-separated agent adapter identifiers."`
+}
+
+// UnavailableChatAgentsResponse lists agents whose chat adapter is missing.
+type UnavailableChatAgentsResponse struct {
+	Agents []UnavailableChatAgent `json:"agents"`
+}
+
+// UnavailableChatAgent is one agent that cannot run a chat, and why.
+type UnavailableChatAgent struct {
+	Agent  string `json:"agent"`
+	Reason string `json:"reason"`
+}
+
 // PrewarmChatAgentResponse acknowledges a background Chat readiness check.
 type PrewarmChatAgentResponse struct {
 	Agent string `json:"agent" description:"Agent adapter identifier whose Chat check was started."`

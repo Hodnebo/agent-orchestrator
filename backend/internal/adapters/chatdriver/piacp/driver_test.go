@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -112,6 +113,17 @@ func TestMissingPiACPDoesNotDownload(t *testing.T) {
 	err := cfg.Probe(context.Background())
 	if !errors.Is(err, ports.ErrChatDriverUnavailable) || !errors.Is(err, want) {
 		t.Fatalf("Probe error = %v", err)
+	}
+}
+
+func TestInstallCheckNamesTheMissingAdapter(t *testing.T) {
+	missing := buildConfig(fakePiPlugin{}, func(context.Context) (string, error) { return "", errors.New("not found") }, nil)
+	if err := missing.InstallCheck(context.Background()); err == nil || !strings.Contains(err.Error(), "npm i -g @victor-software-house/pi-acp") {
+		t.Fatalf("InstallCheck error = %v, want the install command", err)
+	}
+	installed := buildConfig(fakePiPlugin{}, func(context.Context) (string, error) { return "/user/bin/pi-acp", nil }, nil)
+	if err := installed.InstallCheck(context.Background()); err != nil {
+		t.Fatalf("InstallCheck with pi-acp installed = %v", err)
 	}
 }
 

@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
 
+const unavailableGet = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
 vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
 vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agent: string) => ({
@@ -47,6 +49,10 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 }
 
 describe("AgentModelPicker", () => {
+	beforeEach(() => {
+		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
+	});
+
 	beforeEach(() => window.localStorage.clear());
 
 	it("is one menu of Agent, Model and Effort rows for the running agent", async () => {
@@ -112,6 +118,17 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
 		fireEvent.click(await screen.findByRole("menuitemradio", { name: "Codex" }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "codex" });
+	});
+
+	it("leaves out a chat agent whose chat adapter is missing", async () => {
+		unavailableGet.mockResolvedValue({ data: { agents: [{ agent: "pi", reason: "pi-acp is not installed" }] }, error: undefined });
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		expect(await screen.findByRole("menuitemradio", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: "Pi" })).not.toBeInTheDocument();
+		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", expect.anything());
 	});
 
 	it("searches every agent's models and picks one with its agent", async () => {

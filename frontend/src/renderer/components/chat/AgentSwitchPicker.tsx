@@ -8,7 +8,7 @@
  * terminal), so browsing the lists never restarts anything.
  */
 
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, RefreshCw, Star, TriangleAlert, X, Zap } from "lucide-react";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
@@ -20,6 +20,7 @@ import { agentModelDisplayLabel, splitClaudeModels } from "../../lib/agent-model
 import { agentLabel } from "../../lib/agent-options";
 import { isLaunchableAgent } from "../../lib/agent-select-options";
 import { CHAT_SWITCH_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
+import { clientForSessionHost } from "../../lib/host-clients";
 import { toggleModelFavorite, useModelFavorites, type ModelFavorite } from "../../lib/model-favorites";
 import {
 	collapseModelVariants,
@@ -198,6 +199,20 @@ export function AgentModelPicker({
 	const { t } = useTranslation();
 	const { pending, onPendingChange, projectId, hostId } = agentSwitch;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
+	// An agent can be ready in a terminal and still miss the adapter its chat
+	// needs (Pi's pi-acp). The daemon checks that without starting anything.
+	const chatUnavailable = useQuery({
+		queryKey: ["chat-unavailable-agents", hostId ?? ""],
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/chat/unavailable", {
+				params: { query: { agents: CHAT_SWITCH_TARGETS.join(",") } },
+			});
+			if (error) throw error;
+			return new Set(data.agents.map((entry) => entry.agent));
+		},
+		enabled: !terminal,
+		staleTime: 60_000,
+	}).data;
 	// Only agents that can run are offered, as in New Task; the rest are set up
 	// from Manage agents. Unknown readiness stays selectable: the daemon checks
 	// the target before it touches the running agent.
@@ -209,9 +224,10 @@ export function AgentModelPicker({
 			if (id === currentHarness) return [];
 			const agent = readiness?.find((candidate) => candidate.id === id);
 			const label = agentLabel(id) !== id ? agentLabel(id) : agent?.label ?? id;
+			if (!terminal && chatUnavailable?.has(id)) return [];
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
-	], [currentHarness, readiness, terminal]);
+	], [chatUnavailable, currentHarness, readiness, terminal]);
 	const management = useAgentManagementMenu(undefined, hostId);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();

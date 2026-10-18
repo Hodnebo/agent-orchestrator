@@ -243,6 +243,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
 	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
+	"ControllersUnavailableChatAgentsResponse":             "UnavailableChatAgentsResponse",
+	"ControllersUnavailableChatAgent":                      "UnavailableChatAgent",
 	"ControllersProviderSwitchResponse":                    "ProviderSwitchResponse",
 	"ControllersProviderSwitchRequest":                     "ProviderSwitchRequest",
 	"ControllersSessionHistoryQuery":                       "SessionHistoryQuery",
@@ -1715,6 +1717,15 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListAgentAuthPlansResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/chat/unavailable", id: "listUnavailableChatAgents", tag: "conversations",
+			summary:    "List which agents cannot run a chat because an adapter they need is not installed",
+			pathParams: []any{controllers.UnavailableChatAgentsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.UnavailableChatAgentsResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

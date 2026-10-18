@@ -507,6 +507,33 @@ paths:
       summary: Return display-safe native authentication plans for supported agents
       tags:
       - agents
+  /api/v1/agents/chat/unavailable:
+    get:
+      operationId: listUnavailableChatAgents
+      parameters:
+      - description: Comma-separated agent adapter identifiers.
+        in: query
+        name: agents
+        schema:
+          description: Comma-separated agent adapter identifiers.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnavailableChatAgentsResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List which agents cannot run a chat because an adapter they need is
+        not installed
+      tags:
+      - conversations
   /api/v1/agents/codex/account-switches:
     post:
       operationId: startCodexAccountSwitch
@@ -19242,6 +19269,25 @@ components:
       - runs
       - created
       - autoInjectEnabled
+      type: object
+    UnavailableChatAgent:
+      properties:
+        agent:
+          type: string
+        reason:
+          type: string
+      required:
+      - agent
+      - reason
+      type: object
+    UnavailableChatAgentsResponse:
+      properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/UnavailableChatAgent'
+          type: array
+      required:
+      - agents
       type: object
     UnregisterPushDeviceResponse:
       properties:

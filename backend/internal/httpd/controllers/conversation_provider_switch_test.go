@@ -2,6 +2,7 @@ package controllers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -137,5 +138,26 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 	svc = &fakeConversationService{}
 	if rec = route(svc, `{"targetHarness":"codex","message":{"text":""}}`); rec.Code != http.StatusBadRequest || svc.switchRequest.TargetHarness != "" {
 		t.Fatalf("empty message = %d, switch request %+v", rec.Code, svc.switchRequest)
+	}
+}
+
+type unavailableChatService struct {
+	fakeConversationService
+	asked []domain.AgentHarness
+}
+
+func (s *unavailableChatService) ChatUnavailable(_ context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string {
+	s.asked = harnesses
+	return map[domain.AgentHarness]string{domain.HarnessPi: "pi-acp is not installed"}
+}
+
+func TestUnavailableChatAgentsRouteListsMissingAdapters(t *testing.T) {
+	svc := &unavailableChatService{}
+	status, body := providerSwitchRouteRequest(t, svc, http.MethodGet, "/agents/chat/unavailable?agents=codex,%20pi,,", "")
+	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"agents":[{"agent":"pi","reason":"pi-acp is not installed"}]}` {
+		t.Fatalf("unavailable = %d %s", status, body)
+	}
+	if len(svc.asked) != 2 || svc.asked[0] != domain.HarnessCodex || svc.asked[1] != domain.HarnessPi {
+		t.Fatalf("asked = %v, want codex and pi", svc.asked)
 	}
 }

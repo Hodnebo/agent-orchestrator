@@ -53,6 +53,9 @@ type Config struct {
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
+	// InstallCheck optionally reports, without starting anything, that the
+	// adapter the chat needs is missing. See ports.ChatInstallChecker.
+	InstallCheck func(context.Context) error
 	Launch       func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
@@ -240,6 +243,15 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 		return nil, err
 	}
 	return cloneCapabilities(d.cfg.Capabilities), nil
+}
+
+// CheckChatInstall reports a missing chat adapter; nil when the binding has
+// no cheap check.
+func (d *Driver) CheckChatInstall(ctx context.Context) error {
+	if d.cfg.InstallCheck == nil {
+		return nil
+	}
+	return d.cfg.InstallCheck(ctx)
 }
 
 // Start creates a new ACP session in the AO worktree.

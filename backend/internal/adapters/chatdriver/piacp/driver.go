@@ -57,6 +57,12 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			ports.ChatCapabilityUsage:     true,
 			ports.ChatCapabilityDiffs:     true,
 		},
+		InstallCheck: func(ctx context.Context) error {
+			if _, err := resolve(ctx); err != nil {
+				return fmt.Errorf("pi-acp is not installed; install it with npm i -g %s", distributionName)
+			}
+			return nil
+		},
 		Probe: func(ctx context.Context) error {
 			if _, err := resolve(ctx); err != nil {
 				return fmt.Errorf("%w: pi-acp is not installed: %w", ports.ErrChatDriverUnavailable, err)
