@@ -174,7 +174,7 @@ func (s *Store) SendOrchestratorChildMessage(
 			return err
 		}
 		if !allowed {
-			return ErrForbidden
+			return ErrNotOrchestratorChild
 		}
 		// Waking a paused billed child is refused beyond the plan, so the
 		// orchestrator learns why its worker did not start.
@@ -297,8 +297,23 @@ func (s *Store) DeleteOrchestratorChild(
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrForbidden
+		if tag.RowsAffected() > 0 {
+			return nil
+		}
+		// No sandbox moved: either the session is not this orchestrator's
+		// child, or it is and has nothing left to delete.
+		var child bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_sessions
+				WHERE org_id = $1 AND id = $2 AND project_id = $3 AND parent_session_id = $4
+			)`,
+			orgID, childSessionID, projectID, orchestratorSessionID,
+		).Scan(&child); err != nil {
+			return err
+		}
+		if !child {
+			return ErrNotOrchestratorChild
 		}
 		return nil
 	})
