@@ -505,6 +505,26 @@ type TerminalActivityDetector interface {
 	DetectTerminalActivity(output string) (domain.ActivityState, bool)
 }
 
+// TurnFailure is a provider turn that ended on an error, and when it ended.
+type TurnFailure struct {
+	At      time.Time
+	Message string
+}
+
+// TranscriptTurnFailureDetector is implemented by adapters whose harness can
+// end a turn on a provider error (usage limit, unsupported model, expired
+// sign-in) without firing the hook that reports the turn's end, while still
+// recording that end in its native transcript. Codex runs its Stop hook only
+// after a successful turn, so without this a failed turn left the session
+// active until the stale-activity observer screen-proved it idle.
+type TranscriptTurnFailureDetector interface {
+	// LastTurnFailure reports the newest turn end recorded in the transcript
+	// when that turn ended on an error and no later turn has started. ok is
+	// false for a successful, interrupted or still-running turn, and for a
+	// transcript that is missing or not the harness's own.
+	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
+}
+
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
 // coordination sent to an already-running interactive agent. It must return
 // true only when current terminal evidence positively proves that the active

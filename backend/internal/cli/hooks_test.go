@@ -577,6 +577,36 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 }
 
+// Claude fires StopFailure instead of Stop when an API error (usage limit,
+// unknown model, expired login) ends the turn. It must report idle, tagged so
+// lifecycle treats it as a turn boundary, and must not certify the error text
+// as the turn's assistant answer.
+func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"session_id":"native-1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 usage limit","last_assistant_message":"API Error: usage limit reached"}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for native-1", req)
+	}
+	if req.LatestAssistantUpdate != "" || req.LatestUserPrompt != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
+	}
+}
+
 func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")

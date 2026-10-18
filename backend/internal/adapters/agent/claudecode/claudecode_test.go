@@ -525,6 +525,15 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 	if m := matcherForCommand(config.Hooks["SessionEnd"], "ao hooks claude-code session-end"); m != nil {
 		t.Fatalf("SessionEnd matcher = %v, want none", m)
 	}
+	// A turn ended by an API error fires StopFailure instead of Stop. It must
+	// be installed for every error type (no matcher), or such a turn leaves
+	// the session active.
+	if got := countClaudeHookCommand(config.Hooks["StopFailure"], "ao hooks claude-code stop-failure"); got != 1 {
+		t.Fatalf("StopFailure command count = %d, want 1: %#v", got, config.Hooks["StopFailure"])
+	}
+	if m := matcherForCommand(config.Hooks["StopFailure"], "ao hooks claude-code stop-failure"); m != nil {
+		t.Fatalf("StopFailure matcher = %v, want none", m)
+	}
 }
 
 func TestGetAgentHooksMigratesSessionStartMatcher(t *testing.T) {

@@ -42,6 +42,11 @@ func DeriveActivityState(event string, payload []byte) (domain.ActivityState, bo
 		// idle, so an interrupted or finished turn reads Idle until the next
 		// prompt — only a real permission request flips it to waiting_input.
 		return domain.ActivityIdle, true
+	case "stop-failure":
+		// StopFailure fires instead of Stop when an API error ended the turn
+		// (rate or usage limit, unknown model, expired login, server error).
+		// The agent is back at its prompt, so the turn ended like a Stop.
+		return domain.ActivityIdle, true
 	case "notification":
 		return notificationState(payload)
 	case "session-end":
