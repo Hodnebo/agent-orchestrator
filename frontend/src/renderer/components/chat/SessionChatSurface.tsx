@@ -618,8 +618,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						// Match the displayed effort, as the terminal switch does. Cursor's
 						// variant model id already carries its effort.
 						const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
+						// The message shows at once; the switch can take seconds.
+						if (clientMessageId) commands.echoBeforeSend({ clientMessageId, text, excerpts });
 						await providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, autoCompactWindow })
-							.catch((error) => { throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED }); });
+							.catch((error) => {
+								if (clientMessageId) commands.dropEcho(clientMessageId);
+								throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+							});
 						setChosenSwitch(undefined);
 						// Ultracode picked with the switch stays on for the messages after it.
 						ultracode.onChange(Boolean(pendingSwitch.ultracode));

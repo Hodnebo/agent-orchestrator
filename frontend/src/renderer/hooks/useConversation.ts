@@ -148,9 +148,13 @@ function addConversationLocalEcho(
 	targetSessionId: string,
 	echo: ConversationLocalEcho,
 ): void {
+	// An echo shown while an agent switch ran is replaced by its send's own.
 	queryClient.setQueryData<ConversationLocalEchosBySession>(conversationLocalEchosQueryKey, (current = {}) => ({
 		...current,
-		[targetSessionId]: [...(current[targetSessionId] ?? []), echo],
+		[targetSessionId]: [
+			...(current[targetSessionId] ?? []).filter((existing) => existing.clientMessageId !== echo.clientMessageId),
+			echo,
+		],
 	}));
 }
 
@@ -1035,6 +1039,15 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		acknowledgeAcceptedTurn,
 		localEchos: stateSessionId ? localEchosBySession[stateSessionId] ?? [] : [],
 		acknowledgeLocalEcho,
+		/** Shows a message at once while the agent switch it waits for runs. */
+		echoBeforeSend: (echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "excerpts">) => {
+			if (!stateSessionId) return;
+			addConversationLocalEcho(queryClient, stateSessionId, { ...echo, createdAt: new Date().toISOString() });
+		},
+		/** Takes back a message shown before a send that never went out. */
+		dropEcho: (clientMessageId: string) => {
+			if (stateSessionId) releaseConversationLocalEcho(queryClient, stateSessionId, clientMessageId);
+		},
 		resolve: (requestId: string, decisionId: string) => resolve.mutate({ requestId, decisionId }),
 		resolveInput: (
 			requestId: string,

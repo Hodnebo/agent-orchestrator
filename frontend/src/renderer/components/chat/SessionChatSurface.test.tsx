@@ -57,6 +57,8 @@ const {
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
+		echoBeforeSend: vi.fn(),
+		dropEcho: vi.fn(),
 	},
 	conversationState: {
 		snapshot: { capabilities: [] } as
@@ -252,6 +254,8 @@ beforeEach(() => {
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
+	conversationCommandState.echoBeforeSend.mockReset();
+	conversationCommandState.dropEcho.mockReset();
 	catalogObserverState.enabled = [];
 	useUiStore.setState({ inspectorSessions: {} });
 });
@@ -275,6 +279,30 @@ describe("SessionChatSurface pending switch effort", () => {
 			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
 		});
 		expect(providerSwitchMock).toHaveBeenCalledWith(expect.objectContaining({ targetHarness: harness, effort: expected }));
+	});
+
+	it("shows the message while the switch runs, and takes it back when the switch fails", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		let failSwitch: (error: Error) => void = () => {};
+		providerSwitchMock.mockReturnValue(new Promise((_resolve, reject) => { failSwitch = reject; }));
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "chosen-model" });
+		});
+		let sent: Promise<void> | undefined;
+		await act(async () => {
+			sent = sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
+		});
+		expect(conversationCommandState.echoBeforeSend).toHaveBeenCalledWith(
+			expect.objectContaining({ clientMessageId: "switch-message", text: "Recall the code word." }),
+		);
+		expect(conversationCommandState.dropEcho).not.toHaveBeenCalled();
+		await act(async () => {
+			failSwitch(new Error("refused"));
+			await sent?.catch(() => undefined);
+		});
+		expect(conversationCommandState.dropEcho).toHaveBeenCalledWith("switch-message");
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
 	});
 });
 
