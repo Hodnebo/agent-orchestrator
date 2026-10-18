@@ -432,6 +432,8 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
+	/** The API error code that goes with resumeError. */
+	resumeErrorCode?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -698,6 +700,7 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
+	resumeErrorCode,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -1832,6 +1835,7 @@ function ChatWorkspaceContent({
 									onResume={newWorkDisabled ? undefined : onResumeAgent}
 									resuming={resumingAgent}
 									resumeError={resumeError}
+									resumeErrorCode={resumeErrorCode}
 									harness={snapshot.harness}
 									onOpenShell={onOpenShell}
 									openingShell={openingShell}
@@ -2358,6 +2362,7 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
+	resumeErrorCode,
 	harness,
 	onOpenShell,
 	openingShell,
@@ -2371,12 +2376,13 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
+	resumeErrorCode?: string;
 	harness?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
-	const openElsewhere = resumeError?.toLowerCase().includes("this is open elsewhere") ?? false;
+	const openElsewhere = resumeErrorCode === "SESSION_OPEN_ELSEWHERE";
 	// The other app releases the chat without telling AO (Codex can hold a closed
 	// one for many minutes), so keep checking instead of waiting for Retry.
 	const resumeRef = useRef(onResume);
