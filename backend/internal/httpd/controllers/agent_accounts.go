@@ -21,6 +21,7 @@ import (
 type AgentAccountService interface {
 	List(context.Context, bool) ([]agentaccounts.AccountView, error)
 	StartLogin(context.Context, domain.AgentAccountProvider) (agentaccounts.LoginStart, error)
+	StartSignInAgain(context.Context, string) (agentaccounts.LoginStart, error)
 	VerifyLogin(context.Context, string) (agentaccounts.LoginStatus, *agentaccounts.AccountView, error)
 	CancelLogin(context.Context, string) error
 	SetDefault(context.Context, string) error
@@ -51,6 +52,7 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/login/{operationId}/cancel", c.cancelLogin)
 	r.Get("/agents/accounts/sessions/{sessionId}", c.sessionAccounts)
 	r.Put("/agents/accounts/sessions/{sessionId}", c.switchSession)
+	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
 	r.Post("/agents/accounts/{accountId}/default", c.setDefault)
 	r.Post("/agents/accounts/{accountId}/reset-credit", c.consumeResetCredit)
 	r.Delete("/agents/accounts/{accountId}", c.remove)
@@ -108,6 +110,23 @@ func (c *AgentAccountsController) startLogin(w http.ResponseWriter, r *http.Requ
 		writeAgentAccountError(w, r, err)
 		return
 	}
+	writeAgentAccountLoginStart(w, start)
+}
+
+func (c *AgentAccountsController) signInAgain(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/accounts/{accountId}/login")
+		return
+	}
+	start, err := c.Svc.StartSignInAgain(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")))
+	if err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	writeAgentAccountLoginStart(w, start)
+}
+
+func writeAgentAccountLoginStart(w http.ResponseWriter, start agentaccounts.LoginStart) {
 	envelope.WriteJSON(w, http.StatusAccepted, StartAgentAccountLoginResponse{
 		OperationID: start.OperationID, Provider: start.Provider,
 		ShellTerminal: CodexAccountLoginTerminalResponse{HandleID: start.Terminal.HandleID, Title: start.Terminal.Title, CreatedAt: start.Terminal.CreatedAt},
@@ -264,6 +283,8 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
+	case errors.Is(err, ports.ErrAgentAccountInUse):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_IN_USE", "AO could not stop an agent that uses this account, so it kept the account. Stop that agent, then remove the account again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountDeviceFixed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_DEVICE_FIXED", "This computer's own login is managed by its CLI, not AO", nil)
 	default:

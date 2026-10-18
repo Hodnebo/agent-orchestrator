@@ -18,6 +18,7 @@ var (
 	ErrAgentAccountDeviceFixed      = errors.New("the computer's own login cannot be removed here")
 	ErrAgentAccountUnchanged        = errors.New("the session already uses this account")
 	ErrAgentAccountUnshared         = errors.New("the account's folder cannot link to this computer's history")
+	ErrAgentAccountInUse            = errors.New("an agent that uses the account could not be stopped")
 )
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config

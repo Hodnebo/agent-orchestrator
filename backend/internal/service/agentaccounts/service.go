@@ -44,8 +44,10 @@ type Service struct {
 	providers map[domain.AgentAccountProvider]ports.AgentAccountProviderCLI
 	root      string // account folders live in root/<provider>/<id>
 	terminals Terminals
-	log       *slog.Logger
-	now       func() time.Time
+	// stopAgents stops every running agent on an account before it is removed.
+	stopAgents func(context.Context, string) error
+	log        *slog.Logger
+	now        func() time.Time
 
 	mu       sync.Mutex
 	readings map[string]*reading
@@ -66,6 +68,8 @@ type login struct {
 	provider domain.AgentAccountProvider
 	home     string
 	terminal string
+	// account is the saved account a sign-in again runs in; nil for a new one.
+	account *domain.AgentAccount
 }
 
 // New builds the service. root must be absolute; the account folders' paths
@@ -90,6 +94,14 @@ func (s *Service) SetTerminals(terminals Terminals) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.terminals = terminals
+}
+
+// SetAgentStopper late-binds what stops the agents on an account before it is
+// removed, so none keeps running on a login AO deletes.
+func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID string) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopAgents = stop
 }
 
 // AccountView is an account with its latest readings, as the app shows it.
@@ -254,6 +266,23 @@ type LoginStart struct {
 // StartLogin creates a new account folder and runs the provider's own sign-in
 // for it in a terminal.
 func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider) (LoginStart, error) {
+	return s.startLogin(ctx, p, nil)
+}
+
+// StartSignInAgain runs the provider's sign-in in a saved account's own folder,
+// so a signed-out account comes back with its sessions, history and settings.
+func (s *Service) StartSignInAgain(ctx context.Context, accountID string) (LoginStart, error) {
+	account, err := s.find(ctx, accountID)
+	if err != nil {
+		return LoginStart{}, err
+	}
+	if account.Device() {
+		return LoginStart{}, ports.ErrAgentAccountDeviceFixed
+	}
+	return s.startLogin(ctx, account.Provider, &account)
+}
+
+func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider, account *domain.AgentAccount) (LoginStart, error) {
 	provider := s.providers[p]
 	s.mu.Lock()
 	terminals := s.terminals
@@ -263,27 +292,37 @@ func (s *Service) StartLogin(ctx context.Context, p domain.AgentAccountProvider)
 	}
 	id := uuid.NewString()
 	home := filepath.Join(s.root, string(p), id)
+	title := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "Add Claude account", domain.AgentAccountProviderCodex: "Add Codex account"}[p]
+	if account != nil {
+		home = account.Home
+		title = map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "Sign in to Claude account", domain.AgentAccountProviderCodex: "Sign in to Codex account"}[p]
+	}
+	// A saved account's folder is never removed here; only a new one is.
+	discard := func() {
+		if account == nil {
+			_ = os.RemoveAll(home)
+		}
+	}
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return LoginStart{}, fmt.Errorf("create account folder: %w", err)
 	}
 	// Linking first means the sign-in never creates a private copy of a shared folder.
 	if err := s.prepare(provider, home); err != nil {
-		_ = os.RemoveAll(home)
+		discard()
 		return LoginStart{}, err
 	}
 	argv, err := provider.LoginArgv(ctx)
 	if err != nil {
-		_ = os.RemoveAll(home)
+		discard()
 		return LoginStart{}, err
 	}
-	title := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "Add Claude account", domain.AgentAccountProviderCodex: "Add Codex account"}[p]
 	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title})
 	if err != nil {
-		_ = os.RemoveAll(home)
+		discard()
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)
 	}
 	s.mu.Lock()
-	s.logins[id] = &login{id: id, provider: p, home: home, terminal: terminal.HandleID}
+	s.logins[id] = &login{id: id, provider: p, home: home, terminal: terminal.HandleID, account: account}
 	s.mu.Unlock()
 	return LoginStart{OperationID: id, Provider: p, Terminal: terminal}, nil
 }
@@ -296,6 +335,8 @@ const (
 	LoginWaiting   LoginStatus = "waiting"
 	LoginComplete  LoginStatus = "complete"
 	LoginDuplicate LoginStatus = "duplicate"
+	// LoginMismatch is a sign-in again with another login than the account's.
+	LoginMismatch LoginStatus = "mismatch"
 )
 
 // VerifyLogin checks whether the sign-in finished, and saves the account when
@@ -321,10 +362,16 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, err
 	}
 	for _, view := range views {
+		if op.account != nil && view.Account.ID == op.account.ID {
+			continue
+		}
 		if view.Account.Provider == op.provider && view.SignedIn && strings.EqualFold(view.Account.Email, identity.Email) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
+	}
+	if op.account != nil {
+		return s.finishSignInAgain(ctx, op, identity, views)
 	}
 	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, CreatedAt: s.now()}
 	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
@@ -347,7 +394,35 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	return LoginComplete, nil, nil
 }
 
-// CancelLogin stops a sign-in and removes its unsaved folder.
+// finishSignInAgain keeps a saved account's folder signed in only as the login
+// it was saved with: its sessions and limits belong to that login.
+func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity domain.AgentAccountIdentityCheck, views []AccountView) (LoginStatus, *AccountView, error) {
+	var saved *AccountView
+	for i := range views {
+		if views[i].Account.ID == op.account.ID {
+			saved = &views[i]
+		}
+	}
+	if op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email) {
+		s.endLogin(ctx, op, true)
+		return LoginMismatch, saved, nil
+	}
+	s.endLogin(ctx, op, false)
+	s.read(ctx, *op.account)
+	views, err := s.List(ctx, false)
+	if err != nil {
+		return "", nil, err
+	}
+	for _, view := range views {
+		if view.Account.ID == op.account.ID {
+			return LoginComplete, &view, nil
+		}
+	}
+	return LoginComplete, nil, nil
+}
+
+// CancelLogin stops a sign-in and removes its unsaved folder. A saved
+// account's folder stays as it is.
 func (s *Service) CancelLogin(ctx context.Context, operationID string) error {
 	s.mu.Lock()
 	op := s.logins[operationID]
@@ -355,11 +430,14 @@ func (s *Service) CancelLogin(ctx context.Context, operationID string) error {
 	if op == nil {
 		return ports.ErrAgentAccountLoginUnknown
 	}
-	s.endLogin(ctx, op, true)
+	s.endLogin(ctx, op, op.account == nil)
 	return nil
 }
 
-func (s *Service) endLogin(ctx context.Context, op *login, removeFolder bool) {
+// endLogin closes a sign-in. discard signs its folder out, so a refused login's
+// token does not outlive the attempt, and removes the folder unless it belongs
+// to a saved account.
+func (s *Service) endLogin(ctx context.Context, op *login, discard bool) {
 	s.mu.Lock()
 	delete(s.logins, op.id)
 	s.mu.Unlock()
@@ -369,15 +447,17 @@ func (s *Service) endLogin(ctx context.Context, op *login, removeFolder bool) {
 	if op.terminal != "" && terminals != nil {
 		_ = terminals.CloseShellTerminal(context.WithoutCancel(ctx), op.terminal)
 	}
-	if removeFolder {
+	if discard {
 		// A refused duplicate is signed in; signing out first keeps its token
 		// from outliving the folder in the Keychain.
 		logoutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
 		if err := s.providers[op.provider].Logout(logoutCtx, op.home); err != nil {
-			s.log.Debug("sign out unsaved account folder", "provider", op.provider, "error", err)
+			s.log.Debug("sign out refused account folder", "provider", op.provider, "error", err)
 		}
-		s.removeFolder(op.home)
+		if op.account == nil {
+			s.removeFolder(op.home)
+		}
 	}
 }
 
@@ -400,6 +480,16 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	}
 	if account.Device() {
 		return ports.ErrAgentAccountDeviceFixed
+	}
+	// Its agents stop first, so none runs on a login AO deletes. An agent that
+	// cannot be stopped keeps the account.
+	s.mu.Lock()
+	stop := s.stopAgents
+	s.mu.Unlock()
+	if stop != nil {
+		if err := stop(ctx, accountID); err != nil {
+			return fmt.Errorf("%w: %w", ports.ErrAgentAccountInUse, err)
+		}
 	}
 	if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {
 		s.log.Warn("sign out removed account", "account", accountID, "error", err)

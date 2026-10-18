@@ -3554,7 +3554,7 @@ type StartAgentAccountLoginResponse struct {
 // VerifyAgentAccountLoginResponse is how a sign-in stands. A duplicate login
 // is refused and its account names the existing one.
 type VerifyAgentAccountLoginResponse struct {
-	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate"`
+	Status  agentaccounts.LoginStatus `json:"status" enum:"waiting,complete,duplicate,mismatch"`
 	Account *AgentAccountResponse     `json:"account,omitempty"`
 }
 

@@ -81,6 +81,9 @@ export function useAgentAccountActions() {
 		refresh: async () => setAccounts(await fetchAgentAccounts(true)),
 		startLogin: async (provider: AgentAccountProvider) =>
 			unwrap(await apiClient.POST("/api/v1/agents/accounts/login", { body: { provider } })),
+		/** Signs a saved account in again in its own folder; verify and cancel are the same as a new sign-in. */
+		signInAgain: async (accountId: string) =>
+			unwrap(await apiClient.POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
 		verifyLogin: async (operationId: string) => {
 			const result = unwrap(await apiClient.POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
 			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKey });

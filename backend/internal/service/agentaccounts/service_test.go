@@ -66,7 +66,10 @@ func (*fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, e
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
 	return []string{"claude", "auth", "login"}, nil
 }
-func (*fakeClaude) Logout(context.Context, string) error { return nil }
+func (f *fakeClaude) Logout(_ context.Context, home string) error {
+	delete(f.signedInAs, home)
+	return nil
+}
 func (f *fakeClaude) Prepare(string) error {
 	if f.unshared {
 		return fmt.Errorf("%w: link projects: permission denied", ports.ErrAgentAccountUnshared)
@@ -184,5 +187,108 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	// This computer's own login has no folder to link.
 	if err := svc.BindSession(ctx, "s2", domain.HarnessClaudeCode, "device-claude"); err != nil {
 		t.Fatalf("bind to this computer: %v", err)
+	}
+}
+
+// A signed-out account signs in again in its own folder, so its sessions keep
+// it; only the login it was saved with is kept there.
+func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+		t.Fatalf("sign-in = %q, %v", status, err)
+	}
+	accountID := start.OperationID
+	delete(claude.signedInAs, b)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.StartSignInAgain(ctx, "device-claude"); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
+		t.Fatalf("sign in again to this computer: %v", err)
+	}
+	// Cancelled: the saved folder stays.
+	again, err := svc.StartSignInAgain(ctx, accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CancelLogin(ctx, again.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(b); err != nil {
+		t.Fatalf("cancel removed the saved folder: %v", err)
+	}
+	// Another login in the folder is refused and signed out again.
+	again, _ = svc.StartSignInAgain(ctx, accountID)
+	claude.signedInAs[b] = "c@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, again.OperationID); err != nil || status != LoginMismatch {
+		t.Fatalf("other login = %q, %v", status, err)
+	}
+	if _, signedIn := claude.signedInAs[b]; signedIn {
+		t.Fatal("the other login stayed in the account's folder")
+	}
+	// The same login comes back on the same account.
+	again, _ = svc.StartSignInAgain(ctx, accountID)
+	claude.signedInAs[b] = "B@example.com"
+	status, view, err := svc.VerifyLogin(ctx, again.OperationID)
+	if err != nil || status != LoginComplete || view == nil || view.Account.ID != accountID || !view.SignedIn {
+		t.Fatalf("same login = %q view=%+v err=%v", status, view, err)
+	}
+	if len(store.accounts) != 1 {
+		t.Fatalf("accounts = %+v, want the one saved account", store.accounts)
+	}
+	if _, err := os.Stat(b); err != nil {
+		t.Fatalf("the saved folder is gone: %v", err)
+	}
+}
+
+// Removing an account stops its agents first; one that cannot be stopped keeps
+// the account, signed in.
+func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+		t.Fatalf("sign-in = %q, %v", status, err)
+	}
+	var stopped []string
+	stopErr := errors.New("exit agent s1: switch in progress")
+	svc.SetAgentStopper(func(_ context.Context, accountID string) error {
+		stopped = append(stopped, accountID)
+		return stopErr
+	})
+
+	if err := svc.Remove(ctx, "device-claude"); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) || len(stopped) != 0 {
+		t.Fatalf("remove this computer: %v, stopped %v", err, stopped)
+	}
+	if err := svc.Remove(ctx, start.OperationID); !errors.Is(err, ports.ErrAgentAccountInUse) {
+		t.Fatalf("remove with an agent that cannot stop: %v", err)
+	}
+	if _, signedIn := claude.signedInAs[b]; !signedIn {
+		t.Fatal("a refused removal signed the account out")
+	}
+	stopErr = nil
+	if err := svc.Remove(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(stopped) != fmt.Sprintf("[%s %s]", start.OperationID, start.OperationID) {
+		t.Fatalf("stopped = %v", stopped)
+	}
+	if _, signedIn := claude.signedInAs[b]; signedIn {
+		t.Fatal("the removed account stayed signed in")
 	}
 }

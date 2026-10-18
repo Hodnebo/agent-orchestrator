@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -150,6 +151,38 @@ func (m *Manager) preflightAccountTarget(
 // would name another login, and every probe below would pass against it.
 func (m *Manager) runtimeEnvOnAccount(rec domain.SessionRecord, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID)
+}
+
+// ExitAgentsOnAccount stops every running agent that uses accountID, before the
+// account is removed. A chat session stays with its agent exited. A terminal
+// session ends: ExitAgent destroys its runtime, and the reaper then terminates
+// it. Opening or restoring either continues it on the default account.
+func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) error {
+	if m.agentAccounts == nil {
+		return nil
+	}
+	recs, err := m.store.ListAllSessions(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, rec := range recs {
+		if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+			continue
+		}
+		bound, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if bound != accountID {
+			continue
+		}
+		if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // The account override makes the session's launches use accountID instead of

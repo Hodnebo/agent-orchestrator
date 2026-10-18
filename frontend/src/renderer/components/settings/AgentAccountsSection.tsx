@@ -48,20 +48,29 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 		}
 	}, []);
 
-	const setLogin = (next: AgentAccountLogin | undefined) =>
-		setLogins((current) => (pendingLogins = { ...current, [provider]: next }));
-	const startLogin = () => run(`login:${provider}`, async () => {
+	const setLogin = (next: AgentAccountLogin | undefined) => {
+		pendingLogins = { ...pendingLogins, [provider]: next };
+		setLogins(pendingLogins);
+	};
+	// accountId signs that saved account in again, in its own folder.
+	const startLogin = (accountId?: string) => run(`login:${provider}`, async () => {
 		if (login) await actions.cancelLogin(login.operationId).catch(() => undefined);
 		setLogin(undefined);
 		setLoginNote("");
-		setLogin(await actions.startLogin(provider));
+		setLogin(await (accountId ? actions.signInAgain(accountId) : actions.startLogin(provider)));
 	});
-	const checkLogin = (current: AgentAccountLogin) => void run(`verify:${provider}`, async () => {
+	const checkLogin = (current: AgentAccountLogin) => {
+		// A closed sign-in's terminal still reports its exit; there is nothing left to check.
+		if (pendingLogins[provider]?.operationId !== current.operationId) return;
+		void verifyLogin(current);
+	};
+	const verifyLogin = (current: AgentAccountLogin) => run(`verify:${provider}`, async () => {
 		const result = await actions.verifyLogin(current.operationId);
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
 		else {
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
+			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {
@@ -87,7 +96,8 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 				busy={busy}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
-				onRemove={() => setRemoving(account)}
+				onSignInAgain={() => void startLogin(account.id)}
+				onRemove={() => { setError(""); setRemoving(account); }}
 			/>)}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
@@ -102,12 +112,13 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 	</>;
 }
 
-function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemove }: {
+function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
 	account: AgentAccount;
 	aoTokens: number | undefined;
 	busy: string | null;
 	onMakeDefault: () => void;
 	onUseReset: () => void;
+	onSignInAgain: () => void;
 	onRemove: () => void;
 }) {
 	const { t, i18n } = useTranslation();
@@ -126,9 +137,12 @@ function AccountRow({ account, aoTokens, busy, onMakeDefault, onUseReset, onRemo
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
+				{!account.signedIn && !account.device
+					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
+					: null}
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
-					: <Button type="button" size="sm" variant="ghost" disabled={busy !== null || !account.signedIn} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button>}
+					: account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device ? null : <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>

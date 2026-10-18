@@ -364,3 +364,71 @@ func TestAccountMoveFailuresSpeakOfTheAccount(t *testing.T) {
 		t.Fatalf("interface switch detail changed: %q", got)
 	}
 }
+
+// Removing an account first stops the agents that run on it, and only those.
+// Their sessions stay, with the agent exited, so each can continue elsewhere.
+func TestExitAgentsOnAccountStopsOnlyThatAccountsRunningAgents(t *testing.T) {
+	m, st, runtime, _ := newManager()
+	session := func(id string, state domain.ActivityState) domain.SessionRecord {
+		return domain.SessionRecord{
+			ID: domain.SessionID(id), ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+			Activity: domain.Activity{State: state},
+			Metadata: domain.SessionMetadata{
+				WorkspacePath: "/ws/" + id, RuntimeHandleID: "tmux-" + id, RuntimeLaunchID: "launch-" + id, AgentSessionID: "native-" + id,
+			},
+		}
+	}
+	st.sessions["mer-1"] = session("mer-1", domain.ActivityIdle)
+	st.sessions["mer-2"] = session("mer-2", domain.ActivityIdle)
+	st.sessions["mer-3"] = session("mer-3", domain.ActivityExited)
+	runtime.aliveByHandle = map[string]bool{"tmux-mer-1": true, "tmux-mer-2": true}
+	var log []string
+	accounts := newTransitionAccounts(&log)
+	accounts.bound = map[domain.SessionID]string{"mer-1": "acct-b", "mer-2": "device-claude", "mer-3": "acct-b"}
+	m.SetAgentAccounts(accounts)
+
+	if err := m.ExitAgentsOnAccount(ctx, "acct-b"); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(runtime.destroyedIDs) != "[tmux-mer-1]" {
+		t.Fatalf("stopped = %v, want only the running agent on the account", runtime.destroyedIDs)
+	}
+	if got := st.sessions["mer-1"]; got.IsTerminated || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("mer-1 = %+v, want its agent exited and the session kept", got)
+	}
+	if got := st.sessions["mer-2"]; got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("mer-2 on another account changed: %+v", got.Activity)
+	}
+}
+
+// An agent stopped by an account's removal continues on the account picked in
+// its session: the move finds nothing to drain and starts it there.
+func TestAccountTransitionContinuesAnExitedAgentOnTheNewAccount(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
+		t.Run(string(mode), func(t *testing.T) {
+			manager, store, runtime, chat, accounts, _ := newAccountTransitionManager(t, mode)
+			rec := store.sessions["session-1"]
+			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
+			store.sessions["session-1"] = rec
+
+			transition, err := manager.StartAccountTransition(context.Background(), "session-1", "acct-b", domain.SessionInterfaceTransitionDrain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			settled := awaitTransition(t, store, transition.ID)
+			if settled.Phase != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("phase = %s, error = %s %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
+			}
+			env := runtime.lastCfg.Env
+			if mode == domain.SessionModeChat {
+				env = chat.start.Env
+			}
+			if env["CLAUDE_CONFIG_DIR"] != "/accounts/b" {
+				t.Fatalf("agent started with %v, want the new account", env)
+			}
+			if accounts.boundTo("session-1") != "acct-b" {
+				t.Fatal("binding did not move")
+			}
+		})
+	}
+}
