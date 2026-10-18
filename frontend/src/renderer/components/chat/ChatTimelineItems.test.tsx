@@ -1,7 +1,7 @@
-import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
+import { ActivityRow, AssistantMessage, HumanMessage, LiveResponseStatus, TurnOutcome } from "./ChatTimelineItems";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -131,6 +131,36 @@ describe("TurnOutcome", () => {
 		render(<TurnOutcome state="interrupted" />);
 		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
+});
+
+describe("LiveResponseStatus", () => {
+	// The provider re-saves its retry on every attempt. The chip has to update its
+	// count in place; remounting it would replay its entrance several times a turn.
+	it("keeps the same retry chip while the attempt count climbs", () => {
+		const view = render(
+			<LiveResponseStatus startedAt={new Date().toISOString()} reconnect={{ label: "Reconnecting… 1/5", detail: "401 Unauthorized" }} />,
+		);
+		const chip = screen.getByTestId("live-working-task");
+		expect(chip).toHaveTextContent("Reconnecting… 1/5");
+
+		view.rerender(
+			<LiveResponseStatus startedAt={new Date().toISOString()} reconnect={{ label: "Reconnecting… 2/5", detail: "401 Unauthorized, again" }} />,
+		);
+		expect(screen.getByTestId("live-working-task")).toBe(chip);
+		expect(chip).toHaveTextContent("Reconnecting… 2/5");
+		expect(screen.getByTestId("live-turn-status")).toHaveTextContent("401 Unauthorized, again");
+	});
+
+	it("names the current step beside the timer, and only the timer between steps", async () => {
+		const view = render(<LiveResponseStatus startedAt={new Date().toISOString()} task="Search" />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent("Search");
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
+
+		view.rerender(<LiveResponseStatus startedAt={new Date().toISOString()} />);
+		// The old label fades out before it leaves.
+		await waitFor(() => expect(screen.queryByTestId("live-working-task")).not.toBeInTheDocument());
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 	});
 });
 

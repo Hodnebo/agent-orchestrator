@@ -2405,6 +2405,14 @@ const WELCOME_FADE_MS = 150;
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
+/**
+ * A reader who nudges the view up a little and then stops has paused, not left.
+ * After this long with no further input, while the turn is still live and they are
+ * still within `relatchBand` of the end, the follow resumes from where they are.
+ */
+const RELATCH_AFTER_MS = 1800;
+/** How far above the end still counts as a pause rather than reading back. */
+const relatchBand = (node: HTMLElement) => Math.min(320, Math.round(node.clientHeight * 0.4));
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
@@ -3671,6 +3679,31 @@ export function Timeline({
 		return () => observer.disconnect();
 	}, [groups.length]);
 
+	// The pause-then-resume for a reader who only nudged up a little: armed by their
+	// scroll, re-armed by each further scroll, dropped once they go past the band or
+	// open something to read. Only the reader's own scrolling arms it, so streamed
+	// growth while unpinned (which moves nothing) never does.
+	const relatchTimer = useRef<number | undefined>(undefined);
+	const liveTurnRef = useRef(false);
+	liveTurnRef.current = turn?.state === "running";
+	const clearRelatch = useCallback(() => {
+		if (relatchTimer.current === undefined) return;
+		window.clearTimeout(relatchTimer.current);
+		relatchTimer.current = undefined;
+	}, []);
+	const scheduleRelatch = useCallback(() => {
+		clearRelatch();
+		relatchTimer.current = window.setTimeout(() => {
+			relatchTimer.current = undefined;
+			const node = scroller.current;
+			if (!node || pinnedRef.current || !liveTurnRef.current) return;
+			const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+			if (distance > relatchBand(node)) return;
+			requestGlideToEnd();
+		}, RELATCH_AFTER_MS);
+	}, [clearRelatch, requestGlideToEnd]);
+	useEffect(() => clearRelatch, [clearRelatch]);
+
 	function onScroll() {
 		const node = scroller.current;
 		if (!node) return;
@@ -3687,9 +3720,12 @@ export function Timeline({
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
+			if (distance <= relatchBand(node)) scheduleRelatch();
+			else clearRelatch();
 		} else if (!pinnedRef.current && !movedUp) {
 			// The reader is already here: the follow layout this re-pin triggers must not
 			// snap the last few pixels under their scroll, which reads as a jitter.
+			clearRelatch();
 			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
@@ -3717,6 +3753,7 @@ export function Timeline({
 		// under them. Menu triggers (aria-haspopup) open a popup, not content, so they
 		// keep the follow; so do clicks on empty margins.
 		if ((event.target as HTMLElement).closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
 			releaseFollow();
 		}
 	}

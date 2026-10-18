@@ -1919,6 +1919,22 @@ textarea,
 	will-change: transform;
 }
 
+/* The live row's label (current step, retry chip, setup label) fades in once when the
+   row changes what it is showing; the text inside then updates in place. */
+.chat-live-label {
+	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes chat-live-label-in {
+	from { opacity: 0; transform: translateY(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-live-label {
+		animation: none;
+	}
+}
+
 /* Streamed prose: each newly revealed character fades in once, on mount (see
    lib/rehype-stream-fade.ts). */
 .stream-char {

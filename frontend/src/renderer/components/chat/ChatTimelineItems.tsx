@@ -395,10 +395,18 @@ export function TurnOutcome({
 		<div className="group/message flex min-w-0 flex-col gap-1" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
-				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className={cn("text-sm", copy.tone)}>{copy.label}</span>
+				<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+					<span className={cn("text-sm leading-5", copy.tone)}>{copy.label}</span>
 					{error ? (
-						<div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-muted-foreground">
+						<div
+							className={cn(
+								"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
+								// A provider's failure text is code-like (status lines, request ids, URLs):
+								// it sits in a quiet mono block like command output rather than running
+								// on as prose. A stop or recovery note stays in the turn's own voice.
+								state === "failed" ? "rounded-md bg-surface px-3 py-2 font-mono text-xs" : "text-sm",
+							)}
+						>
 							{linkifiedProviderErrorText(error)}
 						</div>
 					) : null}
@@ -460,7 +468,7 @@ export function TurnActions({
 						aria-label="Retry this turn"
 						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 						data-testid="retry-turn"
-						className={cn(TURN_ACTION_BUTTON, "gap-1.5 px-2 text-xs")}
+						className={cn(TURN_ACTION_BUTTON, "gap-1.5 bg-surface px-2.5 text-xs text-foreground/90 hover:bg-interactive-active")}
 					>
 						<RotateCw
 							aria-hidden="true"
@@ -1050,7 +1058,7 @@ export function reconnectCopy(activity: ConversationActivity): { label: string; 
 }
 
 const LIVE_RECONNECT_CHIP =
-	"inline-flex max-w-full items-center gap-1.5 rounded-md bg-warning/10 px-1.5 py-px text-xs font-medium text-warning";
+	"inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-1.5 py-px text-xs tabular-nums text-muted-foreground";
 
 /**
  * The live edge of a turn: the orb, what the agent is doing, and for how long.
@@ -1084,6 +1092,11 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	}, []);
 	const elapsedMs = Math.max(0, now - started);
 	const label = startupLabel ?? reconnect?.label ?? task;
+	// The provider re-saves its retry on every attempt, and the step label changes
+	// with every tool call. Keyed by its text the label would remount, and replay its
+	// entrance, each time; keyed by kind it updates in place and crossfades only when
+	// the row changes what it is showing.
+	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? `task:${task}` : undefined;
 	return (
 		<div className="min-w-0">
 			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
@@ -1095,30 +1108,20 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 					data-testid="live-working-label"
 					className="flex min-w-0 items-center gap-2 text-sm"
 				>
-					{/* The label swaps as the agent moves between steps; a short crossfade keeps
-					    that from reading as a flicker, and popLayout keeps the two from stacking. */}
-					<AnimatePresence initial={false} mode="popLayout">
-						{label ? (
-							<motion.span
-								key={label}
-								initial={reducedMotion ? false : { opacity: 0, y: 2 }}
-								animate={{ opacity: 1, y: 0 }}
-								exit={{ opacity: 0, transition: { duration: reducedMotion ? 0 : 0.1 } }}
-								transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
-								className="min-w-0 truncate"
-								data-testid="live-working-task"
-							>
-								{reconnect && !startupLabel ? (
-									<span className={LIVE_RECONNECT_CHIP}>
-										<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
-										<span className="truncate">{label}</span>
-									</span>
-								) : (
-									<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
-								)}
-							</motion.span>
-						) : null}
-					</AnimatePresence>
+					{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
+					    while the text inside updates in place. */}
+					{label && labelKind ? (
+						<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+							{reconnect && !startupLabel ? (
+								<span className={LIVE_RECONNECT_CHIP}>
+									<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
+									<span className="truncate">{label}</span>
+								</span>
+							) : (
+								<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
+							)}
+						</span>
+					) : null}
 					{startupLabel ? null : (
 						<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
 							{formatDuration(elapsedMs)}

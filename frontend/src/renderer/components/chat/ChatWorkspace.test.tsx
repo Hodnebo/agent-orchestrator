@@ -2517,6 +2517,34 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	// A nudge up near the end is a pause, not a departure: the follow comes back on
+	// its own once the reader has been still for a moment while the turn is live.
+	it("resumes following after a short pause when the reader only nudged up a little", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
+	});
+
+	it("stays put when the reader scrolled well above the end", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 600;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(2600);
+	});
+
 	it("does not follow a streaming resize of the latest row while the reader is unpinned", async () => {
 		stubVirtualTimelineGeometry((index) => index === 59 ? 120 : 600);
 		const originalObserver = window.ResizeObserver;
