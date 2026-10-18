@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -551,5 +552,77 @@ func TestBuildInteractiveCursorBuildsWithoutPrompt(t *testing.T) {
 	})
 	if prompt := systemPromptArg(command); prompt != "" {
 		t.Fatalf("cursor unexpectedly carries a system prompt flag: %q", prompt)
+	}
+}
+
+// Claude Code opens "Make auto mode your default permission mode?" when its
+// global config lacks hasSeenAutoDefaultNudge and user settings pin a non-auto
+// defaultMode, which AO's settings always do. The dialog swallows messages AO
+// types into the terminal, so every Claude terminal must start with it marked
+// seen, without changing the permission mode AO selected.
+func TestBuildInteractiveClaudeMarksAutoDefaultNudgeSeen(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        string
+		permissions string
+		wantMode    string
+		wantFlag    []string
+	}{
+		{"standard", "standard", "", "auto", []string{"--permission-mode", "auto"}},
+		{"trusted", "trusted", "", "bypassPermissions", []string{"--permission-mode", "bypassPermissions"}},
+		{"project accept-edits", "standard", "accept-edits", "acceptEdits", []string{"--permission-mode", "acceptEdits"}},
+		{"project default", "trusted", "default", "default", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := filepath.Join(t.TempDir(), "claude")
+			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// A config a previous launch (or Claude itself) wrote is preserved.
+			seed := `{"userID":"install-1","projects":{"/elsewhere":{"hasTrustDialogAccepted":true}}}`
+			if err := os.WriteFile(filepath.Join(configDir, ".claude.json"), []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			launch := worker.LaunchContext{
+				SessionID: "session-1", Harness: "claude-code", Mode: tt.mode,
+				AgentConfig: domain.ProjectAgentConfig{Permissions: tt.permissions},
+			}
+			command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(launch, worker.CredentialResponse{
+				Provider: "claude-code", CredentialType: "api_key", Secret: "secret",
+			}, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			global := readJSON(t, filepath.Join(configDir, ".claude.json"))
+			if global["hasSeenAutoDefaultNudge"] != true {
+				t.Fatalf("hasSeenAutoDefaultNudge = %v, want true", global["hasSeenAutoDefaultNudge"])
+			}
+			if global["hasCompletedOnboarding"] != true || global["userID"] != "install-1" {
+				t.Fatalf("global config lost onboarding or existing keys: %v", global)
+			}
+			projects := global["projects"].(map[string]any)
+			if _, ok := projects["/elsewhere"]; !ok {
+				t.Fatalf("existing trust entry dropped: %v", projects)
+			}
+			if _, ok := projects[workspace]; !ok {
+				t.Fatalf("workspace not trusted: %v", projects)
+			}
+
+			settings := readJSON(t, filepath.Join(configDir, "settings.json"))
+			if got := settings["permissions"].(map[string]any)["defaultMode"]; got != tt.wantMode {
+				t.Fatalf("defaultMode = %v, want %s", got, tt.wantMode)
+			}
+			if tt.wantFlag == nil {
+				if slices.Contains(command.Args, "--permission-mode") {
+					t.Fatalf("unexpected --permission-mode in %#v", command.Args)
+				}
+			} else if !containsAdjacent(command.Args, tt.wantFlag[0], tt.wantFlag[1]) {
+				t.Fatalf("args %#v missing %v", command.Args, tt.wantFlag)
+			}
+		})
 	}
 }
