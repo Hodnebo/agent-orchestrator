@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// TestMigration0207AllowsOpenInterpreterAndReversesBothHistoricalSchemas mirrors the
+// TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, and the down
 // migration must restore the exact prior constraint.
-func TestMigration0207AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
@@ -19,7 +19,7 @@ func TestMigration0207AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 			db := openMigratedDatabaseCopy(t, 206)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0207 rewrites, so anchor
+				// 'codewhale' in every variant 0214 rewrites, so anchor
 				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
@@ -35,13 +35,13 @@ func TestMigration0207AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 207)
+			upTo(t, db, 214)
 			if _, err := db.Exec(insert, "cc-session", 3, "open-interpreter"); err != nil {
 				t.Fatalf("insert open-interpreter session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 207 {
-				t.Fatalf("migration version = %d, err = %v; want 207", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 214 {
+				t.Fatalf("migration version = %d, err = %v; want 214", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
@@ -64,7 +64,7 @@ func TestMigration0207AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 	}
 }
 
-func TestMigration0207RepairsDraft0199History(t *testing.T) {
+func TestMigration0214RepairsDraft0199History(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 198)
 	// Earlier draft builds used 0199 for the Open Interpreter constraint. Main
 	// now uses it for conversation_messages.continuation, which goose otherwise
@@ -83,5 +83,29 @@ func TestMigration0207RepairsDraft0199History(t *testing.T) {
 	}
 	if err := migrate(db); err != nil {
 		t.Fatalf("repeat migrate draft history: %v", err)
+	}
+}
+
+func TestMigration0214PreservesDraft0207History(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 206)
+	// Previous draft builds recorded Open Interpreter's constraint at 0207.
+	// Renumbering must leave that schema usable and apply 0214 only once.
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''open-interpreter'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (207, 1)`)
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate draft 0207 history: %v", err)
+	}
+	var schema string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(schema, "'open-interpreter'"); count != 1 {
+		t.Fatalf("open-interpreter constraint entries = %d; want 1", count)
+	}
+	var version int
+	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 214 {
+		t.Fatalf("migration version = %d, err = %v; want 214", version, err)
 	}
 }
