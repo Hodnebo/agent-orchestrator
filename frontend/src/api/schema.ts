@@ -48,8 +48,25 @@ export interface paths {
         /** Get the current or last install job for one agent harness */
         get: operations["getAgentInstallStatus"];
         put?: never;
-        /** Start an asynchronous install for one fixed agent harness */
+        /** Start an asynchronous install, reinstall, or update for one fixed agent harness */
         post: operations["startAgentInstall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open the fixed native logout flow for one agent */
+        post: operations["logoutAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -101,6 +118,23 @@ export interface paths {
         put?: never;
         /** Ensure launch-fresh readiness for one agent adapter */
         post: operations["probeAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/update-advisory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare an installed harness version with its known package source */
+        get: operations["getAgentUpdateAdvisory"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -484,6 +518,244 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/awake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Manage desktop Stay Awake */
+        get: operations["getAwake"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/downloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["awakeDownloads"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Manage desktop Stay Awake */
+        delete: operations["clearAwakeHistory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/low-power/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["authorizeAwakeLowPower"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/low-power/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["revokeAwakeLowPower"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Manage desktop Stay Awake */
+        get: operations["observeAwake"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["recoverAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["resumeAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Manage desktop Stay Awake */
+        put: operations["setAwakeRules"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["startAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions/{awakeId}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["endAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/sessions/{awakeId}/extend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["extendAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Manage desktop Stay Awake */
+        put: operations["setAwakeSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/awake/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manage desktop Stay Awake */
+        post: operations["stopAwake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/commands": {
         parameters: {
             query?: never;
@@ -548,6 +820,23 @@ export interface paths {
         put?: never;
         /** Dispatch an agent cue to a session or send a command cue to a scoped shell terminal */
         post: operations["invokeCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/desktop/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve a session artifact directory for the loopback desktop supervisor */
+        get: operations["getDesktopSessionArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -681,7 +970,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Check whether a GitHub personal access token is stored locally */
+        /** Report whether a GitHub token is stored and the GitHub username AO is signed in as */
         get: operations["getGitHubStatus"];
         put?: never;
         post?: never;
@@ -1587,6 +1876,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/agent-browser/*": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Proxy the host's agent browser stream viewer (page, stream socket, downloads) */
+        get: operations["getSessionAgentBrowser"];
+        put?: never;
+        /** Upload a file into the host's agent browser */
+        post: operations["postSessionAgentBrowser"];
+        delete?: never;
+        options?: never;
+        /** Read headers from the host's agent browser stream viewer */
+        head: operations["headSessionAgentBrowser"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/agent-switches": {
         parameters: {
             query?: never;
@@ -1632,6 +1940,109 @@ export interface paths {
         put?: never;
         /** Retry safe source restoration for an agent switch */
         post: operations["recoverSessionAgentSwitch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace the text content of one file in a session's artifact directory */
+        put: operations["updateSessionArtifactFile"];
+        post?: never;
+        /** Delete one file from a session's artifact directory and return the session with its refreshed artifact list */
+        delete: operations["deleteSessionArtifactFile"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-files/*": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Serve a session artifact file sandboxed, an HTML page with the render theme bootstrap */
+        get: operations["getSessionArtifactFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the saved versions of one file in a session's artifact directory */
+        get: operations["listSessionArtifactVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one saved version of an artifact file */
+        get: operations["getSessionArtifactVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an artifact file to an earlier saved version */
+        post: operations["restoreSessionArtifactVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-versions/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an artifact file's unrecorded edit, then list its saved versions */
+        post: operations["syncSessionArtifactVersions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1910,6 +2321,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/prompt-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Suggest the next human message after a completed chat turn */
+        post: operations["suggestSessionConversationPrompt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/queue/reorder": {
         parameters: {
             query?: never;
@@ -1942,6 +2370,247 @@ export interface paths {
         head?: never;
         /** Choose the model, reasoning effort and approval mode for the next turn */
         patch: operations["setSessionConversationTurnSettings"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listSessionSideChats"];
+        put?: never;
+        /** Open an independent launch-scoped side chat */
+        post: operations["createSessionConversationSideChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSessionSideChat"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteSessionSideChat"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolveSessionSideChatApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["compactSessionSideChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getSessionSideChatDraft"];
+        put: operations["putSessionSideChatDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamSessionSideChat"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolveSessionSideChatInput"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["interruptSessionSideQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["renameSessionSideChat"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendSessionSideChatQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["recoverSessionSideChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateSessionSideChatSettings"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["editSessionQueuedSideQuestion"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["cancelSessionSideQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retrySessionSideQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/sessions/{sessionId}/conversation/skills": {
@@ -2381,6 +3050,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/renders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Show an agent's self-contained HTML page inline in its chat thread */
+        post: operations["publishSessionRender"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/renders/{renderId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Serve a published render as a sandboxed HTML document */
+        get: operations["getSessionRender"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/renders/{renderId}/artifact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Keep a published render as a session artifact */
+        post: operations["saveSessionRenderArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/renders/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Screenshot an agent's HTML page in the desktop app before it is published */
+        post: operations["checkSessionRender"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/restore": {
         parameters: {
             query?: never;
@@ -2773,6 +3510,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Classify a path as a workspace file, a session artifact, or neither */
+        get: operations["resolveSessionWorkspacePath"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/search": {
         parameters: {
             query?: never;
@@ -2875,6 +3629,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/harness-defaults/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose which models one harness's pickers offer */
+        patch: operations["updateHarnessDefault"];
+        trace?: never;
+    };
     "/api/v1/settings/session-interface": {
         parameters: {
             query?: never;
@@ -2926,6 +3697,54 @@ export interface paths {
         head?: never;
         /** Rename a standalone shell terminal tab */
         patch: operations["renameShellTerminal"];
+        trace?: never;
+    };
+    "/api/v1/side-chats/launch/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["claimSideChatLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/side-chats/launch/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retireSideChatLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/side-chats/launch/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["exportSideChatLaunch"];
+        put?: never;
+        post: operations["recoverSideChatLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/system/github-auth": {
@@ -3113,6 +3932,33 @@ export interface components {
             path: string;
             projectId?: null | string;
         };
+        AgentAccountIdentity: {
+            email?: string;
+            /** @enum {string} */
+            method?: "account" | "api_key" | "token";
+            name?: string;
+            organization?: string;
+            plan?: string;
+            provider?: string;
+            source?: string;
+            /** @enum {string} */
+            sourceKind?: "environment" | "file" | "command" | "keychain";
+        };
+        AgentAuthDiagnostic: {
+            cached: boolean;
+            /** Format: date-time */
+            checkedAt: string;
+            code: string;
+            /** Format: int64 */
+            durationMs: number;
+            exitCode?: null | number;
+            httpStatus?: number;
+            method: string;
+            nextStep?: string;
+            provider?: string;
+            reason: string;
+            source?: string;
+        };
         AgentAuthPlan: {
             action: string;
             agentId: string;
@@ -3122,13 +3968,16 @@ export interface components {
             guidance?: string;
             /** @enum {string} */
             launchMode: "terminal" | "documentation";
+            logoutCommand?: string;
             reason?: string;
         };
         AgentAuthenticationObservation: {
+            account?: components["schemas"]["AgentAccountIdentity"];
             /** Format: date-time */
             attemptedAt: null | string;
             /** Format: date-time */
             checkedAt: null | string;
+            diagnostics?: components["schemas"]["AgentAuthDiagnostic"][];
             /** @enum {string} */
             freshness: "fresh" | "stale" | "checking";
             reason: string;
@@ -3173,6 +4022,9 @@ export interface components {
             reinstallAvailable: boolean;
             reinstallCommand?: string;
             reinstallReason?: string;
+            updateAvailable: boolean;
+            updateCommand?: string;
+            updateReason?: string;
         };
         AgentInstallPlan: {
             agentId: string;
@@ -3202,9 +4054,12 @@ export interface components {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
         AgentModelInfo: {
+            /** Format: int64 */
+            contextWindow?: number;
             defaultEffort?: string;
             efforts?: string[];
             id: string;
+            inputs?: string[];
             isDefault?: boolean;
             label: string;
             /** Format: date-time */
@@ -3215,6 +4070,7 @@ export interface components {
             agentId: string;
             allowCustom: boolean;
             binaryVersion?: string;
+            configuredProviders?: string[];
             /** @enum {string} */
             customModelEntry: "none" | "direct" | "configured";
             /** Format: date-time */
@@ -3226,6 +4082,7 @@ export interface components {
                 [key: string]: string;
             };
             models: components["schemas"]["AgentModelInfo"][];
+            providers?: string[];
             refreshError?: string;
             refreshRecommended?: boolean;
             /** @enum {string} */
@@ -3280,6 +4137,20 @@ export interface components {
         AgentSwitchResponse: {
             switch: components["schemas"]["AgentSwitch"];
         };
+        AgentUpdateAdvisory: {
+            agentId: string;
+            binaryPath?: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            /** @enum {string} */
+            reason?: "ownership_unconfirmed" | "unsupported_source" | "version_unparseable" | "channel_unconfirmed" | "lookup_failed" | "disabled" | "build_unordered";
+            source?: string;
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
         AppMemoryResponse: {
             /** @description False when there was no earlier sample to measure against: cpuPercent is unknown, not zero. */
             cpuMeasured: boolean;
@@ -3289,6 +4160,62 @@ export interface components {
             processCount: number;
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
+        };
+        ArtifactFileResponse: {
+            /** @description Hex SHA-256 of the file's content. */
+            fileFingerprint: string;
+            path: string;
+            /** Format: int64 */
+            size: number;
+        };
+        ArtifactVersionResponse: {
+            /** @description The version's UTF-8 text content, cut short when truncated is set. */
+            content: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
+            harness?: string;
+            path: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote the version: the agent, or the user through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description The content is only the first 256 KiB of the version. A restore still writes the whole version. */
+            truncated?: boolean;
+            /** Format: int64 */
+            version: number;
+        };
+        ArtifactVersionSummary: {
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** @description Best effort: the agent that was running the session when the version was recorded, which after an agent switch can differ from the agent that wrote it. Absent for older versions. */
+            harness?: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote the version: the agent, or the user through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** Format: int64 */
+            version: number;
         };
         AttachmentInput: {
             data: string;
@@ -3354,6 +4281,116 @@ export interface components {
             startedAt?: null | string;
             /** @enum {string} */
             status: "pending" | "spawning" | "running" | "completed" | "failed";
+        };
+        AwakeApplication: {
+            id: string;
+            identity: string;
+            name: string;
+            protected: boolean;
+        };
+        AwakeCapability: {
+            available: boolean;
+            id: string;
+            reason: string;
+        };
+        AwakeCondition: {
+            end: string;
+            /** @enum {string} */
+            kind: "agent_activity" | "schedule" | "power" | "battery" | "network" | "device" | "display" | "app" | "uptime" | "download";
+            start: string;
+            threshold: number;
+            timezone: string;
+            value: string;
+        };
+        AwakeDownloadsRequest: {
+            activeIds: string[];
+        };
+        AwakeObservation: {
+            agentActive?: null | boolean;
+            appPause: boolean;
+            applications: components["schemas"]["AwakeApplication"][];
+            audioControl: boolean;
+            batteryPercent?: null | number;
+            browsers: components["schemas"]["AwakeApplication"][];
+            devices: string[];
+            displayControl: boolean;
+            externalDisplays: number;
+            keyboardControl: boolean;
+            knownNetworks: string[];
+            lowPowerAuthorized: boolean;
+            lowPowerControl: boolean;
+            lowPowerMode: boolean;
+            networkAddresses: string[];
+            networkConnected?: null | boolean;
+            /** Format: date-time */
+            observedAt: string;
+            onBattery?: null | boolean;
+            thermal: string;
+            /** Format: double */
+            uptimeSeconds: number;
+        };
+        AwakeRule: {
+            conditions: components["schemas"]["AwakeCondition"][];
+            enabled: boolean;
+            id: string;
+            lidClosed: boolean;
+            /** @enum {string} */
+            match: "all" | "any";
+            name: string;
+            suppressed: boolean;
+        };
+        AwakeRulesRequest: {
+            rules: components["schemas"]["AwakeRule"][];
+        };
+        AwakeSession: {
+            boundId: string;
+            boundIdentity: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deadline?: null | string;
+            endReason: string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            id: string;
+            label: string;
+            lidClosed: boolean;
+            /** @enum {string} */
+            mode: "indefinite" | "duration" | "until" | "app" | "download";
+            /** @enum {string} */
+            scope: "ao" | "session";
+            sessionId: string;
+        };
+        AwakeSettings: {
+            agentReconnect: boolean;
+            browserActions: boolean;
+            darkenKeyboard: boolean;
+            displayAwake: boolean;
+            hotspotName: string;
+            hotspotRecovery: boolean;
+            lidClosed: boolean;
+            lowPowerBatteryPercent: number;
+            lowPowerOnSeriousHeat: boolean;
+            muteAudio: boolean;
+            pauseApps: string[];
+            restoreDisplay: boolean;
+            stopBatteryPercent: number;
+        };
+        AwakeState: {
+            active: boolean;
+            activeRules: string[];
+            agentOutcome: string;
+            capabilities: components["schemas"]["AwakeCapability"][];
+            lidActive: boolean;
+            networkOutcome: string;
+            observation: components["schemas"]["AwakeObservation"];
+            paused: boolean;
+            reason: string;
+            rules: components["schemas"]["AwakeRule"][];
+            sessions: components["schemas"]["AwakeSession"][];
+            settings: components["schemas"]["AwakeSettings"];
+            /** Format: date-time */
+            startedAt?: null | string;
         };
         BrowserCommandRequest: {
             action: string;
@@ -3642,7 +4679,14 @@ export interface components {
             active: boolean;
             enabled: boolean;
             hasBattery: boolean;
+            lidActive?: boolean;
+            lidClosed?: boolean;
+            lidReason?: string;
+            lidSupported?: boolean;
             supported: boolean;
+        };
+        ControllersKillSessionRequest: {
+            deleteArtifacts?: boolean;
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
@@ -3728,6 +4772,8 @@ export interface components {
             provisionState?: "provisioning" | "ready" | "failed";
             provisionSteps?: components["schemas"]["SessionProvisionStep"][];
             prs: components["schemas"]["SessionPRFacts"][];
+            /** @enum {string} */
+            requestedOutput?: "artifact";
             reviewerConfig?: components["schemas"]["AgentConfig"];
             /** @enum {string} */
             reviewerHarness?: "claude-code" | "codex" | "copilot" | "cursor" | "kilocode" | "opencode" | "opencode-v2" | "kiro" | "pi" | "agy" | "devin" | "droid" | "kimi" | "kimchi" | "muse" | "amp" | "aider" | "grok" | "crush" | "auggie" | "cline" | "autohand";
@@ -3747,6 +4793,7 @@ export interface components {
         };
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
+            lidClosed?: null | boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -3828,6 +4875,7 @@ export interface components {
         ConversationContentSummaryResponse: {
             mimeType?: string;
             name?: string;
+            sourceConversationId?: string;
             sourceMessageId?: string;
             /** Format: int64 */
             sourceRevision?: number;
@@ -3864,6 +4912,7 @@ export interface components {
         ConversationMessageResponse: {
             clientMessageId?: string;
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
+            continuation?: boolean;
             createdAt: string;
             editAvailable: boolean;
             id: string;
@@ -3912,6 +4961,13 @@ export interface components {
             status: "pending" | "in_progress" | "completed";
             text: string;
         };
+        ConversationPromptSuggestionRequest: {
+            turnId: string;
+        };
+        ConversationPromptSuggestionResponse: {
+            prompt: string;
+            turnId: string;
+        };
         ConversationRateLimitsPayload: {
             planLabel?: string;
             /** Format: int64 */
@@ -3949,6 +5005,7 @@ export interface components {
             branchedFromEarlierMessage: boolean;
             capabilities?: string[];
             compactedAt?: null | string;
+            continueTurnId: string;
             /** @enum {string} */
             controller: "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
             conversationId: string;
@@ -3968,6 +5025,7 @@ export interface components {
             rateLimits?: components["schemas"]["ConversationRateLimitsPayload"];
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
+            supportsExcerpts?: boolean;
             threadState?: components["schemas"]["ConversationThreadStatePayload"];
             title?: string;
             turns: components["schemas"]["ConversationTurnResponse"][];
@@ -4033,6 +5091,15 @@ export interface components {
             rrule?: string;
             timezone: string;
         };
+        CreateConversationSideChatRequest: {
+            forceNew?: boolean;
+            idempotencyKey: string;
+            label?: string;
+            reference?: components["schemas"]["ConversationExcerptReferenceRequest"];
+        };
+        CreateConversationSideChatResponse: {
+            side: components["schemas"]["SideConversation"];
+        };
         CreateReportRequest: {
             message?: string;
             note?: string;
@@ -4079,7 +5146,7 @@ export interface components {
         };
         DelegateTaskRequest: {
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -4096,6 +5163,10 @@ export interface components {
             ok: boolean;
             orchestratorId?: string;
             workerId: string;
+        };
+        DesktopArtifactLocationResponse: {
+            artifactDir: string;
+            sessionId: string;
         };
         DesktopWorkspaceLocationResponse: {
             sessionId: string;
@@ -4139,6 +5210,14 @@ export interface components {
             harness: string;
             mode: string;
             reviewId: string;
+        };
+        DomainSideReference: {
+            conversationId: string;
+            messageId: string;
+            /** Format: int64 */
+            revision: number;
+            selection: string;
+            sourceRole: string;
         };
         EditConversationMessageRequest: {
             clientMessageId?: string;
@@ -4198,6 +5277,9 @@ export interface components {
             session: components["schemas"]["ControllersSessionView"];
             sessionId: string;
         };
+        ExtendAwakeRequest: {
+            durationSeconds: number;
+        };
         FSEntry: {
             /** @description True when the directory carries a .git entry (clone or worktree checkout). */
             gitRepo: boolean;
@@ -4217,6 +5299,11 @@ export interface components {
             name?: string;
             owner?: string;
             private?: null | boolean;
+        };
+        GitHubStatusResponse: {
+            connected: boolean;
+            /** @description GitHub username AO is signed in as, from a stored token or the gh CLI; absent when it could not be resolved. */
+            login?: string;
         };
         GitPreparationEvent: {
             /** @enum {string} */
@@ -4248,6 +5335,9 @@ export interface components {
             initialCommitMessage?: string;
             remoteUrl?: string;
             repoPath: string;
+        };
+        HarnessDefault: {
+            disabledModels?: string[];
         };
         IdentityResponse: {
             apiVersion: number;
@@ -4316,7 +5406,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "cloudflared";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "cloudflared";
             /** Format: date-time */
             updatedAt?: null | string;
         };
@@ -4344,6 +5434,7 @@ export interface components {
             runs: components["schemas"]["ReviewRun"][];
         };
         KillSessionResponse: {
+            artifactsDeleted?: boolean;
             cleanupPending?: boolean;
             freed?: boolean;
             ok: boolean;
@@ -4370,6 +5461,10 @@ export interface components {
             installed: components["schemas"]["AgentInfo"][];
             /** @description Agents supported by this daemon build. */
             supported: components["schemas"]["AgentInfo"][];
+        };
+        ListArtifactVersionsResponse: {
+            path: string;
+            versions: components["schemas"]["ArtifactVersionSummary"][];
         };
         ListAutomationRunsResponse: {
             nextCursor?: string;
@@ -4534,6 +5629,7 @@ export interface components {
             hostId: string;
             keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             loopbackOnly: boolean;
+            noPublicTunnel: boolean;
             password: string;
             port: number;
             securePairing: components["schemas"]["ControllersSecurePairingStatus"];
@@ -4700,6 +5796,25 @@ export interface components {
             providerTurnId: string;
             sourceTurnId: string;
         };
+        PublishRenderRequest: {
+            /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
+            artifact?: boolean;
+            /** @description First-paint frame height in CSS pixels, clamped to 80-2000; the frame then fits the page. */
+            height?: number;
+            /** @description A complete, self-contained HTML document, at most 25 MiB. */
+            html: string;
+            /** @description Short name for the page. */
+            title: string;
+        };
+        PublishRenderResponse: {
+            activityId: string;
+            /** @description With artifact: why the page was not kept. The page is still published. */
+            artifactError?: string;
+            /** @description With artifact: the absolute path of the kept page. */
+            artifactPath?: string;
+            path: string;
+            renderId: string;
+        };
         PushDeviceEnvelope: {
             device: components["schemas"]["PushDeviceResponse"];
         };
@@ -4747,6 +5862,41 @@ export interface components {
             displayName: string;
             ok: boolean;
             sessionId: string;
+        };
+        RenderCheckRequest: {
+            /** @description A complete, self-contained HTML document, at most 25 MiB. */
+            html: string;
+            /** @description Viewport width in CSS pixels, 240-1600. Defaults to 720. */
+            width?: number;
+        };
+        RenderCheckResponse: {
+            consoleMessages: components["schemas"]["RenderConsoleMessage"][];
+            /** @description Height the page needs at this width, in CSS pixels. */
+            contentHeight: number;
+            /**
+             * @description Network the page could use. none when the agent's own sandbox has no network, so remote resources did not load.
+             * @enum {string}
+             */
+            network: "public" | "none";
+            screenshot: components["schemas"]["RenderCheckScreenshot"];
+        };
+        RenderCheckScreenshot: {
+            /** @description Base64 PNG. */
+            data: string;
+            /** @description Page height the screenshot shows, in CSS pixels. */
+            height: number;
+            /** @description PNG height in pixels, when it differs from the page height. */
+            imageHeight?: number;
+            /** @description PNG width in pixels, when it differs from the page width. */
+            imageWidth?: number;
+            mimeType: string;
+            /** @description Page width the screenshot shows, in CSS pixels. */
+            width: number;
+        };
+        RenderConsoleMessage: {
+            /** @enum {string} */
+            level: "debug" | "log" | "warning" | "error";
+            text: string;
         };
         ReorderQueuedConversationTurnsRequest: {
             turnIds: string[];
@@ -4798,6 +5948,15 @@ export interface components {
             content?: {
                 [key: string]: unknown;
             };
+        };
+        RestoreArtifactVersionRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+            /**
+             * Format: int64
+             * @description The version whose content becomes the file's content.
+             */
+            version: number;
         };
         RestoreReviewResponse: {
             reviewerHandleId: string;
@@ -4863,9 +6022,19 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        SaveRenderArtifactRequest: {
+            /** @description Name for the file. Characters a file system refuses are replaced. */
+            title: string;
+        };
+        SaveRenderArtifactResponse: {
+            name: string;
+            /** @description The file, relative to the session's artifact directory. */
+            path: string;
+        };
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
+            continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
@@ -4888,11 +6057,19 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        SendSideQuestionRequest: {
+            attachments?: components["schemas"]["ConversationImageContentRequest"][];
+            clientMessageId: string;
+            references?: components["schemas"]["ConversationExcerptReferenceRequest"][];
+            resources?: components["schemas"]["ConversationResourceContentRequest"][];
+            text: string;
+        };
         SessionActivityResponse: {
             current?: components["schemas"]["SessionStepResponse"];
             recent: components["schemas"]["SessionStepResponse"][];
         };
         SessionArtifact: {
+            inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
@@ -5128,6 +6305,8 @@ export interface components {
             conversationCheckpointOrigin?: "human" | "coordination";
             /** @description Opaque identity of an AO-authored semantic prompt accepted by the native agent. */
             coordinationId?: string;
+            /** @description Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook. */
+            entrypoint?: string;
             /** @description AO hook sub-command that produced this state (e.g. post-tool-use). */
             event?: string;
             /** @description Latest assistant update exposed by the provider hook. */
@@ -5254,6 +6433,9 @@ export interface components {
             cloudOffering: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
+            harnessDefaults?: {
+                [key: string]: components["schemas"]["HarnessDefault"];
+            };
             localEnabled: boolean;
             trackerIntakeEnabled: boolean;
         };
@@ -5268,6 +6450,178 @@ export interface components {
             sessionId?: string;
             title: string;
             workingDir: string;
+        };
+        SideActivity: {
+            /** Format: date-time */
+            createdAt: string;
+            decisions?: components["schemas"]["SideDecision"][];
+            detail?: unknown;
+            id: string;
+            input?: components["schemas"]["SideInput"];
+            kind: string;
+            requestId?: string;
+            sideId: string;
+            status: string;
+            summary: string;
+            text?: string;
+            turnId: string;
+        };
+        SideChatLaunchClaimRequest: {
+            appRunId: string;
+        };
+        SideChatLaunchState: {
+            appRunId: string;
+            numbers?: {
+                [key: string]: number;
+            };
+            sides: components["schemas"]["SideRecoveryRecord"][];
+        };
+        SideChatListResponse: {
+            sides: components["schemas"]["SideConversation"][];
+        };
+        SideChatSnapshotResponse: {
+            snapshot: components["schemas"]["SideSnapshot"];
+        };
+        SideContent: {
+            data?: string;
+            mimeType?: string;
+            name?: string;
+            text?: string;
+            type: string;
+            uri?: string;
+        };
+        SideConversation: {
+            anchorTurnId?: string;
+            cleanupPending?: boolean;
+            contextMode: string;
+            /** Format: date-time */
+            createdAt: string;
+            effort?: string;
+            errorMessage?: string;
+            hasWork: boolean;
+            id: string;
+            label: string;
+            mainConversationId: string;
+            manualLabel?: boolean;
+            model?: string;
+            recreateRequired?: boolean;
+            selectedText?: string;
+            sessionId: string;
+            sourceMessageId?: string;
+            /** Format: int64 */
+            sourceRevision?: number;
+            state: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        SideDecision: {
+            id: string;
+            kind: string;
+            label: string;
+        };
+        SideDraftRequest: {
+            contentJson: string;
+        };
+        SideDraftResponse: {
+            contentJson: string;
+        };
+        SideInput: {
+            message: string;
+            mode: string;
+            schema?: {
+                [key: string]: unknown;
+            };
+            url?: string;
+        };
+        SideLabelRequest: {
+            label: string;
+        };
+        SideMessage: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            /** Format: int64 */
+            revision: number;
+            role: string;
+            /** Format: int64 */
+            sequence: number;
+            sideId: string;
+            streaming: boolean;
+            text: string;
+            turnId: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        SideQuestionResponse: {
+            turn: components["schemas"]["SideTurn"];
+        };
+        SideRecoveryRecord: {
+            activities: components["schemas"]["SideActivity"][];
+            activityProviderIds?: {
+                [key: string]: string;
+            };
+            boundaryState?: string;
+            boundaryTurnId?: string;
+            cleanupOnly?: boolean;
+            createKey: string;
+            decisionData?: {
+                [key: string]: string[];
+            };
+            draft: string;
+            generation: string;
+            harness: string;
+            hostStopped?: boolean;
+            launchConfig: unknown;
+            messageProviderIds?: {
+                [key: string]: string;
+            };
+            messages: components["schemas"]["SideMessage"][];
+            nativeAnchorId: string;
+            policyVersion: number;
+            providerForkId: string;
+            providerHostId: string;
+            referenceContext: string;
+            referencePending: boolean;
+            seedHistory: string;
+            side: components["schemas"]["SideConversation"];
+            sourceProviderId: string;
+            turns: components["schemas"]["SideRecoveryTurn"][];
+        };
+        SideRecoveryTurn: {
+            content?: components["schemas"]["SideContent"][];
+            dispatchAttempt?: number;
+            providerTurnId?: string;
+            referenceContexts: string[];
+            turn: components["schemas"]["SideTurn"];
+        };
+        SideSettingsRequest: {
+            effort: string;
+            model: string;
+        };
+        SideSnapshot: {
+            activities: components["schemas"]["SideActivity"][];
+            hasMore: boolean;
+            messages: components["schemas"]["SideMessage"][];
+            side: components["schemas"]["SideConversation"];
+            turns: components["schemas"]["SideTurn"][];
+        };
+        SideTurn: {
+            clientMessageId: string;
+            /** Format: date-time */
+            completedAt?: null | string;
+            /** Format: date-time */
+            createdAt: string;
+            errorMessage?: string;
+            id: string;
+            referenceContext?: string;
+            references?: components["schemas"]["DomainSideReference"][];
+            retryOfTurnId?: string;
+            selectionText?: string;
+            sideId: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            state: string;
+            text: string;
         };
         SpawnOrchestratorRequest: {
             /** @enum {string} */
@@ -5289,7 +6643,7 @@ export interface components {
             displayName?: string;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -5299,6 +6653,8 @@ export interface components {
             parentSessionId?: string;
             projectId?: string;
             prompt?: string;
+            /** @enum {string} */
+            requestedOutput?: "artifact";
             /** @enum {string} */
             trackerProvider?: "github" | "gitlab";
         };
@@ -5322,13 +6678,28 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
-            /** @description Server-issued installation method id. Omit to use the recommended viable method. */
+            /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
+            expectedVersion?: string;
+            /** @description Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update. */
             method?: string;
             /**
              * @description Requested operation. Defaults to install for older clients.
              * @enum {string}
              */
-            operation?: "install" | "reinstall";
+            operation?: "install" | "reinstall" | "update";
+        };
+        StartAwakeRequest: {
+            boundId: string;
+            boundIdentity?: string;
+            durationSeconds: number;
+            lidClosed: boolean;
+            /** @enum {string} */
+            mode: "indefinite" | "duration" | "until" | "app" | "download";
+            /** @enum {string} */
+            scope: "ao" | "session";
+            sessionId: string;
+            /** Format: date-time */
+            until?: null | string;
         };
         StartCodexAccountSwitchRequest: {
             /** @deprecated */
@@ -5413,6 +6784,10 @@ export interface components {
              */
             targetHarness: "claude-code" | "codex" | "fx";
         };
+        SyncArtifactVersionsRequest: {
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+        };
         SystemMemoryResponse: {
             /** @description What the kernel would hand out without swapping (MemAvailable). */
             availableBytes: number;
@@ -5494,6 +6869,14 @@ export interface components {
             deleted: boolean;
             token: string;
         };
+        UpdateArtifactFileRequest: {
+            /** @description The file's new UTF-8 text content. */
+            content: string;
+            /** @description Hex SHA-256 of the file content the edit started from. */
+            expectedFileFingerprint: string;
+            /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+            path: string;
+        };
         UpdateAutomationRequest: {
             cron?: null | string;
             displayName?: null | string;
@@ -5507,6 +6890,9 @@ export interface components {
         };
         UpdateChatHibernationRequest: {
             enabled: null | boolean;
+        };
+        UpdateHarnessDefaultRequest: {
+            disabledModels: null | string[];
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -5697,6 +7083,12 @@ export interface components {
             summary: components["schemas"]["WorkspaceSummary"];
             truncated: boolean;
             workspaceVersion: string;
+        };
+        WorkspacePathResolutionResponse: {
+            /** @enum {string} */
+            kind: "workspace" | "artifact" | "outside";
+            path: string;
+            sessionId: string;
         };
         WorkspaceRepo: {
             gitStatus?: string;
@@ -5922,9 +7314,61 @@ export interface operations {
             };
         };
     };
+    logoutAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartAgentAuthResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getAgentModels: {
         parameters: {
             query?: {
+                /** @description Return catalog facts without reading session history for model recency. Cached catalogs are served while discovery refreshes in the background. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
             };
@@ -5987,6 +7431,8 @@ export interface operations {
     refreshAgentModels: {
         parameters: {
             query?: {
+                /** @description Refresh the Harness Settings browsing catalog without session-history enrichment; FX includes all connections in a separate cache. */
+                catalogOnly?: boolean;
                 /** @description Optional project identifier used as the model-catalog cache scope. */
                 projectId?: string;
                 /** @description When true, compare executable and config metadata before running discovery. */
@@ -6067,6 +7513,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProbeAgentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getAgentUpdateAdvisory: {
+        parameters: {
+            query?: {
+                /** @description Re-probe the installed binary, ownership and latest release instead of reusing cached advisory evidence. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentUpdateAdvisory"];
                 };
             };
             /** @description Bad Request */
@@ -7357,6 +8856,688 @@ export interface operations {
             };
         };
     };
+    getAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    awakeDownloads: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeDownloadsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearAwakeHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    authorizeAwakeLowPower: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    revokeAwakeLowPower: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    observeAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recoverAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resumeAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAwakeRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeRulesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    startAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    endAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                awakeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    extendAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                awakeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtendAwakeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setAwakeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwakeSettings"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopAwake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwakeState"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     executeBrowserCommand: {
         parameters: {
             query?: never;
@@ -7814,6 +9995,56 @@ export interface operations {
             };
         };
     };
+    getDesktopSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopArtifactLocationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getDesktopSessionWorkspace: {
         parameters: {
             query?: never;
@@ -8183,9 +10414,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: boolean;
-                    };
+                    "application/json": components["schemas"]["GitHubStatusResponse"];
                 };
             };
             /** @description Internal Server Error */
@@ -11429,6 +13658,123 @@ export interface operations {
             };
         };
     };
+    getSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    postSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
+    headSessionAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listSessionAgentSwitches: {
         parameters: {
             query?: never;
@@ -11587,6 +13933,436 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSessionArtifactFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateArtifactFileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactFileResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteSessionArtifactFile: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionArtifactFile: {
+        parameters: {
+            query?: {
+                /** @description Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap. */
+                source?: "1" | null;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionArtifactVersions: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListArtifactVersionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionArtifactVersion: {
+        parameters: {
+            query?: {
+                /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Version number within the file's history. */
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactVersionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    restoreSessionArtifactVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreArtifactVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactFileResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    syncSessionArtifactVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncArtifactVersionsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListArtifactVersionsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12635,6 +15411,87 @@ export interface operations {
             };
         };
     };
+    suggestSessionConversationPrompt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationPromptSuggestionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationPromptSuggestionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     reorderQueuedSessionConversationTurns: {
         parameters: {
             query?: never;
@@ -12768,6 +15625,692 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionSideChats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SideChatListResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createSessionConversationSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConversationSideChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateConversationSideChatResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionSideChat: {
+        parameters: {
+            query?: {
+                /** @description Read side turns older than this RFC3339 timestamp. */
+                before?: string;
+                limit?: null | number;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SideChatSnapshotResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveSessionSideChatApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+                /** @description Provider approval request identifier. Zero is a legitimate value. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveConversationApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    compactSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactConversationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionSideChatDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SideDraftResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    putSessionSideChatDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    streamSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveSessionSideChatInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+                /** @description Provider approval request identifier. Zero is a legitimate value. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveConversationInputRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    interruptSessionSideQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    renameSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    sendSessionSideChatQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendSideQuestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SideQuestionResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recoverSessionSideChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateSessionSideChatSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    editSessionQueuedSideQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendSideQuestionRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelSessionSideQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    retrySessionSideQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Independent side chat identifier. */
+                sideId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13778,7 +17321,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersKillSessionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -14997,6 +18544,288 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    publishSessionRender: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRenderRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishRenderResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionRender: {
+        parameters: {
+            query?: {
+                /** @description Set to 1 to read the page as the agent wrote it: the stored bytes as text/plain, without the theme bootstrap. */
+                source?: "1" | null;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Render identifier returned when the page was published. */
+                renderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    saveSessionRenderArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Render identifier returned when the page was published. */
+                renderId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveRenderArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveRenderArtifactResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkSessionRender: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenderCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RenderCheckResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16435,6 +20264,68 @@ export interface operations {
             };
         };
     };
+    resolveSessionWorkspacePath: {
+        parameters: {
+            query: {
+                /** @description Absolute or workspace-relative file path to classify. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspacePathResolutionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     searchSessionWorkspaceFiles: {
         parameters: {
             query: {
@@ -16744,6 +20635,69 @@ export interface operations {
             };
         };
     };
+    updateHarnessDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateHarnessDefaultRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateSessionInterface: {
         parameters: {
             query?: never;
@@ -17004,6 +20958,128 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    claimSideChatLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideChatLaunchClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    retireSideChatLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideChatLaunchClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    exportSideChatLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SideChatLaunchState"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recoverSideChatLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SideChatLaunchState"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -78,6 +78,7 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 		path: artifact.path,
 		previewUrl: artifact.previewUrl,
 		rawUrl: artifact.rawUrl,
+		inlineUrl: artifact.inlineUrl,
 		size: artifact.size,
 		updatedAt: artifact.updatedAt,
 	};
@@ -149,6 +150,7 @@ export function toWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -251,6 +253,7 @@ function toLocalWorkspaceSession(
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
+		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -262,6 +265,12 @@ function toLocalWorkspaceSession(
 // and always hits the real daemon.
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
+class DaemonNotReadyError extends Error {
+	constructor() {
+		super("AO daemon API is not ready");
+	}
+}
+
 async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	if (usesPreviewWorkspaceData) {
 		const fake =
@@ -272,7 +281,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 		return applyOptimisticSessionKills(snapshot) ?? snapshot;
 	}
 	if (!hasTrustedApiBaseUrl()) {
-		throw new Error("AO daemon API is not ready");
+		throw new DaemonNotReadyError();
 	}
 
 	const [{ data: projectsData, error: projectsError }, { data: sessionsData, error: sessionsError }] =
@@ -337,6 +346,9 @@ async function fetchRemoteSessions(hostId: string) {
 		artifactFiles: await Promise.all((session.artifactFiles ?? []).map(async (artifact) => ({
 			...artifact,
 			rawUrl: artifact.rawUrl ? await aoBridge.remotes.previewUrl(hostId, session.id, artifact.rawUrl) : undefined,
+			// The remote daemon's inline origin is a localhost name, which here
+			// would mean this computer; a remote chat shows no frame anyway.
+			inlineUrl: undefined,
 		}))),
 	})));
 }
@@ -381,13 +393,32 @@ async function fetchRemoteWorkspaces(hostId: string): Promise<WorkspaceSummary[]
 
 // Shared so route loaders can prefetch via queryClient.ensureQueryData (paired
 // with the router's defaultPreload: "intent") and the hook reads the same cache.
+// No refetchInterval here: every observer that carries one runs its own timer,
+// and timers started at different mount times do not dedupe. With ~18
+// subscribers that meant several /projects + /sessions fetches per tick.
+// useWorkspacePolling() is the single owner of the interval.
 export const workspaceQueryOptions = {
 	queryKey: workspaceQueryKey,
 	queryFn: fetchWorkspaces,
-	retry: 1,
+	// Retrying before the daemon is up only parks the query in a 1s backoff.
+	// Fetches started meanwhile (the ready-time invalidation, the shell's startup
+	// fetch) join that backoff instead of running, which held the first
+	// /projects + /sessions about 0.75s past "daemon listening" on cold launch.
+	// Fail fast instead; the daemon status change refetches.
+	retry: (failureCount: number, error: Error) => !(error instanceof DaemonNotReadyError) && failureCount < 1,
 	staleTime: 10_000,
-	refetchInterval: (query: Query<WorkspaceSummary[]>) => (workspaceStatusesChecking(query.state.data) ? 300 : 15_000),
 };
+
+export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
+	workspaceStatusesChecking(query.state.data) ? 300 : 15_000;
+
+/**
+ * Drives the workspace poll from one place. Mounted once by the shell; it never
+ * re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
+ */
+export function useWorkspacePolling(enabled = true) {
+	useQuery({ ...workspaceQueryOptions, refetchInterval: workspaceRefetchInterval, notifyOnChangeProps: [], enabled });
+}
 
 // Cloud projects are a separate query so a control-plane failure can never
 // break the local list: on error TanStack keeps this query's last known data,
@@ -458,6 +489,7 @@ export function toCloudWorkspaceSession(
 			runtimeState: session.runtimeState,
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
+			coderWorkspaceUrl: session.coderWorkspaceUrl,
 		},
 	};
 }

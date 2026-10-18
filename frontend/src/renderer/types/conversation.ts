@@ -153,7 +153,8 @@ export interface ConversationContentSummary {
 	uri?: string;
 	name?: string;
 	text?: string;
-	sourceMessageId?: string;
+	sourceConversationId?: string;
+ sourceMessageId?: string;
 	sourceRevision?: number;
 }
 
@@ -179,6 +180,8 @@ export interface ConversationMessage {
 	content?: ConversationContentSummary[];
 	/** False when the original prompt content cannot be reproduced safely. */
 	editAvailable?: boolean;
+	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
+	continuation?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
@@ -395,6 +398,26 @@ export interface AutoReviewDetail {
 	commandSource?: string;
 }
 
+/** An agent HTML page published with `ao render`, shown inline in its turn. */
+export interface RenderRef {
+	id: string;
+	title: string;
+	height: number;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/renders/{renderId}`. */
+	path: string;
+	/** `[width, height]` pairs measured when the page was published, sorted by width. */
+	heights?: Array<[number, number]>;
+}
+
+/** An HTML session artifact the agent reported with `ao report --artifact`, shown inline in its turn. */
+export interface ArtifactRef {
+	/** Relative to the session's artifact directory, slash-separated. */
+	path: string;
+	name: string;
+	/** Daemon-relative route, `/api/v1/sessions/{id}/artifact-files/{path}`. */
+	url: string;
+}
+
 /**
  * A `system` activity's discriminator and the fields that belong to it.
  *
@@ -411,7 +434,18 @@ export interface SystemEventDetail {
 		| "steer"
 		| "plan"
 		| "context.reset"
-		| "context.boundary";
+		| "context.boundary"
+		| "render"
+		| "artifact"
+		| "workspace.setup";
+	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
+	setupStatus?: "succeeded" | "failed" | "timed_out";
+	/** workspace.setup: the 1-based Setup step that failed or timed out. */
+	setupStep?: number;
+	/** render */
+	render?: RenderRef;
+	/** artifact */
+	artifact?: ArtifactRef;
 	/** model.rerouted */
 	fromModel?: string;
 	toModel?: string;
@@ -741,6 +775,8 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
+	continueTurnId?: string;
 	conversationId: string;
 	sessionId: string;
 	harness: string;

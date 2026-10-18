@@ -1135,6 +1135,32 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 }
 
 // Chat must not be quietly stricter than the terminal path for the same setting.
+// AO's own tools that load agent pages ask this before they use the network.
+func TestSandboxAllowsNetworkFollowsTheCodexSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		readOnly       bool
+		disableNetwork bool
+		launchMode     ports.PermissionMode
+		turnMode       ports.PermissionMode
+		want           bool
+	}{
+		{"full access at launch", false, false, ports.PermissionModeDefault, "", true},
+		{"accept edits at launch", false, false, ports.PermissionModeAcceptEdits, "", false},
+		{"auto at launch", false, false, ports.PermissionModeAuto, "", false},
+		{"turn narrows full access", false, false, ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, false},
+		{"turn widens accept edits", false, false, ports.PermissionModeAcceptEdits, ports.PermissionModeDefault, true},
+		{"read-only reviewer", true, false, ports.PermissionModeAcceptEdits, "", true},
+		{"read-only background", true, true, ports.PermissionModeAcceptEdits, "", false},
+		{"background cannot widen access", true, true, ports.PermissionModeAcceptEdits, ports.PermissionModeBypassPermissions, false},
+	} {
+		conv := &conversation{readOnly: tc.readOnly, disableNetwork: tc.disableNetwork, launchMode: tc.launchMode}
+		if got := conv.SandboxAllowsNetwork(tc.turnMode); got != tc.want {
+			t.Errorf("%s: SandboxAllowsNetwork = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 	for _, tc := range []struct {
 		readOnly                  bool
@@ -1157,10 +1183,61 @@ func TestApprovalSettingsMirrorTUIPosture(t *testing.T) {
 
 func TestReadOnlyTurnCannotOverrideSandbox(t *testing.T) {
 	params := map[string]any{}
-	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true)
+	applyTurnSettings(params, ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}, true, false)
 	if params["approvalPolicy"] != "never" || params["approvalsReviewer"] != "user" ||
 		!reflect.DeepEqual(params["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": true}) {
 		t.Fatalf("read-only turn settings = %#v", params)
+	}
+}
+
+func TestBackgroundReadOnlySandboxPersistsAcrossTurnOverrides(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: "/tmp/ws", Permissions: ports.PermissionModeAuto,
+		ReadOnly: true, DisableNetwork: true, Ephemeral: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
+	var startParams map[string]any
+	if err := json.Unmarshal(start.Params, &startParams); err != nil {
+		t.Fatal(err)
+	}
+	if startParams["sandbox"] != "read-only" || startParams["approvalPolicy"] != "never" || startParams["approvalsReviewer"] != "user" || startParams["ephemeral"] != true {
+		t.Fatalf("background thread settings = %#v", startParams)
+	}
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "Write a title", Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions}}); err != nil {
+		t.Fatal(err)
+	}
+	turn := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var turnParams map[string]any
+	if err := json.Unmarshal(turn.Params, &turnParams); err != nil {
+		t.Fatal(err)
+	}
+	if turnParams["approvalPolicy"] != "never" || turnParams["approvalsReviewer"] != "user" || !reflect.DeepEqual(turnParams["sandboxPolicy"], map[string]any{"type": "readOnly", "networkAccess": false}) {
+		t.Fatalf("background turn settings = %#v", turnParams)
+	}
+}
+
+func TestBackgroundRefusesNetworkPermissionAndApprovalRequests(t *testing.T) {
+	for _, method := range []string{
+		"item/permissions/requestApproval",
+		"item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/tool/requestUserInput",
+	} {
+		t.Run(method, func(t *testing.T) {
+			conv := &conversation{readOnly: true, disableNetwork: true}
+			result, err := conv.handleServerRequest(context.Background(), serverRequest{
+				Method: method, ID: json.RawMessage(`42`),
+				Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","permissions":{"network":{"enabled":true}},"availableDecisions":["accept","cancel"]}`),
+			})
+			if result != nil || err == nil || !strings.Contains(err.Error(), "does not permit") || len(conv.pending) != 0 {
+				t.Fatalf("background request = %#v, %v, pending = %#v", result, err, conv.pending)
+			}
+		})
 	}
 }
 
@@ -1654,5 +1731,49 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 	})
 	if !errors.Is(err, ports.ErrChatHostNotRunning) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
+	servers := []ports.ChatMCPServerConfig{{
+		Name: "ao", Type: "stdio", Command: "/opt/ao/bin/ao", Args: []string{"mcp"},
+		Env: map[string]string{"AO_SESSION_ID": "ao-1"},
+	}, {
+		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
+	}}
+	// Only AO's own server is pre-approved.
+	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
+		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"}},` +
+		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
+	for _, method := range []string{"thread/start", "thread/resume"} {
+		t.Run(method, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			var conv ports.ChatConversation
+			var err error
+			if method == "thread/start" {
+				conv, err = d.Start(context.Background(), ports.ChatStartConfig{
+					SessionID: "ao-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			} else {
+				conv, err = d.Resume(context.Background(), ports.ChatResumeConfig{
+					SessionID: "ao-1", ProviderConversationID: "thread-1", WorkspacePath: "/tmp/ws", Effort: "high", MCPServers: servers,
+				})
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			defer func() { _ = conv.Close() }()
+
+			f := srv.awaitFrame(func(f frame) bool { return f.Method == method })
+			var params struct {
+				Config json.RawMessage `json:"config"`
+			}
+			if err := json.Unmarshal(f.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if string(params.Config) != want {
+				t.Fatalf("config = %s\nwant     %s", params.Config, want)
+			}
+		})
 	}
 }

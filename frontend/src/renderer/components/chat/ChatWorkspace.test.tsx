@@ -1,7 +1,7 @@
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, type ReactElement } from "react";
-import { typeInLexicalEditor } from "../../test/lexical";
+import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
@@ -15,10 +15,10 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
-import type { ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
 	getChatInlineEditMutation,
@@ -207,6 +207,33 @@ beforeEach(() => {
 	window.localStorage.clear();
 	setApiBaseUrl("http://127.0.0.1:3001");
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
+});
+
+describe("ChatWorkspace prompt suggestions", () => {
+	it("inserts a contextual suggestion into the normal draft on Tab without sending it", async () => {
+		const onSend = vi.fn();
+		const promptSuggestion = { id: "context-1", text: "Explain the fix." };
+		const snapshot = { ...chatFixtureSettled, sessionId: "suggestion-workspace" };
+		render(<ChatWorkspace snapshot={snapshot} promptSuggestion={promptSuggestion} onSend={onSend} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(promptSuggestion.text);
+		const editor = screen.getByRole("combobox", { name: "Message the agent" });
+		await userEvent.click(editor);
+		fireEvent.keyDown(editor, { key: "Tab", code: "Tab" });
+		await waitFor(() => expect(editor).toHaveTextContent(promptSuggestion.text));
+		expect(readChatSessionDraft(snapshot.sessionId).composer.text).toBe(promptSuggestion.text);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("withholds suggestions while the normal entry is locked", () => {
+		const props = {
+			snapshot: { ...chatFixtureSettled, sessionId: "suggestion-workspace-locked" },
+			promptSuggestion: { id: "context-1", text: "Explain the fix." },
+		};
+		const view = render(<ChatWorkspace {...props} newWorkDisabled />);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} />);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(props.promptSuggestion.text);
+	});
 });
 
 afterEach(async () => {
@@ -868,6 +895,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(onSessionRenamed).toHaveBeenCalledOnce();
 	});
 
+	it("does not offer rename on the project orchestrator's chat tab", async () => {
+		const user = userEvent.setup();
+		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={chatFixture}
+				session={{ ...chatSession, id: "ao-demo-orchestrator", kind: "orchestrator" }}
+				sessionRole="orchestrator"
+				onSessionRenamed={onSessionRenamed}
+			/>,
+		);
+
+		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
+		await user.dblClick(tab);
+		fireEvent.contextMenu(tab);
+
+		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(renameSessionMock).not.toHaveBeenCalled();
+		expect(onSessionRenamed).not.toHaveBeenCalled();
+	});
+
 	it("keeps titlebar clearance attached throughout sidebar expansion and collapse", () => {
 		useUiStore.setState({ isSidebarOpen: false });
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixture} />);
@@ -1505,6 +1554,40 @@ describe("ChatWorkspace timeline", () => {
 		expect(onDecide).toHaveBeenCalledWith("opaque-request", "option-a");
 	});
 
+	it("keeps each answer's own wording when a question offers several options of one kind", async () => {
+		const user = userEvent.setup();
+		const onDecide = vi.fn();
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items.push({
+			kind: "activity",
+			id: "approval-question",
+			sequence: 102,
+			revision: 1,
+			turnId: "turn-2",
+			activityKind: "approval",
+			status: "pending",
+			summary: "What topic or content would you like the 10 lines written about?",
+			requestId: "question-request",
+			decisions: [
+				{ id: "1", label: "A 10-line bio for your portfolio", kind: "allow_once" },
+				{ id: "2", label: "10 lines of code", kind: "allow_once" },
+				{ id: "3", label: "A general 10-line poem", kind: "allow_once" },
+			],
+			detail: { subjectKind: "mcp_tool" },
+			createdAt: "2026-08-08T00:00:00Z",
+		});
+
+		render(<ChatWorkspace snapshot={snapshot} onDecide={onDecide} onInterrupt={vi.fn()} />);
+
+		const approval = screen.getByRole("group", { name: "Approval request question-request" });
+		expect(within(approval).queryByRole("button", { name: /Allow once/ })).not.toBeInTheDocument();
+		for (const label of [/A 10-line bio for your portfolio/, /10 lines of code/, /A general 10-line poem/]) {
+			expect(within(approval).getByRole("button", { name: label })).toBeInTheDocument();
+		}
+		await user.click(within(approval).getByRole("button", { name: /A general 10-line poem/ }));
+		expect(onDecide).toHaveBeenCalledWith("question-request", "3");
+	});
+
 	it("requires an explicit click for decisions without a semantic kind", () => {
 		const onDecide = vi.fn();
 		const snapshot = structuredClone(chatFixture);
@@ -1854,11 +1937,13 @@ describe("ChatWorkspace timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={startingSnapshot("running")}
-				session={{ ...chatSession, provisionState: "provisioning", provisionSteps: startingSteps("done").map((step) => step.id === "worktree" ? { ...step, status: "running", endedAt: undefined } : step) }}
+				session={{ ...chatSession, branch: "ao/mer-1/root", provisionState: "provisioning", provisionSteps: startingSteps("done").map((step) => step.id === "worktree" ? { ...step, status: "running", endedAt: undefined } : step) }}
 			/>,
 		);
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
+		expect(within(screen.getByTestId("session-startup")).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(screen.queryByText("ao/mer-1/root")).not.toBeInTheDocument();
 	});
 
 	it("waits for controller and provisioning readiness before enabling permission changes", () => {
@@ -1913,6 +1998,56 @@ describe("ChatWorkspace timeline", () => {
 	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
 		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
 		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
+	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, workspaceId: STANDALONE_WORKSPACE_ID, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByText("Describe the page or document you want")).toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample artifact requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Write a one-page plan for a new feature",
+			"Build an HTML page comparing three options side by side",
+			"Turn my rough notes into a polished Markdown document",
+		]);
+
+		await user.click(prompts[1]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Build an HTML page comparing three options side by side"));
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument());
+	});
+
+	it("offers ordinary sample requests in an empty non-artifact chat and fills the composer with one", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample artifact requests" })).not.toBeInTheDocument();
+		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
+		expect(prompts.map((prompt) => prompt.textContent)).toEqual([
+			"Review my recent changes for bugs",
+			"Add tests for the code I am working on",
+			"Walk me through how a request flows through this code",
+		]);
+
+		await user.click(prompts[0]);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Review my recent changes for bugs"));
+		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
+	});
+
+	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} session={{ ...chatSession, requestedOutput: "artifact" }} />);
+
+		expect(screen.getByRole("heading", { name: "What do you want to create?" })).toBeInTheDocument();
+		expect(screen.getByRole("list", { name: "Sample artifact requests" })).toBeInTheDocument();
+	});
+
+	it("drops the sample requests once the conversation has messages", () => {
+		render(<ChatWorkspace snapshot={chatFixture} session={chatSession} />);
+
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
 	});
 
 	it("waits for provider settings before showing composer dropdowns", () => {
@@ -1974,7 +2109,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(resume).toHaveBeenCalledOnce();
 	});
 
-	it("shows connecting during the controller gap, then restores the composer when ready", () => {
+	it("shows connecting during the controller gap, then restores the composer when ready", async () => {
 		const { rerender } = render(
 			<ChatWorkspace
 				snapshot={{
@@ -1990,15 +2125,71 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
-		// Progress is the topbar spinner; the composer stays empty rather than
-		// painting a second "Connecting…" / "Switching…" label over the editor.
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
+		expect(screen.getByText("Starting the chat agent")).toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).not.toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 
+		rerender(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "connecting" } }}
+				controllerTransitioning
+			/>,
+		);
+		expect(await screen.findByText("Restoring your conversation")).toBeInTheDocument();
+
 		rerender(<ChatWorkspace snapshot={chatFixtureEmpty} />);
-		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
+	});
+
+	it("docks the composer at the bottom while arriving in a chat that already has messages", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: "2026-10-09T00:00:00Z" }}
+				controllerTransitioning
+			/>,
+		);
+		const placement = document.querySelector("[data-composer-placement]");
+		expect(placement).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement).toHaveClass("justify-end");
+	});
+
+	it("fades the transcript in only when messages load during an interface switch", () => {
+		const loaded = { ...chatFixtureEmpty, items: [humanMessage("hello")] };
+		const navigation = render(<ChatWorkspace snapshot={chatFixtureEmpty} />);
+		navigation.rerender(<ChatWorkspace snapshot={loaded} />);
+		expect(document.querySelector(".chat-transcript-reveal")).toBeNull();
+		navigation.unmount();
+		const arrival = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={chatSession} controllerTransitioning />);
+		arrival.rerender(<ChatWorkspace snapshot={loaded} session={chatSession} controllerTransitioning />);
+		expect(document.querySelector(".chat-transcript-reveal")).not.toBeNull();
+	});
+
+	it("centers the composer while arriving in a chat with no messages yet", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }}
+				session={{ ...chatSession, lastUserMessageAt: undefined }}
+				controllerTransitioning
+			/>,
+		);
+		expect(document.querySelector("[data-composer-placement]")).toHaveAttribute("data-composer-placement", "center");
+	});
+
+	it("keeps the composer quiet while leaving chat for the terminal", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+				controllerTransitioning
+				newWorkDisabled
+			/>,
+		);
+		expect(screen.queryByText("Starting the chat agent")).not.toBeInTheDocument();
+		expect(document.querySelector(".cursor-chat-composer[data-starting]")).toBeNull();
 	});
 
 	it("keeps history readable while a stopped agent resumes after opening", () => {
@@ -4940,5 +5131,179 @@ describe("durable queued edits", () => {
 		expect(pending?.clientMessageId).toBeTruthy();
 		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Escape" });
 		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit).toEqual(pending);
+	});
+});
+
+describe("sent message recall", () => {
+	/** Fires one arrow key; true means the composer claimed it rather than moving the caret. */
+	const press = (key: "ArrowUp" | "ArrowDown") =>
+		!fireEvent.keyDown(screen.getByRole("combobox", { name: "Message the agent" }), { key });
+	const composerText = () => screen.getByRole("combobox", { name: "Message the agent" }).textContent;
+	const human = (id: string, turnId: string, sequence: number, text: string, extra: Partial<ConversationMessage> = {}): ConversationMessage => ({
+		kind: "message", id, turnId, sequence, revision: 0, role: "user", origin: "human", text, streaming: false,
+		createdAt: "2026-09-09T00:00:00Z", ...extra,
+	});
+	const steer = (id: string, turnId: string, sequence: number, text: string, detail: Record<string, string> = { origin: "human" }): ConversationItem => ({
+		kind: "activity", id, turnId, sequence, revision: 0, activityKind: "system", status: "completed", summary: text,
+		detail: { event: "steer", text, ...detail }, createdAt: "2026-09-09T00:00:00Z",
+	});
+	function historySnapshot(sessionId: string, items: ConversationItem[], activeBranchId = "branch-1"): ConversationSnapshot {
+		return {
+			...chatFixtureEmpty,
+			sessionId,
+			activeBranchId,
+			latestSequence: items.length,
+			turns: [...new Set(items.map((item) => item.turnId as string))].map((id) => ({
+				id, state: "completed" as const, requestedAt: "2026-09-09T00:00:00Z",
+			})),
+			items,
+		};
+	}
+
+	it("recalls only the human prompts this conversation shows as sent", async () => {
+		const snapshot = historySnapshot("recall-sources", [
+			human("first", "t1", 1, "First ask", { clientMessageId: "echo-durable" }),
+			{ ...human("reply", "t1", 2, "An answer"), role: "assistant" },
+			{ ...human("relay", "t2", 3, "A worker report"), origin: "automation" },
+			human("attached", "t3", 4, "Look at this\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-notes.txt"),
+			human("undone", "t4", 5, "Undone ask"),
+			human("second", "t5", 6, "Second ask"),
+			human("repeat", "t6", 7, "Second ask"),
+			human("queued", "t7", 8, "Queued ask"),
+		]);
+		snapshot.turns = snapshot.turns.map((turn) =>
+			turn.id === "t4" ? { ...turn, rolledBack: true } : turn.id === "t7" ? { ...turn, state: "queued" as const } : turn);
+		const localEchos = [
+			{ clientMessageId: "echo-durable", text: "First ask", createdAt: "2026-09-09T00:00:00Z" },
+			{ clientMessageId: "echo-queued", text: "Queued echo", createdAt: "2026-09-09T00:00:01Z", queued: true },
+			{ clientMessageId: "echo-new", text: "Just sent", createdAt: "2026-09-09T00:00:02Z" },
+		];
+		render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["Just sent", "Second ask", "Look at this", "First ask"]);
+	});
+
+	it("recalls the user's steers in sequence order and leaves automation steers out", async () => {
+		const snapshot = historySnapshot("recall-steers", [
+			human("first", "t1", 1, "Earlier ask"),
+			{ ...human("reply", "t1", 3, "An answer"), role: "assistant" },
+			human("second", "t2", 4, "Second ask"),
+			human("undone", "t3", 8, "Undone ask"),
+			// Activities come after the messages here; recall follows their sequence.
+			steer("legacy", "t1", 2, "Legacy guidance", {}),
+			steer("guidance", "t2", 5, "Latest human guidance\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-steer.txt"),
+			steer("automation", "t2", 6, "Automation guidance", { origin: "automation" }),
+			steer("relayed", "t2", 7, "Relayed guidance", { senderSessionId: "worker-1", senderProjectId: "project-1" }),
+			steer("undone-steer", "t3", 9, "Undone guidance"),
+		]);
+		snapshot.turns = snapshot.turns.map((turn) => turn.id === "t3" ? { ...turn, rolledBack: true } : turn);
+		render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByText("Automation guidance")).toBeInTheDocument();
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["Latest human guidance", "Second ask", "Legacy guidance", "Earlier ask"]);
+	});
+
+	it("keeps a walk steady while the same branch gains messages", async () => {
+		const sessionId = "recall-same-branch";
+		const before = historySnapshot(sessionId, [human("a", "t1", 1, "First ask"), human("b", "t2", 2, "Second ask")]);
+		const view = render(<ChatWorkspace snapshot={before} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		press("ArrowUp");
+		expect(composerText()).toBe("Second ask");
+
+		// A prompt from elsewhere and a streaming answer land under the open walk.
+		const after = historySnapshot(sessionId, [
+			human("a", "t1", 1, "First ask"),
+			human("b", "t2", 2, "Second ask"),
+			human("c", "t3", 3, "Third ask"),
+			{ ...human("reply", "t3", 4, "Streaming answer"), role: "assistant", streaming: true },
+		]);
+		view.rerender(<ChatWorkspace snapshot={after} />);
+		press("ArrowUp");
+		expect(composerText()).toBe("First ask");
+		press("ArrowDown");
+		expect(composerText()).toBe("Second ask");
+		press("ArrowDown");
+		expect(composerText()).toBe("");
+
+		press("ArrowUp");
+		expect(composerText()).toBe("Third ask");
+	});
+
+	it.each([
+		{ change: "another branch is activated", conversationId: chatFixtureEmpty.conversationId, activeBranchId: "branch-2" },
+		{ change: "the conversation is replaced", conversationId: "conv-replacement", activeBranchId: "branch-1" },
+	])("drops a walk and restores the draft when $change", async ({ conversationId, activeBranchId }) => {
+		const sessionId = `recall-identity-${activeBranchId}-${conversationId}`;
+		writeChatComposerText(sessionId, "my draft");
+		const view = render(<ChatWorkspace snapshot={historySnapshot(sessionId, [human("a", "t1", 1, "Shared start"), human("b", "t2", 2, "Old branch ask")])} />);
+		const composer = () => screen.getByRole("combobox", { name: "Message the agent" });
+		await waitFor(() => expect(composer()).toHaveTextContent("my draft"));
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(composerText()).toBe("Old branch ask");
+
+		const replaced = historySnapshot(sessionId, [human("a", "t1", 1, "Shared start"), human("c", "t3", 3, "New branch ask")], activeBranchId);
+		view.rerender(<ChatWorkspace snapshot={{ ...replaced, conversationId }} />);
+		expect(composerText()).toBe("my draft");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my draft");
+
+		const recalled: (string | null)[] = [];
+		while (press("ArrowUp")) recalled.push(composerText());
+		expect(recalled).toEqual(["New branch ask", "Shared start"]);
+	});
+
+	it("restores the user's own draft, after a remount too, and sends a recalled prompt", async () => {
+		const sessionId = "recall-draft";
+		writeChatComposerText(sessionId, "my own draft");
+		const send = vi.fn().mockResolvedValue(undefined);
+		const snapshot = historySnapshot(sessionId, [human("a", "t1", 1, "Earlier ask")]);
+		const first = render(<ChatWorkspace snapshot={snapshot} onSend={send} />);
+		const composer = () => screen.getByRole("combobox", { name: "Message the agent" });
+		await waitFor(() => expect(composer()).toHaveTextContent("my own draft"));
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(composerText()).toBe("Earlier ask");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("my own draft");
+		press("ArrowDown");
+		expect(composerText()).toBe("my own draft");
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		first.unmount();
+		render(<ChatWorkspace snapshot={snapshot} onSend={send} />);
+		await waitFor(() => expect(composer()).toHaveTextContent("my own draft"));
+
+		await placeLexicalCaret(composer(), 0);
+		press("ArrowUp");
+		expect(send).not.toHaveBeenCalled();
+		fireEvent.keyDown(composer(), { key: "Enter" });
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toBe("Earlier ask");
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+	});
+
+	it("walks only the active session's messages", async () => {
+		const view = render(<ChatWorkspace snapshot={historySnapshot("recall-alpha", [human("a", "t1", 1, "Alpha ask")])} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		press("ArrowUp");
+		expect(composerText()).toBe("Alpha ask");
+
+		view.rerender(<ChatWorkspace snapshot={historySnapshot("recall-beta", [human("b", "t1", 1, "Beta ask")])} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "");
+		expect(composerText()).toBe("");
+		expect(press("ArrowDown")).toBe(false);
+		expect(press("ArrowUp")).toBe(true);
+		expect(composerText()).toBe("Beta ask");
+		expect(press("ArrowUp")).toBe(false);
+		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
 	});
 });

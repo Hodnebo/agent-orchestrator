@@ -434,16 +434,17 @@ func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (She
 	if len(argv) == 0 {
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL", "Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	readiness, err := prepareCueShellReadiness(s.dataDir, argv)
-	if err != nil {
-		return ShellTerminal{}, err
-	}
-	defer readiness.cleanup()
 	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
 	if err != nil {
 		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
 	}
-	env := agentlaunch.MergeEnv(s.pinnedEnv(projectEnv), readiness.env)
+	env := s.pinnedEnv(projectEnv)
+	readiness, err := prepareCueShellReadiness(s.dataDir, argv, env)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer readiness.cleanup()
+	env = agentlaunch.MergeEnv(env, readiness.env)
 	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
 		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
 	if err != nil {
@@ -524,15 +525,15 @@ func (s *Service) initialInputReadyState(ctx context.Context, handle ports.Runti
 	if err != nil {
 		return nil
 	}
-	if ready := MatchInitialInputReadyState(output, readyStates); ready != nil {
-		return ready
-	}
+	ready := MatchInitialInputReadyState(output, readyStates)
 	if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
 		if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
-			return MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates)
+			if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
+				return renderedReady
+			}
 		}
 	}
-	return nil
+	return ready
 }
 
 func (s *Service) waitForInitialInputReadyState(ctx context.Context, handle ports.RuntimeHandle, readyStates []InitialInputReadyState) *InitialInputReadyState {
@@ -576,6 +577,9 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 			return
 		}
 		s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+		return
+	}
+	if ready.SkipInput {
 		return
 	}
 	if ready.RawPrefix != "" {

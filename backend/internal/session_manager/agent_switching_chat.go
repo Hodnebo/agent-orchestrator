@@ -184,7 +184,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
@@ -395,6 +395,7 @@ func (m *Manager) executeChatAgentSwitch(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            finalSystemPrompt,
 		AdditionalDirectories:   additionalDirectories,
+		MCPServers:              m.aoMCPServers(cfg.TargetHarness, targetLaunchEnv),
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -617,7 +618,7 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 	if !ok {
 		return ErrUnknownHarness
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID)
+	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return err
 	}
@@ -633,6 +634,12 @@ func (m *Manager) rollbackStoppedChatAgentSwitchSource(
 		systemPrompt, systemPromptFile, agentConfig, env,
 	); err != nil {
 		return err
+	}
+	// A target that failed to start can leave its provider host behind. The
+	// session has one host, so the source cannot reopen while the target's
+	// host still owns it under another protocol. Stop it first.
+	if err := m.stopSourceControllerConclusive(current); err != nil {
+		return fmt.Errorf("stop failed target controller: %w", err)
 	}
 	_, err = m.resumeChatController(
 		ctx, "restore failed agent switch", current, project,

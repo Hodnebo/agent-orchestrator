@@ -17,6 +17,29 @@ Turning mobile access off closes the authenticated listener. Regenerating its pa
 
 Where available, Orchestrator can manage a remote-access connector using `cloudflared`. If Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
 
+## Use this desktop from another machine
+
+Open Orchestrator on the machine you want to connect to. With the current `ao` CLI, show its existing connection address and password without changing remote access:
+
+```bash
+ao remote-host status
+```
+
+If `status` reports **Remote host disabled**, install `cloudflared` using **Connect Mobile → Install cloudflared**, then run:
+
+```bash
+ao remote-host enable --tunnel-only
+ao remote-host status
+```
+
+The tunnel starts asynchronously; run `status` again until an HTTPS address appears. On the other desktop, sign in to Orchestrator and open **Settings → Remote hosts → Add host**, then enter that address and connection password. Treat these details as credentials. Cloudflare terminates TLS and can read tunneled traffic; quick-tunnel addresses can change on restart.
+
+If the host already has LAN access enabled, its displayed HTTP address works only on a trusted reachable network. Use `ao remote-host enable --tunnel` to add HTTPS access while retaining that LAN listener; switching to tunnel-only mode requires disabling it first and invalidates the old password.
+
+If `ao` is missing from your Mac's PATH or points to an old install, use the current desktop app's bundled CLI instead: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" remote-host status`. Adjust the app path if you installed or named it differently; the same binary supports `remote-host enable --tunnel-only`.
+
+On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Dock while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
+
 ## Tailscale
 
 iPhones cannot connect through the current raw Tailscale endpoint. Use a managed HTTPS endpoint instead. iOS blocks cleartext requests to `100.64.0.0/10`, and the current v2 offer does not advertise Tailscale HTTPS endpoints. The current desktop panel has no connection-method selector or separate visible TLS control, and automatic TLS setup is incomplete. Android behavior for a raw Tailscale endpoint is unverified.
@@ -52,7 +75,7 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | Works on Wi-Fi but not elsewhere | Confirm a managed HTTPS endpoint is ready, rescan the refreshed QR, and test off Wi-Fi. A plain LAN or raw Tailscale address is not an iOS remote endpoint. |
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
-| Connection drops after sleep or app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; the app and daemon still need to run. Reopen the session after the network returns. |
+| Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |
 | No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
 <details>
@@ -65,3 +88,55 @@ This walkthrough was checked against the desktop pairing UI, daemon mobile bridg
 <Callout type="info">
 	Chat and Terminal UI are two controllers for the same Orchestrator session. Switching does not create a new worktree, but a first switch from Terminal UI to Chat does not reconstruct old terminal screen output as structured messages.
 </Callout>
+
+## Keeping a MacBook reachable with its lid closed
+
+Ordinary **Keep this Mac awake** prevents idle sleep; normal lid sleep remains
+allowed. Eligible Apple Silicon MacBooks (macOS 13–27) with the bundled desktop
+helper can opt into **Keep awake with lid closed**. Enabling this mode also
+enables **Keep this Mac awake** in the same request. It starts while Connect
+Mobile is on and the listener is serving. Your phone does not need to maintain
+an active socket. Turning off mobile access, Keep awake or the lid option
+releases the request. Turning off Keep awake in desktop settings also turns off
+the lid option; turning off just the lid option keeps idle wake on.
+
+Explicit opt-in registers a local recovery helper without an administrator
+password. Short daemon leases and launchd restart recovery handle abandoned
+requests. The UI distinguishes saved intent, an armed native control, and
+safety/recovery stops. macOS authentication stays in effect; an external display
+is not required by the implementation.
+
+Keep the Mac on a ventilated surface, not in a closed bag. Lid wakefulness stops
+below 10% battery, on unknown battery state or at critical thermal pressure.
+After charging/cooling, turn the lid option off and on to restart. Do not run
+another lid utility concurrently; macOS's lid control is global.
+
+A reviewer verified basic lid-close operation and continued phone connectivity
+on one macOS 26 MacBook. Full physical compatibility validation, including crash
+recovery and macOS 27, is pending. A successful probe or "armed"
+status is not a connectivity guarantee on every OS/hardware combination. Test a
+short lid-closed session on your machine before relying on it unattended.
+[ADR 0005](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/adr/0005-mobile-closed-lid-wake.md)
+records current evidence and the release gate.
+
+Helper versions, plist, leases and recovery journal live under `~/.ao/data/wake`,
+shared by AO instances of the same login using the default `~/.ao/data` durable
+data root. Custom or scratch `AO_DATA_DIR` roots disable native lid control so
+isolated runs cannot affect production state or host power. Ordinary Keep awake
+remains available.
+Turning the feature off retains recovery registration but ends requests. To
+remove registration, open the lid, turn the option off in every AO instance and
+wait for recovery to finish, then run
+`launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake`. Do not delete an
+unfinished recovery journal. Re-enabling the option registers the helper again.
+
+An existing compatible helper is reused across app builds, rather than replaced
+while sessions may be active. To upgrade that helper, use the removal steps above
+with the lid open, then enable the option again; fresh registration removes stale
+helper copies.
+
+Native protocol version 2 stores coordinator state inside the default durable
+data root. An existing version-1 registration is never replaced automatically;
+open the lid, stop all old wake sessions and unload its registration before
+opting in again. Retain any unfinished legacy recovery journal under
+`~/.ao/wake` until recovery has completed.
