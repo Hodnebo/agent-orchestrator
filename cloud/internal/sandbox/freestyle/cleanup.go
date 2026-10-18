@@ -110,7 +110,7 @@ func (c *Client) runCleanup(
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanuphook.Margin)
 	defer cancel()
-	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.AsRoot)
+	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.AsRoot, cleanuphook.StopOwnerProcesses)
 	printed, status, err := c.execCleanupHook(runCtx, id, command, wait+cleanuphook.Margin)
 	cleanuphook.Report(ctx, finish, attrs, steps, printed, status, err, "freestyle")
 }

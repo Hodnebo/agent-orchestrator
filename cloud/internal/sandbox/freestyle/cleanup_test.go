@@ -98,6 +98,8 @@ func TestDeleteRunsCleanupInTheVMBeforeDeletingIt(t *testing.T) {
 		`set -- runuser -u "$ao_owner" -- "$ao_hook"`,
 		"timeout -k 5 600 ",
 		`case "$ao_owner" in ''|root|`,
+		// The resumed worker and agent are stopped before the hook runs.
+		`ao_stop "$ao_who" TERM`,
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("hook command missing %q:\n%s", want, command)

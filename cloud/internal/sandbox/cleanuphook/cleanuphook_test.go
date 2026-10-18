@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -55,7 +57,7 @@ func TestCommandAsRootRunsTheHookAsItsOwner(t *testing.T) {
 		t.Skip("sh is unavailable")
 	}
 	hook := filepath.Join(t.TempDir(), "worker", worker.CleanupHookFile)
-	command := Command(HookWord(hook), 10*time.Second, "", AsRoot)
+	command := Command(HookWord(hook), 10*time.Second, "", AsRoot, KeepOwnerProcesses)
 	if strings.Contains(command, "sudo") || strings.Contains(command, "[ -O") {
 		t.Fatalf("a root hook command must reach the owner only through runuser: %s", command)
 	}
@@ -103,7 +105,7 @@ func TestCommandAsRootRunsTheCurrentCleanup(t *testing.T) {
 	if !fits {
 		t.Fatal("a one-line Cleanup does not fit the payload limit")
 	}
-	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload, AsRoot)
+	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload, AsRoot, KeepOwnerProcesses)
 	output := runHookCommand(t, command, rootShims(t, "ao-worker"))
 	printed, status, ok := Split(output)
 	if !ok || status != "0" || strings.Contains(printed, "installed-cleanup") {
@@ -285,5 +287,82 @@ func TestReportRedactsTheStageOutputLikeTheSteps(t *testing.T) {
 	if len(r.events) != 1 || strings.Contains(r.events[0].Output, "abc123") || strings.Contains(r.events[0].Output, "hunter2") ||
 		strings.Contains(stage, "abc123") || strings.Contains(stage, "hunter2") || !strings.Contains(stage, "[REDACTED]") {
 		t.Fatalf("stage output %q, events %+v", stage, r.events)
+	}
+}
+
+// Freestyle and Docker stop the hook owner's processes (the worker and its
+// agent) before the hook runs; Coder, whose login user may run the Coder
+// agent carrying the command, stops nothing.
+func TestCommandStopsTheOwnersProcessesFirst(t *testing.T) {
+	t.Parallel()
+	for _, runner := range []Runner{AsRoot, AsLoginUser} {
+		stopping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", runner, StopOwnerProcesses)
+		stop, run := strings.Index(stopping, `ao_stop "$ao_who" TERM`), strings.Index(stopping, `ao_out=$(`)
+		if stop < 0 || run < stop || !strings.Contains(stopping, `ao_stop "$ao_who" KILL`) ||
+			!strings.Contains(stopping, `1|"$$") continue`) || !strings.Contains(stopping, "ao_who=${ao_owner:-$(id -un)}") {
+			t.Fatalf("runner %d: the owner's processes must be stopped, sparing PID 1 and the command, before the hook runs:\n%s", runner, stopping)
+		}
+		if keeping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", runner, KeepOwnerProcesses); strings.Contains(keeping, "ao_stop") {
+			t.Fatalf("runner %d: KeepOwnerProcesses stops processes:\n%s", runner, keeping)
+		}
+	}
+}
+
+// The stop sends SIGTERM, waits, then SIGKILLs a process that ignores it, and
+// touches only the owner's processes. Run where /proc lists processes, with id
+// and stat shimmed so the owner's are only the two children started here.
+func TestCommandStopEndsOnlyTheOwnersProcesses(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc to list processes")
+	}
+	polite := exec.Command("sleep", "60")
+	stubborn := exec.Command("sh", "-c", `trap "" TERM; while :; do sleep 0.2; done`)
+	bystander := exec.Command("sleep", "60")
+	for _, process := range []*exec.Cmd{polite, stubborn, bystander} {
+		if err := process.Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = bystander.Process.Kill(); _ = bystander.Wait() })
+	exited := func(process *exec.Cmd) chan struct{} {
+		done := make(chan struct{})
+		go func() { _ = process.Wait(); close(done) }()
+		return done
+	}
+	politeDone, stubbornDone := exited(polite), exited(stubborn)
+	bin := t.TempDir()
+	owned := "/proc/" + strconv.Itoa(polite.Process.Pid) + "|/proc/" + strconv.Itoa(stubborn.Process.Pid)
+	shims := map[string]string{
+		"id":   "#!/bin/sh\ncase \"$1\" in -u) echo 4242 ;; -un) echo owner ;; *) exit 1 ;; esac\n",
+		"stat": "#!/bin/sh\ncase \"$3\" in " + owned + ") echo 4242 ;; *) echo 0 ;; esac\n",
+	}
+	for name, content := range shims {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := filepath.Join(t.TempDir(), worker.CleanupHookFile)
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho hook ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	output := runHookCommand(t, Command(HookWord(hook), 10*time.Second, "", AsLoginUser, StopOwnerProcesses),
+		append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH")))
+	if !strings.Contains(output, "hook ran") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("output = %q", output)
+	}
+	for name, done := range map[string]chan struct{}{"polite": politeDone, "stubborn": stubbornDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the %s owner process is still running", name)
+		}
+	}
+	if elapsed := time.Since(started); elapsed < OwnerStopWait-time.Second {
+		t.Fatalf("the stubborn process was killed after %s, before its SIGTERM wait", elapsed)
+	}
+	if err := bystander.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("a process the owner does not own was signalled: %v", err)
 	}
 }

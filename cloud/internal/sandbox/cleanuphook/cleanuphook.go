@@ -93,6 +93,47 @@ const (
 	AsRoot
 )
 
+// Stop says whether the hook command first stops the hook owner's processes.
+type Stop int
+
+const (
+	// KeepOwnerProcesses runs the hook beside whatever the owner runs
+	// (Coder: the login user may also run the Coder agent that carries the
+	// hook command, so nothing is stopped there).
+	KeepOwnerProcesses Stop = iota
+	// StopOwnerProcesses ends every process of the hook's owner (the AO
+	// worker, its agent and whatever they started) before the hook runs as
+	// a fresh process, so neither acts during Cleanup: a Freestyle VM
+	// resumed for its Cleanup resumes them too, and a Docker container runs
+	// them until it is removed. Each gets SIGTERM, up to OwnerStopWait to
+	// exit, then SIGKILL. PID 1 is spared: in a Docker container it is the
+	// worker itself, and ending it would stop the container and the Cleanup
+	// with it (with its agent gone and its session deleted it has nothing to
+	// act on); in a VM it is root's init. Containers the Cleanup stops are
+	// root's (dockerd), so they are untouched; a dev server the agent started
+	// is stopped, which is what a Cleanup that stops it wants.
+	StopOwnerProcesses
+)
+
+// OwnerStopWait is how long the owner's processes have to exit after SIGTERM.
+const OwnerStopWait = 5 * time.Second
+
+// stopOwnerScript defines ao_stop USER SIGNAL, which signals every process of
+// USER but PID 1 and this shell and reports whether any was signalled. It
+// reads /proc rather than using pkill, which slim images lack; signalling 0
+// only checks a process is still there.
+const stopOwnerScript = "ao_stop() {\n" +
+	"  ao_uid=$(id -u \"$1\" 2>/dev/null) || return 1\n" +
+	"  ao_found=1\n" +
+	"  for ao_pid in /proc/[0-9]*; do\n" +
+	"    ao_pid=${ao_pid#/proc/}\n" +
+	"    case \"$ao_pid\" in 1|\"$$\") continue ;; esac\n" +
+	"    [ \"$(stat -c %u \"/proc/$ao_pid\" 2>/dev/null)\" = \"$ao_uid\" ] || continue\n" +
+	"    kill -\"$2\" \"$ao_pid\" 2>/dev/null && ao_found=0\n" +
+	"  done\n" +
+	"  return $ao_found\n" +
+	"}\n"
+
 // Command is the shell command that runs the worker-installed Cleanup hook
 // (hook is a shell word naming it) as the user that owns it, under timeout(1)
 // when the image has it, then prints the tail of its output and, after
@@ -100,8 +141,8 @@ const (
 // first replaces the commands script beside the hook with the project's
 // current Cleanup, as that user, so the hook keeps its working directory,
 // session environment and run-once lock; if that fails the installed
-// commands run.
-func Command(hook string, budget time.Duration, override string, runner Runner) string {
+// commands run. With StopOwnerProcesses it ends the owner's processes first.
+func Command(hook string, budget time.Duration, override string, runner Runner, stop Stop) string {
 	seconds := strconv.Itoa(max(1, int(budget/time.Second)))
 	command := "ao_hook=" + hook + "\n" +
 		"ao_skip() { printf '\\n%s:%s\\n' " + Marker + " " + Skipped + "; exit 0; }\n" +
@@ -136,6 +177,17 @@ func Command(hook string, budget time.Duration, override string, runner Runner) 
 			"else\n" +
 			"  printf %s \"$ao_payload\" | base64 -d | gzip -dc | sh -c " + write + " _ \"$ao_commands\"\n" +
 			"fi || echo \"AO: could not install the project's current Cleanup; running the commands from the session's start\" >&2\n"
+	}
+	if stop == StopOwnerProcesses {
+		polls := strconv.Itoa(int(OwnerStopWait / (500 * time.Millisecond)))
+		command += stopOwnerScript +
+			// A hook the login user owns runs as that user (ao_owner unset).
+			"ao_who=${ao_owner:-$(id -un)}\n" +
+			"if ao_stop \"$ao_who\" TERM; then\n" +
+			"  ao_wait=0\n" +
+			"  while [ \"$ao_wait\" -lt " + polls + " ] && ao_stop \"$ao_who\" 0; do sleep 0.5; ao_wait=$((ao_wait + 1)); done\n" +
+			"  ao_stop \"$ao_who\" KILL\n" +
+			"fi\n"
 	}
 	return command +
 		"if command -v timeout >/dev/null 2>&1; then\n" +

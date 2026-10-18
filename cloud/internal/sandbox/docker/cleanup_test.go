@@ -183,6 +183,8 @@ func TestDeleteRunsCleanupInTheContainerBeforeRemovingIt(t *testing.T) {
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
 		`if [ -O "$ao_hook" ] && [ -x "$ao_hook" ]; then set -- "$ao_hook"`,
 		"timeout -k 5 600 ",
+		// The worker's agent is stopped before the hook runs.
+		`ao_stop "$ao_who" TERM`,
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("hook command missing %q:\n%s", want, command)
