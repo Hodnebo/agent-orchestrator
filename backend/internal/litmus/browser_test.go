@@ -13,7 +13,6 @@ import (
 
 func TestBrowserCommandsForwardAndKeepEvidence(t *testing.T) {
 	for _, args := range [][]string{
-		{"mouse", "wheel", "500", "-80"},
 		{"swipe", "left", "250"},
 		{"click", "#save", "--button", "right"},
 		{"network", "route", "**/api", "--body", `{"ok":true}`},

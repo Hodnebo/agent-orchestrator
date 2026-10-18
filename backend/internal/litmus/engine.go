@@ -152,7 +152,7 @@ func (e *Engine) Run(ctx context.Context, timeout time.Duration, args ...string)
 			}
 		}
 	}
-	out, err := e.invoke(ctx, args...)
+	out, err := e.browserCommand(ctx, args)
 	if err == nil && (changesTab(args) || slices.Contains(args, "--new-tab")) {
 		// An explicit tab change also changes where the next receipt is taken.
 		// Incidental focus changes still use the recovery above.
