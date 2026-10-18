@@ -48,7 +48,7 @@ func codexHomeFromEnvironment(environment []string) string {
 	return strings.TrimSpace(home)
 }
 
-// codexRolloutTail follows the newest interactive Codex rollout under a
+// codexRolloutTail follows the newest rollout of the terminal's Codex under a
 // CODEX_HOME and reports turns that ended on an error. Only bytes written
 // after the watcher started count: history from an earlier process (a resumed
 // conversation, or an adopted Codex that outlived its worker) must not mark
@@ -56,7 +56,10 @@ func codexHomeFromEnvironment(environment []string) string {
 type codexRolloutTail struct {
 	root    string
 	started time.Time
-	path    string
+	// conversationID is the conversation the terminal resumed, if any. Its
+	// rollout is the terminal's whatever surface started it.
+	conversationID string
+	path           string
 	// offsets is how far each rollout has been read. It starts at every
 	// rollout's size when the watcher started, so a resumed conversation is
 	// read from where it was, and one created later from its start.
@@ -67,10 +70,11 @@ type codexRolloutTail struct {
 
 // newCodexRolloutTail records where every existing rollout ends. Call it
 // before the agent starts, so nothing it writes counts as history.
-func newCodexRolloutTail(codexHome string, started time.Time) *codexRolloutTail {
+func newCodexRolloutTail(codexHome, conversationID string, started time.Time) *codexRolloutTail {
 	t := &codexRolloutTail{
 		root: filepath.Join(codexHome, "sessions"), started: started,
-		offsets: make(map[string]int64),
+		conversationID: strings.TrimSpace(conversationID),
+		offsets:        make(map[string]int64),
 	}
 	_ = filepath.WalkDir(t.root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
@@ -93,7 +97,7 @@ type codexTurnFailure struct {
 // poll returns each turn that ended unsuccessfully since the previous poll.
 func (t *codexRolloutTail) poll() []codexTurnFailure {
 	if t.path == "" || t.scans%codexRolloutScanEvery == 0 {
-		t.follow(t.newestInteractiveRollout())
+		t.follow(t.newestTerminalRollout())
 	}
 	t.scans++
 	if t.path == "" {
@@ -153,11 +157,13 @@ func (t *codexRolloutTail) follow(path string) {
 	t.path, t.partial = path, nil
 }
 
-// newestInteractiveRollout is the most recently written rollout of an
-// interactive Codex. Chat's app-server shares the CODEX_HOME but never runs
-// beside the terminal agent; its rollouts and exec runs are skipped anyway so
-// they can never stand in for the terminal's turn.
-func (t *codexRolloutTail) newestInteractiveRollout() string {
+// newestTerminalRollout is the most recently written rollout of the terminal's
+// Codex: the conversation it resumed, or any rollout an interactive Codex
+// writes. A conversation started in Chat (source vscode) and resumed in the
+// terminal is the terminal's now; Chat's app-server shares the CODEX_HOME but
+// never runs beside the terminal agent. Exec, MCP and subagent rollouts are
+// never the terminal's own turn.
+func (t *codexRolloutTail) newestTerminalRollout() string {
 	var newest string
 	var newestMod time.Time
 	_ = filepath.WalkDir(t.root, func(path string, entry os.DirEntry, err error) error {
@@ -168,7 +174,7 @@ func (t *codexRolloutTail) newestInteractiveRollout() string {
 		if err != nil || info.ModTime().Before(newestMod) {
 			return nil
 		}
-		if path != t.path && !codexInteractiveRollout(path) {
+		if path != t.path && !t.resumedRollout(entry.Name()) && !codexTerminalRollout(path) {
 			return nil
 		}
 		newest, newestMod = path, info.ModTime()
@@ -177,7 +183,13 @@ func (t *codexRolloutTail) newestInteractiveRollout() string {
 	return newest
 }
 
-func codexInteractiveRollout(path string) bool {
+// resumedRollout reports whether a rollout file is the resumed conversation's:
+// Codex names it rollout-<time>-<conversation id>.jsonl.
+func (t *codexRolloutTail) resumedRollout(name string) bool {
+	return t.conversationID != "" && strings.HasSuffix(strings.TrimSuffix(name, ".jsonl"), "-"+t.conversationID)
+}
+
+func codexTerminalRollout(path string) bool {
 	file, err := os.Open(path)
 	if err != nil {
 		return false
@@ -201,7 +213,7 @@ func codexInteractiveRollout(path string) bool {
 	}
 	var source string
 	if json.Unmarshal(record.Payload.Source, &source) == nil {
-		return source != "exec" && source != "vscode" && source != "mcp"
+		return source != "exec" && source != "mcp"
 	}
 	// Subagent and other structured sources are not the terminal's own turn.
 	return len(record.Payload.Source) == 0

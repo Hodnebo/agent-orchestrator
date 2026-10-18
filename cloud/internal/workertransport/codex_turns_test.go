@@ -18,6 +18,7 @@ import (
 
 const (
 	codexCLIMeta     = `{"timestamp":"2026-10-18T06:00:00Z","type":"session_meta","payload":{"id":"t1","originator":"codex-tui","source":"cli"}}` + "\n"
+	codexExecMeta    = `{"timestamp":"2026-10-18T06:00:00Z","type":"session_meta","payload":{"id":"t3","originator":"codex_exec","source":"exec"}}` + "\n"
 	codexChatMeta    = `{"timestamp":"2026-10-18T06:00:00Z","type":"session_meta","payload":{"id":"t2","originator":"agent-orchestrator","source":"vscode"}}` + "\n"
 	codexTurnStarted = `{"timestamp":"2026-10-18T06:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"u1"}}` + "\n"
 	// Recorded from Codex 0.150 when its sign-in expired mid-session.
@@ -89,7 +90,7 @@ func TestCodexRolloutTailReportsOnlyNewFailedTurns(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	tail := newCodexRolloutTail(home, time.Now())
+	tail := newCodexRolloutTail(home, "", time.Now())
 	if failures := tail.poll(); len(failures) != 0 {
 		t.Fatalf("history reported as failures: %v", failures)
 	}
@@ -115,7 +116,7 @@ func TestCodexRolloutTailReportsOnlyNewFailedTurns(t *testing.T) {
 func TestCodexRolloutTailSkipsAResumedRolloutsHistory(t *testing.T) {
 	home := t.TempDir()
 	path := writeRollout(t, home, "rollout-a.jsonl", codexCLIMeta+codexTurnStarted+codexTurnFailed)
-	tail := newCodexRolloutTail(home, time.Now().Add(-time.Second))
+	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
 	appendRollout(t, path, codexTurnStarted)
 	if failures := tail.poll(); len(failures) != 0 {
 		t.Fatalf("a resumed rollout's old failure was reported mid-turn: %v", failures)
@@ -126,17 +127,41 @@ func TestCodexRolloutTailSkipsAResumedRolloutsHistory(t *testing.T) {
 	}
 }
 
-func TestCodexRolloutTailIgnoresChatRollouts(t *testing.T) {
+func TestCodexRolloutTailIgnoresExecRollouts(t *testing.T) {
 	home := t.TempDir()
-	tail := newCodexRolloutTail(home, time.Now().Add(-time.Second))
-	writeRollout(t, home, "rollout-chat.jsonl", codexChatMeta+codexTurnStarted+codexTurnFailed)
+	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
+	writeRollout(t, home, "rollout-exec.jsonl", codexExecMeta+codexTurnStarted+codexTurnFailed)
 	if failures := tail.poll(); len(failures) != 0 {
-		t.Fatalf("a Chat app-server rollout was reported: %v", failures)
+		t.Fatalf("a codex exec rollout was reported: %v", failures)
 	}
 	writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted+codexTurnFailed)
 	tail.scans = 0
 	if failures := tail.poll(); len(failures) != 1 {
 		t.Fatalf("failures = %v, want the terminal rollout's failed turn", failures)
+	}
+}
+
+// A conversation started in Chat records source vscode in its rollout. Resumed
+// in the terminal, its failed turns are the terminal's, whether or not the
+// worker knows which conversation it resumed.
+func TestCodexRolloutTailFollowsAChatConversationResumedInTheTerminal(t *testing.T) {
+	for _, conversationID := range []string{"t2", ""} {
+		home := t.TempDir()
+		path := writeRollout(t, home, "rollout-2026-10-18T06-00-00-t2.jsonl", codexChatMeta+codexTurnStarted+codexTurnDone)
+		// Written by Chat before the terminal took over.
+		old := time.Now().Add(-time.Minute)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		tail := newCodexRolloutTail(home, conversationID, time.Now().Add(-time.Second))
+		if failures := tail.poll(); len(failures) != 0 {
+			t.Fatalf("conversation %q: Chat's history was reported: %v", conversationID, failures)
+		}
+		appendRollout(t, path, codexTurnStarted+codexTurnFailed)
+		tail.scans = 0
+		if failures := tail.poll(); len(failures) != 1 {
+			t.Fatalf("conversation %q: failures = %v, want the terminal's failed turn", conversationID, failures)
+		}
 	}
 }
 

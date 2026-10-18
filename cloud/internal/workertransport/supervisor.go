@@ -738,7 +738,10 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	if input.Kind == "agent" && !input.Review && s.Harness == "codex" {
 		// Before the PTY starts, so only what this agent writes is new.
 		if home := codexHomeFromEnvironment(command.Env); home != "" {
-			codexTurns = newCodexRolloutTail(home, time.Now())
+			s.mu.Lock()
+			conversationID := s.AgentCommand.ConversationID
+			s.mu.Unlock()
+			codexTurns = newCodexRolloutTail(home, conversationID, time.Now())
 		}
 	}
 	s.mu.Lock()

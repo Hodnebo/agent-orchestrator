@@ -358,6 +358,10 @@ func TestBuildInteractiveUsesConfiguredDurableCodexHomeOnRestore(t *testing.T) {
 	if !slices.Contains(command.Args, "thread-1") || len(command.Args) == 0 || command.Args[0] != "resume" {
 		t.Fatalf("unexpected Codex restore args: %#v", command.Args)
 	}
+	// The worker follows this conversation's rollout for failed turns.
+	if command.ConversationID != "thread-1" {
+		t.Fatalf("ConversationID = %q, want the resumed thread", command.ConversationID)
+	}
 }
 
 func TestBuildInteractiveWritesOpaqueCodexAuthJSONWithoutRelogin(t *testing.T) {

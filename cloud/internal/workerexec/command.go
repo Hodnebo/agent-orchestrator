@@ -28,6 +28,9 @@ type Command struct {
 	Env          map[string]string
 	SystemPrompt string
 	Cleanup      func()
+	// ConversationID is the provider conversation an interactive command
+	// resumes, empty for one that starts a new conversation.
+	ConversationID string
 	// SecretFileGuard is the PreToolUse hook command a Codex Chat turn
 	// registers and trusts in its app-server (see trustCodexSecretFileGuard).
 	SecretFileGuard string
@@ -196,10 +199,11 @@ func (b HarnessBuilder) BuildInteractive(
 		argv = slices.DeleteFunc(argv, func(arg string) bool { return arg == "--dangerously-bypass-approvals-and-sandbox" })
 	}
 	command := Command{
-		Path: argv[0],
-		Args: argv[1:],
-		Dir:  agentDir,
-		Env:  map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
+		Path:           argv[0],
+		Args:           argv[1:],
+		Dir:            agentDir,
+		Env:            map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
+		ConversationID: identity,
 	}
 	maps.Copy(command.Env, b.Env)
 	if err := b.configureCredential(&command, launch.Harness, credential); err != nil {
