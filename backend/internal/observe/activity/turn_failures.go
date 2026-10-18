@@ -11,6 +11,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// turnFailureErrorLogEvery rate-limits the error log for a failed turn whose
+// report keeps failing: the report is retried every tick, the log is not.
+const turnFailureErrorLogEvery = time.Minute
+
 // DefaultTurnFailureTick is how often active terminal transcripts are checked
 // for a turn that ended on an error. A transcript is re-read only when it
 // changed, so the short tick costs a stat per active session.
@@ -60,12 +64,22 @@ type turnFailureWatch struct {
 	modTime time.Time
 	failure ports.TurnFailure
 	failed  bool
-	// sentRevision and sentAt record the last report, so a failure the
-	// lifecycle suppressed (a running subagent keeps the parent active) is
-	// not re-sent every tick. A newer session revision retries it.
-	sent         bool
-	sentRevision int64
-	sentAt       time.Time
+	// reported is the failure the lifecycle already accepted. It may have
+	// applied it, kept the parent active while a subagent runs (recording the
+	// idle for when the child ends), or fenced it for a stale launch: in every
+	// case re-sending the same failure on a later revision gets the same
+	// answer, so it is sent and logged once.
+	reported turnFailureKey
+	// errorKey and errorLoggedAt rate-limit the error log while one failure's
+	// report keeps failing.
+	errorKey      turnFailureKey
+	errorLoggedAt time.Time
+}
+
+// turnFailureKey identifies one failed turn of one runtime launch.
+type turnFailureKey struct {
+	launchID string
+	at       int64
 }
 
 // NewTurnFailureObserver builds a failed-turn observer.
@@ -165,7 +179,8 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 	if session.Activity.LastActivityAt.IsZero() || watch.failure.At.Before(session.Activity.LastActivityAt) {
 		return
 	}
-	if watch.sent && watch.sentRevision == session.Revision && watch.sentAt.Equal(watch.failure.At) {
+	key := turnFailureKey{launchID: session.RuntimeLaunchID, at: watch.failure.At.UnixNano()}
+	if watch.reported == key {
 		return
 	}
 	revision := session.Revision
@@ -182,10 +197,13 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 		LaunchID:         session.RuntimeLaunchID,
 	})
 	if err != nil {
-		o.logger.Error("turn failure observer: reconciliation failed", "session", session.ID, "err", err)
+		if now := time.Now(); watch.errorKey != key || now.Sub(watch.errorLoggedAt) >= turnFailureErrorLogEvery {
+			watch.errorKey, watch.errorLoggedAt = key, now
+			o.logger.Error("turn failure observer: reconciliation failed", "session", session.ID, "err", err)
+		}
 		return
 	}
-	watch.sent, watch.sentRevision, watch.sentAt = true, revision, watch.failure.At
+	watch.reported = key
 	o.logger.Info("agent turn ended on an error; marking the session idle",
 		"session", session.ID, "harness", session.Harness, "error_message", watch.failure.Message)
 }

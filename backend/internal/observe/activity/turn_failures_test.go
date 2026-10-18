@@ -2,9 +2,12 @@ package activity
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,16 +246,50 @@ func (f fakeTurnFailureSessions) ListTurnFailureCandidates(_ context.Context, ha
 	return out, nil
 }
 
-// The transcript is re-read only when it changes, and a report the lifecycle
-// did not act on is not re-sent until the session row moves.
-func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	dir := t.TempDir()
-	rollout := filepath.Join(dir, "rollout-2026-10-18T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl")
+// countingHandler counts log records per level.
+type countingHandler struct {
+	mu     sync.Mutex
+	counts map[slog.Level]int
+}
+
+func (h *countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *countingHandler) Handle(_ context.Context, record slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.counts == nil {
+		h.counts = make(map[slog.Level]int)
+	}
+	h.counts[record.Level]++
+	return nil
+}
+
+func (h *countingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *countingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *countingHandler) count(level slog.Level) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.counts[level]
+}
+
+type erroringSink struct {
+	calls int
+}
+
+func (f *erroringSink) ApplyActivitySignal(context.Context, domain.SessionID, ports.ActivitySignal) error {
+	f.calls++
+	return errors.New("database is locked")
+}
+
+func turnFailureCandidate(t *testing.T, now time.Time) domain.TurnFailureCandidate {
+	t.Helper()
+	rollout := filepath.Join(t.TempDir(), "rollout-2026-10-18T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl")
 	if err := os.WriteFile(rollout, []byte(startedTurn(now.Add(-2*time.Second))+failedTurn(now.Add(-time.Second))), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	session := domain.TurnFailureCandidate{
+	return domain.TurnFailureCandidate{
 		ID:                   "ao-1",
 		Harness:              domain.HarnessCodex,
 		Activity:             domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-3 * time.Second)},
@@ -260,21 +297,86 @@ func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
 		RuntimeLaunchID:      "launch-1",
 		NativeTranscriptPath: rollout,
 	}
+}
+
+// A failure the lifecycle accepted but did not act on (a running subagent
+// keeps the parent active, a stale launch is fenced) is sent and logged once,
+// even as later writes move the session revision. A new launch or a newer
+// failed turn is reported again.
+func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	session := turnFailureCandidate(t, now)
+	sessions := fakeTurnFailureSessions{rows: []domain.TurnFailureCandidate{session}}
 	sink := &fakeSink{}
-	observer := NewTurnFailureObserver(fakeTurnFailureSessions{rows: []domain.TurnFailureCandidate{session}}, sink,
-		fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: testLogger()})
-	for range 3 {
+	logs := &countingHandler{}
+	observer := NewTurnFailureObserver(sessions, sink,
+		fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: slog.New(logs)})
+	poll := func() {
+		t.Helper()
 		if err := observer.Poll(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
+	for range 3 {
+		poll()
+		sessions.rows[0].Revision++
+	}
 	if len(sink.signals) != 1 {
 		t.Fatalf("signals = %d, want 1", len(sink.signals))
+	}
+	if got := logs.count(slog.LevelInfo); got != 1 {
+		t.Fatalf("info logs = %d, want 1", got)
 	}
 	signal := sink.signals[0]
 	if !signal.Valid || signal.State != domain.ActivityIdle || signal.Event != TurnFailureEvent ||
 		signal.LaunchID != "launch-1" || signal.ExpectedHarness != domain.HarnessCodex ||
 		signal.ExpectedRevision == nil || *signal.ExpectedRevision != 7 {
 		t.Fatalf("signal = %#v", signal)
+	}
+
+	sessions.rows[0].RuntimeLaunchID = "launch-2"
+	poll()
+	poll()
+	if len(sink.signals) != 2 || sink.signals[1].LaunchID != "launch-2" {
+		t.Fatalf("after relaunch signals = %#v, want one more for launch-2", sink.signals)
+	}
+
+	file, err := os.OpenFile(session.NativeTranscriptPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerAt := now.Add(time.Second)
+	_, err = file.WriteString(startedTurn(now) + failedTurn(newerAt))
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll()
+	poll()
+	if len(sink.signals) != 3 || !sink.signals[2].Timestamp.Equal(newerAt) {
+		t.Fatalf("after a newer failure signals = %#v, want one more dated %v", sink.signals, newerAt)
+	}
+	if got := logs.count(slog.LevelInfo); got != 3 {
+		t.Fatalf("info logs = %d, want 3", got)
+	}
+}
+
+// A report that keeps failing is retried every tick but logged once.
+func TestTurnFailureObserverRateLimitsTheErrorLog(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	sink := &erroringSink{}
+	logs := &countingHandler{}
+	observer := NewTurnFailureObserver(fakeTurnFailureSessions{rows: []domain.TurnFailureCandidate{turnFailureCandidate(t, now)}},
+		sink, fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: slog.New(logs)})
+	for range 3 {
+		if err := observer.Poll(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sink.calls != 3 {
+		t.Fatalf("report attempts = %d, want 3", sink.calls)
+	}
+	if got := logs.count(slog.LevelError); got != 1 {
+		t.Fatalf("error logs = %d, want 1", got)
 	}
 }
