@@ -107,6 +107,31 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 		_ = writer.write(hostFrame{Type: "error", Code: "DAEMON_UNAVAILABLE", Message: "AO closed the connection"})
 		return err
 	}
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), maxFromExtensionBytes)
+	// The daemon answers every hello: hello-ok, or hello-rejected with a reason
+	// (bad token, protocol mismatch, another Chrome profile already connected).
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if !scanner.Scan() {
+		_ = writer.write(hostFrame{Type: "error", Code: "DAEMON_UNAVAILABLE", Message: "AO closed the connection"})
+		return fmt.Errorf("no hello reply from AO: %w", scanner.Err())
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	var reply struct {
+		Type  string                       `json:"type"`
+		Error *browserruntime.CommandError `json:"error"`
+	}
+	if json.Unmarshal(scanner.Bytes(), &reply) != nil || reply.Type != "hello-ok" {
+		code, message := "DAEMON_REJECTED", "AO refused the connection"
+		if reply.Error != nil {
+			code, message = reply.Error.Code, reply.Error.Message
+		}
+		if code == "BROWSER_RUNTIME_BUSY" {
+			message = "Another Chrome profile is already connected to AO"
+		}
+		_ = writer.write(hostFrame{Type: "error", Code: code, Message: message})
+		return fmt.Errorf("AO rejected the host: %s", code)
+	}
 	if err := writer.write(hostFrame{Type: "ready", Protocol: HostProtocol}); err != nil {
 		return err
 	}
@@ -114,8 +139,6 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 	done := make(chan error, 2)
 	// Daemon → extension.
 	go func() {
-		scanner := bufio.NewScanner(conn)
-		scanner.Buffer(make([]byte, 64*1024), maxFromExtensionBytes)
 		for scanner.Scan() {
 			line := bytes.TrimSpace(scanner.Bytes())
 			if len(line) == 0 {

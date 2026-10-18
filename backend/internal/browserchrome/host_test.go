@@ -184,13 +184,13 @@ func TestHostWrongTokenIsRejectedByDaemon(t *testing.T) {
 	}
 	ext, errCh := startHost(t, endpointPath)
 	ext.send(map[string]interface{}{"type": "hello", "protocol": HostProtocol})
-	if frame := ext.receive(); frame["type"] != "ready" {
+	if frame := ext.receive(); frame["type"] != "error" || frame["code"] != "BROWSER_RUNTIME_TOKEN_REJECTED" {
 		t.Fatalf("frame = %#v", frame)
 	}
 	select {
 	case <-errCh:
 	case <-time.After(5 * time.Second):
-		t.Fatal("host stayed up after the daemon closed a bad token")
+		t.Fatal("host stayed up after the daemon rejected a bad token")
 	}
 	if broker.Status().Connected {
 		t.Fatal("daemon accepted a wrong token")
@@ -206,9 +206,6 @@ func TestHostForwardsBusyRejection(t *testing.T) {
 
 	second, errCh := startHost(t, endpointPath)
 	second.send(map[string]interface{}{"type": "hello", "protocol": HostProtocol, "extensionVersion": "second"})
-	if ready := second.receive(); ready["type"] != "ready" {
-		t.Fatalf("ready = %#v", ready)
-	}
 	if frame := second.receive(); frame["type"] != "error" || frame["code"] != "BROWSER_RUNTIME_BUSY" {
 		t.Fatalf("frame = %#v", frame)
 	}
