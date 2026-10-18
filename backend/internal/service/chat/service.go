@@ -94,10 +94,14 @@ type Service struct {
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
 	startConfigs     map[domain.ConversationOwner]StartConfig
-	gateMu           sync.Mutex
-	gates            map[domain.ConversationOwner]controllerGate
-	probeMu          sync.Mutex
-	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	awakeInterrupted map[domain.ConversationOwner]domain.AwakeAgentTarget
+	// handoffInterrupted is the provider turn each session's pending handoff
+	// stopped, kept until the account move that stopped it commits.
+	handoffInterrupted map[domain.SessionID]string
+	gateMu             sync.Mutex
+	gates              map[domain.ConversationOwner]controllerGate
+	probeMu            sync.Mutex
+	probed             map[domain.AgentHarness]ports.ChatCapabilities
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -199,8 +203,10 @@ func New(opts Options) *Service {
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
+		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
+		awakeInterrupted:       make(map[domain.ConversationOwner]domain.AwakeAgentTarget),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 		waking:                 make(map[domain.SessionID]int),
@@ -290,6 +296,10 @@ func notifyControllerReady(
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
+	if cfg.AwakeReconnectTarget != nil {
+		target := *cfg.AwakeReconnectTarget
+		cloned.AwakeReconnectTarget = &target
+	}
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -346,6 +356,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		return nil, err
 	}
 	defer gate.unlock()
+	if target := cfg.AwakeReconnectTarget; target != nil {
+		s.mu.Lock()
+		candidate, exists := s.awakeInterrupted[owner]
+		old, hasConfig := s.startConfigs[owner]
+		valid := cfg.ReconnectOnly && !cfg.FreshIfProviderConversationMissing && owner.Kind == domain.ConversationOwnerSession && target.SessionID == cfg.SessionID && target.Owner == cfg.ExpectedControllerOwner && exists && candidate == *target && hasConfig && old.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil
+		if valid {
+			delete(s.awakeInterrupted, owner)
+		}
+		s.mu.Unlock()
+		if !valid {
+			return nil, fmt.Errorf("%w: interrupted attachment proof expired or was explicitly stopped", ports.ErrChatRecoveryInconclusive)
+		}
+	}
 	if cfg.HistoryMode > ports.ChatHistoryDeferred {
 		return nil, errors.New("invalid Chat history mode")
 	}
@@ -1070,8 +1093,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
 	cfg.ProviderScopeID = ""
+	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
+	delete(s.awakeInterrupted, owner)
 	controller.start()
 	s.mu.Unlock()
 
@@ -1082,6 +1107,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		controller.waitForBranchHandoff()
 		s.mu.Lock()
 		if current, ok := s.ownerControllers[owner]; ok && current == controller {
+			controller.mu.Lock()
+			interrupted := controller.transportInterrupted && !controller.explicitClose
+			controller.mu.Unlock()
+			if interrupted && owner.Kind == domain.ConversationOwnerSession && cfg.ExpectedControllerOwner.ControllerGeneration != "" {
+				s.awakeInterrupted[owner] = domain.AwakeAgentTarget{SessionID: cfg.SessionID, Owner: cfg.ExpectedControllerOwner}
+			}
 			delete(s.ownerControllers, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, cfg.SessionID)
@@ -1501,12 +1532,25 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.BeginHandoff(ctx, policy)
+	if err := controller.BeginHandoff(ctx, policy); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if turn := controller.HandoffInterruptedTurn(); turn != "" {
+		s.handoffInterrupted[id] = turn
+	} else {
+		delete(s.handoffInterrupted, id)
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // AbortChatHandoff reopens the existing controller when the user cancels before
 // Session Manager has stopped it.
 func (s *Service) AbortChatHandoff(id domain.SessionID) {
+	s.mu.Lock()
+	delete(s.handoffInterrupted, id)
+	s.mu.Unlock()
 	controller, err := s.Controller(id)
 	if err == nil {
 		controller.AbortHandoff()
@@ -1538,6 +1582,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	if !ok {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		var stopErr error
 		if s.stopProviderHost != nil {
@@ -1578,6 +1623,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 			delete(s.controllers, id)
 		}
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 	default:
 	}
@@ -1600,6 +1646,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 	if errors.Is(err, ErrNoController) {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		return nil
 	}
@@ -1613,6 +1660,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 		if s.ownerControllers[owner] == controller {
 			delete(s.ownerControllers, owner)
 			delete(s.startConfigs, owner)
+			delete(s.awakeInterrupted, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, controller.sessionID)
 			}
@@ -2723,4 +2771,19 @@ func truncateUTF8Head(text string, limit int) string {
 		end--
 	}
 	return text[:end]
+}
+
+// InterruptedAwakeAgents exposes only a positively observed transport loss.
+// It does not infer failure from inactivity, lack of network, or a missing PID.
+func (s *Service) InterruptedAwakeAgents() []domain.AwakeAgentTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []domain.AwakeAgentTarget{}
+	for owner, target := range s.awakeInterrupted {
+		cfg, ok := s.startConfigs[owner]
+		if ok && cfg.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil {
+			result = append(result, target)
+		}
+	}
+	return result
 }
