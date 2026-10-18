@@ -590,9 +590,9 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 	}
 	if ready.SubmitReadyText != "" {
 		if s.waitForInitialInputReadyState(ctx, handle, []InitialInputReadyState{{Text: ready.SubmitReadyText}}) == nil {
-			// The reviewed prefix is already visible in the editor. Submit it after
-			// the bounded wait even if a future CLI changes its completion text.
-			s.sendInitialInputAfterTimeout(handle, input)
+			// The prefix is already in the editor. Without the reviewed completion
+			// marker, Enter could send it as a prompt to the model.
+			s.log.Warn("authentication terminal initial input completion did not appear", "handleId", handle.ID)
 			return
 		}
 	}
