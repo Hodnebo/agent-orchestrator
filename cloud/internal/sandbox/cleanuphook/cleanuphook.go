@@ -301,8 +301,11 @@ func ExitCode(status string) int {
 // after Marker, and err why no status arrived. It appends the run's step
 // events to the session (sandbox.RecordSessionEvent) and finishes the stage
 // with attrs: a failed run with its output excerpt and hint, a run with no
-// hook as skipped, and a run that never reported as an error. Nothing it
-// reports fails the deletion. name prefixes the stage's error.
+// hook as skipped, and a run that never reported as an error. A run that
+// never reported still appends its steps: those its partial output shows, or
+// else each current step as skipped with the provider's error
+// (ExecFailedReason), so the session shows why Cleanup did not run. Nothing
+// it reports fails the deletion. name prefixes the stage's error.
 func Report(
 	ctx context.Context,
 	finish func(error, map[string]string),
@@ -313,11 +316,22 @@ func Report(
 	name string,
 ) {
 	exitCode := ExitCode(status)
-	if err == nil && status != Skipped {
+	switch {
+	case err == nil && status != Skipped:
 		steps.ExitCode, steps.Duration = exitCode, time.Since(steps.StartedAt)
 		for _, event := range worker.CleanupStepEvents(printed, steps) {
 			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
 		}
+	case err != nil && strings.Contains(printed, "@@ao-step-"):
+		// The hook's output came back in part: its steps up to there.
+		steps.ExitCode, steps.Duration = -1, time.Since(steps.StartedAt)
+		for _, event := range worker.CleanupStepEvents(printed, steps) {
+			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
+		}
+	case err != nil:
+		// The provider could not run the hook: each step says why, so the
+		// session shows its Cleanup did not run.
+		recordSkippedSteps(ctx, steps, ExecFailedReason(err))
 	}
 	switch {
 	case err != nil:
@@ -351,6 +365,21 @@ func ReportNotRun(
 	reason string,
 	err error,
 ) {
+	recordSkippedSteps(ctx, steps, reason)
+	attrs["result"] = Skipped
+	finish(err, attrs)
+}
+
+// ExecFailedReason is what each step of a Cleanup the provider could not run
+// says: the provider's error, redacted and short.
+func ExecFailedReason(err error) string {
+	detail := strings.Join(strings.Fields(worker.RedactScriptOutput(err.Error())), " ")
+	return "AO could not run this Cleanup step in the sandbox before deleting it: " + activity.Truncate(detail, 300)
+}
+
+// recordSkippedSteps appends each of the run's current Cleanup steps as
+// skipped, with reason as its hint; nothing when the run does not carry them.
+func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason string) {
 	total := len(steps.Commands)
 	for index, stored := range steps.Commands {
 		repository, command, _ := domain.ParseRepoScriptCommand(stored)
@@ -359,8 +388,6 @@ func ReportNotRun(
 			Command: command, Repository: repository, Status: worker.ScriptStepSkipped, Hint: reason,
 		}))
 	}
-	attrs["result"] = Skipped
-	finish(err, attrs)
 }
 
 // boundedOutput is the hook's output for the stage: redacted as its step

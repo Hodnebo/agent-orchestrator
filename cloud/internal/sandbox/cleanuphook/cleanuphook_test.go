@@ -243,9 +243,24 @@ func TestReportAppendsStepsAndFinishesTheStage(t *testing.T) {
 	if len(skipped.events) != 0 || skipped.stages[0].Err != nil || skipped.stages[0].Attrs["result"] != Skipped {
 		t.Fatalf("skipped run: events %+v, stage %+v", skipped.events, skipped.stages[0])
 	}
-	lost := report("partial", "", errors.New("exec failed"), worker.CleanupRun{RunID: "run-3"})
-	if len(lost.events) != 0 || lost.stages[0].Err == nil || !strings.Contains(lost.stages[0].Err.Error(), "did not report") {
+	lost := report("partial", "", errors.New(`freestyle api returned 400: "timeout_ms cannot exceed 300000" token=abc123`),
+		worker.CleanupRun{RunID: "run-3", Commands: commands})
+	if lost.stages[0].Err == nil || !strings.Contains(lost.stages[0].Err.Error(), "did not report") || len(lost.events) != 2 {
 		t.Fatalf("lost run: events %+v, stage %+v", lost.events, lost.stages[0])
+	}
+	for index, event := range lost.events {
+		if event.Status != worker.ScriptStepSkipped || event.Command != commands[index] || event.RunID != "run-3" ||
+			!strings.Contains(event.Hint, "could not run") || !strings.Contains(event.Hint, "timeout_ms cannot exceed 300000") ||
+			strings.Contains(event.Hint, "abc123") || !worker.ValidScriptStepEvent(event) {
+			t.Fatalf("lost run step %d = %+v", index+1, event)
+		}
+	}
+	// Output that came back in part reports the steps it shows.
+	cut := report("@@ao-step-00000000000000aa 1 2 start 0 / make down\nstopped\n@@ao-step-00000000000000aa 1 2 end 0 10\n"+
+		"@@ao-step-00000000000000aa 2 2 start 0 / docker compose down\nstopp", "", errors.New("connection reset"),
+		worker.CleanupRun{RunID: "run-4", Nonce: "00000000000000aa", Commands: commands})
+	if len(cut.events) != 2 || cut.events[0].Status != worker.SetupSucceeded || cut.events[1].Status != worker.SetupFailed {
+		t.Fatalf("cut run: events %+v", cut.events)
 	}
 }
 
