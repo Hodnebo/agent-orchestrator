@@ -67,6 +67,36 @@ describe("CloudSessionChatSurface", () => {
 		expect(succeeded?.turnId).toBeUndefined();
 		expect(failed?.kind === "activity" ? failed.detail?.output : "unexpected").toBeUndefined();
 	});
+	it("draws one live row per script run and drops the summary it supersedes", () => {
+		const step = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-01T00:00:00Z",
+			payload: { phase: "setup", runId: "run-1", total: 2, command: "npm ci", repository: "", ...payload },
+		});
+		const running = [
+			step(1, { step: 1, status: "running" }),
+			step(2, { step: 1, status: "running", output: "added 10" }),
+		];
+		const [live] = toSnapshot(session, running).items;
+		expect(live).toMatchObject({
+			kind: "activity", id: "cloud-script-run-run-1", activityKind: "system", status: "running", revision: 2,
+			detail: { event: "workspace.script.run", scriptRun: { runId: "run-1", status: "running", runningStep: 1 } },
+		});
+		const finished = [
+			// An older worker's summary for an earlier boot has no step events and keeps its row.
+			{ sessionId: session.id, sequence: 0, type: "workspace.setup", payload: { status: "succeeded" }, createdAt: "2026-10-01T00:00:00Z" },
+			...running,
+			step(3, { step: 1, status: "succeeded", exitCode: 0, durationMs: 1000 }),
+			step(4, { step: 2, status: "succeeded", exitCode: 0, durationMs: 1000, command: "npm run build" }),
+			{ sessionId: session.id, sequence: 5, type: "workspace.setup", payload: { status: "succeeded", durationMs: 2000 }, createdAt: "2026-10-01T00:00:05Z" },
+			step(6, { phase: "cleanup", runId: "cleanup-1", total: 1, step: 1, status: "succeeded", exitCode: 0, durationMs: 10 }),
+		] satisfies CloudCpClientEvent[];
+		const items = toSnapshot(session, finished).items;
+		expect(items.map((item) => item.kind === "activity" ? item.detail?.event : item.kind)).toEqual([
+			"workspace.setup", "workspace.script.run", "workspace.script.run",
+		]);
+		expect(items[1]).toMatchObject({ status: "completed", detail: { scriptRun: { status: "succeeded" } } });
+		expect(items[2]).toMatchObject({ detail: { scriptRun: { phase: "cleanup" } } });
+	});
 	it("carries a failed setup step's command, user, directory, log and hint", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "workspace.setup",

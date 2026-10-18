@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
@@ -166,6 +167,20 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	};
 }
 
+/**
+ * One Setup or Cleanup run as a system row, placed where its first step event
+ * arrived. Its revision moves with every event so the row redraws live.
+ */
+function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActivity {
+	return {
+		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.eventCount,
+		activityKind: "system", status: run.status === "running" ? "running" : run.status === "failed" ? "failed" : "completed",
+		summary: `${run.phase === "setup" ? "Setup" : "Cleanup"} ${run.status}`,
+		detail: { event: "workspace.script.run", scriptRun: run },
+		createdAt,
+	};
+}
+
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
 	const turns = new Map<string, ConversationTurn>();
 	const assistant = new Map<string, ConversationMessage>();
@@ -174,6 +189,12 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
 	const steerableTurns = new Set<string>();
 	const items: ConversationItem[] = [];
+	// Live Setup and Cleanup logs. A run with step events replaces the older
+	// one-line workspace.setup summary the worker still sends after it; workers
+	// that predate step events keep that summary row.
+	const scriptRuns = new Map(groupScriptRuns(events).map((run) => [run.runId, run]));
+	const placedRuns = new Set<string>();
+	const unclaimedSetupRuns = [...scriptRuns.values()].filter((run) => run.phase === "setup");
 	for (const event of events) {
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
@@ -266,7 +287,25 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			}
 			continue;
 		}
+		if (event.type === SCRIPT_STEP_EVENT) {
+			const runId = parseScriptStepPayload(event.payload)?.runId;
+			const run = runId ? scriptRuns.get(runId) : undefined;
+			if (run && !placedRuns.has(run.runId)) {
+				placedRuns.add(run.runId);
+				items.push(scriptRunActivity(run, event.createdAt));
+			}
+			continue;
+		}
 		if (event.type === "workspace.setup") {
+			// The newest setup run that began before this summary is the run it summarizes.
+			let covering = -1;
+			for (let index = 0; index < unclaimedSetupRuns.length; index++) {
+				if (unclaimedSetupRuns[index].firstSequence < event.sequence) covering = index;
+			}
+			if (covering >= 0) {
+				unclaimedSetupRuns.splice(covering, 1);
+				continue;
+			}
 			items.push(projectSetupActivity(event));
 			continue;
 		}
