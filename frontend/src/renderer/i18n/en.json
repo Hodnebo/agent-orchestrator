@@ -2805,6 +2805,8 @@
 	"session.interfaceSwitchFailed": "Could not switch interfaces",
 	"session.dismissInterfaceSwitchError": "Dismiss interface switch error",
 	"session.dismissInterfaceSwitchNotice": "Dismiss",
+	"session.interfaceSwitchDrainUnconfirmedTitle": "Switch to Chat cancelled",
+	"session.interfaceSwitchDrainUnconfirmed": "Couldn't confirm the agent finished, so the switch was cancelled. Switch again to stop the current turn and switch now.",
 	"report.subtitle": "Found an issue? Tell us what happened.",
 	"chat.draft.acceptedMessage": "Message was accepted, but its local draft still needs to be cleared.",
 	"chat.draft.steerRestart": "AO can’t determine whether the agent may already have received this guidance before Chat restarted. Retry safely with the same delivery ID, or abandon recovery to edit it. Sending it again after abandonment may duplicate it.",
