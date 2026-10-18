@@ -53,32 +53,27 @@ func (s RunState) Closed() bool {
 
 // Run is one PR test attempt, owned by one AO session.
 type Run struct {
-	ID            string     `json:"id"`
-	SessionID     string     `json:"sessionId"`
-	ProjectID     string     `json:"projectId,omitempty"`     // the AO project the tester was started in; empty on runs older than the Litmus panel
-	Repo          string     `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
-	RequestedRepo string     `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
-	PRNumber      int        `json:"prNumber"`
-	Title         string     `json:"title,omitempty"` // the PR's title at intake
-	BaseSHA       string     `json:"baseSha,omitempty"`
-	HeadSHA       string     `json:"headSha,omitempty"`
-	Issues        []IssueRef `json:"issues,omitempty"`  // the issues the PR closes (at most three), so the comment can say what the PR is for
-	Areas         []Area     `json:"areas,omitempty"`   // the parts of the codebase the PR changes, in words, biggest first
-	BaseRef       string     `json:"baseRef,omitempty"` // the PR's base branch name, as the comment calls the base build; empty on older runs (main)
-	State         RunState   `json:"state"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	Deadline      time.Time  `json:"deadline"`
-	// TestingEndedAt is the instant the tester submitted or the testing
-	// deadline closed the run. Finalization after that point is not testing time.
-	TestingEndedAt   time.Time       `json:"testingEndedAt,omitempty,omitzero"`
-	submission       *submitInputs   // private close inputs, saved alongside Run by Store
-	TeardownComplete bool            `json:"teardownComplete,omitempty" description:"Targets and clone cleanup completed; the home report may still be incomplete."`
-	Legs             []Leg           `json:"legs,omitempty"`
-	Error            string          `json:"error,omitempty"`        // why the last intake failed (a run with no pinned SHAs may retry), or "blocked at prepare: ..."
-	Comment          string          `json:"comment,omitempty"`      // post | off: whether submit posts the verdict to the PR; set by intake, empty on older runs (no post)
-	Comments         []PostedComment `json:"comments,omitempty"`     // PR comment ids matched by check name on reruns
-	CommentURL       string          `json:"commentUrl,omitempty"`   // the PR comment submit posted or updated
-	CommentState     string          `json:"commentState,omitempty"` // posted | updated | off | failed:<reason>
+	ID            string          `json:"id"`
+	SessionID     string          `json:"sessionId"`
+	ProjectID     string          `json:"projectId,omitempty"`     // the AO project the tester was started in; empty on runs older than the Litmus panel
+	Repo          string          `json:"repo"`                    // as gh resolved the PR (follows renames), lowercase owner/repo
+	RequestedRepo string          `json:"requestedRepo,omitempty"` // owner/repo from the URL the user gave
+	PRNumber      int             `json:"prNumber"`
+	Title         string          `json:"title,omitempty"` // the PR's title at intake; runs from before it was stored take it from context-pack.md
+	BaseSHA       string          `json:"baseSha,omitempty"`
+	HeadSHA       string          `json:"headSha,omitempty"`
+	Issues        []IssueRef      `json:"issues,omitempty"`  // the issues the PR closes (at most three), so the comment can say what the PR is for
+	Areas         []Area          `json:"areas,omitempty"`   // the parts of the codebase the PR changes, in words, biggest first
+	BaseRef       string          `json:"baseRef,omitempty"` // the PR's base branch name, as the comment calls the base build; empty on older runs (main)
+	State         RunState        `json:"state"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	Deadline      time.Time       `json:"deadline"`
+	Legs          []Leg           `json:"legs,omitempty"`
+	Error         string          `json:"error,omitempty"`        // why the last intake failed (a run with no pinned SHAs may retry), or "blocked at prepare: ..."
+	Comment       string          `json:"comment,omitempty"`      // post | off: whether submit posts the verdict to the PR; set by intake, empty on older runs (no post)
+	Comments      []PostedComment `json:"comments,omitempty"`     // PR comment ids matched by check name on reruns
+	CommentURL    string          `json:"commentUrl,omitempty"`   // the PR comment submit posted or updated
+	CommentState  string          `json:"commentState,omitempty"` // posted | updated | off | failed:<reason>
 	// Evidence is whether submit publishes screenshots and GIFs for the comment: post | off; empty on older runs (off).
 	Evidence       string `json:"evidence,omitempty"`
 	EvidenceState  string `json:"evidenceState,omitempty"`  // published | off | failed:<reason>
@@ -93,19 +88,6 @@ type Run struct {
 	Gaps []string `json:"gaps,omitempty"`
 	// Ready names the builds (head, base) that were finished when prepare ran out of time, so the comment can say which.
 	Ready []string `json:"ready,omitempty"`
-}
-
-// submitInputs is the accepted close operation. Keep it in the same atomic
-// run.json write as TestingEndedAt so a restarted daemon resumes that operation.
-type submitInputs struct {
-	Summary        string  `json:"summary"`
-	Blocked        bool    `json:"blocked"`
-	BlockedReason  string  `json:"blockedReason"`
-	SkipBase       bool    `json:"skipBase"`
-	SkipBaseReason string  `json:"skipBaseReason"`
-	Checks         []Check `json:"checks"`
-	Deadline       bool    `json:"deadline"`
-	BrokenLinks    int     `json:"brokenLinks"`
 }
 
 // IssueRef is an issue the PR says it closes.
@@ -135,38 +117,17 @@ type Leg struct {
 	DebugPort     int         `json:"debugPort,omitempty"`
 	RunFile       string      `json:"runFile,omitempty"`
 	Engine        *EngineInfo `json:"engine,omitempty"`
-	Control       *LegControl `json:"control,omitempty"`
 	State         string      `json:"state"`
-	// RecordStartedAt is the first screencast's wall-clock origin. Zero means no recording.
+	// RecordStartedAt is the screencast wall-clock origin, so action times map onto <leg>/<leg>.mp4. Zero: no recording.
 	RecordStartedAt time.Time `json:"recordStartedAt,omitzero"`
 	// RecordStoppedAt is when frame capture stopped; started without stopped means the recording never finished.
-	RecordStoppedAt time.Time       `json:"recordStoppedAt,omitzero"`
-	RecordSegments  []RecordSegment `json:"recordSegments,omitempty"`
-	// RecordJoined is set after the joined recording and action offsets are saved.
-	RecordJoined bool `json:"recordJoined,omitempty"`
+	RecordStoppedAt time.Time `json:"recordStoppedAt,omitzero"`
 	// Retained for the generated API contract. The screencast recorder leaves these unset.
 	RecordCursor bool   `json:"recordCursor,omitempty"`
 	RecordFPS    string `json:"recordFps,omitempty"`
 }
 
-// RecordSegment names a recording relative to the run directory. StartedAt is
-// its wall-clock origin; driven actions also retain their segment-local clock.
-type RecordSegment struct {
-	File      string    `json:"file"`
-	StartedAt time.Time `json:"startedAt"`
-}
-
-// LegControl records whether Litmus can still command the app. Since is the
-// first control-loss action until a successful command proves recovery.
-type LegControl struct {
-	State        string `json:"state" enum:"ok,lost"`
-	Since        int    `json:"since,omitempty"`
-	Cause        string `json:"cause,omitempty" enum:"native_dialog,app_exited,app_unresponsive,browser_control_unusable"`
-	Detail       string `json:"detail,omitempty"`       // local diagnostic, never public report text
-	PublicDetail string `json:"publicDetail,omitempty"` // plain sentence, escaped by the report renderer
-}
-
-// CheckState is a check's progress; pass, fail, partial, absent and skipped are check outcomes. Untested is an overall verdict.
+// CheckState is a check's progress; pass, fail, partial, absent and skipped are its outcomes.
 type CheckState string
 
 // Check states.
@@ -183,65 +144,23 @@ const (
 	CheckSkipped CheckState = "skipped"
 	// CheckBlocked is only ever a verdict's overall: the tester could not run the checks.
 	CheckBlocked CheckState = "blocked"
-	// CheckUntested is an overall verdict when no claimed head check reached a
-	// finished pass, fail, or partial result.
-	CheckUntested CheckState = "untested"
 )
-
-// CheckClassification records the tester's explicit coverage choice.
-type CheckClassification struct {
-	Purpose       string `json:"purpose" enum:"claim,explore,risk"`
-	ClaimSentence string `json:"claimSentence,omitempty"`
-	Risk          string `json:"risk,omitempty"`
-}
-
-// CheckReclassification preserves each change to a check's coverage.
-type CheckReclassification struct {
-	Who    string              `json:"who"`
-	At     time.Time           `json:"at"`
-	Reason string              `json:"reason"`
-	From   CheckClassification `json:"from"`
-	To     CheckClassification `json:"to"`
-}
-
-// CheckAttribution separates an observed outcome from its cause.
-type CheckAttribution struct {
-	Kind    string `json:"kind" enum:"pr,pre-existing,environment,unknown"`
-	Cause   string `json:"cause,omitempty"`
-	Receipt int    `json:"receipt,omitempty"`
-	SameBug string `json:"sameBug,omitempty" description:"Ended failed or partial head check that found the same bug. Set when ending; change only by re-ending."`
-}
 
 // Check is one planned observation and the evidence recorded for it.
 type Check struct {
-	ID                 string                  `json:"id"`
-	Name               string                  `json:"name"`
-	Expect             string                  `json:"expect"`
-	State              CheckState              `json:"state"`
-	Claim              bool                    `json:"claim,omitempty"` // derived from the explicit purpose
-	Purpose            string                  `json:"purpose,omitempty" enum:"claim,explore,risk"`
-	ClaimSentence      string                  `json:"claimSentence,omitempty"`
-	Risk               string                  `json:"risk,omitempty"`
-	Reclassifications  []CheckReclassification `json:"reclassifications,omitempty"`
-	Attribution        string                  `json:"attribution,omitempty" enum:"pr,pre-existing,environment,unknown"`
-	EnvironmentCause   string                  `json:"environmentCause,omitempty"`
-	AttributionReceipt int                     `json:"attributionReceipt,omitempty"`
-	Note               string                  `json:"note,omitempty"`
-	Shot               int                     `json:"shot,omitempty"`
-	Leg                string                  `json:"leg,omitempty"`  // base | head; empty means head
-	Diff               string                  `json:"diff,omitempty"` // pixel-diff image of this check's base and head after-shots (`ao testing compare`)
-	Receipts           []Receipt               `json:"receipts,omitempty"`
-	SameFault          bool                    `json:"sameFault,omitempty"` // the base failed or was partial for the same fault as the head
-	SameBug            string                  `json:"sameBug,omitempty"`   // ended failed or partial head check for the same bug
-	Replaces           string                  `json:"replaces,omitempty" description:"Claim check on the same leg and PR sentence to replace; stays active until this claim ends pass, fail or partial."`
-	ReplacedBy         string                  `json:"replacedBy,omitempty" description:"Replacement check id; replaced checks do not affect the verdict or public comment."`
-	ReplaceReason      string                  `json:"replaceReason,omitempty" description:"PR sentence that contradicts this check's expected observable."`
-
-	NoteHistory []string `json:"noteHistory,omitempty"` // previous notes, oldest first
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Expect    string     `json:"expect"`
+	State     CheckState `json:"state"`
+	Note      string     `json:"note,omitempty"`
+	Shot      int        `json:"shot,omitempty"`
+	Leg       string     `json:"leg,omitempty"`  // base | head; empty means head
+	Diff      string     `json:"diff,omitempty"` // pixel-diff image of this check's base and head after-shots (`ao testing compare`)
+	Receipts  []Receipt  `json:"receipts,omitempty"`
+	SameFault bool       `json:"sameFault,omitempty"` // the base failed or was partial for the same fault as the head
 }
 
-// unreached is a check with no recorded outcome. Attribution describes the
-// cause of an outcome and does not erase the observation.
+// unreached is a check the tester could not reach.
 func (c Check) unreached() bool {
 	return c.State == CheckSkipped
 }
@@ -293,27 +212,10 @@ func (r Run) preparedAt() time.Time {
 // prepared reports whether prepare finished: only then does the run have a deadline, so a testing time to split out.
 func (r Run) prepared() bool { return !r.Deadline.IsZero() }
 
-// testingEndedAt returns the persisted end of the tester's window. An active
-// run without a marker is still in its testing window. A closed legacy run
-// has no honest end time, so callers can render that timing as unknown.
-func (r Run) testingEndedAt(now time.Time) time.Time {
-	if !r.TestingEndedAt.IsZero() {
-		return r.TestingEndedAt
-	}
-	if r.State.Closed() {
-		return time.Time{}
-	}
-	return now
-}
-
-// buildsAndTesting is how long the builds took and how long the tester had them.
+// buildsAndTesting is how long the builds took and how long the tester had them, from intake to the end at now.
 func (r Run) buildsAndTesting(now time.Time) (builds, testing time.Duration) {
 	p := r.preparedAt()
-	builds = max(p.Sub(r.CreatedAt), 0)
-	if end := r.testingEndedAt(now); !end.IsZero() {
-		testing = max(end.Sub(p), 0)
-	}
-	return builds, testing
+	return max(p.Sub(r.CreatedAt), 0), max(now.Sub(p), 0)
 }
 
 // baseName is what a reader calls the base build: the PR's base branch, main when the run did not record it.
@@ -359,14 +261,12 @@ func (r Receipt) onLeg() string { return cmp.Or(r.Leg, "head") }
 
 // Verdict is the submitted result: per-check outcomes with their receipts.
 type Verdict struct {
-	OwnerLoginWarning string     `json:"ownerLoginWarning,omitempty"`
-	Overall           CheckState `json:"overall"` // pass | fail | partial | blocked | untested
-	Checks            []Check    `json:"checks"`
-	IntakeClaims      []string   `json:"intakeClaims,omitempty"`
-	Reasons           []string   `json:"reasons,omitempty"`
-	Summary           string     `json:"summary,omitempty"`
-	StoppedEarly      string     `json:"stoppedEarly,omitempty"` // a blocked submit that kept a recorded failure
-	SkipBase          string     `json:"skipBase,omitempty"`     // why the tester did not run the base (submit --skip-base --reason)
+	Overall      CheckState `json:"overall"` // pass | fail | partial | blocked
+	Checks       []Check    `json:"checks"`
+	Reasons      []string   `json:"reasons,omitempty"`
+	Summary      string     `json:"summary,omitempty"`
+	StoppedEarly string     `json:"stoppedEarly,omitempty"` // a blocked submit that kept a recorded failure
+	SkipBase     string     `json:"skipBase,omitempty"`     // why the tester did not run the base (submit --skip-base --reason)
 	// CommentURL and CommentState echo the run's: where submit put the verdict on the PR, and how that went.
 	CommentURL   string `json:"commentUrl,omitempty"`
 	CommentState string `json:"commentState,omitempty"`
@@ -377,18 +277,10 @@ type Verdict struct {
 
 // RunStatus is a run with its checks.
 type RunStatus struct {
-	OwnerLogins string        `json:"ownerLogins,omitempty"`
-	Run         Run           `json:"run"`
-	Checks      []Check       `json:"checks"`
-	InFlight    []InFlight    `json:"inFlight,omitempty"` // long verbs still running for the run, oldest first by verb
-	OpenClaims  []Check       `json:"openClaims,omitempty"`
-	Hints       []TestingHint `json:"hints,omitempty"`
-}
-
-// TestingHint is daemon-computed guidance for a text-mode testing command. CheckID scopes a hint to a check end.
-type TestingHint struct {
-	CheckID string `json:"checkId,omitempty"`
-	Text    string `json:"text"`
+	OwnerLogins string     `json:"ownerLogins,omitempty"`
+	Run         Run        `json:"run"`
+	Checks      []Check    `json:"checks"`
+	InFlight    []InFlight `json:"inFlight,omitempty"` // long verbs still running for the run, oldest first by verb
 }
 
 // InFlight is a long verb (prepare, launch, submit, cleanup) still running for a
@@ -397,3 +289,6 @@ type InFlight struct {
 	Verb    string  `json:"verb"`
 	Seconds float64 `json:"seconds"`
 }
+
+// browserDataRule is the one line the tester skill and the pack's last section both carry.
+const browserDataRule = "Never import, export, sign in to or read the owner's real browser profiles, cookies, passwords, keychain or accounts; check such a feature only with data created in the test window, or end it as `skipped` with that reason."

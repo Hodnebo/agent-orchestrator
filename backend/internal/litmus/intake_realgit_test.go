@@ -69,7 +69,7 @@ func realGitPR(t *testing.T, changedFiles int, build func(work string)) (svc *Se
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
-	svc = newTestService(t, NewStore(t.TempDir()), func() time.Time { return now }).WithGH(&fakeGH{t: t, err: map[string]error{}, out: map[string][]byte{"pr view": prJSON}})
+	svc = New(NewStore(t.TempDir()), func() time.Time { return now }).WithGH(&fakeGH{t: t, err: map[string]error{}, out: map[string][]byte{"pr view": prJSON}})
 	svc.runner, svc.retryPause = execRunner{}, 0
 	mirror = svc.store.mirrorDir("acme/widgets")
 	if err := os.MkdirAll(filepath.Dir(mirror), 0o750); err != nil {

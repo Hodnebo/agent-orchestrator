@@ -10623,49 +10623,6 @@ paths:
       summary: Cancel an unclaimed speculative task worktree
       tags:
       - projects
-  /api/v1/testing/agent-version:
-    post:
-      operationId: setTestingAgentVersion
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TestingRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TestingRun'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Set the agent version on a testing leg
-      tags:
-      - testing
   /api/v1/testing/checks:
     post:
       operationId: addTestingCheck
@@ -10810,58 +10767,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: End a check with an outcome; refused without a receipt
-      tags:
-      - testing
-  /api/v1/testing/checks/{id}/reclassify:
-    post:
-      operationId: reclassifyTestingCheck
-      parameters:
-      - description: Check id within the run, e.g. c1.
-        in: path
-        name: id
-        required: true
-        schema:
-          description: Check id within the run, e.g. c1.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TestingRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TestingCheck'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Change a pending or running check's coverage classification and record
-        why
       tags:
       - testing
   /api/v1/testing/checks/{id}/replay:
@@ -11364,49 +11269,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Validate a per-repo recipe file
-      tags:
-      - testing
-  /api/v1/testing/relaunch:
-    post:
-      operationId: relaunchTesting
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TestingRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TestingRun'
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Conflict
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Kill and relaunch one testing leg while keeping its profile and data
       tags:
       - testing
   /api/v1/testing/rerun:
@@ -19075,22 +18937,7 @@ components:
       type: object
     TestingCheck:
       properties:
-        attribution:
-          enum:
-          - pr
-          - pre-existing
-          - environment
-          - unknown
-          type: string
-        attributionReceipt:
-          type: integer
-        claim:
-          type: boolean
-        claimSentence:
-          type: string
         diff:
-          type: string
-        environmentCause:
           type: string
         expect:
           type: string
@@ -19102,39 +18949,10 @@ components:
           type: string
         note:
           type: string
-        noteHistory:
-          items:
-            type: string
-          type: array
-        purpose:
-          enum:
-          - claim
-          - explore
-          - risk
-          type: string
         receipts:
           items:
             $ref: '#/components/schemas/TestingReceipt'
           type: array
-        reclassifications:
-          items:
-            $ref: '#/components/schemas/TestingCheckReclassification'
-          type: array
-        replaceReason:
-          description: PR sentence that contradicts this check's expected observable.
-          type: string
-        replacedBy:
-          description: Replacement check id; replaced checks do not affect the verdict
-            or public comment.
-          type: string
-        replaces:
-          description: Claim check on the same leg and PR sentence to replace; stays
-            active until this claim ends pass, fail or partial.
-          type: string
-        risk:
-          type: string
-        sameBug:
-          type: string
         sameFault:
           type: boolean
         shot:
@@ -19146,41 +18964,6 @@ components:
       - name
       - expect
       - state
-      type: object
-    TestingCheckClassification:
-      properties:
-        claimSentence:
-          type: string
-        purpose:
-          enum:
-          - claim
-          - explore
-          - risk
-          type: string
-        risk:
-          type: string
-      required:
-      - purpose
-      type: object
-    TestingCheckReclassification:
-      properties:
-        at:
-          format: date-time
-          type: string
-        from:
-          $ref: '#/components/schemas/TestingCheckClassification'
-        reason:
-          type: string
-        to:
-          $ref: '#/components/schemas/TestingCheckClassification'
-        who:
-          type: string
-      required:
-      - who
-      - at
-      - reason
-      - from
-      - to
       type: object
     TestingElementBox:
       properties:
@@ -19210,8 +18993,6 @@ components:
       type: object
     TestingEngineInfo:
       properties:
-        appOrigin:
-          type: string
         binary:
           type: string
         endpoint:
@@ -19231,21 +19012,10 @@ components:
       - endpoint
       - socketDir
       type: object
-    TestingHint:
-      properties:
-        checkId:
-          type: string
-        text:
-          type: string
-      required:
-      - text
-      type: object
     TestingLeg:
       properties:
         buildManifest:
           type: string
-        control:
-          $ref: '#/components/schemas/TestingLegControl'
         daemonPort:
           type: integer
         dataDir:
@@ -19265,12 +19035,6 @@ components:
           type: boolean
         recordFps:
           type: string
-        recordJoined:
-          type: boolean
-        recordSegments:
-          items:
-            $ref: '#/components/schemas/TestingRecordSegment'
-          type: array
         recordStartedAt:
           format: date-time
           type: string
@@ -19289,29 +19053,6 @@ components:
       - state
       - recordStartedAt
       - recordStoppedAt
-      type: object
-    TestingLegControl:
-      properties:
-        cause:
-          enum:
-          - native_dialog
-          - app_exited
-          - app_unresponsive
-          - browser_control_unusable
-          type: string
-        detail:
-          type: string
-        publicDetail:
-          type: string
-        since:
-          type: integer
-        state:
-          enum:
-          - ok
-          - lost
-          type: string
-      required:
-      - state
       type: object
     TestingPostedComment:
       properties:
@@ -19426,8 +19167,6 @@ components:
           type: boolean
         kind:
           type: string
-        notes:
-          type: string
         ready:
           $ref: '#/components/schemas/TestingReady'
         repo:
@@ -19453,56 +19192,22 @@ components:
       - ready
       - isolation
       type: object
-    TestingRecordSegment:
-      properties:
-        file:
-          type: string
-        startedAt:
-          format: date-time
-          type: string
-      required:
-      - file
-      - startedAt
-      type: object
     TestingRequest:
       properties:
         action:
-          type: string
-        agent:
-          description: 'agent-version only: agent identifier to set for the selected
-            testing leg.'
           type: string
         args:
           description: 'drive: the action''s arguments.'
           items:
             type: string
           type: array
-        attribution:
-          description: 'check end only: cause of the observed outcome.'
-          enum:
-          - pr
-          - pre-existing
-          - environment
-          - unknown
-          type: string
-        attributionReceipt:
-          description: 'check end only: receipt supporting an environment attribution.'
-          type: integer
         blocked:
           description: 'submit only: stop early with a reason; a recorded failure
             keeps the overall result fail.'
           type: boolean
-        claimSentence:
-          description: 'check add/start/reclassify: quote the PR author''s title or
-            body; required for claim.'
-          type: string
         dryRun:
           description: 'prune only: report what would be deleted and delete nothing.'
           type: boolean
-        environmentCause:
-          description: 'check end only: environment cause, required with attribution
-            environment.'
-          type: string
         expect:
           type: string
         harness:
@@ -19546,22 +19251,8 @@ components:
           description: 'start: the project the worker runs in; rerun: only for a run
             that did not record its project.'
           type: string
-        purpose:
-          description: 'check add/start/reclassify: coverage choice; check start and
-            a base twin may inherit it.'
-          enum:
-          - claim
-          - explore
-          - risk
-          type: string
         reason:
-          description: 'submit with blocked: what failed; reclassify: why coverage
-            changed; check add with replaces: PR sentence contradicting the old expect.
-            Required in each case.'
-          type: string
-        replaces:
-          description: 'check add only: ended fail or partial claim on the same leg
-            and PR sentence to replace; requires a reason quoting the PR.'
+          description: 'submit with blocked: what failed; required and non-empty.'
           type: string
         result:
           enum:
@@ -19571,16 +19262,8 @@ components:
           - absent
           - skipped
           type: string
-        risk:
-          description: 'check add/start/reclassify: what the diff could break; required
-            for risk.'
-          type: string
         runId:
           description: 'rerun only: the run whose pull request is tested again.'
-          type: string
-        sameBug:
-          description: 'check end only: ended failed or partial head check that found
-            the same bug. Set when ending; change only by re-ending.'
           type: string
         sameFault:
           description: 'check end only, base leg: the failure or partial is the same
@@ -19599,10 +19282,6 @@ components:
             while a prepared base is unlaunched.'
           type: string
         summary:
-          type: string
-        version:
-          description: 'agent-version only: version to set for the selected testing
-            leg.'
           type: string
       type: object
     TestingRerun:
@@ -19689,13 +19368,6 @@ components:
           type: string
         state:
           type: string
-        teardownComplete:
-          description: Targets and clone cleanup completed; the home report may still
-            be incomplete.
-          type: boolean
-        testingEndedAt:
-          format: date-time
-          type: string
         title:
           type: string
         videoState:
@@ -19752,7 +19424,6 @@ components:
           - pass
           - fail
           - partial
-          - untested
           - blocked
           - expired
           - none
@@ -19804,17 +19475,9 @@ components:
           items:
             $ref: '#/components/schemas/TestingCheck'
           type: array
-        hints:
-          items:
-            $ref: '#/components/schemas/TestingHint'
-          type: array
         inFlight:
           items:
             $ref: '#/components/schemas/LitmusInFlight'
-          type: array
-        openClaims:
-          items:
-            $ref: '#/components/schemas/TestingCheck'
           type: array
         ownerLogins:
           type: string
@@ -19855,7 +19518,6 @@ components:
           - pass
           - fail
           - partial
-          - untested
           - blocked
           - expired
           - none
@@ -19935,13 +19597,7 @@ components:
           type: string
         evidenceState:
           type: string
-        intakeClaims:
-          items:
-            type: string
-          type: array
         overall:
-          type: string
-        ownerLoginWarning:
           type: string
         reasons:
           items:

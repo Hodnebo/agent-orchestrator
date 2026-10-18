@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Retention defaults: reviewed finished runs kept on disk, and finished runs whose checkouts are kept.
+// Retention defaults: finished runs kept on disk, and finished runs whose checkouts are kept.
 const (
 	DefaultKeepRuns      = 20
 	DefaultKeepCheckouts = 2
@@ -39,7 +39,7 @@ func (r PruneReport) Summary() string {
 
 // Prune deletes checkouts and run dirs the retention rules no longer need. It keeps every checkout an unfinished
 // run (intake, prepared, running) or one of the keepCheckouts most recent finished runs references, the keepRuns
-// most recent reviewed finished run dirs, every unreviewed run and every unfinished run. The evidence clone is never touched.
+// most recent finished run dirs and every unfinished run. The evidence clone is never touched.
 func (s *Service) Prune(ctx context.Context, keepRuns, keepCheckouts int) (PruneReport, error) {
 	return s.prune(ctx, keepRuns, keepCheckouts, false, "")
 }
@@ -120,18 +120,15 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	s.mu.Unlock()
 	plan := checkoutPins(runs, keepCheckouts)
 
-	// Evidence stays until the owner posts or discards it. Only reviewed finished runs count toward keepRuns.
+	// Unfinished runs are always kept; only finished runs count toward keepRuns.
 	keepDir := map[string]bool{}
 	if current != "" {
 		keepDir[current] = true
 	}
-	finished, unreviewed := 0, 0
+	finished := 0
 	for _, r := range runs {
-		if !finishedRun(r) {
+		if !finishedRun(r) || r.State == RunAwaitingApproval { // an awaiting run still needs its files to be posted
 			keepDir[r.ID] = true
-		} else if unreviewedRun(r) {
-			keepDir[r.ID] = true
-			unreviewed++
 		} else {
 			finished++
 			if finished <= keepRuns {
@@ -233,7 +230,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	for _, r := range runs {
 		if !keepDir[r.ID] {
 			remove(filepath.Join(s.store.root, r.ID), "", &rep.Runs, "run")
-		} else if finishedRun(r) && !unreviewedRun(r) {
+		} else if finishedRun(r) {
 			// Failed or interrupted encodes keep frames only while the run is open.
 			s.mu.Lock()
 			cur, err := s.store.Get(r.ID)
@@ -274,7 +271,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 			fail("failed to remove a half-made mirror: "+err.Error(), err)
 		}
 	}
-	rep.Lines = append(rep.Lines, fmt.Sprintf("kept %d unreviewed runs", unreviewed), rep.Summary())
+	rep.Lines = append(rep.Lines, rep.Summary())
 	if len(errs) > 0 {
 		return rep, fmt.Errorf("prune: %d paths could not be removed: %s", len(errs), strings.Join(errs, "; "))
 	}
@@ -358,12 +355,6 @@ func finishedRun(r Run) bool {
 	return true
 }
 
-// unreviewedRun protects evidence until the owner has posted or discarded the comment.
-// An off, failed, or missing comment state does not record either decision.
-func unreviewedRun(r Run) bool {
-	return r.CommentState != "posted" && r.CommentState != "updated" && r.CommentState != CommentDiscarded
-}
-
 // asideDir reports whether a checkout dir was moved aside (<sha>.pruning, possibly several times) by a pass that
 // never got to delete it. No run can use such a dir, so prune deletes it without a pin check or another move.
 func asideDir(dir string) bool {
@@ -402,34 +393,9 @@ func withinRoot(root, path string) (string, error) {
 	return rel, nil
 }
 
-// walkRunDir excludes mirrored homes even when they contain real directories.
-// Their .ao links can point to an ancestor of this run.
-func walkRunDir(root string, fn fs.WalkDirFunc) error {
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if isLegHome(path) {
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		return fn(path, d, err)
-	})
-}
-
-func isLegHome(path string) bool {
-	for path = filepath.Clean(path); ; path = filepath.Dir(path) {
-		if filepath.Base(path) == "home" && (filepath.Base(filepath.Dir(path)) == "head" || filepath.Base(filepath.Dir(path)) == "base") {
-			return true
-		}
-		if filepath.Dir(path) == path {
-			return false
-		}
-	}
-}
-
-// dirSize sums regular run files, excluding leg homes and symlinks.
+// dirSize sums the regular files under dir without following symlinks.
 func dirSize(dir string) (n int64) {
-	_ = walkRunDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			if info, err := d.Info(); err == nil {
 				n += info.Size()

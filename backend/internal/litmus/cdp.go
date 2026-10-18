@@ -3,9 +3,7 @@ package litmus
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/coder/websocket"
 )
@@ -31,90 +29,52 @@ func (e *Engine) pageCDP(ctx context.Context) (*pageCDP, error) {
 }
 
 func (e *Engine) pageURL(ctx context.Context) (string, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		targetID, err := e.pinnedTargetID(ctx)
-		if err != nil {
-			return "", err
-		}
-		url, err := e.targetURL(ctx, targetID)
-		if err == nil {
-			return url, nil
-		}
-		if !isLegDown(err) || attempt > 0 {
-			return "", err
-		}
-		hctx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
-		stop := context.AfterFunc(e.life, cancel)
-		list, listErr := e.invokeTimed(hctx, "target-recover-probe", "tab", "list")
-		stop()
-		cancel()
-		if listErr == nil {
-			listErr = e.reattachApp(ctx, parseTabEntries(stripPageContentBoundary(list)))
-		}
-		if listErr != nil {
-			return "", errors.Join(err, listErr)
-		}
+	targetID, err := e.pinnedTargetID(ctx)
+	if err != nil {
+		return "", err
 	}
-	return "", errLegDown
+	return e.targetURL(ctx, targetID)
 }
 
 // pinnedTargetID resolves the engine's app tab to the target ID that remains
 // stable while the browser replaces its WebSocket connection.
 func (e *Engine) pinnedTargetID(ctx context.Context) (string, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		list, err := e.Run(ctx, pointTimeout, "tab", "list", "--json")
-		if err != nil {
-			return "", err
-		}
-		list = stripPageContentBoundary(list)
-		var reply struct {
-			Data struct {
-				Tabs []struct{ TabID, TargetID, URL string }
-			}
-		}
-		if err := json.Unmarshal([]byte(list), &reply); err != nil {
-			return "", err
-		}
-		for _, tab := range reply.Data.Tabs {
-			slog.Info("litmus: resolve tab target", "session", e.Session, "tabID", tab.TabID, "targetID", tab.TargetID, "url", diagnosticURL(tab.URL))
-			if tab.TabID == e.tab && tab.TargetID != "" {
-				slog.Info("litmus: resolve pinned target", "session", e.Session, "tabID", tab.TabID, "targetID", tab.TargetID, "url", diagnosticURL(tab.URL))
-				return tab.TargetID, nil
-			}
-		}
-		if attempt == 0 {
-			hctx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
-			stop := context.AfterFunc(e.life, cancel)
-			plain, probeErr := e.invokeTimed(hctx, "target-tab-probe", "tab", "list")
-			stop()
-			cancel()
-			if probeErr == nil {
-				probeErr = e.reattachApp(ctx, parseTabEntries(stripPageContentBoundary(plain)))
-			}
-			if probeErr == nil {
-				continue
-			}
-			return "", probeErr
+	list, err := e.Run(ctx, pointTimeout, "tab", "list", "--json")
+	if err != nil {
+		return "", err
+	}
+	var reply struct {
+		Data struct {
+			Tabs []struct{ TabID, TargetID string }
 		}
 	}
-	return "", fmt.Errorf("%w: the engine's pinned app tab %q is missing", errLegDown, e.tab)
+	if err := json.Unmarshal([]byte(list), &reply); err != nil {
+		return "", err
+	}
+	var targetID string
+	for _, tab := range reply.Data.Tabs {
+		if tab.TabID == e.tab {
+			targetID = tab.TargetID
+			break
+		}
+	}
+	if targetID == "" {
+		return "", fmt.Errorf("the engine's pinned app tab %q is missing", e.tab)
+	}
+	return targetID, nil
 }
 
 func (e *Engine) targetURL(ctx context.Context, targetID string) (string, error) {
-	var targets []struct{ ID, Type, URL, WebSocketDebuggerURL string }
+	var targets []struct{ ID, Type, WebSocketDebuggerURL string }
 	if err := getJSON(ctx, e.Endpoint+"/json/list", &targets); err != nil {
 		return "", err
 	}
 	for _, t := range targets {
 		if t.ID == targetID && t.Type == "page" && t.WebSocketDebuggerURL != "" {
-			slog.Info("litmus: resolve target url", "session", e.Session, "targetID", t.ID, "url", diagnosticURL(t.URL))
-			if isBlankURL(t.URL) {
-				return "", fmt.Errorf("%w: pinned target %q is blank", errLegDown, targetID)
-			}
 			return t.WebSocketDebuggerURL, nil
 		}
 	}
-	return "", fmt.Errorf("%w: the engine's pinned app target %q is missing on the leg's debug port", errLegDown, targetID)
+	return "", fmt.Errorf("the engine's pinned app target %q is missing on the leg's debug port", targetID)
 }
 
 // recordingPageResolver pins the app target once while the engine is
@@ -129,12 +89,6 @@ func (e *Engine) recordingPageResolver(ctx context.Context) (string, func(contex
 	targetID, err := e.pinnedTargetID(ctx)
 	e.mu.Unlock()
 	if err != nil {
-		// This internal lookup uses Engine.Run but sends no tester action.
-		// Report its cause in recording terms instead of action-send advice.
-		var unsent *unsentAction
-		if errors.As(err, &unsent) {
-			return "", nil, fmt.Errorf("resolve recording app target: %w", unsent.Unwrap())
-		}
 		return "", nil, err
 	}
 	url, err := e.targetURL(ctx, targetID)

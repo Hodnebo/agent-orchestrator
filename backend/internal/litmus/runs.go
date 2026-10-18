@@ -71,9 +71,9 @@ type RunSummary struct {
 	Repo      string   `json:"repo"`
 	PR        RunPR    `json:"pr"`
 	State     RunState `json:"state"`
-	// Verdict is the overall outcome read from verdict.md: pass, fail, partial, untested or blocked; expired for a run that ran
+	// Verdict is the overall outcome read from verdict.md: pass, fail, partial or blocked; expired for a run that ran
 	// out of time, none for a run with no verdict yet.
-	Verdict   string    `json:"verdict" enum:"pass,fail,partial,untested,blocked,expired,none"`
+	Verdict   string    `json:"verdict" enum:"pass,fail,partial,blocked,expired,none"`
 	StartedAt time.Time `json:"startedAt"`
 	// DurationSeconds runs from intake to the verdict (or the last change of a run that never got one); a run still in
 	// flight counts up to now. Time spent waiting for approval is not in it.
@@ -228,14 +228,14 @@ func (s *Service) reviewOn(run Run) bool {
 	return err == nil && ps.Review
 }
 
-var verdictHead = regexp.MustCompile(`^# Verdict: (pass|fail|partial|untested|blocked)\b`)
+var verdictHead = regexp.MustCompile(`^# Verdict: (pass|fail|partial|blocked)\b`)
 
 // summarize builds the list row of a run from its folder.
 func (s *Service) summarize(run Run) RunSummary {
 	dir := filepath.Join(s.store.root, run.ID)
 	row := RunSummary{
 		ID: run.ID, SessionID: run.SessionID, ProjectID: run.ProjectID, Repo: run.Repo,
-		PR:    RunPR{Number: run.PRNumber, URL: fmt.Sprintf("https://github.com/%s/pull/%d", run.Repo, run.PRNumber), Title: run.Title},
+		PR:    RunPR{Number: run.PRNumber, URL: fmt.Sprintf("https://github.com/%s/pull/%d", run.Repo, run.PRNumber), Title: s.title(run, dir)},
 		State: run.State, Verdict: verdictNone, StartedAt: run.CreatedAt,
 		CommentURL: run.CommentURL, CommentState: run.CommentState, VideoState: run.VideoState, Error: run.Error,
 	}
@@ -260,6 +260,19 @@ func (s *Service) summarize(run Run) RunSummary {
 	return row
 }
 
+// title is the PR title a row shows: the one intake stored on the run. A run from before intake stored it takes it from
+// its context pack once and, when it is closed, keeps it in run.json so later polls do not read the pack again.
+func (s *Service) title(run Run, dir string) string {
+	if run.Title != "" {
+		return run.Title
+	}
+	title := packTitle(dir)
+	if title != "" && run.State.Closed() {
+		_, _ = s.update(run.ID, func(cur *Run) { cur.Title = cmp.Or(cur.Title, title) })
+	}
+	return title
+}
+
 // readHead returns the first n bytes of a file as text, or "".
 func readHead(path string, n int64) string {
 	f, err := os.Open(path)
@@ -269,6 +282,15 @@ func readHead(path string, n int64) string {
 	defer func() { _ = f.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(f, n))
 	return string(data)
+}
+
+// packTitle is the PR title the run's context pack states, or "".
+func packTitle(runDir string) string {
+	pack, _ := os.ReadFile(filepath.Join(runDir, "context-pack.md"))
+	if m := prTitle.FindSubmatch(pack); len(m) > 1 {
+		return clip(strings.TrimSpace(string(m[1])), 200)
+	}
+	return ""
 }
 
 // projectOf is the project a run belongs to. A run recorded without one (older than project tracking) takes it from the
@@ -420,10 +442,8 @@ const (
 	oneVideoPostBudget = uploadTimeout + 2*time.Minute + 15*time.Second
 	// PostBudget bounds login, image staging, the evidence push and repo lookup, two videos with one retry each, and the PR comment.
 	PostBudget = commentTimeout + stageTimeout + pushTimeout + time.Minute + 2*oneVideoPostBudget + commentTimeout
-	// FinalizeBudget allows two frame encodes, then captioned cuts.
-	FinalizeBudget = 2*stopTimeout + 3*videoTimeout + 2*time.Duration(screencastFrameCap)*100*time.Millisecond
-	// SubmitBudget covers every synchronous phase of an accepted submit.
-	SubmitBudget = FinalizeBudget + TeardownBudget + doneReportBudget + PostBudget + PruneBudget
+	// SubmitBudget allows two frame encodes, then captioned cuts, before publication.
+	SubmitBudget = PostBudget + 2*stopTimeout + 3*videoTimeout + 2*time.Duration(screencastFrameCap)*100*time.Millisecond
 )
 
 // Discard closes a run awaiting approval without posting: its targets are cleaned up and its comment is kept in the

@@ -254,7 +254,7 @@ func TestRunsListAndDetail(t *testing.T) {
 	}
 
 	d, err := svc.RunDetail(ctx, "run_s1")
-	if err != nil || d.ID != "run_s1" || d.Run.PRNumber != 6394 || len(d.Checks) != 5 || !strings.HasPrefix(d.VerdictMD, "# Verdict: pass") || !strings.HasPrefix(d.CommentMD, "Litmus tried") {
+	if err != nil || d.ID != "run_s1" || d.Run.PRNumber != 6394 || len(d.Checks) != 3 || !strings.HasPrefix(d.VerdictMD, "# Verdict: pass") || !strings.HasPrefix(d.CommentMD, "Litmus tried") {
 		t.Fatalf("detail = %+v err %v", d, err)
 	}
 	raw, _ := json.Marshal(d)
@@ -360,17 +360,17 @@ func TestRunTitleComesFromRunJSON(t *testing.T) {
 	if row := svc.summarize(run); row.PR.Title != run.Title {
 		t.Fatalf("title = %q, want the stored %q (not a re-read of the pack)", row.PR.Title, run.Title)
 	}
-	// A run without a structured title must not pick one from arbitrary pack text.
+	// A run from before titles were stored takes it from the pack once, and keeps it.
 	_, err := svc.update(run.ID, func(r *Run) { r.Title, r.State = "", RunSubmitted })
 	is(t, "")(nil, err)
 	old, _ := svc.store.Get(run.ID)
-	if row := svc.summarize(old); row.PR.Title != "" {
+	if row := svc.summarize(old); row.PR.Title != "changed in the pack" {
 		t.Fatalf("legacy title = %q", row.PR.Title)
 	}
 	is(t, "")(nil, os.Remove(filepath.Join(runDir, "context-pack.md")))
 	again, _ := svc.store.Get(run.ID)
-	if row := svc.summarize(again); row.PR.Title != "" || again.Title != "" {
-		t.Fatalf("missing structured title was filled from pack text: %q", row.PR.Title)
+	if row := svc.summarize(again); row.PR.Title != "changed in the pack" || again.Title != "changed in the pack" {
+		t.Fatalf("the backfilled title was lost: %q", row.PR.Title)
 	}
 
 }
@@ -378,9 +378,6 @@ func TestRunTitleComesFromRunJSON(t *testing.T) {
 func TestDiscardThatCannotCleanUpDoesNotMarkTheCommentDiscarded(t *testing.T) {
 	svc, runDir, g := askSvc(t, true)
 	_, err := svc.Submit(ctx, "s1", "", "")
-	is(t, "")(nil, err)
-	// Discard only retries unfinished teardown. A completed teardown is durable.
-	_, err = svc.update("run_s1", func(run *Run) { run.TeardownComplete = false })
 	is(t, "")(nil, err)
 	is(t, "")(nil, os.MkdirAll(filepath.Join(runDir, "head"), 0o750))
 	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "head", "owned.json"), []byte("{broken"), 0o600)) // teardown cannot read it

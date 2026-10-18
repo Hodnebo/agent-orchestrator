@@ -23,8 +23,6 @@ import (
 	"strings"
 
 	"embed"
-
-	yaml "gopkg.in/yaml.v3"
 )
 
 //go:embed using-ao litmus
@@ -40,49 +38,6 @@ const LitmusSkillName = "litmus"
 // LitmusDir returns the absolute directory the litmus skill installs into.
 func LitmusDir(dataDir string) string {
 	return filepath.Join(dataDir, "skills", LitmusSkillName)
-}
-
-// LitmusSkillBody returns the embedded tester skill without its YAML frontmatter.
-func LitmusSkillBody() (string, error) {
-	data, err := files.ReadFile("litmus/SKILL.md")
-	if err != nil {
-		return "", fmt.Errorf("read embedded litmus SKILL.md: %w", err)
-	}
-	body, err := stripFrontmatter(data)
-	if err != nil {
-		return "", fmt.Errorf("embedded litmus SKILL.md: %w", err)
-	}
-	return body, nil
-}
-
-func stripFrontmatter(data []byte) (string, error) {
-	text := string(data)
-	lines := strings.Split(text, "\n")
-	if len(lines) < 3 || strings.TrimSuffix(lines[0], "\r") != "---" {
-		return "", fmt.Errorf("missing opening YAML frontmatter delimiter")
-	}
-	closing := -1
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSuffix(lines[i], "\r") == "---" {
-			closing = i
-			break
-		}
-	}
-	if closing < 0 {
-		return "", fmt.Errorf("missing closing YAML frontmatter delimiter")
-	}
-	var frontmatter map[string]any
-	if err := yaml.Unmarshal([]byte(strings.Join(lines[1:closing], "\n")), &frontmatter); err != nil {
-		return "", fmt.Errorf("parse YAML frontmatter: %w", err)
-	}
-	if len(frontmatter) == 0 {
-		return "", fmt.Errorf("YAML frontmatter is empty")
-	}
-	body := strings.TrimSpace(strings.Join(lines[closing+1:], "\n"))
-	if body == "" {
-		return "", fmt.Errorf("skill body is empty")
-	}
-	return body, nil
 }
 
 // Dir returns the absolute directory the skill installs into for a given data

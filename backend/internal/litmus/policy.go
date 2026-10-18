@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,19 +19,32 @@ import (
 // EnvRun is set in a testing session's environment to the id of the run it owns.
 const EnvRun = "AO_LITMUS_RUN"
 
+// AwaitingTTL is how long a run may wait for approval, from when it started: past it the sweep discards the run.
+const AwaitingTTL = 7 * 24 * time.Hour
+
 // SweepInterval is how often the daemon looks for runs past their deadline.
 const SweepInterval = 15 * time.Second
 
-// Testers may use the owner's GitHub login in repos they create, following the
-// skill's rules. Litmus posts results on the PR under test. The deny list keeps
-// Claude Code away from commands that affect the owner's AO and earlier verdicts.
-// Prefix rules stop mistakes, but do not match commands inside `sh -c`.
-// Codex has no per-command rules in AO's launch and follows the skill alone.
+// A tester is a normal Claude Code session: any command, any file, the web, the
+// user's gh login for reading. The deny list names what must never happen:
+// publishing or changing anything on GitHub (Litmus posts the one comment
+// itself, after approval when the project asks for it), and any ao command that
+// reaches other sessions, the daemon or the desktop app, and Read of a run's comment.md or verdict.md (an earlier
+// run's verdict is not evidence for this one). Deny beats allow. It
+// stops mistakes, not a determined agent: a prefix rule does not match the same
+// command inside `sh -c`. GuardEnv adds a git-level push block for the common
+// remotes. A Codex tester gets no deny list (Codex has no per-command rules in AO's launch): it runs unattended and is
+// held back by GuardEnv and the skill alone.
 var (
 	allowedTools = []string{"Bash", "Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob", "LS",
 		"WebFetch", "WebSearch", "Agent", "Task", "TodoWrite"}
-	disallowedTools = []string{"Bash(ao testing start:*)", "Bash(ao testing post:*)", "Bash(ao testing discard:*)", "Bash(ao testing prune:*)", "Bash(ao testing rerun:*)",
-		"Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
+	disallowedTools = []string{"Bash(git push:*)",
+		"Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh pr merge:*)", "Bash(gh pr close:*)", "Bash(gh pr edit:*)",
+		"Bash(gh pr create:*)", "Bash(gh pr ready:*)", "Bash(gh pr reopen:*)", "Bash(gh pr revert:*)", "Bash(gh pr lock:*)",
+		"Bash(gh pr unlock:*)", "Bash(gh pr update-branch:*)", "Bash(gh issue:*)", "Bash(gh api:*)", "Bash(gh release:*)",
+		"Bash(gh repo:*)", "Bash(gh workflow:*)", "Bash(gh run:*)", "Bash(gh gist:*)", "Bash(gh label:*)", "Bash(gh secret:*)",
+		"Bash(gh variable:*)", "Bash(gh ssh-key:*)", "Bash(gh gpg-key:*)", "Bash(gh cache:*)", "Bash(gh agent-task:*)", "Bash(gh auth:*)",
+		"Bash(ao testing start:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
 		"Bash(ao review:*)", "Bash(ao project:*)", "Bash(ao orchestrator:*)", "Bash(ao automation:*)", "Bash(ao cue:*)",
 		"Bash(ao stop:*)", "Bash(ao start:*)", "Bash(ao import:*)", "Bash(ao remote-host:*)", "Bash(ao browser:*)",
 		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)",
@@ -44,9 +58,32 @@ const (
 	TesterEffort = "high"
 )
 
-// RefuseTester refuses a verb only the user may run (start, post, discard, prune, rerun) when the request names a tester's own session:
+// pushPrefixes covers the common URL forms of a git remote.
+var pushPrefixes = []string{"https://", "http://", "ssh://", "git://", "git@", "file://", "/"}
+
+// GuardEnv adds to a tester's environment a git setting that sends a push to a
+// remote helper that does not exist, whether `git push` runs directly or inside
+// a script. It covers remotes in pushPrefixes form; a relative path, an explicit
+// pushurl, or a shell that clears the setting gets past it. Fetch and clone are
+// untouched. Settings already in env are kept: the block is appended after them. It also points gh at an empty config
+// dir inside runDir and empties GH_TOKEN, so `gh` in a run has no login to post or comment with (the user's gh login
+// stays the daemon's, not the tester's).
+func GuardEnv(env map[string]string, runDir string) {
+	ghDir := filepath.Join(runDir, "gh-config")
+	_ = os.MkdirAll(ghDir, 0o700) // best effort: gh treats a missing config dir as empty too
+	env["GH_CONFIG_DIR"], env["GH_TOKEN"] = ghDir, ""
+	base, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	base = max(base, 0)
+	for i, prefix := range pushPrefixes {
+		env["GIT_CONFIG_KEY_"+strconv.Itoa(base+i)] = "url.litmus-blocks-push://.pushInsteadOf"
+		env["GIT_CONFIG_VALUE_"+strconv.Itoa(base+i)] = prefix
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(base + len(pushPrefixes))
+}
+
+// RefuseTester refuses a verb only the user may run (start, post, prune) when the request names a tester's own session:
 // one that has a run or a spawn marker. The CLI sends AO_SESSION_ID, so this holds for any harness, whatever its tool
-// rules. A request that names no session is the user's.
+// rules; the deny list and GuardEnv stay as the first line. A request that names no session is the user's.
 func (s *Service) RefuseTester(sessionID, verb string) error {
 	id := RunID(sessionID)
 	if id == "" {
@@ -87,9 +124,8 @@ func IsRunDir(dataDir, path string) bool {
 // neither forgets an expiry nor repeats it.
 const reapedFile = "reaped"
 
-// SweepExpired closes stopped runs and runs past their deadline. A live run with checks, or a stopped run whose accepted
-// submit is saved, is finished with what exists, as a submit would (see closeAtDeadline). Any other run flips to expired
-// (so every verb refuses), the session is stopped through kill,
+// SweepExpired closes stopped runs and runs past their deadline. A live run with checks is finished with what exists,
+// as a submit would (see closeAtDeadline). Any other run flips to expired (so every verb refuses), the session is stopped through kill,
 // the engines close and the legs are cleaned. A run is marked reaped only once all of that has
 // worked and no long verb is still in flight, so anything else is retried on
 // the next tick. State is on disk, so a restarted daemon picks up runs the
@@ -107,6 +143,13 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 		}
 	}
 	for _, run := range runs {
+		if run.State == RunAwaitingApproval && s.clock().Sub(run.CreatedAt) > AwaitingTTL {
+			why := "discarded: nobody approved or discarded this comment within 7 days"
+			if _, err := s.discard(ctx, run.ID, why); err != nil {
+				log.Warn("litmus: could not discard a run that waited too long for approval", "run", run.ID, "error", err)
+			}
+			continue
+		}
 		if run.State == RunSubmitted || run.State == RunCleaned || run.State == RunAwaitingApproval || s.reaped(run.ID) {
 			continue
 		}
@@ -115,23 +158,13 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 			state, _, found := s.activity(ctx, run.SessionID)
 			stopped = found && state == "exited" && run.State != RunExpired && !s.inFlight(run.ID)
 		}
-		acceptedSubmit := !run.TestingEndedAt.IsZero()
 		if !stopped && run.State != RunExpired && !s.clock().After(run.Deadline) {
 			continue
 		}
-		// A durable testing end means Submit passed validation. Resume finalization
-		// even when the tester's session exited before the run deadline.
-		if (!stopped || acceptedSubmit) && s.closeAtDeadline(ctx, run, log) {
+		if !stopped && s.closeAtDeadline(ctx, run, log) {
 			continue
 		}
-		expire := false
 		if _, err := s.update(run.ID, func(r *Run) {
-			// Acceptance and expiry share the service mutex. A submit that
-			// began after the sweep's snapshot must keep its result.
-			if _, submitting := s.busy[r.ID+" submit"]; submitting {
-				return
-			}
-			expire = !r.State.Closed() || r.State == RunExpired
 			if !r.State.Closed() {
 				r.State = RunExpired
 				if stopped {
@@ -140,9 +173,6 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 			}
 		}); err != nil {
 			log.Warn("litmus: could not expire a run", "run", run.ID, "error", err)
-			continue
-		}
-		if !expire {
 			continue
 		}
 		done := true
@@ -170,29 +200,11 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 // closeAtDeadline finishes a run that ran out of time with checks: every check without a result becomes skipped
 // ("ran out of time"), the verdict is derived from what exists, verdict.md and comment.md are written, and the run
 // follows its comment mode as a submit does. It reports whether the sweep is done with the run for this tick: it was
-// closed, or finalization is unfinished and the next tick tries again. False sends the run down the plain expiry.
-// A failed accepted submit keeps its saved checks and testing end for the existing sweep to resume. A run with no
-// intake or a prior stopped reason has nothing to salvage.
+// closed, or a long verb is in flight and the next tick tries again. False sends the run down the plain expiry, which
+// is also where a close that failed ends up. A run whose tester never ran intake, or was stopped, has nothing to salvage.
 func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger) bool {
-	acceptedSubmit := !run.TestingEndedAt.IsZero()
-	s.mu.Lock()
-	_, submitting := s.busy[run.ID+" submit"]
-	s.mu.Unlock()
-	if submitting {
-		return true
-	}
-	var checks []Check
-	var err error
-	if run.submission != nil {
-		checks = run.submission.Checks
-	} else {
-		checks, err = s.store.Checks(run.ID)
-	}
-	if err != nil {
-		log.Warn("litmus: could not read checks at the deadline", "run", run.ID, "error", err)
-		return acceptedSubmit
-	}
-	if run.submission == nil && (len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped) {
+	checks, err := s.store.Checks(run.ID)
+	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped {
 		return false
 	}
 	if s.inFlight(run.ID) {
@@ -209,27 +221,14 @@ func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger
 	if err != nil {
 		s.mu.Unlock()
 		log.Warn("litmus: could not read a run at its deadline", "error", err)
-		return acceptedSubmit
+		return false
 	}
 	if (run.State.Closed() && run.State != RunExpired) || s.reaped(run.ID) {
 		s.mu.Unlock()
 		return true
 	}
-	if run.submission != nil {
-		s.mu.Unlock()
-		in := run.submission
-		if _, err := s.closeRunWithLinkMode(ctx, run, in.Checks, in.Summary, in.BlockedReason, in.SkipBaseReason, in.Deadline); err != nil {
-			log.Warn("litmus: could not resume an accepted submit", "run", run.ID, "error", err)
-		}
-		return true
-	}
 	checks, err = s.store.Checks(run.ID)
-	if err != nil {
-		s.mu.Unlock()
-		log.Warn("litmus: could not read checks at the deadline", "run", run.ID, "error", err)
-		return acceptedSubmit
-	}
-	if len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped {
+	if err != nil || len(checks) == 0 || run.Error == ReasonNoIntake || run.Error == ReasonStopped {
 		s.mu.Unlock()
 		return false
 	}
@@ -242,15 +241,15 @@ func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger
 	s.mu.Unlock()
 	if err != nil {
 		log.Warn("litmus: could not save the checks of a run at its deadline", "run", run.ID, "error", err)
-		return acceptedSubmit
+		return false
 	}
 	why := "" // the head checks the tester reached but did not repeat on the base say so
 	if _, notRun := baseCoverage(checks); len(notRun) > 0 {
 		why = ReasonOutOfTime
 	}
-	if _, err := s.closeRunAtDeadline(ctx, run, skipOnBase(checks, why), "", "", why); err != nil {
+	if _, err := s.closeRun(ctx, run, skipOnBase(checks, why), "", "", why); err != nil {
 		log.Warn("litmus: could not close a run at its deadline", "run", run.ID, "error", err)
-		return acceptedSubmit
+		return false
 	}
 	log.Info("litmus: run closed at its deadline", "run", run.ID)
 	return true

@@ -54,11 +54,11 @@ type PostedComment struct {
 	Fixed  bool   `json:"fixed,omitempty"`
 }
 
-// bugComment is a head-side failure that the available evidence does not
-// establish as pre-existing.
+// bugComment is a head-side failure for which main either passed, has no
+// feature, or has no result. A base failure is deliberately excluded: it is
+// not evidence that this PR introduced the failure.
 type bugComment struct {
 	Check     Check
-	Linked    []Check
 	Base      *Check
 	Number    int
 	Total     int
@@ -77,14 +77,13 @@ const (
 const (
 	commentCap     = 6000 // GitHub allows far more; a PR comment this long is not read
 	commentTimeout = 60 * time.Second
-	bugImageAlt    = "main on the left and the PR build on the right"
 )
 
-// commentFit controls optional labels and run-wide limits.
-// Check rows have their own sentence budget; full notes stay in details.
+// commentFit is one squeeze of the body: how long a table note, a Limits bullet and a Notes entry may be, and how many
+// bullets show. A fit with no notes length has no Notes section, which carries each note in full.
 type commentFit struct{ note, limit, bullets, notes int }
 
-// commentFits are the optional-detail settings retained by older render callers.
+// commentFits run from roomy to tight; the table rows are clipped last.
 var commentFits = []commentFit{{80, 300, 12, 600}, {80, 150, 6, 300}, {80, 80, 3, 150}, {60, 60, 2, 0}, {40, 40, 1, 0}}
 
 func commentMarker(repo string, n int) string {
@@ -96,166 +95,25 @@ func commentMarker(repo string, n int) string {
 // Litmus runs and is accepted when reading them.
 func litmusCommentMarker() string { return "<!-- litmus:comment -->" }
 
-func commentChecksAgainstBase(checks []Check) []Check {
-	// Replaced checks are historical ledger entries. They must not appear
-	// in the public comment or act as a base twin for the replacement.
-	active := activeReplacementChecks(checks)
-	resolved := active
-	for i := range resolved {
-		resolved[i] = checkAgainstBase(active, active[i])
-	}
-	return resolved
-}
-
-// failingBugComments returns head failures that can be shown as regressions.
-// Eligibility belongs to each check. Resolve links only after that decision so
-// an ineligible root cannot hide an eligible linked check.
+// failingBugComments returns only head checks that can be attributed to this
+// PR. A matching base failure or partial result is a pre-existing problem and
+// therefore stays in the ordinary run summary.
 func failingBugComments(checks []Check) []bugComment {
-	resolved := commentChecksAgainstBase(checks)
-	eligible := make(map[string]bool, len(resolved))
-	for _, c := range resolved {
-		eligible[c.ID] = eligibleBugCheck(resolved, c)
-	}
-
-	rootFor := make(map[string]string, len(resolved))
-	for _, c := range resolved {
-		if !eligible[c.ID] {
-			continue
-		}
-		rootFor[c.ID] = nearestEligibleBugAncestor(resolved, c.ID, eligible)
-	}
-
-	var groups []bugComment
-	byRoot := make(map[string]int, len(rootFor))
-	for _, c := range resolved {
-		rootID, ok := rootFor[c.ID]
-		if !ok {
-			continue
-		}
-		index, ok := byRoot[rootID]
-		if !ok {
-			root, found := checkByID(resolved, rootID)
-			if !found {
-				continue
-			}
-			byRoot[rootID] = len(groups)
-			groups = append(groups, bugComment{Check: root, Base: baseTwinCheck(resolved, root)})
-			index = len(groups) - 1
-		}
-		if c.ID != rootID {
-			groups[index].Linked = append(groups[index].Linked, c)
-		}
-	}
-
-	numberBugComments(groups)
-	return groups
-}
-
-// eligibleBugCheck applies the bug rule to one head check before links are
-// resolved. Unknown legacy causes remain visible when the verdict records a
-// failure. Environment and proven pre-existing observations stay in the ledger.
-func eligibleBugCheck(checks []Check, c Check) bool {
-	if c.onLeg() != "head" || (c.State != CheckFail && c.State != CheckPartial && c.State != CheckAbsent) {
-		return false
-	}
-	original, found := checkByID(checks, c.ID)
-	if !found {
-		original = c
-	}
-	// checkAgainstBase can turn an environment attribution into an unknown
-	// PR difference when main passed. Use that resolved result here so a real
-	// regression still gets a bug section. Same-fault evidence is independent
-	// of the verdict's pre-existing risk/exploration rule and never becomes a
-	// PR bug, including when the check is a claim.
-	if c.Attribution == "environment" || preExisting(checks, c) || sameFaultFailure(checks, original) {
-		return false
-	}
-	base := baseTwinCheck(checks, c)
-	if base != nil && base.unreached() {
-		base = nil
-	}
-	if base == nil {
-		return c.State == CheckFail || c.State == CheckAbsent || c.Attribution != ""
-	}
-	if c.State == CheckAbsent || c.Attribution == "pr" {
-		return true
-	}
-	if base.State == CheckPass || base.State == CheckAbsent {
-		return true
-	}
-	// derive treats a failing main check with a saved after-shot as an
-	// unresolved same fault unless the tester marked the head result as PR. A
-	// base failure without that evidence, and a base partial result, do not
-	// establish that this head failure is pre-existing.
-	if c.State == CheckFail {
-		return base.State != CheckFail || !ranAndFailed(*base)
-	}
-	return false
-}
-
-func checkByID(checks []Check, id string) (Check, bool) {
+	var out []bugComment
 	for _, c := range checks {
-		if c.ID == id {
-			return c, true
-		}
-	}
-	return Check{}, false
-}
-
-// nearestEligibleBugAncestor follows at most len(checks) links. A missing
-// target or a cycle makes the link local to the check, so malformed stored
-// data cannot hang rendering.
-func nearestEligibleBugAncestor(checks []Check, id string, eligible map[string]bool) string {
-	seen := make(map[string]bool, len(checks))
-	current := id
-	root := id
-	for steps := 0; steps < len(checks); steps++ {
-		if seen[current] {
-			return id
-		}
-		seen[current] = true
-		c, found := checkByID(checks, current)
-		if !found || strings.TrimSpace(c.SameBug) == "" {
-			return root
-		}
-		targetID := strings.TrimSpace(c.SameBug)
-		if seen[targetID] {
-			return id
-		}
-		if _, found := checkByID(checks, targetID); !found {
-			return id
-		}
-		current = targetID
-		if eligible[current] {
-			root = current
-		}
-	}
-	return root
-}
-
-// originalProblemLine calls out claims that failed on main with an after-shot
-// and passed on the PR build.
-func originalProblemLine(run Run, checks []Check) string {
-	checks = commentChecksAgainstBase(checks)
-	count := 0
-	for _, c := range checks {
-		if c.onLeg() != "head" || !c.Claim || c.State != CheckPass {
+		if c.onLeg() != "head" || (c.State != CheckFail && c.State != CheckAbsent) {
 			continue
 		}
-		i := baseTwin(checks, c)
-		if i < 0 {
+		base := baseTwinCheck(checks, c)
+		if base == nil || (base.State != CheckPass && base.State != CheckAbsent) {
 			continue
 		}
-		base := checks[i]
-		if base.Claim && ranAndFailed(base) {
-			count++
-		}
+		out = append(out, bugComment{Check: c, Base: base})
 	}
-	if count == 0 {
-		return ""
+	for i := range out {
+		out[i].Number, out[i].Total = i+1, len(out)
 	}
-	return fmt.Sprintf("%s reproduces the original problem in %d claim %s that %s on the PR build.",
-		recase(run.baseName(), true), count, plural(count, "check", "checks"), map[bool]string{true: "passes", false: "pass"}[count == 1])
+	return out
 }
 
 func postedCommentFor(comments []PostedComment, name string) (PostedComment, bool) {
@@ -283,24 +141,44 @@ func (s *Service) previousComments(run Run) []PostedComment {
 	return current
 }
 
-func numberBugComments(bugs []bugComment) {
+func (s *Service) numberBugComments(run Run, bugs []bugComment) {
+	previous := s.previousComments(run)
+	used := map[int]bool{}
+	next := 1
+	for _, old := range previous {
+		if strings.EqualFold(strings.TrimSpace(old.Name), "summary") {
+			continue
+		}
+		if old.Number > 0 {
+			used[old.Number] = true
+			next = max(next, old.Number+1)
+		}
+	}
 	for i := range bugs {
-		bugs[i].Number, bugs[i].Total = i+1, len(bugs)
+		if old, ok := postedCommentFor(previous, bugs[i].Check.Name); ok && old.Number > 0 {
+			bugs[i].Number = old.Number
+			continue
+		}
+		bugs[i].Number = next
+		used[next] = true
+		next++
+	}
+	total := len(bugs)
+	for _, bug := range bugs {
+		total = max(total, bug.Number)
+	}
+	for i := range bugs {
+		bugs[i].Total = total
 	}
 }
-
-var bugCommentHeading = regexp.MustCompile(`^Bug [0-9]+ of [0-9]+:`)
 
 // baseTwinCheck is the check-name form of baseTwin. It returns nil when main
 // was not repeated, which is still useful evidence for a head-only failure.
 func baseTwinCheck(checks []Check, c Check) *Check {
-	if replacementRetired(checks, c) {
-		return nil
-	}
 	var fallback *Check
 	for i := range checks {
 		b := &checks[i]
-		if replacementRetired(checks, *b) || b.onLeg() != "base" || !strings.EqualFold(b.Name, c.Name) || !slices.Contains(outcomes, b.State) {
+		if b.onLeg() != "base" || !strings.EqualFold(b.Name, c.Name) || !slices.Contains(outcomes, b.State) {
 			continue
 		}
 		if b.State == CheckPass || b.State == CheckAbsent {
@@ -311,77 +189,81 @@ func baseTwinCheck(checks []Check, c Check) *Check {
 	return fallback
 }
 
+// noteSentences keeps at most four tester sentences. It is intentionally
+// conservative: a short fragment is still useful evidence, but the public
+// comment must never expose engine refs or markdown supplied by the tester.
+func noteSentences(run Run, v Verdict, c Check) string {
+	note := builds(plainTester(c.Note, run, v.Checks), run)
+	note = strings.TrimSpace(note)
+	if note == "" {
+		note = outcomeWords[c.State]
+	}
+	if note == "" {
+		note = plainTester(c.Expect, run, v.Checks)
+	}
+	var scrubbed strings.Builder
+	start := 0
+	for _, loc := range append(sentenceStop.FindAllStringIndex(note, -1), []int{len(note), len(note)}) {
+		// A semicolon can start the receipt clause, so keep it within the sentence.
+		if loc[0] < len(note) && note[loc[0]] == ';' {
+			continue
+		}
+		sentence := note[start:loc[0]]
+		if match := receiptMention.FindStringIndex(sentence); match != nil {
+			cut := strings.LastIndexAny(sentence[:match[0]], ",;")
+			if cut < 0 {
+				cut = 0
+			}
+			sentence = strings.TrimSpace(sentence[:cut])
+		}
+		if strings.TrimSpace(sentence) != "" {
+			scrubbed.WriteString(sentence)
+			scrubbed.WriteString(note[loc[0]:loc[1]])
+		}
+		start = loc[1]
+	}
+	note = scrubbed.String()
+	var parts []string
+	start = 0
+	for _, loc := range sentenceStop.FindAllStringIndex(note, -1) {
+		if p := strings.TrimSpace(note[start:loc[1]]); p != "" {
+			parts = append(parts, p)
+		}
+		start = loc[1]
+		if len(parts) == 4 {
+			break
+		}
+	}
+	if len(parts) < 4 && strings.TrimSpace(note[start:]) != "" {
+		parts = append(parts, strings.TrimSpace(note[start:]))
+	}
+	for i := range parts {
+		parts[i] = plainSentence(parts[i], 280)
+	}
+	return mdText(strings.Join(parts, " "), 1100)
+}
+
 // bugCommentBody is deliberately small enough to leave room for one image
 // and one check recording. Image and clip are repository URLs after evidence
 // publishing, or run-relative files while a draft waits for approval.
-func bugCommentBody(run Run, v Verdict, b bugComment, image, clip string, marker bool, showChecks ...bool) string {
-	allChecks := v.Checks
-	v.Checks = commentChecksAgainstBase(v.Checks)
-	b.Check = checkAgainstBase(v.Checks, b.Check)
-	var parts []string
-	if b.Number == 1 {
-		parts = append(parts, fmt.Sprintf("**Result: %s.**", commentResultLine(v.Overall, count(v.Checks), run.baseName())))
-		if summary := testerSummary(v.Summary); summary != "" {
-			parts = append(parts, summary)
-		}
-	}
-	note := strings.TrimSpace(b.Check.Note)
-	if note == "" {
-		note = recase(plainSentence(outcomeWords[b.Check.State], math.MaxInt), true)
-	}
-	parts = append(parts, fmt.Sprintf("Bug %d of %d:", b.Number, b.Total), mdText(noteSentencePrefix(note, 2), math.MaxInt))
-	if len(showChecks) > 0 && showChecks[0] {
-		if line := originalProblemLine(run, v.Checks); line != "" {
-			parts = append(parts, line)
-		}
-	}
-	if len(b.Linked) > 0 {
-		labels := []string{compactCheckLabel(b.Check)}
-		for _, c := range b.Linked {
-			labels = append(labels, compactCheckLabel(c))
-		}
-		parts = append(parts, "Checks: "+strings.Join(labels, "; "))
-	}
-	if len(showChecks) > 0 && showChecks[0] {
-		if worth := worthALookRows(run, v.Checks); len(worth) > 0 {
-			parts = append(parts, "Worth a look:\n\n"+strings.Join(worth, "\n"))
-		}
-	}
+func bugCommentBody(run Run, v Verdict, b bugComment, image, clip string, marker bool) string {
+	parts := []string{fmt.Sprintf("Bug %d of %d:", b.Number, b.Total), noteSentences(run, v, b.Check)}
 	if v.StoppedEarly != "" {
-		parts = append(parts, "Stopped early: "+plainSentence(plainTester(v.StoppedEarly, run, v.Checks), math.MaxInt))
+		parts = append(parts, "Stopped early: "+plainSentence(plainTester(v.StoppedEarly, run, v.Checks), 300))
 	}
-	console := compareConsoleErrors(b.Check, v.Checks)
-	if len(console.lines) > 0 {
-		details := "<details><summary>App console errors during this check</summary>\n\n" + mdTextLines(strings.Join(console.lines, "\n\n"))
-		if !console.compared {
-			details += "\n\nNo console errors were recorded on " + run.baseName() + "."
-		}
-		parts = append(parts, details+"\n\n</details>")
+	if lines := checkConsoleErrors(b.Check); len(lines) > 0 {
+		parts = append(parts, "<details><summary>App console errors during this check</summary>\n\n```\n"+strings.Join(lines, "\n")+"\n```\n\n</details>")
 	}
 	if image != "" {
-		parts = append(parts, "!["+bugImageAlt+"]("+image+")")
-		if pair, err := selectBugImage(b, allChecks); err == nil {
-			parts = append(parts, pair.caption())
-		}
+		parts = append(parts, "![The base build on the left and the PR build on the right]("+image+")")
 	} else {
-		parts = append(parts, "A comparison image could not be made.")
+		parts = append(parts, "A comparison image was not available because "+run.baseName()+" had no matching shot.")
 	}
 	if clip != "" {
 		parts = append(parts, "<details><summary>Recording for "+mdText(strings.ReplaceAll(b.Check.Name, "-", " "), 120)+"</summary>\n\n[Watch the check]("+clip+")\n\n</details>")
 	} else {
 		parts = append(parts, "<details><summary>Recording for "+mdText(strings.ReplaceAll(b.Check.Name, "-", " "), 120)+"</summary>\n\nThe check recording was not available.\n\n</details>")
 	}
-	if len(showChecks) > 0 && showChecks[0] {
-		if lists := compactChecks(run, v, failingBugComments(v.Checks)); lists != "" {
-			parts = append(parts, lists)
-		}
-	}
-	if len(showChecks) > 0 && showChecks[0] {
-		if notes := fullCheckNotes(run, v); notes != "" {
-			parts = append(parts, notes)
-		}
-	}
-
 	if marker {
 		parts = append(parts, litmusCommentMarker())
 	}
@@ -392,128 +274,39 @@ func bugCommentBody(run Run, v Verdict, b bugComment, image, clip string, marker
 var consolePaths = regexp.MustCompile("(?:[a-zA-Z][a-zA-Z0-9+.-]*://|[a-zA-Z]:[\\\\/]|/)[^\\s\"'`<>()]+")
 
 func checkConsoleErrors(c Check) []string {
-	return consoleLines(c, "head")
-}
-
-type consoleErrorComparison struct {
-	lines    []string
-	compared bool
-}
-
-func compareConsoleErrors(c Check, checks []Check) consoleErrorComparison {
-	head, _ := consoleLineRecords(c, "head")
-	base, baseAvailable := consoleLineRecords(c, "base")
-	if twin := baseTwinCheck(checks, c); twin != nil {
-		baseRecords, available := consoleLineRecords(*twin, "base")
-		base = append(base, baseRecords...)
-		baseAvailable = baseAvailable || available
-	}
-	if !baseAvailable {
-		return consoleErrorComparison{lines: limitConsoleLines(consoleLineTexts(head))}
-	}
-	baseKeys := make(map[string]bool, len(base))
-	for _, line := range base {
-		baseKeys[line.key] = true
-	}
-	var onlyHead []consoleLine
-	for _, line := range head {
-		if !baseKeys[line.key] {
-			onlyHead = append(onlyHead, line)
-		}
-	}
-	return consoleErrorComparison{lines: limitConsoleLines(consoleLineTexts(onlyHead)), compared: true}
-}
-
-func consoleLines(c Check, leg string) []string {
-	lines, _ := consoleLineRecords(c, leg)
-	return limitConsoleLines(consoleLineTexts(lines))
-}
-
-func limitConsoleLines(lines []string) []string {
-	return lines[:min(len(lines), 5)]
-}
-
-type consoleLine struct {
-	text string
-	key  string
-}
-
-func consoleLineTexts(lines []consoleLine) []string {
-	texts := make([]string, len(lines))
-	for i, line := range lines {
-		texts[i] = line.text
-	}
-	return texts
-}
-
-func consoleLineRecords(c Check, leg string) ([]consoleLine, bool) {
-	var lines []consoleLine
+	var lines []string
 	seen := map[string]bool{}
-	available := false
 	for _, r := range c.Receipts {
-		receiptLeg := r.onLeg()
-		if r.Leg == "" && c.Leg != "" {
-			receiptLeg = c.Leg
-		}
-		if receiptLeg != leg {
+		if r.onLeg() != "head" {
 			continue
-		}
-		if strings.TrimSpace(r.ConsoleTail) != "" {
-			available = true
 		}
 		for _, line := range strings.Split(r.ConsoleTail, "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			key := normalizeConsoleError(line)
-			if seen[key] {
-				continue
-			}
-			chars := []rune(line)
-			line = string(chars[:min(len(chars), 200)]) // raw console output keeps its exact cap
 			line = consolePaths.ReplaceAllStringFunc(line, func(path string) string {
 				if strings.Contains(path, "://") && !strings.HasPrefix(path, "file://") {
 					return path
 				}
 				return filepath.Base(strings.ReplaceAll(path, `\`, "/"))
 			})
-			seen[key] = true
-			lines = append(lines, consoleLine{text: line, key: key})
+			chars := []rune(line)
+			line = string(chars[:min(len(chars), 200)])
+			if line == "" || seen[line] {
+				continue
+			}
+			seen[line] = true
+			lines = append(lines, line)
+			if len(lines) == 5 {
+				return lines
+			}
 		}
 	}
-	return lines, available
+	return lines
 }
 
-// Console tails often repeat the same error with a fresh request id, port, or
-// timestamp on every receipt. Normalize those volatile values for de-duplication
-// while retaining the first readable line in the published comment.
-var consoleVolatile = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:(?:request|req|trace|session|run)(?:[_-]?id)?|id)[=:][[:alnum:]_-]+`),
-	regexp.MustCompile(`(?i)\b(?:request|req|trace|session|run)[_-][[:alnum:]-]+\b`),
-	regexp.MustCompile(`(?i)\b(?:port|PORT)[=: ]+[0-9]+\b`),
-	regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`),
-	regexp.MustCompile(`(?i)\b(?:hash|sha|checksum)(?:[_-]?id)?[=:][[:alnum:]_-]+`),
-	regexp.MustCompile(`(?i)\b[0-9a-f]{7,64}\b`),
-	regexp.MustCompile(`\b[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?\b`),
-	regexp.MustCompile(`(?i)\b(?:timestamp|time|ts)\s*[:=]\s*[0-9]{10,16}\b`),
-	regexp.MustCompile(`(?:^|[[:space:]\[])[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})?`),
-	regexp.MustCompile(`(?i)\b(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{2,5}\b`),
-	regexp.MustCompile(`(?i)//[^/\s:]+:[0-9]{2,5}\b`),
-}
-
-func normalizeConsoleError(line string) string {
-	line = consolePaths.ReplaceAllString(line, "<path>")
-	for _, re := range consoleVolatile {
-		line = re.ReplaceAllString(line, "<value>")
-	}
-	return strings.Join(strings.Fields(line), " ")
-}
-
-// summaryCommentBody gives the result, claim outcomes, and skipped-check reasons.
+// summaryCommentBody is the compact two-sentence form for a passing run. A
+// partial or skipped check gets its own sentence so a reader can see what was
+// left unfinished without scanning the larger legacy summary.
 func summaryCommentBody(run Run, v Verdict, now time.Time, marker bool) string {
-	allChecks := v.Checks
-	v.Checks = commentChecksAgainstBase(v.Checks)
 	var paragraphs []string
 	main := run.baseName()
 	both := slices.ContainsFunc(v.Checks, func(c Check) bool {
@@ -527,480 +320,68 @@ func summaryCommentBody(run Run, v Verdict, now time.Time, marker bool) string {
 		}
 		took := lasted(now.Sub(run.CreatedAt))
 		if run.prepared() {
-			took = preparedTiming(run, now)
+			builds, testing := run.buildsAndTesting(now)
+			took = "builds " + lasted(builds) + ", testing " + lasted(testing)
 		}
 		paragraphs = append(paragraphs, fmt.Sprintf("Litmus tried #%d %s (%s).", run.PRNumber, where, took))
 	} else {
 		paragraphs = append(paragraphs, fmt.Sprintf("Litmus could not start on #%d.", run.PRNumber))
 	}
 	tally := count(v.Checks)
-	paragraphs = append(paragraphs, "**Result: "+commentResultLine(v.Overall, tally, main)+".**")
-	if lines := replacementLines(allChecks); len(lines) > 0 {
-		paragraphs = append(paragraphs, "Replacements:\n\n"+strings.Join(lines, "\n"))
+	result := verdictLine(v.Overall, tally, main)
+	if v.Overall == CheckPass && tally.passed > 0 {
+		word := "checks"
+		if tally.passed == 1 {
+			word = "check"
+		}
+		result = fmt.Sprintf("the PR does what it says in the %d %s I finished", tally.passed, word)
 	}
-	if line := originalProblemLine(run, v.Checks); line != "" {
-		paragraphs = append(paragraphs, line)
-	}
-	if v.Overall != CheckBlocked {
-		paragraphs = append(paragraphs, coverageLine(tally, main))
-	}
-	if worth := worthALookRows(run, v.Checks); len(worth) > 0 {
-		paragraphs = append(paragraphs, "Worth a look:\n\n"+strings.Join(worth, "\n"))
-	}
+	paragraphs = append(paragraphs, lowerFirst(result)+".")
 	for _, gap := range run.Gaps {
-		if text := plainSentence(gap, math.MaxInt); text != "" {
+		if text := plainSentence(gap, 400); text != "" {
 			paragraphs = append(paragraphs, text)
 		}
 	}
-	if lists := compactChecks(run, v); lists != "" {
-		paragraphs = append(paragraphs, lists)
+	for _, c := range v.Checks {
+		if c.onLeg() != "head" || (c.State != CheckPartial && c.State != CheckSkipped) {
+			continue
+		}
+		label := lowerLead(mdText(clause(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 180), 220))
+		if c.State == CheckSkipped {
+			paragraphs = append(paragraphs, "I could not check that "+label+skipWhy(c.Note)+".")
+		} else {
+			paragraphs = append(paragraphs, "I could only partly check that "+label+skipWhy(c.Note)+".")
+		}
 	}
-	if summary := testerSummary(v.Summary); summary != "" {
-		paragraphs = append(paragraphs, summary)
-	}
-
-	if notes := fullCheckNotes(run, v); notes != "" {
-		paragraphs = append(paragraphs, notes)
-	}
-
 	if marker {
 		paragraphs = append(paragraphs, litmusCommentMarker())
 	}
 	return strings.Join(paragraphs, "\n\n")
 }
 
-// firstNoteSentence keeps a complete sentence even when it exceeds the row budget.
-// Passing notes and all remaining sentences stay in the full-notes block.
-func firstNoteSentence(note string) string {
-	return noteSentencePrefix(note, 1)
-}
-
-var noteSentenceEnd = regexp.MustCompile(`[.!?](?:\s+|$)`)
-
-func noteSentencePrefix(note string, limit int) string {
-	note = strings.TrimSpace(note)
-	ends := noteSentenceEnd.FindAllStringIndex(note, limit)
-	if len(ends) == limit {
-		note = strings.TrimSpace(note[:ends[limit-1][1]])
-	}
-	return note
-}
-
-func compactCheckLabel(c Check) string {
-	return mdText(strings.ReplaceAll(c.Name, "-", " "), math.MaxInt)
-}
-
-func hasHeadTwin(checks []Check, c Check) bool {
-	return c.onLeg() == "base" && slices.ContainsFunc(checks, func(h Check) bool {
-		return h.onLeg() == "head" && strings.EqualFold(h.Name, c.Name)
-	})
-}
-
-// commentBaseTwin includes unfinished checks so their notes are retained too.
-func commentBaseTwin(checks []Check, c Check) *Check {
-	if replacementRetired(checks, c) {
-		return nil
-	}
-	for i := range checks {
-		if !replacementRetired(checks, checks[i]) && checks[i].onLeg() == "base" && strings.EqualFold(checks[i].Name, c.Name) {
-			return &checks[i]
-		}
-	}
-	return nil
-}
-
-func mainCheckResult(run Run, checks []Check, c Check) string {
-	if text := mainComparison(run, checks, c); text != "" {
-		return " (" + text + ")"
-	}
-	return ""
-}
-
-func mainComparison(run Run, checks []Check, c Check) string {
-	if c.onLeg() == "base" {
-		return ""
-	}
-	if twin := commentBaseTwin(checks, c); twin != nil {
-		status := mainStatus(run.baseName(), twin.State, checkPurpose(c))
-		if twin.Attribution == "environment" {
-			if detail := environmentDetail(*twin); detail != "" {
-				status += ", environment: " + detail
-			}
-		}
-		return status
-	}
-	return run.baseName() + ": not compared"
-}
-
-func mainStatus(main string, state CheckState, purpose string) string {
-	if purpose == "claim" {
-		switch state {
-		case CheckPass:
-			return main + " already does this"
-		case CheckFail:
-			return main + " does not do this"
-		case CheckPartial:
-			return main + " does part of this"
-		}
-	}
-	switch state {
-	case CheckAbsent:
-		return "not on " + main
-	case CheckFail:
-		return "fails on " + main
-	case CheckPartial:
-		return "partly broken on " + main
-	case CheckPass:
-		return "works on " + main
-	case CheckSkipped, CheckPending, CheckRunning:
-		return "not tested on " + main
-	default:
-		return "not compared on " + main
-	}
-}
-
-// checkPurpose keeps older stored checks, which only have Claim, on the same
-// wording path as current checks with an explicit purpose.
-func checkPurpose(c Check) string {
-	if c.Purpose == "claim" || c.Claim {
-		return "claim"
-	}
-	return c.Purpose
-}
-
-func environmentDetail(c Check) string {
-	detail := strings.TrimSpace(c.EnvironmentCause)
-	if detail == "" {
-		detail = strings.TrimSpace(c.Note)
-	}
-	detail = strings.TrimSpace(strings.TrimRight(detail, "."))
-	if detail == "" {
-		return ""
-	}
-	return lowerFirst(mdText(detail, math.MaxInt))
-}
-
-func commentUntested(c Check) bool {
-	return c.unreached() || !slices.Contains(outcomes, c.State)
-}
-
-// compactChecks budgets each observation rather than dropping checks to fit.
-func compactChecks(run Run, v Verdict, bugSections ...[]bugComment) string {
-	checks := commentChecksAgainstBase(v.Checks)
-	var bugs []bugComment
-	if len(bugSections) > 0 {
-		bugs = bugSections[0]
-	}
-	var passed, rows []string
-	for _, c := range checks {
-		if hasHeadTwin(checks, c) || commentUntested(c) {
-			continue
-		}
-		label := compactCheckLabel(c)
-		if c.onLeg() == "base" {
-			label += " (" + run.baseName() + ")"
-		}
-		comparison := mainCheckResult(run, checks, c)
-		if c.State == CheckPass && c.Attribution != "environment" {
-			passed = append(passed, label+comparison)
-			continue
-		}
-		note := mdText(firstNoteSentence(c.Note), math.MaxInt)
-		for _, b := range bugs {
-			if b.Check.ID == c.ID || slices.ContainsFunc(b.Linked, func(link Check) bool { return link.ID == c.ID }) {
-				note = fmt.Sprintf("See Bug %d.", b.Number)
-				break
-			}
-		}
-		if c.onLeg() == "head" && preExisting(checks, c) {
-			note = "Pre-existing. " + note
-		}
-		if c.Attribution == "environment" {
-			if detail := environmentDetail(c); detail != "" {
-				note += " Environment: " + recase(detail, true) + "."
-			}
-		}
-		rows = append(rows, strings.TrimSpace("- "+label+": "+string(c.State)+comparison+". "+note))
-	}
-	var parts []string
-	if len(passed) > 0 {
-		parts = append(parts, "Passed: "+strings.Join(passed, "; "))
-	}
-	if len(rows) > 0 {
-		parts = append(parts, strings.Join(rows, "\n"))
-	}
-	if skipped := skippedCheckRows(run, checks); len(skipped) > 0 {
-		parts = append(parts, "Not tested: "+strings.Join(skipped, "; "))
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func skippedCheckRows(run Run, checks []Check) []string {
-	checks = commentChecksAgainstBase(checks)
-	var rows []string
-	for _, effect := range verdictChecks(checks) {
-		c := effect.Check
-		if hasHeadTwin(checks, c) || !commentUntested(c) || effect.supersededBy != "" {
-			continue
-		}
-		label := compactCheckLabel(c)
-		details := mdText(firstNoteSentence(cmp.Or(c.EnvironmentCause, c.Note, "No result recorded")), math.MaxInt)
-		if c.onLeg() == "base" {
-			details = run.baseName() + ": " + details
-		} else if comparison := mainComparison(run, checks, c); comparison != "" {
-			details = strings.TrimSuffix(details, ".")
-			details += "; " + comparison
-		}
-		rows = append(rows, label+" ("+details+")")
-	}
-	return rows
-}
-
-// testerSummary keeps the tester's complete summary separate from generated
-// check coverage, which comes from recorded checks and their skip reasons.
-func testerSummary(summary string) string {
-	if strings.TrimSpace(summary) == "" {
-		return ""
-	}
-	return "Tester summary:\n\n" + mdTextLines(summary)
-}
-
-// mdTextLines applies the public-comment escaping used for notes while keeping
-// the tester's paragraph breaks.
-func mdTextLines(s string) string {
-	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = mdText(lines[i], math.MaxInt)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// fullCheckNotes is the single collapsed ledger. Labels and notes stay whole.
-func fullCheckNotes(run Run, v Verdict) string {
-	v.Checks = commentChecksAgainstBase(v.Checks)
-	if len(v.Checks) == 0 {
-		return ""
-	}
-	parts := []string{"<details><summary>Full check notes</summary>"}
-	note := func(c Check) string {
-		text := recase(run.sideName(c.onLeg()), true) + ": " + cmp.Or(string(c.State), "not recorded") + "."
-		if note := strings.TrimSpace(c.Note); note != "" {
-			text += " " + mdText(note, math.MaxInt)
-		}
-		if c.Attribution == "environment" || c.EnvironmentCause != "" {
-			text += " " + environmentPhrase(c)
-		}
-		return text
-	}
-	for _, c := range v.Checks {
-		if hasHeadTwin(v.Checks, c) {
-			continue
-		}
-		line := "- " + compactCheckLabel(c)
-		if c.Expect != "" {
-			line += ". Expected: " + plainSentence(c.Expect, math.MaxInt)
-		}
-		if c.Risk != "" {
-			line += " Risk: " + mdText(c.Risk, math.MaxInt)
-		}
-		line += "\n\n  " + note(c)
-		if twin := commentBaseTwin(v.Checks, c); c.onLeg() == "head" && twin != nil {
-			if twin.Expect != "" && twin.Expect != c.Expect {
-				line += "\n\n  " + recase(run.baseName(), true) + " expected: " + plainSentence(twin.Expect, math.MaxInt)
-			}
-			if twin.Risk != "" && twin.Risk != c.Risk {
-				line += " Risk: " + mdText(twin.Risk, math.MaxInt)
-			}
-			line += "\n\n  " + note(*twin)
-		}
-		parts = append(parts, line)
-	}
-	return strings.Join(parts, "\n\n") + "\n\n</details>"
-}
-
 // fixedCommentBody keeps the marker on the first comment so a later rerun can
 // still find the run, while the visible text is exactly the requested result.
 func fixedCommentBody(sha string, marker bool) string {
-	body := "Fixed at " + mdText(clip(strings.TrimSpace(sha), 80), math.MaxInt)
+	body := "Fixed at " + clip(strings.TrimSpace(sha), 80)
 	if marker {
 		body += "\n\n" + litmusCommentMarker()
 	}
 	return body
 }
 
-var githubAutolink = regexp.MustCompile(`(?i)(https?://github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/(issues|pull)/[0-9]+|https?://github\.com/[[:alnum:]_.-]+/[[:alnum:]_.-]+/commit/[[:xdigit:]]{7,}|[[:alnum:]_.-]+/[[:alnum:]_.-]+@[[:xdigit:]]{7,}|[[:alnum:]_.-]+@[[:xdigit:]]{7,}|[[:alnum:]_.-]+/[[:alnum:]_.-]+#[0-9]+|GH-[0-9]+|#[0-9]+|[[:xdigit:]]{7,})`)
-
-// codeIssueReferences keeps GitHub from turning documented issue, pull request,
-// and commit references into links while leaving the visible text unchanged.
-func codeIssueReferences(s string) string {
-	unmatched := unmatchedBackticks(s)
-	var out strings.Builder
-	last := 0
-	for _, span := range githubAutolink.FindAllStringIndex(s, -1) {
-		ref := s[span[0]:span[1]]
-		if issueReferenceInsideCodeOrURL(s, span[0], span[1]) || !autolinkWordBoundary(s, span[0], span[1], ref) {
-			continue
-		}
-		writeTextWithBacktickEscapes(&out, s, unmatched, last, span[0])
-		out.WriteByte('`')
-		out.WriteString(s[span[0]:span[1]])
-		out.WriteByte('`')
-		last = span[1]
-	}
-	writeTextWithBacktickEscapes(&out, s, unmatched, last, len(s))
-	return out.String()
-}
-
-func autolinkWordBoundary(s string, start, end int, ref string) bool {
-	if !strings.HasPrefix(strings.ToUpper(ref), "GH-") && !isBareSHA(ref) {
-		return true
-	}
-	if start > 0 {
-		r, _ := utf8.DecodeLastRuneInString(s[:start])
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			return false
-		}
-	}
-	if end < len(s) {
-		r, _ := utf8.DecodeRuneInString(s[end:])
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' {
-			return false
-		}
-	}
-	return true
-}
-
-func isBareSHA(ref string) bool {
-	if len(ref) < 7 {
-		return false
-	}
-	for _, r := range ref {
-		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
-			return false
-		}
-	}
-	return true
-}
-
-func issueReferenceInsideCodeOrURL(s string, start, end int) bool {
-	if insideBacktickCode(s, start) {
-		return true
-	}
-	// mdText escaped the ampersand of a literal numeric character reference.
-	if s[start] == '#' && strings.HasSuffix(s[:start], "&amp;") && end < len(s) && s[end] == ';' {
-		return true
-	}
-	from := strings.LastIndexFunc(s[:start], unicode.IsSpace) + 1
-	to := len(s)
-	if next := strings.IndexFunc(s[end:], unicode.IsSpace); next >= 0 {
-		to = end + next
-	}
-	token := s[from:to]
-	return (strings.Contains(token, "://") && !githubIssueOrCommitURL(token)) || strings.HasPrefix(token, "mailto:")
-}
-
-func githubIssueOrCommitURL(token string) bool {
-	token = strings.TrimRight(token, ".,;:!?)]}")
-	lower := strings.ToLower(token)
-	return githubAutolink.MatchString(token) && (strings.Contains(lower, "/issues/") || strings.Contains(lower, "/pull/") || strings.Contains(lower, "/commit/"))
-}
-
-func writeTextWithBacktickEscapes(out *strings.Builder, s string, unmatched []bool, start, end int) {
-	for i := start; i < end; {
-		if !unmatched[i] {
-			out.WriteByte(s[i])
-			i++
-			continue
-		}
-		out.WriteString("&#96;")
-		i++
-	}
-}
-
-func unmatchedBackticks(s string) []bool {
-	unmatched := make([]bool, len(s))
-	for i := 0; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(s) && s[j] == '`' {
-			j++
-		}
-		if escapedBacktickRun(s, i) {
-			for k := i; k < j; k++ {
-				unmatched[k] = true
-			}
-			i = j
-			continue
-		}
-		_, closeEnd := matchingBacktickRun(s, j, j-i)
-		if closeEnd < 0 {
-			for k := i; k < j; k++ {
-				unmatched[k] = true
-			}
-			i = j
-			continue
-		}
-		i = closeEnd
-	}
-	return unmatched
-}
-
-// mdText makes tester-written text safe for a public comment. It keeps the
-// tester's words, folds whitespace to a safe single line, shortens only at
-// sentence boundaries, and escapes markup and mentions.
+// mdText makes tester-written text safe for a public comment: one line, clipped, no raw HTML or entities, no
+// link or image syntax, no engine refs (@e12 would also ping a user) and no @mention.
 func mdText(s string, n int) string {
-	s = sentences(strings.Join(strings.Fields(s), " "), n)
-	s = cell(strings.ReplaceAll(s, `\`, `\\`))
-	s = strings.NewReplacer("&", "&amp;", "<", "&lt;", "[", `\[`).Replace(s)
-	s = codeIssueReferences(s)
-	// Commit references need their @ intact inside the code span. Neutralize
-	// mentions only after references have been wrapped, and only in prose.
-	var escaped strings.Builder
-	codeRun := 0
-	for i := 0; i < len(s); {
-		if s[i] == '`' {
-			end := i + 1
-			for end < len(s) && s[end] == '`' {
-				end++
-			}
-			if codeRun == 0 {
-				codeRun = end - i
-			} else if codeRun == end-i {
-				codeRun = 0
-			}
-			escaped.WriteString(s[i:end])
-			i = end
-			continue
-		}
-		if s[i] == '@' && codeRun == 0 {
-			escaped.WriteString("@\u200b")
-		} else {
-			escaped.WriteByte(s[i])
-		}
-		i++
-	}
-	s = escaped.String()
-	// Every caller may place this text at a line start. Whitespace folding
-	// removes indentation; escape block markers before they reach Markdown.
-	if s != "" && (strings.ContainsRune("#>-+*=_", rune(s[0])) || strings.HasPrefix(s, "```") || strings.HasPrefix(s, "~~~")) {
-		return `\` + s
-	}
-	// CommonMark ordered lists accept up to nine digits and either delimiter.
-	i := 0
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	if i > 0 && i <= 9 && i < len(s) && (s[i] == '.' || s[i] == ')') && (i+1 == len(s) || s[i+1] == ' ') {
-		return s[:i] + `\` + s[i:]
-	}
-	return s
+	s = cell(strings.ReplaceAll(clip(engineRef.ReplaceAllString(strings.Join(strings.Fields(s), " "), "that element"), n), `\`, `\\`))
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", "[", `\[`, "@", "@\u200b").Replace(s)
 }
 
-// plainSentence escapes tester prose, shortens at a sentence boundary, and adds a final stop.
+var (
+	engineRef = regexp.MustCompile(`(?:\bref[ =]+)?\B@e\d+\b`)
+	legPrefix = regexp.MustCompile(`(?i)^(base|head)( leg)?:\s*`)
+)
+
+// plainSentence is a tester's note as one sentence of a public comment: no "Base:" prefix, clipped to n, ending in a stop.
 func plainSentence(note string, n int) string {
 	out := plainCell(note, n)
 	if out == "" || strings.HasSuffix(out, "...") || strings.ContainsAny(out[len(out)-1:], "!?") {
@@ -1012,162 +393,106 @@ func plainSentence(note string, n int) string {
 	return strings.TrimRight(out, ".;:,") + "."
 }
 
-// shorten keeps a complete sentence when one fits; otherwise it keeps the
-// whole text so an older stored field never ends mid-sentence.
+// shorten cuts text to n characters at a word, with "..." when it cut.
 func shorten(s string, n int) string {
-	return sentences(s, n)
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n-3]
+	if i := strings.LastIndex(s, " "); i > n/2 {
+		s = s[:i]
+	}
+	return s + "..."
 }
 
-// sentences shortens s only when a complete sentence fits in n characters.
+var danglingWord = regexp.MustCompile(`(?i) (and|or|but|the|a|an|of|to|with|in|on|at|for|is|are)$`)
+
+// clause is s as the end of a sentence: cut at a word when over n characters (never mid-word, never inside an
+// unclosed bracket or after a word that wants another) and with no stop of its own, so the caller's period is the only one.
+func clause(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		cut := string(r[:n])
+		if r[n] != ' ' {
+			if i := strings.LastIndex(cut, " "); i > 0 {
+				cut = cut[:i]
+			}
+		}
+		if i := strings.LastIndex(cut, "("); i >= 0 && !strings.Contains(cut[i:], ")") {
+			cut = cut[:i]
+		}
+		s = danglingWord.ReplaceAllString(strings.TrimRight(cut, " "), "")
+	}
+	return strings.TrimRight(s, " .,;:")
+}
+
+// sentences is s cut back to a whole sentence when it is over n characters and has a stop inside them.
 func sentences(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > n {
-		prefix := string(r[:n])
-		for i := len(prefix) - 1; i > 0; i-- {
-			if (prefix[i-1] == '.' || prefix[i-1] == '!' || prefix[i-1] == '?') && prefix[i] == ' ' {
-				return prefix[:i]
-			}
+		if i := strings.LastIndex(string(r[:n]), ". "); i > 0 {
+			return s[:i]
 		}
 	}
 	return s
 }
 
-func isTesterWordRune(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) || strings.ContainsRune("_-/\\`@#=&%", r)
+var testerWords = regexp.MustCompile(`(?i)\b(head|base|c\d+)\b`)
+
+// plainTester is a tester's text in the reader's words, for a tester who ignored the rules: head is the PR build,
+// base is the base branch, and a check id is that check's name.
+func plainTester(s string, run Run, checks []Check) string {
+	return testerWords.ReplaceAllStringFunc(legPrefix.ReplaceAllString(strings.TrimSpace(s), ""), func(w string) string {
+		out := "that check"
+		switch low := strings.ToLower(w); low {
+		case "head":
+			out = "the PR build"
+		case "base":
+			out = cmp.Or(run.BaseRef, "main")
+		default:
+			if i := slices.IndexFunc(checks, func(c Check) bool { return strings.EqualFold(c.ID, low) }); i >= 0 {
+				out = strings.ReplaceAll(checks[i].Name, "-", " ")
+			}
+		}
+		if first, _ := utf8.DecodeRuneInString(w); unicode.IsUpper(first) {
+			out = recase(out, true)
+		}
+		return out
+	})
 }
 
-// insideBacktickCode reports whether pos is inside a Markdown code span. The
-// opening and closing delimiters must use the same run length, so this also
-// handles double-backtick spans and triple-backtick fences.
-func insideBacktickCode(s string, pos int) bool {
-	for i := 0; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(s) && s[j] == '`' {
-			j++
-		}
-		run := j - i
-		if escapedBacktickRun(s, i) {
-			i = j
-			continue
-		}
-		closeStart, closeEnd := matchingBacktickRun(s, j, run)
-		if closeStart < 0 {
-			i = j
-			continue
-		}
-		if pos >= j && pos < closeStart {
-			return true
-		}
-		if pos < closeEnd {
-			return false
-		}
-		i = closeEnd
-	}
-	return false
+// buildName is a lead-in or inner mention of a build, which the comment adds itself: "on the PR build", "in the PR build", "on main".
+func buildName(run Run) string {
+	return `(?:on|in) (?:the PR build|main|` + regexp.QuoteMeta(run.baseName()) + `)`
 }
 
-func matchingBacktickRun(s string, from, want int) (int, int) {
-	for i := from; i < len(s); {
-		if s[i] != '`' {
-			i++
-			continue
-		}
-		j := i + 1
-		for j < len(s) && s[j] == '`' {
-			j++
-		}
-		if j-i == want && !escapedBacktickRun(s, i) {
-			return i, j
-		}
-		i = j
+// builds strips the build a tester's note names, since checkPara and the captions lead with it: a leading
+// "On the PR build," or "On main" (comma optional), and the same words inside the first clause (up to the first comma
+// or period). A note that lost its opening gets a capital back.
+func builds(note string, run Run) string {
+	s, name := strings.TrimSpace(note), buildName(run)
+	lead := regexp.MustCompile(`(?i)^` + name + `(?:,\s*|\s+|$)`)
+	inner := regexp.MustCompile(`(?i)\s+` + name + `(\s|[,.;:]|$)`)
+	cut := lead.ReplaceAllString(s, "")
+	first, rest := cut, ""
+	if i := strings.IndexAny(cut, ",."); i >= 0 {
+		first, rest = cut[:i], cut[i:]
 	}
-	return -1, -1
+	cut = inner.ReplaceAllString(first, "$1") + rest
+	if cut == s {
+		return s
+	}
+	return recase(strings.TrimSpace(cut), true)
 }
 
-func escapedBacktickRun(s string, start int) bool {
-	slashes := 0
-	for i := start - 1; i >= 0 && s[i] == '\\'; i-- {
-		slashes++
-	}
-	return slashes%2 == 1
-}
-
-func testerWordAllowed(s string, start, end int) bool {
-	if insideBacktickCode(s, start) {
-		return false
-	}
-	// A URL's query and fragment are part of the same token as its path.
-	from := strings.LastIndexFunc(s[:start], unicode.IsSpace) + 1
-	to := len(s)
-	if next := strings.IndexFunc(s[end:], unicode.IsSpace); next >= 0 {
-		to = end + next
-	}
-	if token := s[from:to]; strings.Contains(token, "://") || strings.HasPrefix(token, "mailto:") {
-		return false
-	}
-	if start > 0 {
-		before, _ := utf8.DecodeLastRuneInString(s[:start])
-		if isTesterWordRune(before) || before == '.' || before == ':' {
-			return false
-		}
-	}
-	if end < len(s) {
-		after, _ := utf8.DecodeRuneInString(s[end:])
-		switch {
-		case isTesterWordRune(after):
-			return false
-		case after == ':' && end+1 < len(s):
-			next, _ := utf8.DecodeRuneInString(s[end+1:])
-			return unicode.IsSpace(next)
-		case s[end] == '.' && !sentencePeriod(s, end):
-			return false
-		}
-	}
-	return true
-}
-
-func sentencePeriod(s string, pos int) bool {
-	next, _ := utf8.DecodeRuneInString(s[pos+1:])
-	return pos+1 == len(s) || unicode.IsSpace(next)
-}
-
-// plainTester preserves tester prose. Build names belong in generated labels.
-func plainTester(s string, _ Run, _ []Check) string {
-	return strings.TrimSpace(s)
-}
-
-func environmentPhrase(c Check) string {
-	cause := strings.TrimSpace(c.EnvironmentCause)
-	if cause == "" {
-		cause = strings.TrimSpace(c.Note)
-	}
-	if cause == "" {
-		cause = "the test environment was unavailable"
-	}
-	prefix := "Environment: "
-	if c.unreached() {
-		prefix = "Litmus couldn't test this: "
-	}
-	return prefix + plainSentence(cause, math.MaxInt)
-}
-
-// subjectLed reports whether a note already normalized for display opens with a build as its subject, "The PR build shows",
+// subjectLed reports whether a note (already through builds) opens with a build as its subject, "The PR build shows",
 // "The main build is" or "Main has", so the comment keeps it as its own sentence instead of adding "On the PR build,".
 func subjectLed(note string, run Run) bool {
 	return regexp.MustCompile(`(?i)^(?:the (?:PR|main) build|main|` + regexp.QuoteMeta(run.baseName()) + `)(?:'s)?(?:\s|$)`).MatchString(note)
 }
 
 var compared = regexp.MustCompile(`(?i)\bcompared\b`)
-
-func hasProseMatch(re *regexp.Regexp, s string, start, end int) bool {
-	return slices.ContainsFunc(re.FindAllStringIndex(s[start:end], -1), func(loc []int) bool {
-		return testerWordAllowed(s, start+loc[0], start+loc[1])
-	})
-}
 
 // withoutComparison drops the sentences of a tester's note that say what was or was not compared with the base branch.
 // plainVerdict applies it only to a check with no result on the base branch, where such a claim would be false. The other sentences stay. Sentences end at . ! ? or ; before a space.
@@ -1177,7 +502,7 @@ func withoutComparison(note string, run Run) string {
 	start, dropped := 0, 0
 	for _, loc := range append(sentenceStop.FindAllStringIndex(note, -1), []int{len(note), len(note)}) {
 		if s := note[start:loc[1]]; strings.TrimSpace(s) != "" {
-			if hasProseMatch(compared, note, start, loc[1]) && hasProseMatch(main, note, start, loc[1]) {
+			if compared.MatchString(s) && main.MatchString(s) {
 				dropped++
 			} else {
 				kept = append(kept, strings.TrimSpace(s))
@@ -1193,12 +518,28 @@ func withoutComparison(note string, run Run) string {
 }
 
 var sentenceStop = regexp.MustCompile(`[.!?;](?:\s+|$)`)
+var receiptMention = regexp.MustCompile(`(?i)receipts?/?\s*\d+(-after\.png)?`)
 var trailingEntity = regexp.MustCompile(`&(?:amp;)*[A-Za-z0-9#]+;$`)
 
-// plainVerdict copies checks without rewriting the tester's words. Renderers
-// filter completed replacements while keeping the audit links available.
-func plainVerdict(_ Run, v Verdict) Verdict {
-	v.Checks = slices.Clone(v.Checks)
+// plainVerdict is v with the tester's own words (in each check's expectation and note, the skip reason and a blocked
+// reason) said in the reader's. The checks are copied; v is not changed.
+func plainVerdict(run Run, v Verdict) Verdict {
+	checks := slices.Clone(v.Checks)
+	for i := range checks {
+		note := plainTester(checks[i].Note, run, v.Checks)
+		if c := checks[i]; c.onLeg() == "head" && slices.Contains([]string{"", string(CheckSkipped)}, baseResult(v.Checks, c)) { // nothing was compared, so a claim that it was is false
+			note = withoutComparison(note, run)
+		}
+		checks[i].Expect, checks[i].Note = plainTester(checks[i].Expect, run, v.Checks), builds(note, run)
+	}
+	if v.Overall == CheckBlocked { // another verdict's reasons begin with a check id and name, which the comment matches on
+		v.Reasons = slices.Clone(v.Reasons)
+		for i, r := range v.Reasons {
+			v.Reasons[i] = plainTester(r, run, v.Checks)
+		}
+	}
+	v.SkipBase = plainTester(v.SkipBase, run, v.Checks)
+	v.Checks = checks
 	return v
 }
 
@@ -1250,9 +591,9 @@ func capitalised(w, text string, mid bool) bool {
 	return false
 }
 
-// checkLabel names a check by what it expects (its name, de-slugged, when there is no expectation).
+// checkLabel names a check by what it expects, in 60 characters (its name, de-slugged, when there is no expectation).
 func checkLabel(c Check) string {
-	return mdText(sentences(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 60), 80)
+	return mdText(shorten(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 60), 80)
 }
 
 // rowLabel is the label of the table row c belongs to: a base check beside its head twin is named like the twin.
@@ -1270,166 +611,98 @@ var cellWords = map[string]string{"pass": "works", "fail": "fails", "partial": "
 
 func cellWord(s string) string { return cmp.Or(cellWords[s], s) }
 
-// tally counts completed head checks separately from comparisons and differences.
+// tally counts the head checks by what they showed.
 type tally struct {
-	completed, compared, notRun, differed, headProblems, failed, worth int
-	environmentProblems                                                int
-	skippedClaims                                                      []Check
+	passed, shown, pre, prePartial, notCompared, failed, partial, unreached int
+	compared, notRun                                                        int // head checks with and without a result on main (baseCoverage)
 }
 
 func count(checks []Check) (t tally) {
-	for _, effect := range verdictChecks(checks) {
-		c := effect.Check
-		_, notes := splitWorthNotes(c.Note)
-		t.worth += len(notes)
-		if c.unreached() {
-			if effect.skippedClaim {
-				t.skippedClaims = append(t.skippedClaims, c)
+	compared, notRun := baseCoverage(checks)
+	t.compared, t.notRun = len(compared), len(notRun)
+	for _, c := range checks {
+		if c.onLeg() != "head" {
+			continue
+		}
+		base := baseResult(checks, c)
+		switch {
+		case c.unreached():
+			t.unreached++
+			continue
+		case preExisting(checks, c):
+			t.pre++
+			if c.State == CheckPartial {
+				t.prePartial++
 			}
 			continue
+		case base == "" || base == string(CheckSkipped):
+			t.notCompared++
+		case c.State == CheckPartial:
+			t.partial++
 		}
-		if c.onLeg() != "head" || !slices.Contains(outcomes, c.State) {
-			continue
-		}
-		t.completed++
-		if c.Attribution != "environment" && effect.cap != "" {
-			t.headProblems++
+		if c.State == CheckPass {
+			t.passed++
+			if failedOnBase(checks, c) {
+				t.shown++
+			}
 		}
 		if c.State == CheckFail || c.State == CheckAbsent {
 			t.failed++
-		}
-		if c.Attribution == "environment" && effect.cap != "" {
-			t.environmentProblems++
-		}
-		base := CheckState(baseResult(checks, c))
-		if base == "observed" || slices.Contains(outcomes, base) && base != CheckSkipped {
-			t.compared++
-			if base != "observed" && base != c.State {
-				t.differed++
-			}
-		} else {
-			t.notRun++
 		}
 	}
 	return t
 }
 
+// verdictLine is the sentence after "Result:", from the overall verdict and what the checks showed.
 func verdictLine(overall CheckState, t tally, main string) string {
-	switch overall {
-	case CheckBlocked:
+	left := t.notCompared + t.partial + t.unreached
+	switch {
+	case overall == CheckBlocked:
 		return "could not test this one"
-	case CheckUntested:
-		return "the PR's stated behavior was not checked"
-	case CheckFail:
+	case overall == CheckFail:
 		return "something broke; do not merge yet"
-	case CheckPass:
-		if t.worth > 0 {
-			return fmt.Sprintf("pass, %d %s worth a look", t.worth, plural(t.worth, "thing", "things"))
+	case overall == CheckPartial && t.failed > 0:
+		return "the PR build and " + main + " both fail; I could not tell whether it is the same fault; read the finding before merging"
+	case t.unreached > 0 && t.passed+t.pre+t.notCompared+t.failed+t.partial == 0:
+		return "could not test this from the app"
+	case t.passed == 0: // nothing failed, nothing was confirmed
+		return "nothing failed, but I could not confirm the change from the app; read the diff before merging"
+	case overall == CheckPartial && left == 0:
+		return "the PR build works, but nothing differed from " + main + "; read the diff before merging"
+	case overall == CheckPass:
+		word := "checks"
+		if t.passed == 1 {
+			word = "check"
 		}
-		return "pass"
-	case CheckPartial:
-		line := "partial: not everything could be tested"
-		if t.headProblems > 0 {
-			line = "partial: something misbehaved"
-		} else if t.environmentProblems == 0 && t.completed > 0 && t.compared == t.completed && t.differed == 0 && len(t.skippedClaims) == 0 {
-			line = "partial: no difference from " + main + " shown"
-		}
-		var skipped []string
-		for _, c := range t.skippedClaims {
-			side := "the PR build"
-			if c.onLeg() == "base" {
-				side = main
-			}
-			skipped = append(skipped, mdText(strings.ReplaceAll(c.Name, "-", " "), math.MaxInt)+" on "+side)
-		}
-		if len(skipped) > 0 {
-			line += "; skipped claim checks: " + joinNatural(skipped)
+		line := fmt.Sprintf("the PR does what it says in the %d %s I finished", t.passed, word)
+		if left > 0 {
+			line += ". " + leftover(t.notCompared+t.partial, t.unreached)
 		}
 		return line
+	case overall == CheckPartial && t.compared > 0:
+		few := func(n int, one, many string) string { return map[bool]string{true: one, false: many}[n == 1] }
+		line := "the PR build works as far as I could check; " + fmt.Sprint(t.compared) + few(t.compared, " check was", " checks were") + " compared on " + main + " and showed no difference"
+		if t.notRun > 0 {
+			line += ", " + fmt.Sprint(t.notRun) + few(t.notRun, " was", " were") + " not"
+		}
+		return line + "; read the diff before merging"
+	case overall == CheckPartial:
+		return "the PR build works as far as I could check; nothing was compared against " + main + ", so read the diff before merging"
 	}
-	return string(overall)
+	return "the PR build works as far as I could check. " + leftover(t.notCompared+t.partial, t.unreached)
 }
 
-// Skipped checks are named once in the compact ledger below the result.
-func commentResultLine(overall CheckState, t tally, main string) string {
-	line, _, _ := strings.Cut(verdictLine(overall, t, main), "; skipped claim checks:")
-	return line
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
+// leftover says what the checks that did not finish as a comparison came to: some only ran on the PR build, some could
+// not be done at all (skipped, or never reached), or both.
+func leftover(only, undone int) string {
+	few := func(n int, one, many string) string { return map[bool]string{true: one, false: many}[n == 1] }
+	switch {
+	case only > 0 && undone > 0:
+		return few(only, "One check only ran on the PR build", "A few checks only ran on the PR build") + " and " + few(undone, "one could not be done", "a few could not be done")
+	case only > 0:
+		return few(only, "One check only ran on the PR build", "A few checks only ran on the PR build")
 	}
-	return many
-}
-
-func coverageLine(t tally, main string) string {
-	return fmt.Sprintf("%d completed %s on the PR build; %d %s compared on %s; %d %s with different results.",
-		t.completed, plural(t.completed, "check", "checks"), t.compared, plural(t.compared, "check", "checks"), main,
-		t.differed, plural(t.differed, "check", "checks"))
-}
-
-// splitWorthNotes keeps each marked opinion separate from the check's outcome.
-func splitWorthNotes(note string) (string, []string) {
-	const marker = "worth a look:"
-	at := strings.Index(strings.ToLower(note), marker)
-	if at < 0 {
-		return note, nil
-	}
-	main, rest := strings.TrimSpace(note[:at]), note[at+len(marker):]
-	var notes []string
-	for {
-		at = strings.Index(strings.ToLower(rest), marker)
-		part := rest
-		if at >= 0 {
-			part = rest[:at]
-		}
-		if part = strings.TrimSpace(part); part != "" {
-			notes = append(notes, part)
-		}
-		if at < 0 {
-			return main, notes
-		}
-		rest = rest[at+len(marker):]
-	}
-}
-
-func worthALookRows(run Run, checks []Check) []string {
-	checks = commentChecksAgainstBase(checks)
-	var rows []string
-	for _, c := range checks {
-		_, notes := splitWorthNotes(c.Note)
-		if len(notes) == 0 {
-			continue
-		}
-		receipt := "receipt unavailable"
-		seq := c.Shot
-		if seq == 0 {
-			if receipts := c.legReceipts(); len(receipts) > 0 {
-				seq = receipts[len(receipts)-1].Seq
-			}
-		}
-		if seq > 0 {
-			receipt = fmt.Sprintf("receipt %d", seq)
-		}
-		for _, note := range notes {
-			rows = append(rows, "- "+mdText(strings.ReplaceAll(c.Name, "-", " "), math.MaxInt)+", "+run.sideName(c.onLeg())+", "+receipt+": "+mdText(firstNoteSentence(note), math.MaxInt))
-		}
-	}
-	return rows
-}
-
-func joinNatural(words []string) string {
-	switch len(words) {
-	case 0:
-		return ""
-	case 1:
-		return words[0]
-	case 2:
-		return words[0] + " and " + words[1]
-	default:
-		return strings.Join(words[:len(words)-1], ", ") + ", and " + words[len(words)-1]
-	}
+	return few(undone, "One check could not be done", "A few checks could not be done")
 }
 
 // plainReason says a derive reason in the comment's words; a tester's own reason passes through.
@@ -1445,72 +718,47 @@ func plainReason(r, main string) string {
 		return "I could not reach any check on the PR build."
 	case reasonNoDifference:
 		return "Nothing passed on the PR build that failed on " + main + ", so I never saw the difference."
-	case reasonUntested:
-		return "I did not check the PR's stated behavior."
 	}
-	return mdText(r, math.MaxInt)
+	return mdText(r, 300)
 }
 
 var outcomeWords = map[CheckState]string{CheckPass: "it worked", CheckFail: "it did not work", CheckPartial: "it only partly worked", CheckAbsent: "it is not there"}
 
 // checkPara tells one check the way a teammate would: what was tried, what happened on the PR build, then on main.
 func checkPara(run Run, v Verdict, c Check, n, i int) string {
-	c.Note, _ = splitWorthNotes(c.Note)
-	v.Checks = commentChecksAgainstBase(v.Checks)
-	c = checkAgainstBase(v.Checks, c)
 	notes := make([]string, 0, 2*len(v.Checks)) // every note and expectation: a word capitalised mid-sentence there is a label
 	for _, x := range v.Checks {
 		notes = append(notes, x.Note, x.Expect)
 	}
-	label, main := lowerLead(mdText(strings.TrimRight(sentences(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 160), ".!?"), 400), notes...), run.baseName()
+	label, main := lowerLead(mdText(clause(cmp.Or(c.Expect, strings.ReplaceAll(c.Name, "-", " ")), 160), 400), notes...), run.baseName()
 	if c.unreached() {
-		if c.Attribution == "environment" {
-			return strings.TrimSpace(fmt.Sprintf("Not checked: %s. %s", label, environmentPhrase(c)))
-		}
-		return strings.TrimSpace(fmt.Sprintf("Not checked: %s. %s", label, recase(plainSentence(c.Note, math.MaxInt), true)))
+		return strings.TrimSpace(fmt.Sprintf("I could not check that %s. %s", label, recase(plainSentence(c.Note, n), true)))
 	}
-	if c.onLeg() == "head" && outcomeWords[c.State] == "" && plainSentence(c.Note, math.MaxInt) == "" { // nothing was seen on the PR build
-		return recase(mdText(strings.ReplaceAll(c.Name, "-", " "), math.MaxInt), true) + " could not be run on the PR build."
+	if c.onLeg() == "head" && outcomeWords[c.State] == "" && plainSentence(c.Note, n) == "" { // nothing was seen on the PR build
+		return recase(strings.ReplaceAll(c.Name, "-", " "), true) + " could not be run on the PR build."
 	}
 	say := func(who string, x Check) string {
-		note := plainSentence(x.Note, math.MaxInt)
-		if x.Attribution == "environment" {
-			note = strings.TrimSpace(cmp.Or(note, outcomeWords[x.State]+".") + " " + environmentPhrase(x))
-		}
+		note := plainSentence(x.Note, n)
 		if subjectLed(note, run) {
 			return recase(note, true)
 		}
 		return fmt.Sprintf("On %s, %s", who, cmp.Or(lowerLead(note, notes...), outcomeWords[x.State]+"."))
 	}
-	lead := []string{"I checked that ", "Next I checked that ", "I also checked that "}[i%3]
-	if c.Claim {
-		lead = "- " + string(c.State) + ": "
-	}
-	out := []string{lead + label + "."}
+	out := []string{[]string{"I checked that ", "Next I checked that ", "I also checked that "}[i%3] + label + "."}
 	if c.onLeg() == "head" {
 		if c.State == CheckAbsent {
 			out = append(out, "The PR build does not have this.")
 		}
 		out = append(out, say("the PR build", c))
 	}
-	twin := baseTwin(v.Checks, c)
-	baseEnvironment := twin >= 0 && v.Checks[twin].Attribution == "environment"
-	switch {
+	switch twin := baseTwin(v.Checks, c); {
 	case c.onLeg() == "base":
 		out = append(out, say(main, c))
-	case twin >= 0 && checkPurpose(c) == "claim":
-		line := mainComparison(run, v.Checks, c) + "."
-		if strings.TrimSpace(v.Checks[twin].Note) != "" {
-			base := v.Checks[twin]
-			base.Attribution = "" // mainComparison already includes the environment cause.
-			line += " " + say(main, base)
-		}
-		out = append(out, line)
 	case twin >= 0 && v.Checks[twin].State == CheckSkipped:
-		out = append(out, "I did not repeat this on "+main+".")
-	case twin >= 0 && v.Checks[twin].State == CheckAbsent && !baseEnvironment: // main has no such feature
+		out = append(out, "I did not repeat this on "+main+skipWhy(v.Checks[twin].Note)+".")
+	case twin >= 0 && v.Checks[twin].State == CheckAbsent: // main has no such feature: it is new, not something that failed there
 		line := main + " does not have this" + skipWhy(v.Checks[twin].Note) + "."
-		if c.State != CheckAbsent && c.Attribution != "environment" {
+		if c.State != CheckAbsent {
 			line = "This is new in the PR; " + line
 		} else {
 			line = recase(line, true)
@@ -1525,9 +773,10 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 		out = append(out, "I could not compare it with "+main+".")
 	}
 	switch {
-	case c.onLeg() != "head" || c.Attribution == "environment" || baseEnvironment:
+	case c.onLeg() != "head":
+	case preExisting(v.Checks, c) && c.State == CheckPartial && baseResult(v.Checks, c) == string(CheckPartial): // the main sentence already says what was seen
 	case preExisting(v.Checks, c):
-		out = append(out, "This is pre-existing; the same outcome was recorded on "+main+".")
+		out = append(out, "The same thing happens on "+main+", so the PR did not cause it.")
 	case c.State == CheckPartial && baseResult(v.Checks, c) == string(CheckPartial):
 		out = append(out, "It is also partial on "+main+"; I could not tell whether it is the same fault.")
 	case c.State == CheckFail && baseResult(v.Checks, c) == string(CheckFail):
@@ -1540,7 +789,7 @@ func checkPara(run Run, v Verdict, c Check, n, i int) string {
 
 // skipWhy is ": <why>" for the note on a check the tester did not repeat on the base, or "" when it gave none.
 func skipWhy(note string) string {
-	if why := lowerFirst(mdText(strings.TrimRight(strings.TrimSpace(note), "."), math.MaxInt)); why != "" {
+	if why := lowerFirst(mdText(clause(note, 200), 400)); why != "" {
 		return ": " + why
 	}
 	return ""
@@ -1558,19 +807,23 @@ func lasted(d time.Duration) string {
 	}
 }
 
-func preparedTiming(run Run, now time.Time) string {
-	builds, testing := run.buildsAndTesting(now)
-	testingText := "not recorded"
-	if !run.testingEndedAt(now).IsZero() {
-		testingText = lasted(testing)
-	}
-	return "builds " + lasted(builds) + ", testing " + testingText
-}
-
-// renderComment is the PR comment for a stored verdict, ending in its run marker.
-// Every check stays visible, with full notes in the final collapsed block.
+// renderComment is the PR comment for a stored verdict, ending in the marker that finds it again. It is built from
+// the run, the verdict and the published evidence alone and fits commentCap by squeezing everything before the
+// table notes. The image lines do not count against the cap; a body that still does not fit loses them.
 func renderComment(run Run, v Verdict, ev evidence, now time.Time) string {
-	return commentBody(run, v, ev, now, commentFits[0]) + "\n\n" + commentMarker(run.Repo, run.PRNumber)
+	v = plainVerdict(run, v)
+	marker := commentMarker(run.Repo, run.PRNumber)
+	images := ev.imageChars()
+	for _, f := range commentFits {
+		if body := commentBody(run, v, ev, now, f) + "\n\n" + marker; len(body)-images <= commentCap {
+			return body
+		}
+	}
+	body := commentBody(run, v, evidence{limits: ev.limits}, now, commentFits[len(commentFits)-1]) + "\n\n" + marker
+	if len(body) <= commentCap {
+		return body
+	}
+	return strings.ToValidUTF8(body[:commentCap-len(marker)-6], "") + "...\n\n" + marker
 }
 
 // issuesFor is " (for #6390)", " (for #6390 and #6391)" or " (for #1, #2 and #3)", each number linked to its issue; ""
@@ -1594,21 +847,26 @@ func issuesFor(issues []IssueRef) string {
 }
 
 func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) string {
-	allChecks := v.Checks
-	v.Checks = commentChecksAgainstBase(v.Checks)
-	fullNotes := fullCheckNotes(run, v)
 	var blocks []string // paragraphs, joined by a blank line
 	add := func(format string, a ...any) { blocks = append(blocks, fmt.Sprintf(format, a...)) }
 	main, n := run.baseName(), max(f.notes, f.note)
-	worth, tally := worthALookRows(run, v.Checks), count(v.Checks)
-	var themes []string
+	var worth, themes []string
 	v.Checks = slices.Clone(v.Checks)
 	for i, c := range v.Checks {
-		v.Checks[i].Note, _ = splitWorthNotes(c.Note)
+		if at := strings.Index(strings.ToLower(c.Note), "worth a look:"); at >= 0 {
+			worth = append(worth, checkLabel(c)+": "+plainSentence(c.Note[at+len("worth a look:"):], n))
+			v.Checks[i].Note = strings.TrimSpace(c.Note[:at])
+		}
 		for _, r := range c.Receipts {
 			if r.ThemeNote != "" {
 				themes = append(themes, checkLabel(c)+", "+run.sideName(r.onLeg())+": "+mdText(r.ThemeNote, n))
 			}
+		}
+	}
+	var rows []Check
+	for _, c := range v.Checks {
+		if _, _, beside := compareCells(v.Checks, c); !beside {
+			rows = append(rows, c)
 		}
 	}
 	both := slices.ContainsFunc(v.Checks, func(c Check) bool {
@@ -1620,49 +878,47 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	if started {
 		took := "(" + lasted(now.Sub(run.CreatedAt)) + ")" // a run that never finished preparing has no testing time to split out
 		if run.prepared() {
-			took = "(" + preparedTiming(run, now) + ")"
+			builds, testing := run.buildsAndTesting(now)
+			took = "(builds " + lasted(builds) + ", testing " + lasted(testing) + ")"
 		}
 		add("Litmus tried #%d%s on the PR build%s %s.", run.PRNumber, issuesFor(run.Issues), map[bool]string{true: " and on " + main + run.atBranchPoint()}[both], took)
 	} else { // nothing was built: say so, not "tried on the PR build"
 		why := ""
 		if blocked && len(v.Reasons) > 0 {
-			why = " (" + lowerFirst(mdText(v.Reasons[0], math.MaxInt)) + ")"
+			why = " (" + lowerFirst(mdText(clause(v.Reasons[0], 120), 200)) + ")"
 		}
 		add("Litmus could not start on #%d%s%s. %s", run.PRNumber, issuesFor(run.Issues), why, run.builtLine())
 	}
-	add("**Result: %s.**", commentResultLine(v.Overall, tally, main))
-	if lines := replacementLines(allChecks); len(lines) > 0 {
-		add("Replacements:\n\n%s", strings.Join(lines, "\n"))
-	}
-	if summary := testerSummary(v.Summary); summary != "" {
-		add("%s", summary)
-	}
-	if line := originalProblemLine(run, v.Checks); line != "" {
-		add("%s", line)
-	}
-	if !blocked {
-		add("%s", coverageLine(tally, main))
-	}
-	if len(worth) > 0 {
-		add("Worth a look:\n\n%s", strings.Join(worth, "\n"))
-	}
-	if v.OwnerLoginWarning != "" {
-		add("%s", mdText(v.OwnerLoginWarning, math.MaxInt))
-	}
-	if why := lowerFirst(mdText(strings.TrimRight(v.SkipBase, "."), math.MaxInt)); why != "" && !blocked {
+	add("**Result: %s.**", verdictLine(v.Overall, count(v.Checks), main))
+	if why := lowerFirst(mdText(clause(v.SkipBase, 200), 400)); why != "" && !blocked {
 		switch compared, notRun := baseCoverage(v.Checks); { // each paragraph below says why; this says how much
 		case len(compared) == 0:
 			add("I did not run %s: %s.", main, why)
 		case len(notRun) > 0:
 			labels := make([]string, len(notRun))
 			for i, c := range notRun {
-				labels[i] = mdText(strings.ReplaceAll(c.Name, "-", " "), math.MaxInt)
+				labels[i] = strings.ReplaceAll(c.Name, "-", " ")
 			}
 			add("I compared %d %s on %s; %d %s not run there: %s.", len(compared), map[bool]string{true: "check", false: "checks"}[len(compared) == 1], main, len(notRun), map[bool]string{true: "was", false: "were"}[len(notRun) == 1], strings.Join(labels, ", "))
 		}
 	}
-	if lists := compactChecks(run, v); lists != "" {
-		add("%s", lists)
+	if blocked {
+		rows = nil
+	}
+	if len(rows) > 4 { // a handful of checks read better as paragraphs; a long list also gets a table to scan
+		table := make([]string, 0, 2+len(rows))
+		table = append(table, "| what was checked | PR build | "+main+" | note |", "|---|---|---|---|")
+		for _, c := range rows {
+			head, base, _ := compareCells(v.Checks, c)
+			table = append(table, fmt.Sprintf("| %s | %s | %s | %s |", checkLabel(c), cellWord(head), cellWord(base), plainCell(c.Note, f.note)))
+		}
+		add("%s", strings.Join(table, "\n"))
+	}
+	for i, c := range rows {
+		add("%s", checkPara(run, v, c, n, i))
+	}
+	if len(worth) > 0 {
+		add("Worth a look: %s", strings.Join(worth, " "))
 	}
 	if len(themes) > 0 {
 		add("%s", strings.Join(themes, "\n"))
@@ -1686,17 +942,15 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 	}
 	var gaps, limits []string
 	for _, g := range run.Gaps { // what intake could not get, as the pack and verdict.md say it: in full at every fit, the other limits give way
-		if text := strings.TrimSpace(g); text != "" {
-			gaps = append(gaps, mdText(text, math.MaxInt))
-		}
+		gaps = append(gaps, mdText(g, math.MaxInt))
 	}
 	limits = append(limits, ev.limits...)
 	for i, r := range v.Reasons { // a reason that opens with a check's id and name is that check's note, already told above
 		switch {
-		case blocked && !started && i == 0: // the first line carries all of it
+		case blocked && !started && i == 0 && clause(r, 120) == strings.TrimRight(strings.Join(strings.Fields(r), " "), " .,;:"): // the first line carries all of it
 		case blocked:
-			limits = append(limits, "I could not run the checks. "+recase(plainSentence(r, math.MaxInt), true))
-		case r == reasonNoneReached && len(tally.skippedClaims) > 0: // every check was skipped: the result line says so
+			limits = append(limits, "I could not run the checks. "+recase(plainSentence(r, 300), true))
+		case r == reasonNoneReached && count(v.Checks).unreached > 0: // every check was skipped: the result line says so
 		case !slices.ContainsFunc(v.Checks, func(c Check) bool { return strings.HasPrefix(r, c.ID+" "+c.Name+": ") }):
 			limits = append(limits, plainReason(r, main))
 		}
@@ -1707,13 +961,10 @@ func commentBody(run Run, v Verdict, ev evidence, now time.Time, f commentFit) s
 			limits = append(limits[:i], fmt.Sprintf("And %d more.", len(limits)-i))
 			break
 		}
-		limits[i] = l
+		limits[i] = clip(l, f.limit)
 	}
 	if limits = append(gaps, limits...); len(limits) > 0 {
 		add("%s", strings.Join(limits, "\n"))
-	}
-	if fullNotes != "" {
-		add("%s", fullNotes)
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -1799,9 +1050,17 @@ func areaLine(areas []Area, checks []Check) string {
 	return out + strings.Join(left, ", ") + "."
 }
 
-// plainCell escapes tester prose and shortens only at a sentence boundary.
+// singular drops the plural s of a name's last word: components is component, but status stays.
+func singular(s string) string {
+	if strings.HasSuffix(s, "s") && !strings.HasSuffix(s, "ss") && !strings.HasSuffix(s, "us") && !strings.HasSuffix(s, "is") {
+		return s[:len(s)-1]
+	}
+	return s
+}
+
+// plainCell is a tester's note without its "Base:" prefix, clipped and made safe: the table's note column.
 func plainCell(note string, n int) string {
-	return mdText(strings.TrimSpace(note), n)
+	return mdText(legPrefix.ReplaceAllString(strings.TrimSpace(note), ""), n)
 }
 
 // postComment writes comment.md (the exact body) and, when the run asked for it and is not blocked, publishes the
@@ -1829,38 +1088,13 @@ func (s *Service) writeComment(run Run, v Verdict, ev evidence) (string, error) 
 // ask-before-posting runs. A later post reads these files back, so edits made
 // while approval is pending survive evidence publication.
 func (s *Service) draftComments(run Run, v Verdict) ([]commentDoc, error) {
-	docs, err := s.renderCommentDrafts(run, v, s.clock())
-	if err != nil {
-		return nil, err
-	}
-	dir := filepath.Join(s.store.root, run.ID, "comments")
-	for i := range docs {
-		if docs[i].Number == 0 {
-			docs[i].Number = i + 1
-		}
-		if err := writeAtomic(filepath.Join(dir, strconv.Itoa(i+1)+".md"), []byte(docs[i].Body)); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.writeCommentManifest(run, docs); err != nil {
-		return nil, err
-	}
-	if len(docs) > 0 {
-		if err := s.store.WriteFile(run.ID, "comment.md", []byte(docs[0].Body)); err != nil {
-			return nil, err
-		}
-	}
-	return docs, nil
-}
-
-func (s *Service) renderCommentDrafts(run Run, v Verdict, now time.Time) ([]commentDoc, error) {
 	dir := filepath.Join(s.store.root, run.ID, "comments")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 	plain := plainVerdict(run, v)
 	bugs := failingBugComments(plain.Checks)
-	numberBugComments(bugs)
+	s.numberBugComments(run, bugs)
 	history := s.previousComments(run)
 	markerName := ""
 	for _, old := range history {
@@ -1883,9 +1117,9 @@ func (s *Service) renderCommentDrafts(run Run, v Verdict, now time.Time) ([]comm
 	docs := make([]commentDoc, 0, max(len(bugs), 1))
 	if len(bugs) == 0 {
 		marker := isMarker("summary", 0)
-		body := summaryCommentBody(run, plain, now, marker)
+		body := summaryCommentBody(run, plain, s.clock(), marker)
 		if plain.Overall == CheckBlocked || plain.Overall == CheckFail {
-			body = renderComment(run, plain, evidence{}, now)
+			body = renderComment(run, plain, evidence{}, s.clock())
 			body = strings.ReplaceAll(body, commentMarker(run.Repo, run.PRNumber), litmusCommentMarker())
 			if !marker {
 				body = strings.ReplaceAll(body, litmusCommentMarker(), "")
@@ -1897,7 +1131,7 @@ func (s *Service) renderCommentDrafts(run Run, v Verdict, now time.Time) ([]comm
 			bugs[i].ImageFile = fmt.Sprintf("bug-%d.png", bugs[i].Number)
 			imagePath := filepath.Join(dir, bugs[i].ImageFile)
 			image := ""
-			if err := makeBugImage(bugs[i], v.Checks, imagePath); err != nil {
+			if err := makeBugImage(bugs[i], plain.Checks, imagePath); err != nil {
 				s.commentLogf(run, "comment image %s: %v", bugs[i].Check.Name, err)
 			} else {
 				image = bugs[i].ImageFile
@@ -1907,7 +1141,7 @@ func (s *Service) renderCommentDrafts(run Run, v Verdict, now time.Time) ([]comm
 			if p := checkClipPath(filepath.Join(s.store.root, run.ID), bugs[i].Check.ID); fileExists(p) {
 				clip = filepath.ToSlash(filepath.Join("..", "clips", filepath.Base(p)))
 			}
-			docs = append(docs, commentDoc{Name: bugs[i].Check.Name, Number: bugs[i].Number, Marker: marker, ImageFile: image, ClipFile: clip, Body: bugCommentBody(run, v, bugs[i], image, clip, marker, i == 0)})
+			docs = append(docs, commentDoc{Name: bugs[i].Check.Name, Number: bugs[i].Number, Marker: marker, ImageFile: image, ClipFile: clip, Body: bugCommentBody(run, plain, bugs[i], image, clip, marker)})
 		}
 	}
 	current := make(map[string]bool, len(bugs))
@@ -1927,12 +1161,20 @@ func (s *Service) renderCommentDrafts(run Run, v Verdict, now time.Time) ([]comm
 		marker := isMarker(name, len(docs))
 		docs = append(docs, commentDoc{Name: name, Number: old.Number, Fixed: true, CommentID: old.ID, Marker: marker, Body: fixedCommentBody(run.HeadSHA, marker)})
 	}
-	if warning := mdText(v.OwnerLoginWarning, math.MaxInt); len(docs) > 0 && warning != "" && !strings.Contains(docs[0].Body, warning) {
-		docs[0].Body += "\n\n" + warning + "\n"
-	}
 	for i := range docs {
 		if docs[i].Number == 0 {
 			docs[i].Number = i + 1
+		}
+		if err := writeAtomic(filepath.Join(dir, strconv.Itoa(i+1)+".md"), []byte(docs[i].Body)); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.writeCommentManifest(run, docs); err != nil {
+		return nil, err
+	}
+	if len(docs) > 0 {
+		if err := s.store.WriteFile(run.ID, "comment.md", []byte(docs[0].Body)); err != nil {
+			return nil, err
 		}
 	}
 	return docs, nil
@@ -2047,7 +1289,7 @@ func (s *Service) commentDrafts(run Run, v Verdict, ev evidence, fallback string
 	}
 	plain := plainVerdict(run, v)
 	bugs := failingBugComments(plain.Checks)
-	numberBugComments(bugs)
+	s.numberBugComments(run, bugs)
 	history := s.previousComments(run)
 	markerName := ""
 	for _, old := range history {
@@ -2080,7 +1322,7 @@ func (s *Service) commentDrafts(run Run, v Verdict, ev evidence, fallback string
 				if fileExists(clipPath) {
 					clip = filepath.ToSlash(filepath.Join("..", "clips", filepath.Base(clipPath)))
 				}
-				docs = append(docs, commentDoc{Name: bug.Check.Name, Number: bug.Number, Body: bugCommentBody(run, v, bug, image, clip, marker, i == 0)})
+				docs = append(docs, commentDoc{Name: bug.Check.Name, Number: bug.Number, Body: bugCommentBody(run, plain, bug, image, clip, marker)})
 			}
 		}
 	}
@@ -2088,9 +1330,6 @@ func (s *Service) commentDrafts(run Run, v Verdict, ev evidence, fallback string
 		if !docs[i].Fixed && i < len(bugs) {
 			docs[i].Name = bugs[i].Check.Name
 			imageFile := fmt.Sprintf("bug-%d.png", bugs[i].Number)
-			oldImageFile := fmt.Sprintf("bug-%d.png", docs[i].Number)
-			docs[i].Body = bugCommentHeading.ReplaceAllString(docs[i].Body, fmt.Sprintf("Bug %d of %d:", bugs[i].Number, bugs[i].Total))
-			docs[i].Body = strings.ReplaceAll(docs[i].Body, "("+oldImageFile+")", "("+imageFile+")")
 			// Keep the generated target even when the local file was removed, so a
 			// failed evidence publish cannot leak a broken path into GitHub.
 			docs[i].ImageFile = imageFile
@@ -2116,9 +1355,8 @@ func (s *Service) commentDrafts(run Run, v Verdict, ev evidence, fallback string
 		if docs[i].ImageFile != "" {
 			if url := ev.bugImages[docs[i].Name]; url != "" {
 				docs[i].Body = strings.ReplaceAll(docs[i].Body, "("+docs[i].ImageFile+")", "("+url+")")
-			} else if strings.Contains(docs[i].Body, "]("+docs[i].ImageFile+")") {
-				imageLink := regexp.MustCompile(`!\[[^\]]*\]\(` + regexp.QuoteMeta(docs[i].ImageFile) + `\)\n*`)
-				docs[i].Body = imageLink.ReplaceAllString(docs[i].Body, "")
+			} else if strings.Contains(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")") {
+				docs[i].Body = strings.ReplaceAll(docs[i].Body, "![The base build on the left and the PR build on the right]("+docs[i].ImageFile+")\n\n", "")
 				docs[i].Body = strings.TrimSpace(docs[i].Body) + "\n\nThe comparison image was not available in the published evidence."
 			}
 		}
@@ -2210,9 +1448,6 @@ func (s *Service) publishCommentSet(ctx context.Context, run Run, v Verdict, ev 
 	}
 	if len(docs) == 0 {
 		return "", "", errors.New("no comment drafts found")
-	}
-	if err := s.store.put(run.ID, commentMediaFile, commentMedia{BugImages: ev.bugImages, CheckClips: ev.checkClips}); err != nil {
-		return "", "", fmt.Errorf("save published comment media: %w", err)
 	}
 	if err := s.store.WriteFile(run.ID, "comment.md", []byte(docs[0].Body)); err != nil {
 		return "", "", err
@@ -2346,7 +1581,7 @@ func (s *Service) commentFailed(run Run, err error) string {
 	slog.Warn("litmus: PR comment failed", "run", run.ID, "error", err)
 	s.commentLog(run, err)
 	reason, _, _ := strings.Cut(err.Error(), "\n")
-	return "failed:" + sentences(strings.TrimSpace(reason), 120)
+	return "failed:" + clip(strings.TrimSpace(reason), 120)
 }
 
 func (s *Service) commentLog(run Run, err error) { s.commentLogf(run, "%v", err) }

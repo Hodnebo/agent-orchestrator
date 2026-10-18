@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -431,44 +430,6 @@ func TestGetLaunchCommandAppendsConfiguredModel(t *testing.T) {
 	}
 	if containsSubsequence(cmd, []string{"--model", "  gpt-5.4-mini  "}) {
 		t.Fatalf("command %#v used untrimmed model", cmd)
-	}
-}
-
-func TestTestingSessionUsesDefaultServiceTier(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "codex"}
-	dataDir := t.TempDir()
-	for _, tc := range []struct {
-		name          string
-		workspacePath string
-		wantOverride  bool
-	}{
-		{name: "tester", workspacePath: litmus.RunDir(dataDir, "session-123"), wantOverride: true},
-		{name: "normal", workspacePath: filepath.Join(dataDir, "worktrees", "session-123")},
-		{name: "other data dir", workspacePath: litmus.RunDir(t.TempDir(), "session-123")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			launch, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
-				DataDir: dataDir, WorkspacePath: tc.workspacePath,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			restore, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
-				DataDir: dataDir,
-				Session: ports.SessionRef{
-					WorkspacePath: tc.workspacePath,
-					Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
-				},
-			})
-			if err != nil || !ok {
-				t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
-			}
-			for name, cmd := range map[string][]string{"launch": launch, "restore": restore} {
-				if got := containsSubsequence(cmd, []string{"-c", `service_tier="default"`}); got != tc.wantOverride {
-					t.Fatalf("%s command %#v: service tier override = %v, want %v", name, cmd, got, tc.wantOverride)
-				}
-			}
-		})
 	}
 }
 

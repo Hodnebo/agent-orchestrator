@@ -24,37 +24,21 @@ import (
 
 // fakeSys records every process action in order; started maps live pids to start times.
 type fakeSys struct {
-	log      []string
-	started  map[int]time.Time
-	cmds     map[int]string
-	procsErr error
-	busy     int // port polls that still report busy
-	groups   map[int][]int
+	log     []string
+	started map[int]time.Time
+	cmds    map[int]string
+	busy    int // port polls that still report busy
 }
 
 func (f *fakeSys) ops() sysOps {
 	rec := func(verb string) func(int) {
-		return func(pid int) {
-			f.log = append(f.log, fmt.Sprint(verb, " ", pid))
-			if verb == "kill" || verb == "killGroup" {
-				delete(f.started, pid)
-				delete(f.cmds, pid)
-			}
-			if verb == "killGroup" {
-				for _, child := range f.groups[pid] {
-					delete(f.started, child)
-					delete(f.cmds, child)
-				}
-			}
-		}
+		return func(pid int) { f.log = append(f.log, fmt.Sprint(verb, " ", pid)) }
 	}
 	return sysOps{
 		startTime: func(pid int) (time.Time, bool) { t, ok := f.started[pid]; return t, ok },
-		procs:     func() (map[int]string, error) { return f.cmds, f.procsErr },
-		groupPIDs: func(pgid int) ([]int, error) { return f.groups[pgid], nil },
+		procs:     func() map[int]string { return f.cmds },
 		killGroup: rec("killGroup"), kill: rec("kill"), rmBrowser: rec("rm"),
-		portBusy:  func(int) (bool, error) { f.busy--; return f.busy >= 0, nil },
-		freePorts: freePorts,
+		portBusy: func(int) bool { f.busy--; return f.busy >= 0 },
 	}
 }
 
@@ -79,35 +63,12 @@ func TestLegEnvIsolatesTheTarget(t *testing.T) {
 	if got := envValue(legEnv(Recipe{}, "run_s1", 0, "base", "/run/base", "/clone", "", 1, 2), "AO_RUN_FILE"); got != "" {
 		t.Errorf("a recipe without isolation got AO_RUN_FILE=%q", got)
 	}
-	ownerHome := t.TempDir()
-	t.Setenv("HOME", ownerHome)
-	legDir := filepath.Join(t.TempDir(), "head")
-	prepared, err := prepareLegEnv(env, legDir, ownerHome)
-	if err != nil {
-		t.Fatal(err)
+	if got := envValue(env, "HOME"); got != os.Getenv("HOME") {
+		t.Errorf("HOME changed to %q", got)
 	}
-	if got := envValue(prepared, "HOME"); got != filepath.Join(legDir, "home") {
-		t.Errorf("HOME = %q, want leg home", got)
-	}
-}
-
-func TestFreePortsAreDistinct(t *testing.T) {
 	ports, err := freePorts(2)
 	if err != nil || len(ports) != 2 || ports[0] == ports[1] || ports[0] == 0 || ports[1] == 0 {
 		t.Fatalf("ports %v err %v", ports, err)
-	}
-}
-
-func TestLegEnvIsolatesDevAPIProxy(t *testing.T) {
-	t.Setenv("AO_DEV_API_TARGET", "http://127.0.0.1:3001")
-	env := legEnv(Recipe{Isolation: true}, "run_s1", 0, "head", "/run/head", "/clone", "", 3200, 9400)
-	if got, want := envValue(env, "AO_DEV_API_TARGET"), "http://127.0.0.1:3200"; got != want {
-		t.Errorf("AO_DEV_API_TARGET = %q, want %q", got, want)
-	}
-	for _, kv := range env {
-		if strings.Contains(kv, ":3001") {
-			t.Errorf("isolated environment contains the owner's daemon port: %q", kv)
-		}
 	}
 }
 
@@ -138,7 +99,7 @@ func TestReadinessStages(t *testing.T) {
 		{func() { daemonUp.Store(true) }, "debug port /json/version"},
 		{func() { debugUp.Store(true) }, "0 page targets"},
 		{func() { list.Store(`[{"type":"page"},{"type":"page"}]`) }, "2 page targets"},
-		{func() { list.Store(`[{"type":"background_page"},{"type":"page","url":"http://litmus.test/"}]`) }, ""},
+		{func() { list.Store(`[{"type":"background_page"},{"type":"page"}]`) }, ""},
 	} {
 		step.set()
 		if err := rc.check(ctx); (step.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), step.want)) {
@@ -150,59 +111,17 @@ func TestReadinessStages(t *testing.T) {
 	pollEvery = 5 * time.Millisecond
 	daemonUp.Store(false)
 	time.AfterFunc(40*time.Millisecond, func() { daemonUp.Store(true) })
-	if _, err := waitReady(ctx, rc, 5*time.Second, nil); err != nil {
+	if err := waitReady(ctx, rc, 5*time.Second, nil); err != nil {
 		t.Fatalf("never became ready: %v", err)
 	}
 	daemonUp.Store(false)
-	if _, err := waitReady(ctx, rc, 50*time.Millisecond, nil); err == nil || !strings.Contains(err.Error(), "not ready after") || !strings.Contains(err.Error(), "daemon /readyz") {
+	if err := waitReady(ctx, rc, 50*time.Millisecond, nil); err == nil || !strings.Contains(err.Error(), "not ready after") || !strings.Contains(err.Error(), "daemon /readyz") {
 		t.Fatalf("timeout err = %v", err)
 	}
 	exited := make(chan struct{})
 	close(exited)
-	if _, err := waitReady(ctx, rc, 5*time.Second, exited); err == nil || !strings.Contains(err.Error(), "exited") {
+	if err := waitReady(ctx, rc, 5*time.Second, exited); err == nil || !strings.Contains(err.Error(), "exited") {
 		t.Fatalf("exit err = %v", err)
-	}
-}
-
-type readyURLTransport struct {
-	urls  []string
-	lists int
-}
-
-func (f *readyURLTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	body := ""
-	if req.URL.Path == "/json/list" {
-		body = fmt.Sprintf(`[{"type":"page","url":%q}]`, f.urls[min(f.lists, len(f.urls)-1)])
-		f.lists++
-	}
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
-}
-
-func TestReadinessWaitsForAppURL(t *testing.T) {
-	oldClient, oldPoll := httpClient, pollEvery
-	pollEvery = time.Millisecond
-	t.Cleanup(func() { httpClient, pollEvery = oldClient, oldPoll })
-	for _, blank := range []string{"", "about:blank"} {
-		t.Run(blank, func(t *testing.T) {
-			transport := &readyURLTransport{urls: []string{blank, blank, "http://litmus.test/"}}
-			httpClient = &http.Client{Transport: transport}
-			rc := readyCheck{daemon: "http://ready.test", debug: "http://ready.test", ready: Ready{PageTargets: 1}}
-			got, err := waitReady(ctx, rc, time.Second, nil)
-			if err != nil || got != "http://litmus.test/" || transport.lists < 4 {
-				t.Fatalf("ready URL = %q, %v after %d lists", got, err, transport.lists)
-			}
-		})
-	}
-}
-
-func TestReadinessBlankURLRespectsLaunchLimit(t *testing.T) {
-	oldClient, oldPoll := httpClient, pollEvery
-	pollEvery = time.Millisecond
-	httpClient = &http.Client{Transport: &readyURLTransport{urls: []string{"about:blank"}}}
-	t.Cleanup(func() { httpClient, pollEvery = oldClient, oldPoll })
-	rc := readyCheck{daemon: "http://ready.test", debug: "http://ready.test", ready: Ready{PageTargets: 1}}
-	if got, err := waitReady(ctx, rc, 20*time.Millisecond, nil); got != "" || err == nil || !strings.Contains(err.Error(), "not ready after") || !strings.Contains(err.Error(), "about:blank") {
-		t.Fatalf("blank URL did not time out: %q, %v", got, err)
 	}
 }
 
@@ -232,12 +151,8 @@ func TestSeedStepsRunInOrderAndRetryWaitFor(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	gap, ok := seedGapOf(ctx, nil, "head", err)
-	if !ok || gap != "The PR build started without its sample content (seed step 1 failed)." {
+	if !ok || !strings.HasPrefix(gap, "The PR build started without its sample content (seed step 1 failed: BRANCH_CHECKED_OUT_ELSEWHERE: ao/litmus-head-1/root xxx") || !strings.HasSuffix(gap, "...).") || strings.Contains(gap, "\n") {
 		t.Fatalf("gap %q ok %t", gap, ok)
-	}
-	log, logErr := os.ReadFile(filepath.Join(legDir, "logs", "seed.log"))
-	if logErr != nil || !strings.Contains(string(log), "BRANCH_CHECKED_OUT_ELSEWHERE") || !strings.Contains(string(log), os.ErrPermission.Error()) {
-		t.Fatalf("seed diagnostic missing from private log: %s, %v", log, logErr)
 	}
 	if _, ok := seedGapOf(ctx, nil, "head", errors.New("target not ready")); ok {
 		t.Fatal("a failure that is not a seed step became a gap")
@@ -287,7 +202,7 @@ func TestSeedGapsNameBothBuildsAndScrubPaths(t *testing.T) {
 		t.Fatalf("builds were not named separately: %q", run.Gaps)
 	}
 	comment := renderComment(run, commentVerdict(commentChecks(t)), evidence{}, run.CreatedAt.Add(time.Minute))
-	if strings.Contains(comment, home) || strings.Contains(strings.Join(run.Gaps, "\n"), home) || strings.Contains(comment, "could not open") || !strings.Contains(comment, "seed step 2 failed") {
+	if strings.Contains(comment, home) || strings.Contains(strings.Join(run.Gaps, "\n"), home) || !strings.Contains(comment, "could not open ~/.ao/") {
 		t.Fatalf("seed path was not scrubbed in gaps or comment: %q\n%s", run.Gaps, comment)
 	}
 }
@@ -295,7 +210,7 @@ func TestSeedGapsNameBothBuildsAndScrubPaths(t *testing.T) {
 type seedReadyTransport struct{}
 
 func (seedReadyTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[{"type":"page","url":"http://litmus.test/"}]`)), Header: http.Header{}}, nil
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[{"type":"page"}]`)), Header: http.Header{}}, nil
 }
 
 func TestLaunchScrubsSeedGapsAndKeepsBothBuilds(t *testing.T) {
@@ -306,7 +221,7 @@ func TestLaunchScrubsSeedGapsAndKeepsBothBuilds(t *testing.T) {
 	oldClient := httpClient
 	httpClient = &http.Client{Transport: seedReadyTransport{}}
 	t.Cleanup(func() { httpClient = oldClient })
-	svc := newTestService(t, NewStore(t.TempDir()), nil)
+	svc := New(NewStore(t.TempDir()), nil)
 	sys := (&fakeSys{}).ops()
 	sys.killGroup = sigkillGroup
 	svc.sys = sys
@@ -334,28 +249,18 @@ func TestLaunchScrubsSeedGapsAndKeepsBothBuilds(t *testing.T) {
 		run.Legs = append(run.Legs, Leg{Name: name, State: "prepared", Worktree: root})
 	}
 	is(t, "")(nil, svc.store.Save(run))
-	is(t, "")(nil, svc.store.SaveChecks(run.ID, []Check{{ID: "c1", Purpose: "risk", Risk: "git credentials"}, {ID: "c2", Purpose: "risk", Risk: "old transcripts"}}))
+	is(t, "")(nil, svc.store.SaveChecks(run.ID, []Check{{ID: "c1"}, {ID: "c2"}}))
 	t.Cleanup(func() {
 		for _, e := range svc.engines {
 			e.Close(sys)
 		}
 		for _, name := range []string{"head", "base"} {
-			is(t, "")(nil, cleanLeg(ctx, sys, svc.store.legDir(run.ID, name)))
+			is(t, "")(nil, cleanLeg(ctx, sys, svc.store.legDir(run.ID, name), false))
 		}
 	})
 	for _, name := range []string{"head", "base"} {
 		run, err = svc.Launch(ctx, "s1", name)
 		is(t, "")(nil, err)
-		var engine *EngineInfo
-		for _, launched := range run.Legs {
-			if launched.Name == name {
-				engine = launched.Engine
-				break
-			}
-		}
-		if engine == nil || engine.AppOrigin != "http://litmus.test" {
-			t.Fatalf("%s app origin = %+v, want readiness origin", name, engine)
-		}
 	}
 	var seedGaps []string
 	for _, gap := range run.Gaps {
@@ -367,13 +272,13 @@ func TestLaunchScrubsSeedGapsAndKeepsBothBuilds(t *testing.T) {
 		t.Fatalf("identical seed failures merged across builds: %q", seedGaps)
 	}
 	for i, build := range []string{"PR", "main"} {
-		want := "The " + build + " build started without its sample content (seed step 1 failed)."
+		want := "The " + build + " build started without its sample content (seed step 1 failed: could not open ~/.ao/litmus/runs/run_private/head/data)."
 		if seedGaps[i] != want {
 			t.Errorf("gap %q, want %q", seedGaps[i], want)
 		}
 	}
 	comment := renderComment(run, commentVerdict(commentChecks(t)), evidence{}, time.Now())
-	if strings.Contains(comment, home) || strings.Contains(strings.Join(run.Gaps, "\n"), home) || strings.Contains(comment, "could not open") || !strings.Contains(comment, "seed step 1 failed") {
+	if strings.Contains(comment, home) || strings.Contains(strings.Join(run.Gaps, "\n"), home) || !strings.Contains(comment, "could not open ~/.ao/") {
 		t.Fatalf("seed path was not scrubbed in gaps or comment: %q\n%s", run.Gaps, comment)
 	}
 }
@@ -407,20 +312,15 @@ func TestCleanLegOrderAndStartTimeGuard(t *testing.T) {
 	run := func(dir string, f *fakeSys) string {
 		t.Helper()
 		f.log = nil
-		is(t, "")(nil, cleanLeg(ctx, f.ops(), dir))
+		is(t, "")(nil, cleanLeg(ctx, f.ops(), dir, true))
 		return strings.Join(f.log, "|")
 	}
 
 	// pid 300 was recycled by another process, so only 100, 200 and what the command lines name die, in that order.
-	dir, f := newLeg(map[int]time.Time{100: t0, 200: t0, 300: t0.Add(time.Hour)}, map[int]string{500: "/usr/bin/other", 600: "tmux -L litmus-run_s1-head", 601: "tmux -L litmus-run_s10-head", 602: "tmux -L litmus-host", 603: "tmux", 604: "tmux -Llitmus-run_s1-head"}, 2) // ports busy for two polls
+	dir, f := newLeg(map[int]time.Time{100: t0, 200: t0, 300: t0.Add(time.Hour)}, map[int]string{500: "/usr/bin/other", 600: "tmux -L litmus-run_s1-head"}, 2) // ports busy for two polls
 	f.cmds[400] = "/x/Electron --user-data-dir=" + dir + "/electron"
 	if got, want := run(dir, f), "killGroup 100|kill 200|rm 200|kill 400|rm 400|kill 600|rm 600"; got != want {
 		t.Fatalf("kills = %s, want %s", got, want)
-	}
-	for pid, want := range map[int]string{601: "tmux -L litmus-run_s10-head", 602: "tmux -L litmus-host", 603: "tmux", 604: "tmux -Llitmus-run_s1-head"} {
-		if got := f.cmds[pid]; got != want {
-			t.Fatalf("pid %d command = %q, want %q", pid, got, want)
-		}
 	}
 	for sub, want := range map[string]bool{"electron": false, "data": false, "logs": true, "owned.json": true} {
 		if _, err := os.Stat(filepath.Join(dir, sub)); (err == nil) != want {
@@ -435,15 +335,15 @@ func TestCleanLegOrderAndStartTimeGuard(t *testing.T) {
 	if got := run(dir, f); got != "kill 200|rm 200" {
 		t.Fatalf("recycled leader: %s", got)
 	}
-	dir, f = newLeg(nil, nil, 0) // everything already dead: an empty leaderless group needs no signal
-	if got := run(dir, f); got != "rm 200|rm 300" {
+	dir, f = newLeg(nil, nil, 0) // everything already dead: a leaderless group may still hold children
+	if got := run(dir, f); got != "killGroup 100|rm 200|rm 300" {
 		t.Fatalf("dead target: %s", got)
 	}
 
 	defer func(d time.Duration) { portWait = d }(portWait)
 	portWait = 100 * time.Millisecond
 	dir, f = newLeg(nil, nil, 1000) // something still listens: keep the state so cleanup can be retried
-	if err := cleanLeg(ctx, f.ops(), dir); err == nil || !strings.Contains(err.Error(), "still in use") {
+	if err := cleanLeg(ctx, f.ops(), dir, true); err == nil || !strings.Contains(err.Error(), "still in use") {
 		t.Fatalf("err = %v", err)
 	}
 	if o, _ := readOwned(dir); o.State != "running" {
@@ -451,74 +351,10 @@ func TestCleanLegOrderAndStartTimeGuard(t *testing.T) {
 	}
 }
 
-func TestCleanLegRequiresPrivateTmuxDeath(t *testing.T) {
-	for _, appearsLate := range []bool{false, true} {
-		t.Run(fmt.Sprint(appearsLate), func(t *testing.T) {
-			dir := t.TempDir()
-			is(t, "")(nil, os.Mkdir(filepath.Join(dir, "data"), 0o700))
-			is(t, "")(nil, writeOwned(dir, Owned{RunID: "run_s1", Leg: "head", State: "running"}))
-			f := &fakeSys{cmds: map[int]string{600: "tmux -L litmus-run_s1-head"}}
-			sys := f.ops()
-			probes, kills := 0, 0
-			sys.procs = func() (map[int]string, error) {
-				probes++
-				if appearsLate && probes == 1 {
-					return nil, nil
-				}
-				return f.cmds, nil
-			}
-			sys.kill = func(pid int) {
-				if pid != 600 {
-					t.Fatalf("killed unrelated pid %d", pid)
-				}
-				kills++
-			}
-			canceled, cancel := context.WithCancel(ctx)
-			cancel()
-			err := cleanLeg(canceled, sys, dir)
-			if err == nil || !strings.Contains(err.Error(), "pids [600] alive") || probes != 2 || (!appearsLate && kills != 1) || (appearsLate && kills != 0) {
-				t.Fatalf("private tmux death was not required: error=%v probes=%d kills=%d", err, probes, kills)
-			}
-			if o, err := readOwned(dir); err != nil || o.State != "running" {
-				t.Fatalf("ownership changed before tmux death: %+v, %v", o, err)
-			}
-			if _, err := os.Stat(filepath.Join(dir, "data")); err != nil {
-				t.Fatalf("data removed before tmux death: %v", err)
-			}
-		})
-	}
-}
-
-func TestCleanLegProcessEnumerationFailureKeepsTargetState(t *testing.T) {
-	t0 := time.Date(2026, 10, 11, 8, 0, 0, 0, time.UTC)
-	dir := t.TempDir()
-	for _, sub := range []string{"electron", "data", "logs"} {
-		is(t, "")(nil, os.MkdirAll(filepath.Join(dir, sub), 0o750))
-	}
-	is(t, "")(nil, writeOwned(dir, Owned{
-		RunID: "run_s1", Leg: "head", PGID: Proc{100, t0}, DaemonPort: 3200, DebugPort: 9400, State: "running",
-	}))
-	f := &fakeSys{started: map[int]time.Time{100: t0}, procsErr: errors.New("ps unavailable")}
-	if err := cleanLeg(ctx, f.ops(), dir); err == nil || !strings.Contains(err.Error(), "ps unavailable") {
-		t.Fatalf("cleanLeg error = %v, want process enumeration failure", err)
-	}
-	if got, _ := readOwned(dir); got.State != "running" {
-		t.Fatalf("owned state = %q, want running", got.State)
-	}
-	for _, sub := range []string{"electron", "data"} {
-		if _, err := os.Stat(filepath.Join(dir, sub)); err != nil {
-			t.Fatalf("%s removed after process enumeration failure: %v", sub, err)
-		}
-	}
-	if len(f.log) != 0 {
-		t.Fatalf("process actions after enumeration failure: %v", f.log)
-	}
-}
-
 func TestCleanupVerbAndStaleSweep(t *testing.T) {
 	t0 := time.Date(2026, 10, 11, 8, 0, 0, 0, time.UTC)
 	data := t.TempDir()
-	svc := newTestService(t, NewStore(data), nil)
+	svc := New(NewStore(data), nil)
 	f := &fakeSys{started: map[int]time.Time{100: t0, 101: t0}}
 	svc.sys = f.ops()
 	svc.closeEngine = func(id string) { f.log = append(f.log, "engine "+id) }
@@ -531,14 +367,9 @@ func TestCleanupVerbAndStaleSweep(t *testing.T) {
 	}
 
 	leave("run_s1", 100, "running")
-	legBin := filepath.Join(svc.store.legDir("run_s1", "head"), "bin")
-	is(t, "")(nil, os.MkdirAll(legBin, 0o700))
 	out, err := svc.Cleanup(ctx, "s1")
 	if err != nil || out.State != RunCleaned || out.Legs[0].State != "cleaned" || strings.Join(f.log, "|") != "engine run_s1|killGroup 100" {
 		t.Fatalf("out %+v err %v log %q", out, err, f.log)
-	}
-	if _, err := os.Stat(legBin); !os.IsNotExist(err) {
-		t.Fatalf("leg bin remains after cleanup: %v", err)
 	}
 	is(t, "TESTING_RUN_NOT_FOUND")(svc.Cleanup(ctx, "nobody"))
 
@@ -605,12 +436,11 @@ func TestElectronProcPicksTheBrowserNotAHelper(t *testing.T) {
 		330: "/x/Electron Helper (GPU) --type=gpu-process --remote-debugging-port=9400 --lang=en-US", // and --type=
 		340: "/x/Electron . --remote-debugging-port=94001",                                           // another leg's port
 	}}
-	svc := newTestService(t, NewStore(t.TempDir()), nil)
-	svc.sys = f.ops()
-	if got, err := svc.electronProc(flag); err != nil || got != (Proc{PID: 310, Start: t0}) {
+	svc := &Service{sys: f.ops()}
+	if got := svc.electronProc(flag); got != (Proc{PID: 310, Start: t0}) {
 		t.Fatalf("electronProc = %+v, want pid 310", got)
 	}
-	if got, err := svc.electronProc("--remote-debugging-port=1"); err != nil || got.PID != 0 {
+	if got := svc.electronProc("--remote-debugging-port=1"); got.PID != 0 {
 		t.Fatalf("no match = %+v", got)
 	}
 }

@@ -102,9 +102,9 @@ func TestPageURLMatchesPinnedTabTargetID(t *testing.T) {
 }
 
 func TestRecordingPageResolverPinsOnceAndReconnectsWithoutEngineLock(t *testing.T) {
-	e := newEngine(EngineInfo{Binary: "fake", Endpoint: "http://debug", RunDir: t.TempDir(), AppOrigin: "http://app.test"}, func(_ context.Context, _ string, args, _ []string) (string, error) {
+	e := newEngine(EngineInfo{Binary: "fake", Endpoint: "http://debug", RunDir: t.TempDir()}, func(_ context.Context, _ string, args, _ []string) (string, error) {
 		switch strings.Join(args[2:], " ") {
-		case "stream disable", "tab t1 --pin-tab":
+		case "stream disable":
 			return "", nil
 		case "tab list":
 			return "→ [t1] App - http://app.test/\n", nil
@@ -163,9 +163,9 @@ func TestRecordingPageResolverPinsOnceAndReconnectsWithoutEngineLock(t *testing.
 }
 
 func TestRecordingPageResolverReconnectRespectsCancellation(t *testing.T) {
-	e := newEngine(EngineInfo{Binary: "fake", Endpoint: "http://debug", RunDir: t.TempDir(), AppOrigin: "http://app.test"}, func(_ context.Context, _ string, args, _ []string) (string, error) {
+	e := newEngine(EngineInfo{Binary: "fake", Endpoint: "http://debug", RunDir: t.TempDir()}, func(_ context.Context, _ string, args, _ []string) (string, error) {
 		switch strings.Join(args[2:], " ") {
-		case "stream disable", "tab t1 --pin-tab":
+		case "stream disable":
 			return "", nil
 		case "tab list":
 			return "→ [t1] App - http://app.test/\n", nil

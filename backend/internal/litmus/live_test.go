@@ -27,7 +27,7 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 	src, _ := filepath.Abs("../../..")
 	data, err := os.MkdirTemp("/tmp", "lv") // short: the target binds a unix socket beside running.json (104-byte path limit)
 	is(t, "")(nil, err)
-	svc := newTestService(t, NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
+	svc := New(NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
 	if svc.binary == "" { // the test binary sits in a temp dir, not beside the daemon
@@ -46,8 +46,8 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 	is(t, "")(nil, err)
 	lap("prepare")
 	is(t, "")(nil, svc.store.Save(Run{ID: "run_live", SessionID: "live", Repo: DefaultRepo, PRNumber: 6394, HeadSHA: "e2204e0f361867a28310e71421a4227ab1d09544", State: RunPrepared, CreatedAt: time.Now(), Deadline: time.Now().Add(RunBudget), Legs: []Leg{leg}}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens with a message composer", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "model menu", "the model control opens a menu with Model, Effort and Plan Mode", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens with a message composer", ""))
+	is(t, "")(svc.CheckAdd(ctx, "live", "model menu", "the model control opens a menu with Model, Effort and Plan Mode", ""))
 	run, err := svc.Launch(ctx, "live", "head")
 	is(t, "")(nil, err)
 	lap("launch + seed")
@@ -86,7 +86,7 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 		return lines[0]
 	}
 
-	is(t, "")(svc.CheckStart(ctx, "live", "c1", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "live", "c1"))
 	t.Logf("tab list: %.300s", drive("tab"))
 	lap("tab list")
 	click(`Toggle Sample project \S+ sessions.*ref=e[0-9]+`, "project row") // the project row starts collapsed
@@ -99,7 +99,7 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 		t.Errorf("no chat composer after opening the sample chat:\n%.3000s", snap)
 	}
 	is(t, "")(svc.CheckEnd(ctx, "live", "c1", CheckPass, "composer present: "+strings.Join(composer, "; "), false, 0))
-	is(t, "")(svc.CheckStart(ctx, "live", "c2", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "live", "c2"))
 	all := strings.Split(snap, "\n")
 	for i, l := range all {
 		if strings.Contains(l, "Model and reasoning effort") {
@@ -149,8 +149,8 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 	is(t, "")(nil, err)
 	lap("cleanup")
 	for _, p := range []int{leg.DaemonPort, leg.DebugPort} {
-		if busy, err := svc.sys.portBusy(p); err != nil || busy {
-			t.Errorf("port %d cleanup unconfirmed, busy=%t: %v", p, busy, err)
+		if svc.sys.portBusy(p) {
+			t.Errorf("port %d still open after cleanup", p)
 		}
 	}
 	if _, alive := svc.sys.startTime(enginePID); alive && enginePID > 0 {
@@ -159,9 +159,7 @@ func TestLiveHeadOfPR6394(t *testing.T) {
 	if _, err := os.Stat(leg.Engine.SocketDir); err == nil {
 		t.Errorf("engine socket dir %s survived cleanup", leg.Engine.SocketDir)
 	}
-	procs, err := svc.sys.procs()
-	is(t, "")(nil, err)
-	for pid, cmd := range procs {
+	for pid, cmd := range svc.sys.procs() {
 		if strings.Contains(cmd, svc.store.root) {
 			t.Errorf("leftover process %d: %.200s", pid, cmd)
 		}
@@ -178,7 +176,7 @@ func TestLiveHeadTwice(t *testing.T) {
 	src, _ := filepath.Abs("../../..")
 	data, err := os.MkdirTemp("/tmp", "lv") // short: the target binds a unix socket beside running.json
 	is(t, "")(nil, err)
-	svc := newTestService(t, NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
+	svc := New(NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
 	if svc.binary, err = resolveBinary(filepath.Join(src, "frontend", "agent-browser", "agent-browser"), ""); err != nil {
@@ -190,8 +188,8 @@ func TestLiveHeadTwice(t *testing.T) {
 		leg, err := svc.prepareLeg(ctx, DefaultRepo, r, "head", sha)
 		is(t, "")(nil, err)
 		is(t, "")(nil, svc.store.Save(Run{ID: "run_" + session, SessionID: session, Repo: DefaultRepo, PRNumber: 6394, HeadSHA: sha, State: RunPrepared, CreatedAt: time.Now(), Deadline: time.Now().Add(RunBudget), Legs: []Leg{leg}}))
-		is(t, "")(svc.CheckAdd(ctx, session, "open chat", "the sample chat opens", "", "", "", CheckClassification{Purpose: "explore"}))
-		is(t, "")(svc.CheckAdd(ctx, session, "model menu", "the model control opens a menu", "", "", "", CheckClassification{Purpose: "explore"}))
+		is(t, "")(svc.CheckAdd(ctx, session, "open chat", "the sample chat opens", ""))
+		is(t, "")(svc.CheckAdd(ctx, session, "model menu", "the model control opens a menu", ""))
 		return svc.Launch(ctx, session, "head")
 	}
 	run, err := launch("live1")
@@ -228,7 +226,7 @@ func TestLiveHeadAndBaseVideos(t *testing.T) {
 	src, _ := filepath.Abs("../../..")
 	data, err := os.MkdirTemp("/tmp", "lv") // short: the target binds a unix socket beside running.json
 	is(t, "")(nil, err)
-	svc := newTestService(t, NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
+	svc := New(NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
 	if svc.binary, err = resolveBinary(filepath.Join(src, "frontend", "agent-browser", "agent-browser"), ""); err != nil {
@@ -243,8 +241,8 @@ func TestLiveHeadAndBaseVideos(t *testing.T) {
 		legs = append(legs, leg)
 	}
 	is(t, "")(nil, svc.store.Save(Run{ID: "run_live", SessionID: "live", Repo: DefaultRepo, PRNumber: 6394, HeadSHA: shas["head"], BaseSHA: shas["base"], State: RunPrepared, CreatedAt: time.Now(), Deadline: time.Now().Add(RunBudget), Legs: legs}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens", "base", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens", ""))
+	is(t, "")(svc.CheckAdd(ctx, "live", "open chat", "the sample chat opens", "base"))
 	for _, leg := range []string{"head", "base"} {
 		_, err := svc.Launch(ctx, "live", leg)
 		is(t, "")(nil, err)
@@ -280,7 +278,7 @@ func TestLiveHeadAndBaseVideos(t *testing.T) {
 	}
 	for i, leg := range []string{"head", "base"} {
 		id := fmt.Sprintf("c%d", i+1)
-		is(t, "")(svc.CheckStart(ctx, "live", id, CheckClassification{Purpose: "explore"}))
+		is(t, "")(svc.CheckStart(ctx, "live", id))
 		act(leg)
 		is(t, "")(svc.CheckEnd(ctx, "live", id, map[string]CheckState{"head": CheckPass, "base": CheckFail}[leg], leg+" live", false, 0))
 	}
@@ -315,8 +313,8 @@ func TestLiveHeadAndBaseVideos(t *testing.T) {
 	is(t, "")(nil, err)
 	for _, l := range run.Legs {
 		for _, p := range []int{l.DaemonPort, l.DebugPort} {
-			if busy, err := svc.sys.portBusy(p); err != nil || busy {
-				t.Errorf("%s port %d cleanup unconfirmed, busy=%t: %v", l.Name, p, busy, err)
+			if svc.sys.portBusy(p) {
+				t.Errorf("%s port %d still open after cleanup", l.Name, p)
 			}
 		}
 	}
@@ -332,7 +330,7 @@ func TestLiveOcclusionFlags(t *testing.T) {
 	src, _ := filepath.Abs("../../..")
 	data, err := os.MkdirTemp("/tmp", "lv") // short: the target binds a unix socket beside running.json
 	is(t, "")(nil, err)
-	svc := newTestService(t, NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
+	svc := New(NewStore(data), nil).WithRepos(func(context.Context, ...string) (string, error) { return src, nil })
 	r, err := ParseRecipe(defaultRecipe)
 	is(t, "")(nil, err)
 	if svc.binary, err = resolveBinary(filepath.Join(src, "frontend", "agent-browser", "agent-browser"), ""); err != nil {
@@ -349,15 +347,13 @@ func TestLiveOcclusionFlags(t *testing.T) {
 	leg, err := svc.prepareLeg(ctx, DefaultRepo, r, "head", sha)
 	is(t, "")(nil, err)
 	is(t, "")(nil, svc.store.Save(Run{ID: "run_live", SessionID: "live", Repo: DefaultRepo, PRNumber: 6394, HeadSHA: sha, State: RunPrepared, CreatedAt: time.Now(), Deadline: time.Now().Add(RunBudget), Legs: []Leg{leg}}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "a", "x", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckAdd(ctx, "live", "b", "y", "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(ctx, "live", "a", "x", ""))
+	is(t, "")(svc.CheckAdd(ctx, "live", "b", "y", ""))
 	run, err := svc.Launch(ctx, "live", "head")
 	is(t, "")(nil, err)
 	leg = run.Legs[0]
 	port, pid := "--remote-debugging-port="+strconv.Itoa(leg.DebugPort), 0
-	procs, err := svc.sys.procs()
-	is(t, "")(nil, err)
-	for p, cmd := range procs { // the browser process: Chromium's helpers carry --type= and not our flags
+	for p, cmd := range svc.sys.procs() { // the browser process: Chromium's helpers carry --type= and not our flags
 		if strings.Contains(cmd, port) && strings.Contains(cmd, "Electron") && !strings.Contains(cmd, " --type=") {
 			pid = p
 		}

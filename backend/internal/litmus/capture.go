@@ -90,8 +90,6 @@ func (e *Engine) flatten(ctx context.Context, path string) error {
 }
 
 const themePairIgnored = "theme pair not taken: the app ignored the system theme"
-const themePairFailed = "theme pair not taken: the system theme screenshots could not be captured"
-const themePairRestoreFailed = "the previous theme preference could not be restored"
 
 const themeStateJS = `(() => {
  const root = document.documentElement;
@@ -115,14 +113,12 @@ func themePaintJS(background, theme string) string {
 
 // themePair captures both system preferences before check end persists its
 // result. It restores Litmus's previous media override even after a failure.
-// Both emulation and screenshots use this same independent CDP connection, so
-// restarting agent-browser cannot drop the override between setting and capture.
 func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []ThemeShot, note string) {
 	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
 	p, err := e.pageCDP(ctx)
 	if err != nil {
-		return nil, s.themePairError(e, "open page", err)
+		return nil, "theme pair not taken: " + err.Error()
 	}
 	if p.conn != nil {
 		defer func() { _ = p.conn.CloseNow() }()
@@ -143,21 +139,16 @@ func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []
 		restore, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := set(restore, previous); err != nil {
-			s.logThemePairError(e, "restore preference", err)
-			if note == "" {
-				note = themePairRestoreFailed
-			} else {
-				note += "; " + themePairRestoreFailed
-			}
+			note += "; could not restore the previous theme preference: " + err.Error()
 		}
 	}()
 	for _, theme := range []string{"light", "dark"} {
 		var before struct{ Background, Theme, Preference string }
 		if err := p.evaluate(ctx, themeStateJS, &before); err != nil {
-			return shots, s.themePairError(e, "read page theme", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		if err := set(ctx, theme); err != nil {
-			return shots, s.themePairError(e, "set preference", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		// A view transition can defer the DOM update beyond the next two frames.
 		wait := themePaintJS(before.Background, before.Theme)
@@ -166,22 +157,22 @@ func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []
 		}
 		var painted bool
 		if err := p.evaluate(ctx, wait, &painted); err != nil {
-			return shots, s.themePairError(e, "wait for theme", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		var result struct{ Data string }
 		if err := p.call(ctx, "Page.captureScreenshot", map[string]any{"format": "png", "fromSurface": true}, &result); err != nil {
-			return shots, s.themePairError(e, "capture screenshot", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		data, err := base64.StdEncoding.DecodeString(result.Data)
 		if err != nil {
-			return shots, s.themePairError(e, "decode screenshot", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		path := filepath.Join(e.RunDir, "receipts", id+"-"+theme+".png")
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			return shots, s.themePairError(e, "create screenshot directory", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return shots, s.themePairError(e, "save screenshot", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		err = opaquePNG(path, func() (color.Color, error) {
 			var values []uint8
@@ -192,7 +183,7 @@ func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []
 		})
 		shots = append(shots, ThemeShot{Theme: theme, Path: path})
 		if err != nil {
-			return shots, s.themePairError(e, "check screenshot", err)
+			return shots, "theme pair not taken: " + err.Error()
 		}
 		if !painted {
 			// Keep one picture of the pinned page without claiming a second theme.
@@ -207,18 +198,6 @@ func (s *Service) themePair(ctx context.Context, e *Engine, id string) (shots []
 		return shots[:1], themePairIgnored
 	}
 	return shots, ""
-}
-
-func (s *Service) themePairError(e *Engine, stage string, err error) string {
-	s.logThemePairError(e, stage, err)
-	return themePairFailed
-}
-
-func (s *Service) logThemePairError(e *Engine, stage string, err error) {
-	if e == nil || err == nil || e.leg == "" {
-		return
-	}
-	s.engineLog(filepath.Base(e.RunDir), e.leg, "theme pair: "+stage+": "+clip(cell(err.Error()), 400))
 }
 
 func samePixels(a, b string) bool {

@@ -150,7 +150,7 @@ func TestIntakeWritesContextPack(t *testing.T) {
 		t.Fatalf("second intake: err %v, %d bare clones", err, f.count("clone --bare"))
 	}
 	pack, last := readRunFile(t, svc, run, "context-pack.md"), -1
-	for _, h := range []string{"## Suggested checks", "## 1. PR", "## 2. What the PR says", "## 3. Linked issue", "## 4. Changed files", "### Diff excerpt", "## 5. CI status", "## 6. Recipe"} {
+	for _, h := range []string{"## 1. PR", "## 2. What the PR says", "## 3. Linked issue", "## 4. Changed files", "### Diff excerpt", "## 5. CI status", "## 6. Recipe", "## 7. What to do next"} {
 		if i := strings.Index(pack, h); i <= last {
 			t.Fatalf("heading %q out of order (at %d, previous %d)", h, i, last)
 		} else {
@@ -158,135 +158,13 @@ func TestIntakeWritesContextPack(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"keep model menu open on Other models", "Author: ronishrohan | State: MERGED", "Base: main@0ca80cfc370b", "Head: fix/model-menu-closes-on-selection@e2204e0f3618",
-		"Size: 2 files, +43/-16", "### frontend/src/renderer", "components/chat/TurnSettingsBar.tsx +7/-0", "full diff: diff.patch", "- test -> SUCCESS", "None linked.", "kind: electron", "## Where the code is", "/repos/orchestratorinc__agent-orchestrator/e2204e0f361867a28310e71421a4227ab1d09544", "/repos/orchestratorinc__agent-orchestrator/0ca80cfc370b21443c4a2b9d22199c047b8c74e7"} {
+		"Size: 2 files, +43/-16", "### frontend/src/renderer", "components/chat/TurnSettingsBar.tsx +7/-0", "full diff: diff.patch", "- test -> SUCCESS", "None linked.", "none yet", "ao testing launch head", "the next changed area from section 4", "every check is something a user would do in the app, in the order of Suggested checks", "## Where the code is", "/repos/orchestratorinc__agent-orchestrator/e2204e0f361867a28310e71421a4227ab1d09544", "/repos/orchestratorinc__agent-orchestrator/0ca80cfc370b21443c4a2b9d22199c047b8c74e7"} {
 		if !strings.Contains(pack, want) {
 			t.Errorf("context-pack.md lacks %q", want)
 		}
 	}
 	if n := len(strings.Fields(pack)); n > maxPackWords {
 		t.Fatalf("pack has %d words", n)
-	}
-}
-
-func TestIntakeLoadsPackageConstantsAndRecordsUnreadableSourceDiagnostics(t *testing.T) {
-	const sourcePath = "backend/internal/widget.go"
-	const testPath = "backend/internal/widget_test.go"
-	const otherGoPath = "backend/internal/other.go"
-	const limitsPath = "backend/internal/limits.go"
-	const listCommand = "ls-tree -r --name-only " + head6394 + " -- backend/internal"
-	source := "package widget\n\nfunc CanRender(count int) bool {\n\tif count > MAX_ITEMS { return false }\n\treturn true\n}\n"
-	sourcePatch := "diff --git a/" + sourcePath + " b/" + sourcePath + "\n--- a/" + sourcePath + "\n+++ b/" + sourcePath + "\n@@ -4 +4 @@\n-\tif count > 10 { return false }\n+\tif count > MAX_ITEMS { return false }\n"
-	secondPatch := func(path string) string {
-		return "diff --git a/" + path + " b/" + path + "\n--- a/" + path + "\n+++ b/" + path + "\n@@ -1 +1 @@\n-package widget\n+package widget\n"
-	}
-	for _, tc := range []struct {
-		name, unreadablePath string
-		diagnostics          []string
-		listError            bool
-	}{
-		{name: "cross-file package constant"},
-		{name: "unreadable changed source", unreadablePath: sourcePath, diagnostics: []string{"Could not read PR-head source file " + sourcePath}},
-		{name: "unreadable package listing", diagnostics: []string{"Could not list PR-head package source files in backend/internal"}, listError: true},
-		{name: "source and listing failures", unreadablePath: otherGoPath, diagnostics: []string{"Could not read PR-head source file " + otherGoPath, "Could not list PR-head package source files in backend/internal"}, listError: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			secondPath := testPath
-			if tc.name == "source and listing failures" {
-				secondPath = otherGoPath
-			}
-			svc, _ := newSvc(t)
-			f := svc.runner.(*fakeRunner)
-			f.gitOut["diff --name-status"] = "M\x00" + sourcePath + "\x00M\x00" + secondPath + "\x00"
-			f.gitOut["diff --numstat"] = "1\t1\t" + sourcePath + "\x001\t0\t" + secondPath + "\x00"
-			f.gitOut["diff --patch"] = sourcePatch + secondPatch(secondPath)
-			f.gitOut["show "+head6394+":"+sourcePath] = source
-			f.gitOut[listCommand] = sourcePath + "\n" + limitsPath + "\n"
-			f.gitOut["show "+head6394+":"+limitsPath] = "package widget\n\nconst MAX_ITEMS = 50\n"
-			if secondPath == otherGoPath {
-				f.gitOut["show "+head6394+":"+otherGoPath] = "package widget\n\nfunc Other() {}\n"
-			}
-			if tc.unreadablePath != "" {
-				f.gitErr["show "+head6394+":"+tc.unreadablePath] = errors.New("object unavailable")
-			}
-			if tc.listError {
-				f.gitErr[listCommand] = errors.New("tree unavailable")
-			}
-
-			run, err := svc.Intake(ctx, "s1", prURL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(run.Gaps) != 0 {
-				t.Fatalf("private source-read diagnostic became a public gap: %q", run.Gaps)
-			}
-			pack := readRunFile(t, svc, run, "context-pack.md")
-			if len(tc.diagnostics) == 0 {
-				if !strings.Contains(pack, "limits: MAX_ITEMS = 50 (backend/internal/limits.go:3)") {
-					t.Fatalf("same-package constant was not loaded into changed code:\n%s", pack)
-				}
-				if f.count("ls-tree -r --name-only "+head6394) != 1 {
-					t.Fatalf("package listing calls: %d", f.count("ls-tree -r --name-only "+head6394))
-				}
-				return
-			}
-			log := readRunFile(t, svc, run, intakeLogFile)
-			for _, diagnostic := range tc.diagnostics {
-				if !strings.Contains(log, diagnostic) {
-					t.Errorf("intake log lacks diagnostic %q: %s", diagnostic, log)
-				}
-			}
-			if !strings.Contains(pack, "## Intake diagnostics") {
-				t.Fatalf("intake diagnostic missing from private log or pack: %q\n%s", log, pack)
-			}
-			if tc.unreadablePath == sourcePath && !strings.Contains(pack, "(enclosing function not found; changed lines only)") {
-				t.Fatalf("unreadable changed source was silently dropped:\n%s", pack)
-			}
-		})
-	}
-}
-
-func TestIntakeRecipeDiagnosticStaysOutOfPublicGaps(t *testing.T) {
-	svc, now := newSvc(t)
-	path := svc.store.recipePath(DefaultRepo)
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("kind: invalid\nrun: {cmd: run}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	run, err := svc.Intake(ctx, "s1", prURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(run.Gaps) != 0 {
-		t.Fatalf("recipe diagnostic leaked into public gaps: %q", run.Gaps)
-	}
-	public := summaryCommentBody(run, Verdict{Overall: CheckPass}, *now, false)
-	if strings.Contains(public, "I could not read the recipe") {
-		t.Fatalf("recipe diagnostic leaked into public comment: %s", public)
-	}
-	log := readRunFile(t, svc, run, "intake.log")
-	if !strings.Contains(log, "I could not read the recipe") || !strings.Contains(log, "recipe: kind must") {
-		t.Fatalf("intake diagnostic missing from private log: %q", log)
-	}
-	got, err := intakeDiagnostics(filepath.Join(svc.store.root, run.ID))
-	if err != nil || len(got) != 1 || !strings.Contains(got[0], "I could not read the recipe") {
-		t.Fatalf("intakeDiagnostics = %q, err %v", got, err)
-	}
-	empty, err := intakeDiagnostics(t.TempDir())
-	if err != nil || len(empty) != 0 {
-		t.Fatalf("missing intake log = %q, err %v", empty, err)
-	}
-	badDir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(badDir, intakeLogFile), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := intakeDiagnostics(badDir); err == nil {
-		t.Fatal("unreadable intake log error was suppressed")
-	}
-	pack := readRunFile(t, svc, run, "context-pack.md")
-	if !strings.Contains(pack, "## Intake diagnostics") || !strings.Contains(pack, "I could not read the recipe") {
-		t.Fatalf("intake diagnostic missing from context pack:\n%s", pack)
 	}
 }
 
@@ -401,7 +279,7 @@ func TestIntakeIssuePriorRunsRecipeAndCaps(t *testing.T) {
 	is(t, "")(nil, svc.store.WriteFile("run_old", "verdict.md", []byte("# Verdict: fail\n\nmore")))
 	recipes := filepath.Join(svc.store.root, "..", "recipes")
 	is(t, "")(nil, os.MkdirAll(recipes, 0o750))
-	is(t, "")(nil, os.WriteFile(filepath.Join(recipes, "orchestratorinc__agent-orchestrator.yaml"), []byte("kind: electron\nrun:\n  cmd: ./run\n"), 0o600))
+	is(t, "")(nil, os.WriteFile(filepath.Join(recipes, "orchestratorinc__agent-orchestrator.yaml"), []byte("kind: electron\n"), 0o600))
 
 	run, err := svc.Intake(ctx, "s1", prURL)
 	if err != nil {
@@ -483,7 +361,7 @@ func TestIntakeFatalFailuresLeaveNoPartialFiles(t *testing.T) {
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		if !slices.Equal(names, []string{homeSnapshotFile, "owner-logins.json", "receipts", "run.json"}) { // only baselines, no partial PR evidence or .tmp-* files
+		if !slices.Equal(names, []string{"owner-logins.json", "receipts", "run.json"}) { // no diff.patch, files.txt, context-pack.md or .tmp-* files
 			t.Fatalf("%s: files after failure: %v", c.code, names)
 		}
 		if saved, err := svc.store.Get(run.ID); err != nil || saved.State != RunIntake || saved.Error == "" || saved.HeadSHA != "" {
@@ -560,7 +438,7 @@ func TestIntakeLive(t *testing.T) {
 	if os.Getenv("LITMUS_LIVE") != "1" {
 		t.Skip("set LITMUS_LIVE=1 to call the real gh CLI")
 	}
-	svc := newTestService(t, NewStore(t.TempDir()), nil)
+	svc := New(NewStore(t.TempDir()), nil)
 	run, err := svc.Intake(ctx, "live", "https://github.com/OrchestratorInc/agent-orchestrator/pull/6394")
 	if err != nil {
 		t.Fatal(err)
@@ -609,9 +487,9 @@ func suggestFixture(t *testing.T, n string) intakeData {
 
 func TestSuggestedChecksOnThreeRealPRs(t *testing.T) {
 	for n, want := range map[string]string{
-		"6403": "## Suggested checks\n\n- Headline claim: keep navigation arrows visible with the sidebar expanded\n",
-		"6266": "## Suggested checks\n\n- Headline claim: refine Harness settings layout\n",
-		"6387": "## Suggested checks\n\n- Headline claim: acknowledge reports inside Claude paste wrappers\n",
+		"6403": "## Suggested checks\n\n- Headline claim: keep navigation arrows visible with the sidebar expanded\n- Something visible in the renderer component TitlebarNav still works.\n",
+		"6266": "## Suggested checks\n\n- Headline claim: refine Harness settings layout\n- Something visible in the renderer settings (HarnessLogo, HarnessSettingsSection) still works.\n- Something visible in the renderer styles still works.\n",
+		"6387": "## Suggested checks\n\n- Headline claim: acknowledge reports inside Claude paste wrappers\n- Something visible in the cli package (hooks) still works.\n",
 	} {
 		d := suggestFixture(t, n)
 		got := suggestedChecks(d)
@@ -619,14 +497,14 @@ func TestSuggestedChecksOnThreeRealPRs(t *testing.T) {
 		if got != want {
 			t.Errorf("#%s:\n got %q\nwant %q", n, got, want)
 		}
-		if pack := renderPack(d, ""); !strings.Contains(pack, want) || strings.Index(pack, want) > strings.Index(pack, "## 1. PR") {
+		if pack := renderPack(d, ""); !strings.Contains(pack, "\n"+want+"\n") || strings.Index(pack, want) > strings.Index(pack, "## 1. PR") {
 			t.Errorf("#%s: the section is not at the top of the pack", n)
 		}
 		noSlop(t, strings.ReplaceAll(got, "Headline claim", "Main claim"))
 	}
 }
 
-func TestSuggestedChecksKeepsClaimsAndIssueWithoutRiskQuota(t *testing.T) {
+func TestSuggestedChecksTakesTheClaimSentenceAndTheIssueAndStopsAtFiveLines(t *testing.T) {
 	d := intakeData{issue: &issue{Number: 12, Title: "Arrows vanish"}, words: true}
 	d.pr.Title = "fix(shell)!: keep the navigation arrows"
 	d.pr.Body = "## What\n\nSome context here.\n\n```\nAdds a code line that is not prose.\n```\n\nThis PR keeps the [arrows](http://x) visible. More text.\n"
@@ -635,11 +513,13 @@ func TestSuggestedChecksKeepsClaimsAndIssueWithoutRiskQuota(t *testing.T) {
 	}
 	got := suggestedChecks(d)
 	lines := strings.Split(strings.TrimSpace(strings.SplitN(got, "\n\n", 2)[1]), "\n")
-	if len(lines) != 3 || lines[0] != "- Headline claim: keep the navigation arrows" || lines[1] != "- In the author's words: This PR keeps the arrows visible." || lines[2] != "- Linked issue #12: Arrows vanish" {
+	if len(lines) != 5 || lines[0] != "- Headline claim: keep the navigation arrows" || lines[1] != "- In the author's words: This PR keeps the arrows visible." || lines[2] != "- Linked issue #12: Arrows vanish" {
 		t.Errorf("lines %q", lines)
 	}
-	if strings.Contains(got, "Something visible in") || strings.Contains(got, "Smoke:") || strings.Contains(got, "Plan at least 2") {
-		t.Errorf("unexpected suggestion: %q", got)
+	for _, l := range lines[3:] {
+		if !strings.HasPrefix(l, "- Something visible in ") || strings.Contains(l, "docs") || strings.Contains(l, "test") {
+			t.Errorf("area line %q", l)
+		}
 	}
 	for body, want := range map[string]string{
 		"Adds a retry on failure. Other things.":                              "Adds a retry on failure.",
@@ -684,7 +564,7 @@ func TestBigIsMoreThan30FilesOrMoreThan2000ChangedLines(t *testing.T) {
 	}
 }
 
-// The linked issue and the existing big-PR suggestions stay in both sizes.
+// The linked issue is a suggested check on both branches; a big PR still gets three checks beyond the context lines.
 func TestSuggestedChecksKeepTheLinkedIssueOnBigAndSmallPRs(t *testing.T) {
 	for _, n := range []int{30, 31} {
 		d := intakeData{issue: &issue{Number: 12, Title: "Arrows vanish"}, words: true}
@@ -696,11 +576,8 @@ func TestSuggestedChecksKeepTheLinkedIssueOnBigAndSmallPRs(t *testing.T) {
 		if lines[0] != "- Headline claim: keep the navigation arrows" || lines[1] != "- Linked issue #12: Arrows vanish" {
 			t.Errorf("%d files: lines %q", n, lines)
 		}
-		want := []string{"- Headline claim: keep the navigation arrows", "- Linked issue #12: Arrows vanish"}
-		if n > bigFiles {
-			want = append(want, "- One thing next to the headline claim still works; pick it from the areas in section 4, not from the diff.", "- Smoke: the app opens and a chat runs.")
-		}
-		if big := n > bigFiles; big != d.big() || !slices.Equal(lines, want) {
+		if big := n > bigFiles; big != d.big() || (big && (len(lines) != 4 || !strings.HasPrefix(lines[2], "- One thing next to the headline claim") || lines[3] != "- Smoke: the app opens and a chat runs.")) ||
+			(!big && (len(lines) != 3 || !strings.HasPrefix(lines[2], "- Something visible in the cli package"))) {
 			t.Errorf("%d files (big %v): lines %q", n, d.big(), lines)
 		}
 	}
@@ -714,17 +591,6 @@ func (m mapTree) file(path string) []string {
 		return strings.Split(s, "\n")
 	}
 	return nil
-}
-
-func (m mapTree) list(dir string) ([]string, error) {
-	var paths []string
-	for path := range m {
-		if filepath.Dir(path) == dir {
-			paths = append(paths, path)
-		}
-	}
-	slices.Sort(paths)
-	return paths, nil
 }
 
 func (m mapTree) grep(word string) (hits []codeHit) {
@@ -825,7 +691,7 @@ func TestContextSectionsSayWhereTheCodeIsAndStaySilentWithoutFacts(t *testing.T)
 	d.gates = "### cloudEnabled\n\n- a.ts:1\n> x\n"
 	got := contextSections(d)
 	for _, want := range []string{"## Where the code is", "- PR build checkout: /data/repos/o__r/headsha", "- Main checkout: /data/repos/o__r/basesha",
-		"You may read any file there (Read, Grep, Glob) to learn how a feature is reached or gated; you cannot change them.", "Before the checkouts exist, read any PR file with `git -C <mirror> show <headSHA>:<path>` (main: `<baseSHA>`).", "## How the touched features are gated", "### cloudEnabled",
+		"You may read any file there (Read, Grep, Glob) to learn how a feature is reached or gated; you cannot change them.", "## How the touched features are gated", "### cloudEnabled",
 		"## How the author tested", `- "Harness settings and logo tests: 51 passed."`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("sections lack %q:\n%s", want, got)
@@ -847,7 +713,7 @@ func TestContextSectionsOnTheRealPR6266(t *testing.T) {
 	d := suggestFixture(t, "6266")
 	d.pr.HeadRefOid = filepath.Base(head)
 	d.headDir, d.baseDir = head, cmp.Or(os.Getenv("LITMUS_6266_MAIN"), filepath.Join(filepath.Dir(head), "main"))
-	d.gates, _ = svc.gateNotes(ctx, head, &d)
+	d.gates, _ = svc.gateNotes(ctx, head, d)
 	got := contextSections(d)
 	t.Logf("\n%s", got)
 	for _, want := range []string{"### useCloudGate", "### cloudEnabled", "Developer Mode-only toggle", "fake daemon/cloud data"} {
@@ -1043,16 +909,31 @@ func TestIntakeMergedPRKeepsTheBaseTip(t *testing.T) {
 	}
 }
 
-func TestPackContainsNoTesterProcedureRules(t *testing.T) {
-	pack := renderPack(intakeData{repo: "o/r", pr: pullRequest{Number: 1}}, "")
-	for _, unwanted := range []string{"Plan at most", "Plan at least 2", "--leg base", "check add", "Never import", "## 7. What to do next"} {
-		if strings.Contains(pack, unwanted) {
-			t.Errorf("pack contains %q:\n%s", unwanted, pack)
+// Section 8 plans pairs as advice with no cap, and tells the tester to finish a check on both builds before the next one.
+func TestPackSaysHowToPlanAndRunPairs(t *testing.T) {
+	for _, n := range []int{30, 31} {
+		d := intakeData{repo: "o/r", pr: pullRequest{Number: 1}}
+		for i := 0; i < n; i++ {
+			d.files = append(d.files, changedFile{Path: fmt.Sprintf("backend/internal/cli/f%d.go", i), Status: "M", Added: 1})
 		}
-	}
-	for _, heading := range []string{"## 1. PR", "## 2. What the PR says", "## 3. Linked issue", "## 4. Changed files", "## 5. CI status", "## 6. Recipe"} {
-		if !strings.Contains(pack, heading) {
-			t.Errorf("pack lacks heading %q", heading)
+		pack := renderPack(d, "")
+		next := pack[strings.Index(pack, "## 7. What to do next"):]
+		plan, other := "Plan at most 6 pairs of checks", "Plan at most 4 pairs"
+		if n > bigFiles {
+			plan, other = "Plan at most 4 pairs of checks", "Plan at most 6 pairs"
+		}
+		for _, want := range []string{plan, "(4 for a PR over 30 files, 6 otherwise)", "split a check that mixes two things", "Litmus enforces no limit on checks",
+			"`ao testing launch head`, `ao testing launch base`", "seed step N failed", "its sample content is missing: do not fail a check", "may itself be a finding", "then at once on main with `--leg base`, before the next check", "A check is done only when it has a result on both",
+			"end the main side as `absent` with a screenshot of where it would be; `fail` means the feature is there and broken", "add another pair", "Never add a check that runs on the PR build alone", browserDataRule} {
+			if !strings.Contains(next, want) {
+				t.Errorf("%d files: section 7 lacks %q:\n%s", n, want, next)
+			}
+		}
+		if strings.Contains(next, "accepts at most") {
+			t.Errorf("%d files: section 7 states a cap on checks", n)
+		}
+		if strings.Contains(next, other) {
+			t.Errorf("%d files: section 7 also says %q", n, other)
 		}
 	}
 }
@@ -1061,6 +942,10 @@ func TestPackContainsNoTesterProcedureRules(t *testing.T) {
 func TestPackDoesNotSuggestRunningPRTests(t *testing.T) {
 	for _, path := range []string{"frontend/src/renderer/components/chat/Bar.tsx", "backend/internal/cli/hooks.go"} {
 		pack := renderPack(intakeData{repo: "o/r", pr: pullRequest{Number: 1}, files: []changedFile{{Path: path, Status: "M", Added: 3}}}, "")
+		const heading = "## 7. What to do next"
+		if !strings.Contains(pack, heading) {
+			t.Fatalf("pack for %s is missing %q", path, heading)
+		}
 		for _, banned := range []string{"ao testing test", "package tests", "with-tests-from", "test check"} {
 			if strings.Contains(pack, banned) {
 				t.Errorf("pack for %s suggests %q:\n%s", path, banned, pack)

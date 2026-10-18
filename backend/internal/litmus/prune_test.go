@@ -1,7 +1,6 @@
 package litmus
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -16,7 +15,7 @@ import (
 // c1 is referenced by two old finished runs, c2 by the recent finished run, c3 by a running run.
 func pruneFixture(t *testing.T) (svc *Service, root string, recent Run) {
 	t.Helper()
-	svc = newTestService(t, NewStore(t.TempDir()), nil)
+	svc = New(NewStore(t.TempDir()), nil)
 	root = filepath.Dir(svc.store.root)
 	c1, c2, c3 := strings.Repeat("1", 40), strings.Repeat("2", 40), strings.Repeat("3", 40)
 	for _, sha := range []string{c1, c2, c3} {
@@ -31,10 +30,10 @@ func pruneFixture(t *testing.T) (svc *Service, root string, recent Run) {
 	day := 24 * time.Hour
 	base := time.Date(2026, 10, 10, 9, 0, 0, 0, time.UTC)
 	for _, r := range []Run{
-		{ID: "run_old1", State: RunCleaned, CommentState: CommentDiscarded, CreatedAt: base.Add(-4 * day), HeadSHA: c1, BaseSHA: c1},
-		{ID: "run_old2", State: RunSubmitted, CommentState: "posted", CreatedAt: base.Add(-3 * day), HeadSHA: c1, BaseSHA: c1},
+		{ID: "run_old1", State: RunCleaned, CreatedAt: base.Add(-4 * day), HeadSHA: c1, BaseSHA: c1},
+		{ID: "run_old2", State: RunSubmitted, CreatedAt: base.Add(-3 * day), HeadSHA: c1, BaseSHA: c1},
 		{ID: "run_live", State: RunRunning, CreatedAt: base.Add(-2 * day), HeadSHA: c3, BaseSHA: c3},
-		{ID: "run_recent", State: RunSubmitted, CommentState: "updated", CreatedAt: base.Add(-day), HeadSHA: c2, BaseSHA: c2},
+		{ID: "run_recent", State: RunSubmitted, CreatedAt: base.Add(-day), HeadSHA: c2, BaseSHA: c2},
 	} {
 		r.Repo = "aoagents/agent-orchestrator"
 		if err := svc.store.Save(r); err != nil {
@@ -418,87 +417,5 @@ func TestPruneClearsClosedRunFramesEvenWhenEvidenceIsKept(t *testing.T) {
 	}
 	if !pathExists(filepath.Join(svc.store.root, recent.ID, "verdict.md")) {
 		t.Fatal("prune removed retained evidence")
-	}
-}
-
-func TestPruneKeepsUnreviewedEvidenceBeyondRetention(t *testing.T) {
-	for _, mode := range []string{"manual", "dry-run", "auto"} {
-		t.Run(mode, func(t *testing.T) {
-			svc, root, recent := pruneFixture(t)
-			base := recent.CreatedAt.Add(-30 * 24 * time.Hour)
-			for id, state := range map[string]string{
-				"run_awaiting": CommentAwaiting, "run_off": CommentOff, "run_failed": "failed:offline", "run_legacy": "",
-			} {
-				run := Run{ID: id, State: RunSubmitted, CreatedAt: base, CommentState: state, HeadSHA: strings.Repeat("1", 40)}
-				if state == CommentAwaiting {
-					run.State = RunAwaitingApproval
-				}
-				if err := svc.store.Save(run); err != nil {
-					t.Fatal(err)
-				}
-				for _, name := range []string{"verdict.md", "comment.md", "head/recording.mp4", "head/frames/000001.jpg"} {
-					writeFile(t, filepath.Join(svc.store.root, id, name), "evidence")
-				}
-			}
-			var rep PruneReport
-			var err error
-			switch mode {
-			case "manual":
-				rep, err = svc.Prune(ctx, 1, 0)
-			case "dry-run":
-				rep, err = svc.PruneDryRun(ctx, 1, 0)
-			case "auto":
-				svc.keepRuns, svc.keepCheckouts = 1, 0
-				svc.autoPrune(ctx, recent)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if mode != "auto" && !slices.Contains(rep.Lines, "kept 4 unreviewed runs") {
-				t.Fatalf("unreviewed count missing: %+v", rep)
-			}
-			for _, id := range []string{"run_awaiting", "run_off", "run_failed", "run_legacy"} {
-				for _, name := range []string{"verdict.md", "comment.md", "head/recording.mp4", "head/frames/000001.jpg"} {
-					if !pathExists(filepath.Join(svc.store.root, id, name)) {
-						t.Errorf("%s lost %s", id, name)
-					}
-				}
-			}
-			if mode == "dry-run" {
-				if !slices.Contains(rep.Runs, "runs/run_old1") || !slices.Contains(rep.Runs, "runs/run_old2") || len(rep.Runs) != 2 {
-					t.Fatalf("reviewed runs should be pruned: %+v", rep)
-				}
-				return
-			}
-			for _, id := range []string{"run_old1", "run_old2"} {
-				if pathExists(filepath.Join(svc.store.root, id)) {
-					t.Errorf("reviewed %s survived retention", id)
-				}
-			}
-			if pathExists(filepath.Join(root, "repos", "aoagents__agent-orchestrator", strings.Repeat("1", 40))) {
-				t.Error("stale checkout was kept")
-			}
-			if !pathExists(filepath.Join(svc.store.root, recent.ID)) {
-				t.Error("unreviewed runs consumed the reviewed retention window")
-			}
-		})
-	}
-}
-
-func TestPruneDefaultsKeepUnreviewedRunOlderThanWindow(t *testing.T) {
-	svc := newTestService(t, NewStore(t.TempDir()), nil)
-	now := time.Now()
-	for i := 0; i <= DefaultKeepRuns; i++ {
-		run := Run{ID: fmt.Sprintf("run_%03d", i), State: RunSubmitted, CreatedAt: now.Add(time.Duration(i) * time.Hour), CommentState: "posted"}
-		if i == 0 {
-			run.CommentState = CommentOff
-		}
-		if err := svc.store.Save(run); err != nil {
-			t.Fatal(err)
-		}
-	}
-	rep, err := svc.Prune(ctx, DefaultKeepRuns, DefaultKeepCheckouts)
-	if err != nil || len(rep.Runs) != 0 || !pathExists(filepath.Join(svc.store.root, "run_000")) || !slices.Contains(rep.Lines, "kept 1 unreviewed runs") {
-		t.Fatalf("default prune = %+v, %v", rep, err)
 	}
 }

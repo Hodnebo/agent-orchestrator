@@ -3,7 +3,6 @@ package controllers_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 )
 
@@ -45,203 +43,27 @@ func testingServer(t *testing.T, deps httpd.APIDeps) func(method, path, body str
 	}
 }
 
-func testLitmusService(t *testing.T, store *litmus.Store, clock func() time.Time) *litmus.Service {
-	t.Helper()
-	home := t.TempDir()
-	patch, err := os.ReadFile(filepath.Join("..", "..", "litmus", "testdata", "pr6394.diff"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return litmus.New(store, clock).WithRunner(testingGitFixture{patch: patch}).WithOwnerHome(home, []string{
-		"HOME=" + home,
-		"PATH=" + filepath.Join(home, "bin"),
-		"npm_config_prefix=" + filepath.Join(home, ".npm-global"),
-		"HOMEBREW_PREFIX=" + filepath.Join(home, ".homebrew"),
-	})
-}
-
-type testingGitFixture struct {
-	patch []byte
-}
-
-func (f testingGitFixture) Run(ctx context.Context, _ string, _ []string, name string, args ...string) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if name != "git" {
-		return nil, fmt.Errorf("unexpected testing command %q", name)
-	}
-	for len(args) >= 2 && (args[0] == "-C" || args[0] == "-c") {
-		args = args[2:]
-	}
-	if len(args) == 0 {
-		return nil, errors.New("testing git fixture received no subcommand")
-	}
-	last := args[len(args)-1]
-	has := func(want string) bool {
-		for _, arg := range args {
-			if arg == want {
-				return true
-			}
-		}
-		return false
-	}
-	switch args[0] {
-	case "clone":
-		if err := os.MkdirAll(last, 0o750); err != nil {
-			return nil, err
-		}
-		return []byte(""), os.WriteFile(filepath.Join(last, "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
-	case "config", "fetch", "update-ref", "for-each-ref":
-		return nil, nil
-	case "merge-base":
-		return []byte("0ca80cfc370b21443c4a2b9d22199c047b8c74e7\n"), nil
-	case "rev-list":
-		return []byte("0\n"), nil
-	case "diff":
-		switch {
-		case has("--numstat"):
-			return []byte("36\t16\tfrontend/src/renderer/components/chat/TurnSettingsBar.test.tsx\x007\t0\tfrontend/src/renderer/components/chat/TurnSettingsBar.tsx\x00"), nil
-		case has("--name-status"):
-			return []byte("M\x00frontend/src/renderer/components/chat/TurnSettingsBar.test.tsx\x00M\x00frontend/src/renderer/components/chat/TurnSettingsBar.tsx\x00"), nil
-		case has("--patch"):
-			return f.patch, nil
-		}
-	case "show":
-		return []byte("export function keepModelMenuOpen(): boolean { return true }\n"), nil
-	case "ls-tree":
-		return nil, nil
-	}
-	return nil, fmt.Errorf("unexpected testing git command: %s", strings.Join(args, " "))
-}
-
-func savedTestPNG(t *testing.T, runDir ...string) string {
+func savedTestPNG(t *testing.T) string {
 	t.Helper()
 	var data bytes.Buffer
 	if err := png.Encode(&data, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
-	var dir string
-	if len(runDir) > 0 {
-		dir = runDir[0]
-	} else {
-		dir = t.TempDir()
-	}
-	path := filepath.Join(dir, "shot.png")
+	path := filepath.Join(t.TempDir(), "shot.png")
 	if err := os.WriteFile(path, data.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-type agentVersionTestingService struct {
-	controllers.TestingService
-	sessionID, leg, agent, version string
-}
-
-func (s *agentVersionTestingService) AgentVersion(_ context.Context, sessionID, leg, agent, version string) (litmus.Run, error) {
-	s.sessionID, s.leg, s.agent, s.version = sessionID, leg, agent, version
-	return litmus.Run{ID: "run_1", State: litmus.RunRunning, Repo: "o/r", PRNumber: 7}, nil
-}
-
-type relaunchTestingService struct {
-	controllers.TestingService
-	sessionID, leg string
-}
-
-func (s *relaunchTestingService) Relaunch(_ context.Context, sessionID, leg string) (litmus.Run, error) {
-	s.sessionID, s.leg = sessionID, leg
-	return litmus.Run{ID: "run_1", State: litmus.RunRunning, Repo: "o/r", PRNumber: 7}, nil
-}
-
-func TestTestingAPIRelaunch(t *testing.T) {
-	svc := &relaunchTestingService{}
-	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/relaunch", strings.NewReader(`{"sessionId":"ao-1","leg":"head"}`))
-	req.Header.Set("Content-Type", "application/json")
-	res := httptest.NewRecorder()
-	router.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"id":"run_1"`) {
-		t.Fatalf("POST /relaunch = %d %s", res.Code, res.Body.String())
-	}
-	if svc.sessionID != "ao-1" || svc.leg != "head" {
-		t.Fatalf("Relaunch got session=%q leg=%q", svc.sessionID, svc.leg)
-	}
-}
-
-type checkEndTestingService struct {
-	controllers.TestingService
-	sessionID, id string
-	result        litmus.CheckState
-	note          string
-	attribution   []litmus.CheckAttribution
-}
-
-func (s *checkEndTestingService) CheckEnd(_ context.Context, sessionID, id string, result litmus.CheckState, note string, _ bool, _ int, attribution ...litmus.CheckAttribution) (litmus.Check, error) {
-	s.sessionID, s.id, s.result, s.note, s.attribution = sessionID, id, result, note, attribution
-	check := litmus.Check{ID: id, State: result}
-	if len(attribution) == 1 {
-		check.SameBug, check.Attribution = attribution[0].SameBug, attribution[0].Kind
-	}
-	return check, nil
-}
-
-func TestTestingAPIAgentVersion(t *testing.T) {
-	svc := &agentVersionTestingService{}
-	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/agent-version", strings.NewReader(`{"sessionId":"ao-1","leg":"head","agent":"claude-code","version":"2.1"}`))
-	req.Header.Set("Content-Type", "application/json")
-	res := httptest.NewRecorder()
-	router.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"id":"run_1"`) {
-		t.Fatalf("POST /agent-version = %d %s", res.Code, res.Body.String())
-	}
-	if svc.sessionID != "ao-1" || svc.leg != "head" || svc.agent != "claude-code" || svc.version != "2.1" {
-		t.Fatalf("AgentVersion got session=%q leg=%q agent=%q version=%q", svc.sessionID, svc.leg, svc.agent, svc.version)
-	}
-}
-
-func TestTestingAPICheckEndForwardsSameBug(t *testing.T) {
-	svc := &checkEndTestingService{}
-	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
-	for _, tc := range []struct {
-		body, wantBug, wantKind string
-		wantResult              litmus.CheckState
-	}{
-		{`{"sessionId":"ao-1","result":"fail","note":"same row","sameBug":"c1"}`, "c1", "", litmus.CheckFail},
-		{`{"sessionId":"ao-1","result":"partial","attribution":"unknown","sameBug":"c1"}`, "c1", "unknown", litmus.CheckPartial},
-	} {
-		res := httptest.NewRecorder()
-		router.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/testing/checks/c2/end", strings.NewReader(tc.body)))
-		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"sameBug":"c1"`) {
-			t.Fatalf("POST /checks/c2/end = %d %s", res.Code, res.Body.String())
-		}
-		if svc.sessionID != "ao-1" || svc.id != "c2" || svc.result != tc.wantResult {
-			t.Fatalf("CheckEnd got session=%q id=%q result=%q", svc.sessionID, svc.id, svc.result)
-		}
-		if len(svc.attribution) != 1 || svc.attribution[0].SameBug != tc.wantBug || svc.attribution[0].Kind != tc.wantKind {
-			t.Fatalf("CheckEnd attribution = %+v", svc.attribution)
-		}
-	}
-}
-
 func TestTestingAPIStatusAndSubmit(t *testing.T) {
-	dataDir := t.TempDir()
-	store := litmus.NewStore(dataDir)
-	do := testingServer(t, httpd.APIDeps{Testing: testLitmusService(t, store, nil).WithGH(recordedGH{t: t})})
+	store := litmus.NewStore(t.TempDir())
+	do := testingServer(t, httpd.APIDeps{Testing: litmus.New(store, nil).WithGH(recordedGH{t: t})})
 	do("GET", "/status?sessionId=ao-1", "", http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK, `"state":"intake"`, `"prNumber":6394`, `"comment":"off"`)
 	do("GET", "/status?sessionId=ao-1", "", http.StatusOK, `"checks":[]`)
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"model menu","expect":"last model reachable","purpose":"claim","claimSentence":"Clicking \"Other models\" in the chat model menu no longer closes the menu"}`, http.StatusOK, `"id":"c1"`)
-
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"git push","expect":"push works","purpose":"risk","risk":"HOME moves credentials","claimSentence":"a claim"}`, http.StatusBadRequest, "TESTING_CHECK_CLAIM_SENTENCE")
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"git push","expect":"push works","purpose":"risk","risk":"HOME moves credentials"}`, http.StatusOK, `"id":"c2"`, `"purpose":"risk"`, `"risk":"HOME moves credentials"`)
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"old chat","expect":"opens","purpose":"risk","risk":"HOME hides transcripts"}`, http.StatusOK, `"id":"c3"`)
-	for _, id := range []string{"c2", "c3"} {
-		do("POST", "/checks/"+id+"/start", `{"sessionId":"ao-1","purpose":"risk","risk":"`+map[string]string{"c2": "HOME moves credentials", "c3": "HOME hides transcripts"}[id]+`"}`, http.StatusOK, `"state":"running"`)
-		do("POST", "/checks/"+id+"/end", `{"sessionId":"ao-1","result":"skipped","note":"tried creating a fixture; no session available"}`, http.StatusOK, `"state":"skipped"`)
-	}
-	do("POST", "/checks/c1/start", `{"sessionId":"ao-1"}`, http.StatusOK, `"state":"running"`, `"claim":true`)
+	do("POST", "/checks", `{"sessionId":"ao-1","name":"model menu","expect":"last model reachable"}`, http.StatusOK, `"id":"c1"`)
+	do("POST", "/checks/c1/start", `{"sessionId":"ao-1"}`, http.StatusOK, `"state":"running"`)
 	do("POST", "/checks/c1/end", `{"sessionId":"ao-1","result":"maybe"}`, http.StatusBadRequest, "TESTING_CHECK_RESULT_INVALID")
 	do("POST", "/checks/c1/end", `{"sessionId":"ao-1","result":"pass"}`, http.StatusConflict, "TESTING_CHECK_NO_RECEIPT") // nothing was driven
 	do("POST", "/submit", `{"sessionId":"ao-1"}`, http.StatusBadRequest, "TESTING_CHECKS_INCOMPLETE", "c1 model menu")
@@ -249,7 +71,7 @@ func TestTestingAPIStatusAndSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shot := savedTestPNG(t, filepath.Join(dataDir, "litmus", "runs", "run_ao-1"))
+	shot := savedTestPNG(t)
 	checks[0].Receipts = []litmus.Receipt{{Seq: 1, Action: "click", AfterPath: shot}}
 	if err := store.SaveChecks("run_ao-1", checks); err != nil {
 		t.Fatal(err)
@@ -261,48 +83,8 @@ func TestTestingAPIStatusAndSubmit(t *testing.T) {
 	do("POST", "/intake", `{"sessionId":"ao-1","unknown":true}`, http.StatusBadRequest, "INVALID_JSON")
 }
 
-type optionalClassificationTestingService struct {
-	controllers.TestingService
-	addClassificationCount, startClassificationCount int
-}
-
-func (s *optionalClassificationTestingService) CheckAdd(_ context.Context, _, name, expect, leg, _, _ string, classification ...litmus.CheckClassification) (litmus.Check, error) {
-	s.addClassificationCount = len(classification)
-	return litmus.Check{ID: "c1", Name: name, Expect: expect, Leg: leg, Purpose: "claim", Claim: true, ClaimSentence: "inherited claim"}, nil
-}
-
-func (s *optionalClassificationTestingService) CheckStart(_ context.Context, _, id string, classification ...litmus.CheckClassification) (litmus.Check, error) {
-	s.startClassificationCount = len(classification)
-	return litmus.Check{ID: id, State: litmus.CheckRunning, Purpose: "claim", Claim: true, ClaimSentence: "inherited claim"}, nil
-}
-
-func TestTestingAPIBaseCheckInheritsHeadClassification(t *testing.T) {
-	svc := &optionalClassificationTestingService{}
-	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
-		httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
-	for _, tc := range []struct {
-		path string
-		body string
-		want string
-	}{
-		{"checks", `{"sessionId":"ao-1","name":"other MODELS","expect":"the menu stays open","leg":"base"}`, `"id":"c1"`},
-		{"checks/c1/start", `{"sessionId":"ao-1"}`, `"state":"running"`},
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/"+tc.path, strings.NewReader(tc.body))
-		req.Header.Set("Content-Type", "application/json")
-		res := httptest.NewRecorder()
-		router.ServeHTTP(res, req)
-		if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), tc.want) {
-			t.Fatalf("POST %s = %d %s", tc.path, res.Code, res.Body.String())
-		}
-	}
-	if svc.addClassificationCount != 0 || svc.startClassificationCount != 0 {
-		t.Fatalf("omitted classifications reached service as explicit values: add=%d start=%d", svc.addClassificationCount, svc.startClassificationCount)
-	}
-}
-
 func TestTestingAPISubmitBlocked(t *testing.T) {
-	do := testingServer(t, httpd.APIDeps{Testing: testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t})})
+	do := testingServer(t, httpd.APIDeps{Testing: litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t})})
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
 	do("POST", "/submit", `{"sessionId":"ao-1","blocked":true,"reason":"  "}`, http.StatusBadRequest, "TESTING_REASON_REQUIRED")
 	do("POST", "/submit", `{"sessionId":"ao-1","blocked":true,"reason":"prepare refused"}`, http.StatusOK, `"overall":"blocked"`, `"reasons":["prepare refused"]`)
@@ -310,11 +92,10 @@ func TestTestingAPISubmitBlocked(t *testing.T) {
 }
 
 func TestTestingAPICheckLegAndCompareRoute(t *testing.T) {
-	do := testingServer(t, httpd.APIDeps{Testing: testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t})})
+	do := testingServer(t, httpd.APIDeps{Testing: litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t})})
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"menu","expect":"opens","leg":"base","purpose":"explore"}`, http.StatusOK, `"id":"c1"`, `"leg":"base"`, `"name":"menu"`)
-	do("POST", "/checks", `{"sessionId":"ao-1","name":"menu","expect":"opens","leg":"main","purpose":"explore"}`, http.StatusBadRequest, "TESTING_LEG_INVALID")
-	do("POST", "/checks/c1/reclassify", `{"sessionId":"ao-1","purpose":"claim","claimSentence":"Clicking \"Other models\" in the chat model menu no longer closes the menu","reason":"the PR now states this behavior"}`, http.StatusOK, `"purpose":"claim"`, `"reclassifications":[`)
+	do("POST", "/checks", `{"sessionId":"ao-1","name":"menu","expect":"opens","leg":"base"}`, http.StatusOK, `"id":"c1"`, `"leg":"base"`, `"name":"menu"`)
+	do("POST", "/checks", `{"sessionId":"ao-1","name":"menu","expect":"opens","leg":"main"}`, http.StatusBadRequest, "TESTING_LEG_INVALID")
 	do("POST", "/checks/c9/compare", `{"sessionId":"ao-1"}`, http.StatusNotFound, "TESTING_CHECK_NOT_FOUND")
 	do("POST", "/checks/c1/compare", `{"sessionId":"ao-1"}`, http.StatusConflict, "TESTING_COMPARE_INCOMPLETE") // no after-shots
 }
@@ -325,7 +106,7 @@ func TestTestingAPIReplayValidationAndTesterAccess(t *testing.T) {
 	if err := store.Save(run); err != nil {
 		t.Fatal(err)
 	}
-	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: testLitmusService(t, store, nil)}, httpd.ControlDeps{})
+	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: litmus.New(store, nil)}, httpd.ControlDeps{})
 	for _, tc := range []struct {
 		leg  string
 		code int
@@ -344,7 +125,7 @@ func TestTestingAPIReplayValidationAndTesterAccess(t *testing.T) {
 
 func TestTestingAPICheckEndSameFaultAndDuplicate(t *testing.T) {
 	store := litmus.NewStore(t.TempDir())
-	svc := testLitmusService(t, store, nil)
+	svc := litmus.New(store, nil)
 	run := litmus.Run{ID: "run_ao-1", SessionID: "ao-1", State: litmus.RunRunning, Deadline: time.Now().Add(time.Minute)}
 	if err := store.Save(run); err != nil {
 		t.Fatal(err)
@@ -363,9 +144,8 @@ func TestTestingAPICheckEndSameFaultAndDuplicate(t *testing.T) {
 		code             int
 	}{
 		{"/checks/c1/end", `{"sessionId":"ao-1","result":"fail","sameFault":true}`, "TESTING_CHECK_SAME_FAULT", http.StatusBadRequest},
-		{"/checks/c1/end", `{"sessionId":"ao-1","result":"fail","sameBug":"c2"}`, "TESTING_CHECK_SAME_BUG", http.StatusBadRequest},
 		{"/checks/c2/end", `{"sessionId":"ao-1","result":"fail","sameFault":true}`, `"sameFault":true`, http.StatusOK},
-		{"/checks", `{"sessionId":"ao-1","name":"MENU","expect":"shown","leg":"head","purpose":"explore"}`, "TESTING_CHECK_DUPLICATE", http.StatusConflict},
+		{"/checks", `{"sessionId":"ao-1","name":"MENU","expect":"shown","leg":"head"}`, "TESTING_CHECK_DUPLICATE", http.StatusConflict},
 	} {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/testing"+row.path, strings.NewReader(row.body)))
@@ -402,7 +182,7 @@ func TestTestingAPICheckEndShot(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
-				httpd.APIDeps{Testing: testLitmusService(t, store, nil)}, httpd.ControlDeps{})
+				httpd.APIDeps{Testing: litmus.New(store, nil)}, httpd.ControlDeps{})
 			w := httptest.NewRecorder()
 			body := fmt.Sprintf(`{"sessionId":"ao-1","result":"fail","shot":%d}`, tc.shot)
 			router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/testing/checks/c9/end", strings.NewReader(body)))
@@ -415,7 +195,7 @@ func TestTestingAPICheckEndShot(t *testing.T) {
 
 func TestTestingAPITestVerbRemoved(t *testing.T) {
 	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
-		httpd.APIDeps{Testing: testLitmusService(t, litmus.NewStore(t.TempDir()), nil)}, httpd.ControlDeps{})
+		httpd.APIDeps{Testing: litmus.New(litmus.NewStore(t.TempDir()), nil)}, httpd.ControlDeps{})
 	res := httptest.NewRecorder()
 	router.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/testing/test", strings.NewReader(`{}`)))
 	if res.Code != http.StatusNotFound {
@@ -425,7 +205,7 @@ func TestTestingAPITestVerbRemoved(t *testing.T) {
 
 func TestTestingAPIStartSpawnsWorker(t *testing.T) {
 	var spawned []litmus.SpawnRequest
-	svc := testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r litmus.SpawnRequest) (string, error) {
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithSpawner(func(_ context.Context, r litmus.SpawnRequest) (string, error) {
 		spawned = append(spawned, r)
 		return "ao-7", nil
 	})
@@ -440,7 +220,7 @@ func TestTestingAPIStartSpawnsWorker(t *testing.T) {
 }
 
 func TestTestingAPIStartNoCommentReachesTheRun(t *testing.T) {
-	svc := testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-7", nil })
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-7", nil })
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
 	do("POST", "/start", `{"prUrl":"aoagents/agent-orchestrator#6394","noComment":true}`, http.StatusOK, `"sessionId":"ao-7"`)
 	do("POST", "/intake", `{"sessionId":"ao-7","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"comment":"off"`)
@@ -448,7 +228,7 @@ func TestTestingAPIStartNoCommentReachesTheRun(t *testing.T) {
 }
 
 func TestTestingAPIStartNoEvidenceReachesTheRun(t *testing.T) {
-	svc := testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-7", nil })
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-7", nil })
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
 	do("POST", "/start", `{"prUrl":"aoagents/agent-orchestrator#6394","noEvidence":true}`, http.StatusOK, `"sessionId":"ao-7"`)
 	do("POST", "/intake", `{"sessionId":"ao-7","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"evidence":"off"`, `"comment":"post"`)
@@ -483,7 +263,7 @@ func (g recordedGH) Run(_ context.Context, args ...string) ([]byte, error) {
 
 func TestTestingAPISubmitSkipBase(t *testing.T) {
 	store := litmus.NewStore(t.TempDir())
-	do := testingServer(t, httpd.APIDeps{Testing: testLitmusService(t, store, nil).WithGH(recordedGH{t: t})})
+	do := testingServer(t, httpd.APIDeps{Testing: litmus.New(store, nil).WithGH(recordedGH{t: t})})
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
 	do("POST", "/submit", `{"sessionId":"ao-1","skipBase":"  "}`, http.StatusBadRequest, "TESTING_REASON_REQUIRED")
 	do("POST", "/submit", `{"sessionId":"ao-1","skipBase":"base build is broken"}`, http.StatusBadRequest, "TESTING_NO_CHECKS") // the field reaches the service
@@ -502,7 +282,7 @@ func TestTestingAPIPrune(t *testing.T) {
 	if err := os.Chtimes(checkout, old, old); err != nil {
 		t.Fatal(err)
 	}
-	do := testingServer(t, httpd.APIDeps{Testing: testLitmusService(t, litmus.NewStore(dataDir), nil)})
+	do := testingServer(t, httpd.APIDeps{Testing: litmus.New(litmus.NewStore(dataDir), nil)})
 	do("POST", "/prune", `{"dryRun":true}`, http.StatusOK, `"dryRun":true`, "would remove checkout repos/o__r/", "would prune: 1 checkouts, 0 runs")
 	if _, err := os.Stat(checkout); err != nil {
 		t.Fatalf("dry run deleted the checkout: %v", err)
@@ -536,11 +316,10 @@ func (g postingGH) Run(ctx context.Context, args ...string) ([]byte, error) {
 
 func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
 	const pr = "aoagents/agent-orchestrator#6394"
-	dataDir := t.TempDir()
-	store := litmus.NewStore(dataDir)
+	store := litmus.NewStore(t.TempDir())
 	var posted []string
 	ids := []string{"ao-7", "ao-8", "ao-9"}
-	svc := testLitmusService(t, store, nil).WithGH(postingGH{recordedGH{t: t}, &posted}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) {
+	svc := litmus.New(store, nil).WithGH(postingGH{recordedGH{t: t}, &posted}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) {
 		id := ids[0]
 		ids = ids[1:]
 		return id, nil
@@ -557,23 +336,18 @@ func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
 		t.Helper()
 		do("POST", "/start", `{"projectId":"p1","prUrl":"`+pr+`","noEvidence":true}`, http.StatusOK, `"sessionId":"`+session+`"`)
 		do("POST", "/intake", `{"sessionId":"`+session+`","prUrl":"`+pr+`"}`, http.StatusOK, `"projectId":"p1"`)
-		do("POST", "/checks", `{"sessionId":"`+session+`","name":"model menu","expect":"last model reachable","purpose":"claim","claimSentence":"Clicking \"Other models\" in the chat model menu no longer closes the menu"}`, http.StatusOK)
-		do("POST", "/checks/c1/start", `{"sessionId":"`+session+`","purpose":"claim","claimSentence":"Clicking \"Other models\" in the chat model menu no longer closes the menu"}`, http.StatusOK)
+		do("POST", "/checks", `{"sessionId":"`+session+`","name":"model menu","expect":"last model reachable"}`, http.StatusOK)
+		do("POST", "/checks/c1/start", `{"sessionId":"`+session+`"}`, http.StatusOK)
 		id := "run_" + session
 		checks, err := store.Checks(id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		checks[0].Receipts = []litmus.Receipt{{Seq: 1, Action: "click", AfterPath: savedTestPNG(t, filepath.Join(dataDir, "litmus", "runs", id))}}
+		checks[0].Receipts = []litmus.Receipt{{Seq: 1, Action: "click", AfterPath: savedTestPNG(t)}}
 		if err := store.SaveChecks(id, checks); err != nil {
 			t.Fatal(err)
 		}
 		do("POST", "/checks/c1/end", `{"sessionId":"`+session+`","result":"pass"}`, http.StatusOK)
-		for _, id := range []string{"c2", "c3"} {
-			do("POST", "/checks", `{"sessionId":"`+session+`","name":"risk `+id+`","expect":"still works","purpose":"risk","risk":"menu change breaks `+id+`"}`, http.StatusOK)
-			do("POST", "/checks/"+id+"/start", `{"sessionId":"`+session+`","purpose":"risk","risk":"menu change breaks `+id+`"}`, http.StatusOK)
-			do("POST", "/checks/"+id+"/end", `{"sessionId":"`+session+`","result":"skipped","note":"tried opening the menu; no session available"}`, http.StatusOK)
-		}
 		do("POST", "/submit", `{"sessionId":"`+session+`"}`, http.StatusOK, `"commentState":"awaiting-approval"`)
 	}
 	finish("ao-7")
@@ -610,7 +384,7 @@ func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
 }
 
 func TestTestingAPIProjectSettingsReviewPreservesOmittedValue(t *testing.T) {
-	svc := testLitmusService(t, litmus.NewStore(t.TempDir()), nil)
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil)
 	router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
 	put := func(body string, want ...string) {
 		t.Helper()
@@ -632,16 +406,15 @@ func TestTestingAPIProjectSettingsReviewPreservesOmittedValue(t *testing.T) {
 	put(`{"askBeforePosting":true,"review":false}`, `"review":false`)
 }
 
-// The daemon, not the prompt, keeps a tester out of start, rerun, post, discard and prune.
+// The daemon, not the prompt, keeps a tester out of start, rerun, post and prune.
 func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
-	svc := testLitmusService(t, litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-9", nil })
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-9", nil })
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
 
 	do("POST", "/prune", `{"sessionId":"ao-1","dryRun":true}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/start", `{"sessionId":"ao-1","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/runs/run_ao-1/post", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
-	do("POST", "/runs/run_ao-1/discard", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/rerun", `{"sessionId":"ao-1","runId":"run_ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "rerun")
 
 	// The user's own session, or no session, is allowed through.
@@ -649,43 +422,4 @@ func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	do("POST", "/prune", `{"dryRun":true}`, http.StatusOK, `"dryRun":true`)
 	do("POST", "/start", `{"sessionId":"ao-orch","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-9"`)
 	do("POST", "/rerun", `{"sessionId":"ao-orch","runId":"run_ao-1","projectId":"p1"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
-}
-
-type riskTestingService struct {
-	controllers.TestingService
-	classification litmus.CheckClassification
-	reason         string
-}
-
-func (s *riskTestingService) CheckAdd(_ context.Context, _, _, _, _, _, _ string, classification ...litmus.CheckClassification) (litmus.Check, error) {
-	s.classification = classification[0]
-	return litmus.Check{ID: "c1", Purpose: s.classification.Purpose, Risk: s.classification.Risk}, nil
-}
-
-func (s *riskTestingService) CheckStart(ctx context.Context, _, _ string, classification ...litmus.CheckClassification) (litmus.Check, error) {
-	return s.CheckAdd(ctx, "", "", "", "", "", "", classification...)
-}
-
-func (s *riskTestingService) CheckReclassify(ctx context.Context, _, _ string, classification litmus.CheckClassification, reason string) (litmus.Check, error) {
-	s.reason = reason
-	return s.CheckAdd(ctx, "", "", "", "", "", "", classification)
-}
-
-func TestTestingAPIRiskClassification(t *testing.T) {
-	for _, path := range []string{"checks", "checks/c1/start", "checks/c1/reclassify"} {
-		t.Run(path, func(t *testing.T) {
-			svc := &riskTestingService{}
-			router := httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, httpd.APIDeps{Testing: svc}, httpd.ControlDeps{})
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/testing/"+path, strings.NewReader(`{"sessionId":"s1","name":"git push","expect":"push succeeds","purpose":"risk","risk":"HOME moves credentials","reason":"the diff moves HOME"}`))
-			req.Header.Set("Content-Type", "application/json")
-			res := httptest.NewRecorder()
-			router.ServeHTTP(res, req)
-			if res.Code != http.StatusOK || svc.classification != (litmus.CheckClassification{Purpose: "risk", Risk: "HOME moves credentials"}) || !strings.Contains(res.Body.String(), `"risk":"HOME moves credentials"`) {
-				t.Fatalf("POST %s = %d %s, classification %+v", path, res.Code, res.Body.String(), svc.classification)
-			}
-			if strings.HasSuffix(path, "reclassify") && svc.reason != "the diff moves HOME" {
-				t.Fatalf("reclassify reason = %q", svc.reason)
-			}
-		})
-	}
 }

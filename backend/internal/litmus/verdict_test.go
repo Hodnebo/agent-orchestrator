@@ -1,12 +1,10 @@
 package litmus
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
@@ -37,41 +36,24 @@ func TestChecksPlanRules(t *testing.T) {
 	svc, _ := newSvc(t)
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
 	run, _ := svc.store.Get("run_s1")
-	run.State, run.Repo, run.Legs = RunPrepared, "example/risk-fixture", []Leg{{Name: "head", State: "prepared"}, {Name: "base", State: "prepared"}}
+	run.State, run.Legs = RunPrepared, []Leg{{Name: "head", State: "prepared"}}
 	is(t, "")(nil, svc.store.Save(run))
-	launchCode := func(want string) {
-		t.Helper()
-		for _, leg := range []string{"head", "base"} {
-			_, err := svc.Launch(ctx, "s1", leg)
-			is(t, want)(nil, err)
-		}
+	refused := func() bool { // launch is refused for want of checks (anything else it fails on is beyond this test)
+		_, err := svc.Launch(ctx, "s1", "head")
+		var e *apierr.Error
+		return errors.As(err, &e) && e.Code == "TESTING_CHECKS_REQUIRED"
 	}
-	launchCode("TESTING_RECIPE_MISSING")
-	c, err := svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "base", "", "", CheckClassification{Purpose: "risk", Risk: "base risk"})
-	is(t, "")(c, err)
-	if c.Leg != "base" || c.Name != "menu opens" {
-		t.Fatalf("base check: %+v", c)
+	c, err := svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "base")
+	if !refused() || err != nil || c.Leg != "base" || c.Name != "menu opens" {
+		t.Fatalf("one check: refused %t, %+v, %v", refused(), c, err)
 	}
-	is(t, "TESTING_LEG_INVALID")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "main", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "TESTING_CHECK_TWIN_CLASS")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "risk", Risk: "head risk"}))
-	launchCode("TESTING_RECIPE_MISSING")
-	for i := 0; i < 2; i++ {
-		is(t, "")(svc.CheckAdd(ctx, "s1", fmt.Sprint("risk ", i), "still works", "", "", "", CheckClassification{Purpose: "risk", Risk: "HOME moves user data"}))
-		if i == 0 {
-			launchCode("TESTING_RECIPE_MISSING")
-		} else {
-			// A missing recipe stops the test before any process starts.
-			launchCode("TESTING_RECIPE_MISSING")
-		}
+	is(t, "TESTING_LEG_INVALID")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "main"))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", ""))
+	if refused() {
+		t.Fatal("launch with two checks still refused")
 	}
-	// A successful first launch persists RunRunning even if its leg later crashes.
-	is(t, "")(nil, svc.store.SaveChecks(run.ID, nil))
-	_, err = svc.update(run.ID, func(r *Run) { r.State, r.Legs[0].State = RunRunning, "failed" })
-	is(t, "")(nil, err)
-	launchCode("TESTING_RECIPE_MISSING")
 	for i := 2; i <= 20; i++ { // there is no cap: the run's budget is the only limit
-		is(t, "")(svc.CheckAdd(ctx, "s1", fmt.Sprint("check ", i), "x", "", "", "", CheckClassification{Purpose: "explore"}))
+		is(t, "")(svc.CheckAdd(ctx, "s1", fmt.Sprint("check ", i), "x", ""))
 	}
 }
 
@@ -97,7 +79,7 @@ func TestVerdictListsSeedGapsAsLimits(t *testing.T) {
 }
 
 func TestDeriveOverall(t *testing.T) {
-	head := func(id string, st CheckState) Check { return Check{ID: id, Name: id, State: st, Claim: true} }
+	head := func(id string, st CheckState) Check { return Check{ID: id, Name: id, State: st} }
 	base := func(id string, st CheckState) Check {
 		return Check{ID: "b" + id, Name: strings.ToUpper(id), State: st, Leg: "base", Receipts: []Receipt{{Leg: "base", Action: "click", AfterPath: evidenceFile(t)}}}
 	} // same name as head(id), any case, with a screenshot receipt like every ended check
@@ -106,47 +88,45 @@ func TestDeriveOverall(t *testing.T) {
 		checks []Check
 		want   CheckState
 	}{
-		{[]Check{head("x", CheckPass), base("x", CheckFail)}, CheckPass},                                                  // the base failing is the bug being fixed
-		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckPass)}, CheckPass},                            // y was never compared; the difference on x carries it
-		{[]Check{head("x", CheckPass)}, CheckPartial},                                                                     // no base result
-		{[]Check{head("x", CheckPass), base("x", CheckPass)}, CheckPartial},                                               // base is the same: no difference shown
-		{[]Check{head("x", CheckPass), base("x", CheckPartial)}, CheckPass},                                               // an evidenced partial claim twin shows a difference
-		{[]Check{{ID: "c1", Name: "x", State: CheckPass, Claim: true, Receipts: []Receipt{{Leg: "base"}}}}, CheckPartial}, // base observed, no outcome
-		{[]Check{head("x", CheckPartial), base("x", CheckFail)}, CheckPartial},                                            // a partial head never passes
+		{[]Check{head("x", CheckPass), base("x", CheckFail)}, CheckPass},                                     // the base failing is the bug being fixed
+		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckPass)}, CheckPass},               // y was never compared; the difference on x carries it
+		{[]Check{head("x", CheckPass)}, CheckPartial},                                                        // no base result
+		{[]Check{head("x", CheckPass), base("x", CheckPass)}, CheckPartial},                                  // base is the same: no difference shown
+		{[]Check{head("x", CheckPass), base("x", CheckPartial)}, CheckPartial},                               // only a base fail counts
+		{[]Check{{ID: "c1", Name: "x", State: CheckPass, Receipts: []Receipt{{Leg: "base"}}}}, CheckPartial}, // base observed, no outcome
+		{[]Check{head("x", CheckPartial), base("x", CheckFail)}, CheckPartial},                               // a partial head never passes
 		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckPartial)}, CheckPartial},
-		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPartial)}, CheckFail},    // any head fail wins
-		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckSkipped)}, CheckPartial}, // an unreached head check caps the result
-		{[]Check{head("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},
-		{[]Check{head("x", CheckFail), head("y", CheckSkipped)}, CheckFail},                                                   // a skip does not override a failure
-		{[]Check{head("x", CheckPass), base("x", CheckFail), base("y", CheckSkipped)}, CheckPass},                             // only head skips cap the result
-		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, CheckPartial},                                                // nothing differs
-		{[]Check{head("x", CheckSkipped)}, CheckUntested},                                                                     // nothing was reached
-		{[]Check{base("x", CheckFail)}, CheckUntested},                                                                        // a base-only check never decides
-		{[]Check{head("x", CheckPass), base("x", CheckSkipped)}, CheckPartial},                                                // the base could not be reached either
-		{[]Check{head("x", CheckPartial), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckPartial}, // matching partial labels stay partial
-		{[]Check{head("x", CheckFail), base("x", CheckFail), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},       // an unproven matching failure stays in the finding but does not block
-		{[]Check{head("x", CheckFail), {ID: "bx", Name: "X", State: CheckFail, Leg: "base"}}, CheckFail},                      // main's failure has no evidence and cannot make the head failure partial
-		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPass), base("y", CheckFail)}, CheckFail},          // a base pass makes it the PR's regression
-		{[]Check{head("x", CheckPartial), base("x", CheckSkipped)}, CheckPartial},                                             // the base was not reached: not pre-existing
-		{[]Check{head("x", CheckFail), base("x", CheckFail)}, CheckPartial},                                                   // an unproven matching failure does not block
-		{[]Check{head("x", CheckPass), {ID: "bx", Name: "x", State: CheckFail, Leg: "base"}}, CheckPartial},                   // nor one with no receipt at all
-		{[]Check{head("x", CheckFail), base("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckFail},       // a head fail beside a base skip is not pre-existing
-		{[]Check{head("x", CheckFail), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckFail},       // nor beside a base partial
-		{[]Check{head("x", CheckPass), base("x", CheckAbsent)}, CheckPass},                                                    // a feature main lacks is a difference in the PR's favour
-		{[]Check{head("x", CheckFail), base("x", CheckAbsent)}, CheckFail},                                                    // a head fail beside an absent main is the PR's own
-		{[]Check{head("x", CheckFail), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckFail},        // it is never pre-existing, whatever else passes
-		{[]Check{head("x", CheckPartial), base("x", CheckAbsent)}, CheckPartial},                                              // a head partial still counts against the PR
-		{[]Check{head("x", CheckPartial), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},  // and is not pre-existing
-		{[]Check{head("x", CheckAbsent), base("x", CheckAbsent)}, CheckFail},                                                  // absence on the PR build is a failure even without a completed claim
-		{[]Check{head("x", CheckAbsent)}, CheckFail},                                                                          // absence on the PR build is a failure even without a completed claim
-		{[]Check{head("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckFail},                              // absence on the PR build counts as a failure
-		{[]Check{head("x", CheckAbsent), base("x", CheckPass), head("y", CheckPass), base("y", CheckAbsent)}, CheckFail},      // a head absent beside a base pass is a failure
-		{[]Check{head("x", CheckPass), base("x", CheckAbsent), head("y", CheckPass)}, CheckPass},                              // y was never compared; the difference on x carries it
-		{[]Check{head("x", CheckFail), same(base("x", CheckFail)), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},
-		{[]Check{head("x", CheckPartial), same(base("x", CheckPartial)), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},
+		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPartial)}, CheckFail}, // any head fail wins
+		{[]Check{head("x", CheckPass), base("x", CheckFail), head("y", CheckSkipped)}, CheckPass}, // could not reach: left out
+		{[]Check{head("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckPass},
+		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, CheckPartial},                                               // nothing differs
+		{[]Check{head("x", CheckSkipped)}, CheckPartial},                                                                     // nothing was reached
+		{[]Check{base("x", CheckFail)}, CheckPartial},                                                                        // a base-only check never decides
+		{[]Check{head("x", CheckPass), base("x", CheckSkipped)}, CheckPartial},                                               // the base could not be reached either
+		{[]Check{head("x", CheckPartial), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckFail},   // matching partial labels do not prove the same fault
+		{[]Check{head("x", CheckFail), base("x", CheckFail), head("y", CheckPass), base("y", CheckFail)}, CheckPartial},      // an unproven matching failure stays in the finding but does not block
+		{[]Check{head("x", CheckFail), {ID: "bx", Name: "X", State: CheckFail, Leg: "base"}}, CheckFail},                     // main's failure has no evidence and cannot make the head failure partial
+		{[]Check{head("x", CheckFail), base("x", CheckPass), head("y", CheckPass), base("y", CheckFail)}, CheckFail},         // a base pass makes it the PR's regression
+		{[]Check{head("x", CheckPartial), base("x", CheckSkipped)}, CheckPartial},                                            // the base was not reached: not pre-existing
+		{[]Check{head("x", CheckFail), base("x", CheckFail)}, CheckPartial},                                                  // an unproven matching failure does not block
+		{[]Check{head("x", CheckPass), {ID: "bx", Name: "x", State: CheckFail, Leg: "base"}}, CheckPartial},                  // nor one with no receipt at all
+		{[]Check{head("x", CheckFail), base("x", CheckSkipped), head("y", CheckPass), base("y", CheckFail)}, CheckFail},      // a head fail beside a base skip is not pre-existing
+		{[]Check{head("x", CheckFail), base("x", CheckPartial), head("y", CheckPass), base("y", CheckFail)}, CheckFail},      // nor beside a base partial
+		{[]Check{head("x", CheckPass), base("x", CheckAbsent)}, CheckPass},                                                   // a feature main lacks is a difference in the PR's favour
+		{[]Check{head("x", CheckFail), base("x", CheckAbsent)}, CheckFail},                                                   // a head fail beside an absent main is the PR's own
+		{[]Check{head("x", CheckFail), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckFail},       // it is never pre-existing, whatever else passes
+		{[]Check{head("x", CheckPartial), base("x", CheckAbsent)}, CheckPartial},                                             // a head partial still counts against the PR
+		{[]Check{head("x", CheckPartial), base("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckPartial}, // and is not pre-existing
+		{[]Check{head("x", CheckAbsent), base("x", CheckAbsent)}, CheckFail},                                                 // a promised feature absent on head failed
+		{[]Check{head("x", CheckAbsent)}, CheckFail},                                                                         // a head absent alone is a failure
+		{[]Check{head("x", CheckAbsent), head("y", CheckPass), base("y", CheckFail)}, CheckFail},                             // absence on the PR build counts as a failure
+		{[]Check{head("x", CheckAbsent), base("x", CheckPass), head("y", CheckPass), base("y", CheckAbsent)}, CheckFail},     // a head absent beside a base pass is a failure
+		{[]Check{head("x", CheckPass), base("x", CheckAbsent), head("y", CheckPass)}, CheckPass},                             // y was never compared; the difference on x carries it
+		{[]Check{head("x", CheckFail), same(base("x", CheckFail)), head("y", CheckPass), base("y", CheckFail)}, CheckPass},
+		{[]Check{head("x", CheckPartial), same(base("x", CheckPartial)), head("y", CheckPass), base("y", CheckFail)}, CheckPass},
 		{[]Check{head("x", CheckFail), same(base("x", CheckFail))}, CheckPartial},
 		{[]Check{head("x", CheckPass), {Name: "x", State: CheckFail, Leg: "base", Receipts: []Receipt{{Action: "click", Leg: "base"}}}}, CheckPartial},
-		{[]Check{base("x", CheckAbsent)}, CheckUntested}, // a base-only check never decides
+		{[]Check{base("x", CheckAbsent)}, CheckPartial}, // a base-only check never decides
 	} {
 		if got, _ := derive(c.checks); got != c.want {
 			t.Errorf("case %d: %s, want %s", i, got, c.want)
@@ -156,10 +136,11 @@ func TestDeriveOverall(t *testing.T) {
 		checks []Check
 		want   string
 	}{
-		{[]Check{head("x", CheckSkipped), head("y", CheckSkipped)}, reasonUntested},
-		{[]Check{base("x", CheckFail)}, reasonUntested},
+		{[]Check{head("x", CheckSkipped), head("y", CheckSkipped)}, "no head check could be reached"},
+		{[]Check{base("x", CheckFail)}, "no head check could be reached"},
 		{[]Check{head("x", CheckPass), head("y", CheckSkipped)}, "no check passed on the head while failing on the base"},
 		{[]Check{head("x", CheckFail), base("x", CheckFail)}, "x x: fails on main too; not shown to be the same fault"},
+		{[]Check{head("x", CheckPartial), base("x", CheckPartial)}, "x x: is partial on main too; not shown to be the same fault"},
 		{[]Check{head("x", CheckAbsent), base("x", CheckAbsent)}, "the PR build does not have this"},
 		{[]Check{head("x", CheckPass), base("x", CheckPass), head("y", CheckAbsent)}, "the PR build does not have this"},
 	} {
@@ -167,61 +148,12 @@ func TestDeriveOverall(t *testing.T) {
 			t.Errorf("reason case %d: %q lacks %q", i, reasons, c.want)
 		}
 	}
+	dir := t.TempDir()
 	for title, want := range map[string]bool{"fix(chat): x": true, "Update stuff": true, "CI(x): y": false} {
-		if claimsChange(Run{Title: title}) != want {
+		_ = os.WriteFile(filepath.Join(dir, "context-pack.md"), []byte("## 1. PR\n\n- #1 "+title+"\n"), 0o600)
+		if claimsChange(dir) != want {
 			t.Errorf("claimsChange(%q) = %t", title, !want)
 		}
-	}
-}
-
-func TestDeriveSkippedHeadCheckCapsPassingChecksAtPartial(t *testing.T) {
-	checks := []Check{
-		{ID: "c1", Name: "update action", State: CheckSkipped, Claim: true, Note: "update notice never appeared"},
-		{ID: "c2", Name: "menu opens", State: CheckPass, Claim: true},
-		{ID: "c3", Name: "menu opens", State: CheckFail, Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}},
-		{ID: "c4", Name: "settings opens", State: CheckPass, Claim: true},
-	}
-	overall, reasons := derive(checks)
-	want := []string{"c1 update action: not checked: update notice never appeared"}
-	if overall != CheckPartial || !reflect.DeepEqual(reasons, want) {
-		t.Fatalf("derive = %s, %q; want %s, %q", overall, reasons, CheckPartial, want)
-	}
-}
-
-func TestDeriveSkipsDoNotCapWhenTheyAreNotClaims(t *testing.T) {
-	checks := []Check{
-		{ID: "c1", Name: "update action", State: CheckSkipped, Note: "optional context"},
-		{ID: "c2", Name: "menu opens", State: CheckPass, Claim: true},
-		{ID: "c3", Name: "menu opens", State: CheckFail, Leg: "base", Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}},
-	}
-	if overall, _ := derive(checks); overall != CheckPass {
-		t.Fatalf("derive = %s, want pass", overall)
-	}
-}
-
-func TestDeriveWithoutEndedClaimIsUntested(t *testing.T) {
-	checks := []Check{{ID: "c1", Name: "menu opens", State: CheckSkipped, Claim: true, Note: "not reached"}}
-	if overall, reasons := derive(checks); overall != CheckUntested || !slices.Contains(reasons, reasonUntested) {
-		t.Fatalf("derive = %s, %q, want untested with %q", overall, reasons, reasonUntested)
-	}
-}
-
-func TestDeriveKeepsRecordedHeadProblems(t *testing.T) {
-	baseFail := Check{ID: "b1", Name: "claim", Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-	for _, tc := range []struct {
-		name   string
-		checks []Check
-		want   CheckState
-	}{
-		{"nonclaim fail before a claim ends", []Check{{ID: "c1", Name: "regression", State: CheckFail}, {ID: "c2", Name: "claim", Claim: true, State: CheckSkipped}}, CheckFail},
-		{"absent claim", []Check{{ID: "c1", Name: "claim", Claim: true, State: CheckAbsent}}, CheckFail},
-		{"nonclaim partial caps a pass", []Check{{ID: "c1", Name: "claim", Claim: true, State: CheckPass}, baseFail, {ID: "c2", Name: "regression", State: CheckPartial}}, CheckPartial},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got, _ := derive(tc.checks); got != tc.want {
-				t.Fatalf("derive = %s, want %s", got, tc.want)
-			}
-		})
 	}
 }
 
@@ -243,16 +175,15 @@ func submitSvc(t *testing.T) (*Service, *fakeMedia, string, string) {
 		return r
 	}
 	is(t, "")(nil, svc.store.SaveChecks("run_s1", []Check{
-		{ID: "c1", Name: "menu opens", Expect: "list | shown", State: CheckPass, Claim: true, Receipts: []Receipt{rcpt(1, "head")}},
+		{ID: "c1", Name: "menu opens", Expect: "list | shown", State: CheckPass, Receipts: []Receipt{rcpt(1, "head")}},
 		{ID: "c2", Name: "menu opens", Expect: "list shown", State: CheckFail, Leg: "base", Receipts: []Receipt{rcpt(2, "base")}},
-		{ID: "c3", Name: "last model", Expect: "scrolls", State: CheckPass, Claim: true, Receipts: []Receipt{rcpt(3, "head")}},
+		{ID: "c3", Name: "last model", Expect: "scrolls", State: CheckPass, Receipts: []Receipt{rcpt(3, "head")}},
 	}))
 	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "actions.jsonl"), actions, 0o600))
 	is(t, "")(nil, os.MkdirAll(filepath.Join(runDir, "head", "logs"), 0o750))
 	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "head", "logs", "dev.log"), []byte("boot\nlistening on :3200\n"), 0o600))
 	_, err := svc.update("run_s1", func(r *Run) { r.Legs, r.Evidence = []Leg{{Name: "head", State: "running"}}, EvidenceOff }) // evidence has tests of its own
 	is(t, "")(nil, err)
-	addSkippedRisks(t, svc, "run_s1")
 	return svc, fm, runDir, filepath.Join(svc.store.dataDir(), "artifacts", "s1")
 }
 
@@ -271,189 +202,6 @@ func exists(t *testing.T, p string) {
 	}
 }
 
-func TestValidateVerdictLinks(t *testing.T) {
-	runDir := t.TempDir()
-	is(t, "")(nil, os.MkdirAll(filepath.Join(runDir, "receipts"), 0o750))
-	for _, name := range []string{"1-after.png", "space (1).png", "(1).png", "a&b.png"} {
-		is(t, "")(nil, os.WriteFile(filepath.Join(runDir, "receipts", name), []byte("png"), 0o600))
-	}
-	for _, tc := range []struct {
-		name, md, missing string
-	}{
-		{"link", "[shot](receipts/1-after.png)", ""},
-		{"image", "![shot](receipts/1-after.png#detail)", ""},
-		{"encoded path", "![shot](receipts/space%20%281%29.png?raw=1#detail)", ""},
-		{"escaped path", `[shot](receipts/\(1\).png)`, ""},
-		{"path with spaces", "[shot](<receipts/space (1).png>)", ""},
-		{"entity", "[shot](receipts/a&amp;b.png)", ""},
-		{"reference", "![shot][s]\n\n[s]: receipts/1-after.png", ""},
-		{"anchors and URLs", "[here](#checks) [web](https://example.com/missing) ![remote](//example.com/missing.png) [mail](mailto:a@example.com) [absolute](/missing.png)", ""},
-		{"code", "`[example](missing.png)`\n\n```md\n![example](missing.png)\n```", ""},
-		{"missing link", "[shot](receipts/missing.png)", "receipts/missing.png"},
-		{"missing image", "![shot](receipts/missing.png)", "receipts/missing.png"},
-		{"missing reference", "[shot][s]\n\n[s]: receipts/missing.png", "receipts/missing.png"},
-		{"missing table link", "| shot |\n| --- |\n| [shot](receipts/missing.png) |", "receipts/missing.png"},
-		{"directory", "[folder](receipts/)", "receipts/"},
-		{"outside run", "[shot](../missing.png)", "../missing.png"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateVerdictLinks(runDir, tc.md, "", nil)
-			if tc.missing == "" {
-				is(t, "")(nil, err)
-			} else {
-				is(t, "TESTING_VERDICT_LINKS_MISSING")(nil, err)
-				if !strings.Contains(err.Error(), tc.missing) {
-					t.Fatalf("error does not name broken link %q: %v", tc.missing, err)
-				}
-			}
-		})
-	}
-}
-
-func TestDeadlineNeutralizesBrokenInlineAndReferenceLinks(t *testing.T) {
-	runDir := t.TempDir()
-	for _, md := range []string{
-		"[shot](receipts/missing.png)",
-		"![shot][missing]\n\n[missing]: receipts/missing.png",
-	} {
-		got, count := neutralizeVerdictLinks(runDir, md)
-		if count == 0 || strings.Contains(got, "receipts/missing.png") || strings.Contains(got, "[missing]") {
-			t.Fatalf("neutralized %q as %q with count %d", md, got, count)
-		}
-		if err := validateVerdictLinks(runDir, got, "", nil); err != nil {
-			t.Fatalf("neutralized markdown still failed validation: %v", err)
-		}
-	}
-}
-
-func TestSubmitRefusesBrokenVerdictLinks(t *testing.T) {
-	for _, blocked := range []bool{false, true} {
-		t.Run(fmt.Sprintf("blocked=%t", blocked), func(t *testing.T) {
-			svc, media, runDir, art := submitSvc(t)
-			svc.runner = &videoProbeRunner{duration: "70"}
-			is(t, "")(nil, os.WriteFile(recordingPath(runDir, "head"), []byte("mp4"), 0o600))
-			before, err := svc.update("run_s1", func(r *Run) { r.Legs[0].RecordStartedAt = svc.clock() })
-			is(t, "")(nil, err)
-			checks, err := svc.store.Checks("run_s1")
-			is(t, "")(nil, err)
-			checks[0].Note = "![missing shot](receipts/missing.png)"
-			is(t, "")(nil, svc.store.SaveChecks("run_s1", checks))
-			submit := func(summary string) (Verdict, error) {
-				if blocked {
-					return svc.SubmitBlocked(ctx, "s1", summary)
-				}
-				return svc.Submit(ctx, "s1", summary, "")
-			}
-			_, err = submit("[missing evidence](scratch/missing.txt#detail)")
-			is(t, "TESTING_VERDICT_LINKS_MISSING")(nil, err)
-			field := "summary"
-			if blocked {
-				field = "blocked reason"
-			}
-			for _, path := range []string{"check c1 note: receipts/missing.png", field + ": scratch/missing.txt#detail", "fix the summary, or re-end that check with a corrected note, then submit again"} {
-				if !strings.Contains(err.Error(), path) {
-					t.Errorf("error does not name broken link %q: %v", path, err)
-				}
-			}
-			after, err := svc.store.Get("run_s1")
-			is(t, "")(nil, err)
-			if after.State != before.State || !reflect.DeepEqual(after.Legs, before.Legs) || !after.TestingEndedAt.IsZero() || after.submission != nil {
-				t.Fatalf("refused submit closed the run: %+v", after)
-			}
-			if len(media.calls) != 0 {
-				t.Fatalf("refused submit encoded video: %v", media.calls)
-			}
-			for _, dir := range []string{runDir, art} {
-				if _, err := os.Stat(filepath.Join(dir, "verdict.md")); !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("refused submit wrote verdict.md in %s: %v", dir, err)
-				}
-			}
-			is(t, "")(svc.CheckEnd(ctx, "s1", "c1", checks[0].State, "![shot](receipts/1-after.png)", false, 0))
-			is(t, "")(submit("[shot](receipts/1-after.png#detail) [checks](#checks) [web](https://example.com/missing)"))
-			exists(t, filepath.Join(runDir, "verdict.md"))
-		})
-	}
-}
-
-func TestSubmitIgnoresLinksOutsideEditableFields(t *testing.T) {
-	svc, _, runDir, _ := submitSvc(t)
-	checks, err := svc.store.Checks("run_s1")
-	is(t, "")(nil, err)
-	for i := range checks {
-		checks[i].Name += " [name](missing-name.txt)"
-		checks[i].Expect = "[expect](missing-expect.txt)"
-		checks[i].NoteHistory = []string{"[old note](missing-history.txt)"}
-	}
-	is(t, "")(nil, svc.store.SaveChecks("run_s1", checks))
-	_, err = svc.update("run_s1", func(r *Run) {
-		r.Gaps = []string{"[intake gap](missing-gap.txt)"}
-		r.Error = "[run error](missing-error.txt)"
-	})
-	is(t, "")(nil, err)
-	is(t, "")(svc.Submit(ctx, "s1", "checked", ""))
-	exists(t, filepath.Join(runDir, "verdict.md"))
-}
-
-func TestSubmitRefusesBrokenSkipBaseReason(t *testing.T) {
-	svc, _, _, _ := submitSvc(t)
-	_, err := svc.Submit(ctx, "s1", "checked", "[missing evidence](scratch/missing.txt)")
-	is(t, "TESTING_VERDICT_LINKS_MISSING")(nil, err)
-	if !strings.Contains(err.Error(), "skip-base reason: scratch/missing.txt") {
-		t.Fatalf("skip-base link was not named: %v", err)
-	}
-	if !strings.Contains(err.Error(), "edit the --skip-base --reason") {
-		t.Fatalf("skip-base link error did not name the field to edit: %v", err)
-	}
-}
-
-func TestSubmitRejectsLongSummaryAndReasons(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		call  func(*Service) (Verdict, error)
-		code  string
-		limit int
-	}{
-		{"summary", func(s *Service) (Verdict, error) {
-			return s.Submit(ctx, "s1", strings.Repeat("x", maxSummaryChars+1), "")
-		}, "TESTING_SUMMARY_TOO_LONG", maxSummaryChars},
-		{"skip-base reason", func(s *Service) (Verdict, error) {
-			return s.Submit(ctx, "s1", "", strings.Repeat("x", maxReasonChars+1))
-		}, "TESTING_REASON_TOO_LONG", maxReasonChars},
-		{"blocked reason", func(s *Service) (Verdict, error) {
-			return s.SubmitBlocked(ctx, "s1", strings.Repeat("x", maxReasonChars+1))
-		}, "TESTING_REASON_TOO_LONG", maxReasonChars},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc, _, _, _ := submitSvc(t)
-			_, err := tc.call(svc)
-			is(t, tc.code)(nil, err)
-			if !strings.Contains(err.Error(), fmt.Sprint(tc.limit)) {
-				t.Fatalf("length error does not name %d-character limit: %v", tc.limit, err)
-			}
-		})
-	}
-}
-
-func TestDeadlineSanitizesBrokenLinksInWholeVerdict(t *testing.T) {
-	svc, _, runDir, _ := submitSvc(t)
-	run, err := svc.store.Get("run_s1")
-	is(t, "")(nil, err)
-	run.Gaps = []string{"[gap](missing-gap.txt)"}
-	checks, err := svc.store.Checks(run.ID)
-	is(t, "")(nil, err)
-	checks[0].Name = "[menu](missing-name.txt)"
-	checks[0].Expect = "[list](missing-expect.txt)"
-	_, err = svc.closeRunAtDeadline(ctx, run, checks, "", "", "")
-	is(t, "")(nil, err)
-	md := readRunFile(t, svc, run, "verdict.md")
-	if links := brokenRelativeLinks(runDir, md); len(links) > 0 {
-		t.Fatalf("deadline verdict has broken links: %q", links)
-	}
-	if !strings.Contains(md, "broken relative link(s) were shown as plain text") {
-		t.Fatalf("deadline verdict omitted broken-link warning: %s", md)
-	}
-}
-
 func TestSubmitWritesVerdictAndPublishesArtifacts(t *testing.T) {
 	svc, fm, runDir, art := submitSvc(t)
 	v, err := svc.Submit(ctx, "s1", "looks right on head", "")
@@ -464,9 +212,9 @@ func TestSubmitWritesVerdictAndPublishesArtifacts(t *testing.T) {
 		t.Fatalf("video encoded without a recording: %v", fm.calls)
 	}
 	md, _ := os.ReadFile(filepath.Join(runDir, "verdict.md"))
-	for _, want := range []string{"# Verdict: pass", "| check | purpose | expect | head result | base result | receipts |", `| c1 menu opens |  | list \| shown | pass | fail | [1](receipts/1-after.png) |`,
-		"| c3 last model |  | scrolls | pass | not compared on base |", "Uncaught TypeError: boom", "listening on :3200", "## Limits", "The base leg was not launched",
-		"- c3 last model: not compared on base", "- " + headlineRule,
+	for _, want := range []string{"# Verdict: pass", "| check | expect | head result | base result | receipts |", `| c1 menu opens | list \| shown | pass | fail | [1](receipts/1-after.png) |`,
+		"| c3 last model | scrolls | pass | not compared on base |", "Uncaught TypeError: boom", "listening on :3200", "## Limits", "The base leg was not launched",
+		"- c3 last model: not compared on base", "- The result is fail if any head check was absent or failed, except a head fail beside an unmarked base fail that ran and has evidence; that finding stays in the comment but leaves the result partial",
 		"- The PR title claims a behavior change.", "Video: none (recording was not available)", "looks right on head"} {
 		if !strings.Contains(string(md), want) {
 			t.Errorf("verdict.md lacks %q:\n%s", want, md)
@@ -487,122 +235,6 @@ func TestSubmitWritesVerdictAndPublishesArtifacts(t *testing.T) {
 		}
 	}
 	is(t, "TESTING_RUN_CLOSED")(svc.Submit(ctx, "s1", "", ""))
-}
-
-func TestSubmitKeepsIntakeDiagnosticsOutOfThePublicComment(t *testing.T) {
-	svc, _, runDir, _ := submitSvc(t)
-	const diagnostic = "recipe parser: private detail /tmp/secret"
-	is(t, "")(nil, os.WriteFile(filepath.Join(runDir, intakeLogFile), []byte(diagnostic+"\n"), 0o600))
-
-	if _, err := svc.Submit(ctx, "s1", "looks right on head", ""); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	verdict, err := os.ReadFile(filepath.Join(runDir, "verdict.md"))
-	if err != nil {
-		t.Fatalf("read verdict.md: %v", err)
-	}
-	if want := "Private intake diagnostic: " + diagnostic; !strings.Contains(string(verdict), want) {
-		t.Fatalf("verdict.md lacks %q:\n%s", want, verdict)
-	}
-	comment, err := os.ReadFile(filepath.Join(runDir, "comment.md"))
-	if err != nil {
-		t.Fatalf("read comment.md: %v", err)
-	}
-	if strings.Contains(string(comment), diagnostic) {
-		t.Fatalf("comment.md leaked private intake diagnostic:\n%s", comment)
-	}
-}
-
-func TestSubmitRecordsIntakeDiagnosticsReadFailure(t *testing.T) {
-	svc, _, runDir, _ := submitSvc(t)
-	if err := os.Mkdir(filepath.Join(runDir, intakeLogFile), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-	_, err := svc.Submit(ctx, "s1", "looks right on head", "")
-	if err != nil {
-		t.Fatalf("Submit failed on a private diagnostic: %v", err)
-	}
-	if !strings.Contains(logs.String(), "could not read intake diagnostics") {
-		t.Fatalf("diagnostics read failure was not logged: %s", logs.String())
-	}
-	if run, readErr := svc.store.Get("run_s1"); readErr != nil || run.State != RunSubmitted || run.TestingEndedAt.IsZero() {
-		t.Fatalf("submit did not finish with the recorded testing end: run=%+v err=%v", run, readErr)
-	}
-	verdict, err := os.ReadFile(filepath.Join(runDir, "verdict.md"))
-	if err != nil || !strings.Contains(string(verdict), "Private intake diagnostic: could not read intake diagnostics:") || !strings.Contains(string(verdict), "is a directory") {
-		t.Fatalf("private verdict lost diagnostic read failure: %s, %v", verdict, err)
-	}
-	comment, err := os.ReadFile(filepath.Join(runDir, "comment.md"))
-	if err != nil || strings.Contains(string(comment), "read intake diagnostics") || strings.Contains(string(comment), runDir) {
-		t.Fatalf("public comment leaked private diagnostic: %s, %v", comment, err)
-	}
-}
-
-func TestUnreadableIntakeLogDoesNotBlockVerdict(t *testing.T) {
-	for _, deadline := range []bool{false, true} {
-		t.Run(fmt.Sprintf("deadline=%v", deadline), func(t *testing.T) {
-			svc, _, runDir, _ := submitSvc(t)
-			svc.kill = nil
-			path := filepath.Join(runDir, intakeLogFile)
-			is(t, "")(nil, os.WriteFile(path, []byte("private intake detail"), 0o600))
-			is(t, "")(nil, os.Chmod(path, 0o000))
-			t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
-			if _, err := os.ReadFile(path); err == nil {
-				t.Skip("mode 000 files are readable by this process")
-			} else if !errors.Is(err, os.ErrPermission) {
-				t.Fatalf("expected permission failure for intake.log: %v", err)
-			}
-			if deadline {
-				run, err := svc.store.Get("run_s1")
-				is(t, "")(nil, err)
-				svc.clock = func() time.Time { return run.Deadline.Add(time.Second) }
-				sweep(svc, nil)
-			} else {
-				is(t, "")(svc.Submit(ctx, "s1", "looks right on head", ""))
-			}
-			run, err := svc.store.Get("run_s1")
-			if err != nil || run.State != RunSubmitted {
-				t.Fatalf("unreadable log prevented verdict: run=%+v, err=%v", run, err)
-			}
-			verdict, err := os.ReadFile(filepath.Join(runDir, "verdict.md"))
-			if err != nil || !strings.Contains(string(verdict), "Private intake diagnostic: could not read intake diagnostics:") || !strings.Contains(string(verdict), "permission denied") {
-				t.Fatalf("private verdict lost permission error: %s, %v", verdict, err)
-			}
-			comment, err := os.ReadFile(filepath.Join(runDir, "comment.md"))
-			if err != nil || strings.Contains(string(comment), "intake.log") || strings.Contains(string(comment), "permission denied") || strings.Contains(string(comment), "private intake detail") {
-				t.Fatalf("public comment leaked intake diagnostic: %s, %v", comment, err)
-			}
-		})
-	}
-}
-
-func TestCloseRunReturnsChecksAttributedAgainstLateSameFaultBase(t *testing.T) {
-	svc, _, _, _ := submitSvc(t)
-	run, err := svc.store.Get("run_s1")
-	is(t, "")(nil, err)
-	seed, err := svc.store.Checks(run.ID)
-	is(t, "")(nil, err)
-	checks := []Check{
-		{ID: "c1", Name: "proven change", Claim: true, State: CheckPass, Receipts: seed[0].Receipts},
-		{ID: "c2", Name: "proven change", Claim: true, Leg: "base", State: CheckFail, Receipts: seed[1].Receipts},
-		{ID: "c3", Name: "existing-folder setup", Purpose: "risk", State: CheckPartial, Attribution: "pr", Receipts: seed[0].Receipts},
-		{ID: "c4", Name: "existing-folder setup", Purpose: "risk", Leg: "base", State: CheckPartial, SameFault: true, Receipts: seed[1].Receipts},
-	}
-	v, err := svc.closeRun(ctx, run, checks, "", "", "")
-	is(t, "")(nil, err)
-	if v.Overall != CheckPass {
-		t.Fatalf("late same-fault base result capped the verdict: %+v", v)
-	}
-	if got := v.Checks[2].Attribution; got != "pre-existing" {
-		t.Fatalf("returned verdict kept the raw head attribution %q, want pre-existing", got)
-	}
-	if got := checks[2].Attribution; got != "pr" {
-		t.Fatalf("normalizing the verdict mutated the saved tester label to %q", got)
-	}
 }
 
 func TestSubmitCutsEachLegFromItsOwnRecordingAndSurvivesFFmpegFailure(t *testing.T) {
@@ -692,12 +324,12 @@ func TestLaunchAndCloseRefuseEachOther(t *testing.T) {
 	is(t, "")(svc.Submit(ctx, "s1", "", "")) // nothing stays marked busy
 }
 
-func TestNotesAreKeptWholeAndOversizeNotesAreRefused(t *testing.T) {
+func TestNotesAreKeptWholeAndNeverRefused(t *testing.T) {
 	svc, _ := newSvc(t)
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
-	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "head shows the c2 receipt", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
-	long := "the base has none, the snapshot lacks it. " + strings.Repeat("word ", 50) // under the limit, with the tester's words
+	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "head shows the c2 receipt", ""))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
+	long := "the base has none, the snapshot lacks it. " + strings.Repeat("word ", 150) // over 600 characters, with the tester's words
 	got, err := svc.CheckEnd(ctx, "s1", "c1", CheckSkipped, long, false, 0)
 	if err != nil || got.Note != strings.TrimSpace(long) {
 		t.Fatalf("note not kept whole: %q, %v", got.Note, err)
@@ -706,51 +338,36 @@ func TestNotesAreKeptWholeAndOversizeNotesAreRefused(t *testing.T) {
 		t.Errorf("checks.json holds %d characters of the note, want %d", len(saved[0].Note), len(strings.TrimSpace(long)))
 	}
 	body := renderComment(Run{Repo: "o/r", PRNumber: 1, BaseRef: "main"}, Verdict{Overall: CheckPartial, Checks: []Check{got}}, evidence{}, time.Now())
-	if !strings.Contains(body, "the base has none") || strings.Contains(body, "the main has none") || strings.Contains(body, "main has none") {
-		t.Errorf("the comment did not keep the tester's words:\n%s", body)
+	if strings.Contains(body, "the base has none") || !strings.Contains(body, "the main has none") && !strings.Contains(body, "main has none") {
+		t.Errorf("the comment did not rewrite the tester's words:\n%s", body)
 	}
-	if strings.Contains(body, "...") || strings.Count(body, "word") < 50 {
-		t.Errorf("the comment did not keep the long note:\n%s", body)
+	if !strings.Contains(body, "...") || strings.Contains(body, strings.Repeat("word ", 150)) {
+		t.Errorf("the comment did not cut the long note:\n%s", body)
 	}
-	is(t, "")(svc.CheckAdd(ctx, "s1", "x", strings.Repeat("a", 500), "", "", "", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "x", strings.Repeat("a", 500), ""))
 }
 
-func TestCheckClaimPersistsAndOversizeNoteNamesItsLimit(t *testing.T) {
-	svc, _ := newSvc(t)
-	is(t, "")(svc.Intake(ctx, "s1", prURL))
-	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "the menu opens", "", "", "", CheckClassification{Purpose: "claim", ClaimSentence: "The row now stops that click."}))
-	got, err := svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "claim", ClaimSentence: "The row now stops that click."})
-	is(t, "")(got, err)
-	if !got.Claim {
-		t.Fatal("started claimed check did not persist claim")
-	}
-	_, err = svc.CheckEnd(ctx, "s1", "c1", CheckSkipped, strings.Repeat("x", maxCheckNoteChars+1), false, 0)
-	is(t, "TESTING_CHECK_NOTE_TOO_LONG")(nil, err)
-	if !strings.Contains(err.Error(), fmt.Sprint(maxCheckNoteChars)) {
-		t.Fatalf("oversize note error does not name the limit: %v", err)
-	}
-	checks, _ := svc.store.Checks("run_s1")
-	if checks[0].State != CheckRunning || !checks[0].Claim {
-		t.Fatalf("rejected note changed check: %+v", checks[0])
-	}
-}
-
-func TestSkippedCheckNeedsNoReceiptAndLeavesUnclaimedRunUntested(t *testing.T) {
+func TestSkippedCheckNeedsNoReceiptAndLeavesTheHeadline(t *testing.T) {
 	svc, _ := newSvc(t)
 	svc.media = &fakeMedia{}
 	is(t, "")(svc.Intake(ctx, "s1", prURL))
-	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "opens", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckAdd(ctx, "s1", "last model", "scrolls", "", "", "", CheckClassification{Purpose: "explore"}))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c1", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "reach the menu", "opens", ""))
+	is(t, "")(svc.CheckAdd(ctx, "s1", "last model", "scrolls", ""))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c1"))
 	is(t, "")(svc.CheckEnd(ctx, "s1", "c1", CheckSkipped, "needs a paid plan", false, 0))
-	is(t, "")(svc.CheckStart(ctx, "s1", "c2", CheckClassification{Purpose: "explore"}))
+	is(t, "")(svc.CheckStart(ctx, "s1", "c2"))
 	is(t, "TESTING_CHECK_NO_RECEIPT")(svc.CheckEnd(ctx, "s1", "c2", CheckPass, "", false, 0)) // only a skip is exempt
 	checks, _ := svc.store.Checks("run_s1")
-	checks[1].Receipts = []Receipt{{Seq: 1, Action: "click", AfterPath: evidenceFile(t, filepath.Join(svc.store.root, "run_s1"))}}
+	checks[1].Receipts = []Receipt{{Seq: 1, Action: "click", AfterPath: evidenceFile(t)}}
 	is(t, "")(nil, svc.store.SaveChecks("run_s1", checks))
 	is(t, "")(svc.CheckEnd(ctx, "s1", "c2", CheckPass, "", false, 0))
-	_, err := svc.Submit(ctx, "s1", "", "")
-	is(t, "TESTING_NO_CLAIM_CHECKS")(nil, err)
+	v, err := svc.Submit(ctx, "s1", "", "")
+	if err != nil || v.Overall != CheckPartial { // c2 passed, but nothing differs from the base
+		t.Fatalf("verdict %+v err %v", v, err)
+	}
+	if md, _ := os.ReadFile(filepath.Join(svc.store.root, "run_s1", "verdict.md")); !strings.Contains(string(md), "- c1 reach the menu (head leg): could not reach. needs a paid plan") || strings.Contains(string(md), "- c1 reach the menu: not compared") {
+		t.Fatalf("verdict.md:\n%s", md)
+	}
 }
 
 func TestCompareDiffsTheBaseShotAgainstHead(t *testing.T) {
@@ -869,9 +486,7 @@ func TestSubmitSurvivesAFailedCleanupAndSaysSo(t *testing.T) {
 	if !strings.Contains(string(md), "- Cleanup after submit failed, stop leftovers with `ao testing cleanup`: ") || !strings.Contains(string(md), "not a git repository") {
 		t.Fatalf("verdict.md hides the cleanup failure:\n%s", md)
 	}
-	// Pruning failed after the leg was killed and wiped. Its state must reflect
-	// that completed cleanup even though the verdict still reports the prune error.
-	if run, _ := svc.store.Get("run_s1"); run.State != RunSubmitted || run.Legs[0].State != "cleaned" {
+	if run, _ := svc.store.Get("run_s1"); run.State != RunSubmitted || run.Legs[0].State == "cleaned" {
 		t.Fatalf("run %+v", run)
 	}
 }
@@ -910,8 +525,7 @@ func TestSubmitBlockedClosesTheRunWithoutReceipts(t *testing.T) {
 	})
 	run, err := svc.Intake(ctx, "s1", prURL)
 	is(t, "")(nil, err)
-	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "", "", "", CheckClassification{Purpose: "claim", ClaimSentence: "The row now stops that click."})) // planned, never driven: a normal submit would refuse it
-	addSkippedRisks(t, svc, run.ID)
+	is(t, "")(svc.CheckAdd(ctx, "s1", "menu opens", "list shown", "")) // planned, never driven: a normal submit would refuse it
 	is(t, "TESTING_CHECKS_INCOMPLETE")(svc.Submit(ctx, "s1", "", ""))
 	is(t, "TESTING_REASON_REQUIRED")(svc.SubmitBlocked(ctx, "s1", "  "))
 	if len(reported) != 0 {
@@ -919,7 +533,7 @@ func TestSubmitBlockedClosesTheRunWithoutReceipts(t *testing.T) {
 	}
 
 	v, err := svc.SubmitBlocked(ctx, "s1", " prepare refused: no checkout ") // a failing report does not fail the submit
-	if err != nil || v.Overall != CheckBlocked || !reflect.DeepEqual(v.Reasons, []string{"prepare refused: no checkout"}) || len(v.Checks) != 3 {
+	if err != nil || v.Overall != CheckBlocked || !reflect.DeepEqual(v.Reasons, []string{"prepare refused: no checkout"}) || len(v.Checks) != 1 {
 		t.Fatalf("verdict %+v err %v", v, err)
 	}
 	md := readRunFile(t, svc, run, "verdict.md")
@@ -946,7 +560,7 @@ func TestSubmitBlockedKeepsRecordedFailure(t *testing.T) {
 	run := Run{ID: "run_s1", SessionID: "s1", Repo: "o/r", PRNumber: 7, State: RunRunning, CreatedAt: *now, Deadline: now.Add(RunBudget), Comment: CommentOff, Evidence: EvidenceOff}
 	is(t, "")(nil, svc.store.Save(run))
 	checks := []Check{
-		{ID: "c1", Name: "menu", State: CheckFail, Note: "click closed the menu", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t, filepath.Join(svc.store.root, "run_s1"))}}},
+		{ID: "c1", Name: "menu", State: CheckFail, Note: "click closed the menu", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
 		{ID: "c2", Name: "unfinished", State: CheckRunning},
 	}
 	is(t, "")(nil, svc.store.SaveChecks(run.ID, checks))
@@ -973,46 +587,13 @@ func TestSubmitBlockedKeepsRecordedFailure(t *testing.T) {
 	}
 }
 
-func TestSubmitBlockedKeepsRiskPartialWhenClaimsAreUnreached(t *testing.T) {
-	for _, claimState := range []CheckState{CheckPending, CheckSkipped} {
-		t.Run(string(claimState), func(t *testing.T) {
-			svc, now := newSvc(t)
-			run := Run{ID: "run_s1", SessionID: "s1", Repo: "o/r", PRNumber: 7, State: RunRunning, CreatedAt: *now, Deadline: now.Add(RunBudget), Comment: CommentOff, Evidence: EvidenceOff}
-			is(t, "")(nil, svc.store.Save(run))
-			checks := []Check{
-				{ID: "c1", Name: "existing folder", Purpose: "risk", State: CheckPartial, Note: "the folder sometimes remains"},
-				{ID: "c2", Name: "claimed behavior", Purpose: "claim", Claim: true, ClaimSentence: "The claimed behavior works.", State: claimState, Note: "not reached"},
-			}
-			is(t, "")(nil, svc.store.SaveChecks(run.ID, checks))
-			derived, _ := derive(checks)
-			if derived != CheckUntested {
-				t.Fatalf("derive = %s, want %s", derived, CheckUntested)
-			}
-
-			v, err := svc.SubmitBlocked(ctx, "s1", "agent stopped before finishing")
-			if err != nil || v.Overall != CheckUntested || v.StoppedEarly != "agent stopped before finishing" {
-				t.Fatalf("verdict %+v, %v", v, err)
-			}
-			if len(v.Reasons) == 0 || v.Reasons[0] != v.StoppedEarly || !slices.Contains(v.Reasons, reasonUntested) {
-				t.Fatalf("reasons %q do not preserve the derived untested verdict", v.Reasons)
-			}
-			md := readRunFile(t, svc, run, "verdict.md")
-			for _, want := range []string{"# Verdict: untested", "Stopped early: agent stopped before finishing", "Testing stopped early: agent stopped before finishing"} {
-				if !strings.Contains(md, want) {
-					t.Errorf("verdict.md lacks %q:\n%s", want, md)
-				}
-			}
-		})
-	}
-}
-
 func TestSubmitBlockedKeepsPerBugFailure(t *testing.T) {
 	svc, now := newSvc(t)
 	svc.media = &fakeMedia{}
 	run := Run{ID: "run_s1", SessionID: "s1", Repo: "o/r", PRNumber: 7, State: RunRunning, CreatedAt: *now, Deadline: now.Add(RunBudget), Comment: CommentOff, Evidence: EvidenceOff}
 	is(t, "")(nil, svc.store.Save(run))
 	checks := []Check{
-		{ID: "c1", Name: "menu", State: CheckFail, Claim: true, Note: "click closed the menu", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t, filepath.Join(svc.store.root, "run_s1"))}}},
+		{ID: "c1", Name: "menu", State: CheckFail, Note: "click closed the menu", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
 		{ID: "c2", Name: "menu", Leg: "base", State: CheckPass},
 		{ID: "c3", Name: "unfinished", State: CheckRunning},
 	}
@@ -1040,7 +621,7 @@ func TestSubmitRefusesAnUnlaunchedBaseUnlessSkipped(t *testing.T) {
 		left             time.Duration
 	}{
 		{"prepared base, time left", "TESTING_BASE_NOT_RUN", "", prepared, 10 * time.Minute},
-		{"exactly the guard window left", "", "", prepared, baseGuardLeft},
+		{"exactly the guard window left", "TESTING_BASE_NOT_RUN", "", prepared, baseGuardLeft},
 		{"skipped with a reason while time is left", "", "a comparison would not change the verdict", prepared, 10 * time.Minute},
 		{"skipped with a reason, base running", "", "main is slow", []Leg{head, {Name: "base", State: "running"}}, 10 * time.Minute},
 		{"skipped with a reason, under the guard window", "", "the main build\nis broken", prepared, baseGuardLeft - time.Second},
@@ -1087,7 +668,7 @@ func TestSubmitRefusesAnUnlaunchedBaseUnlessSkipped(t *testing.T) {
 func TestSubmitRefusesHeadChecksNotComparedOnBase(t *testing.T) {
 	legs := []Leg{{Name: "head", State: "running"}, {Name: "base", State: "running"}}
 	rc := func(leg string) []Receipt { return []Receipt{{Seq: 9, Leg: leg, Action: "click", AfterPath: "x.png"}} }
-	pass := Check{ID: "c1", Name: "a", State: CheckPass, Claim: true, Purpose: "claim", ClaimSentence: "A works.", Receipts: rc("head")}
+	pass := Check{ID: "c1", Name: "a", State: CheckPass, Receipts: rc("head")}
 	partial := Check{ID: "c2", Name: "b", State: CheckPartial, Receipts: rc("head")}
 	baseSkip := func(id, name, note string) Check {
 		return Check{ID: id, Name: name, State: CheckSkipped, Leg: "base", Note: note}
@@ -1107,12 +688,10 @@ func TestSubmitRefusesHeadChecksNotComparedOnBase(t *testing.T) {
 		{"base receipts on the head check", "", "", "", []Check{pass, {ID: "c2", Name: "b", State: CheckFail, Receipts: append(rc("head"), rc("base")...)}, baseSkip("c3", "a", "not repeated")}, legs, 10 * time.Minute},
 		{"skip-base after the base failed to launch", "", "main would not start", "", []Check{pass, partial}, []Leg{legs[0], {Name: "base", State: "failed"}}, 10 * time.Minute},
 		{"too little time left", "", "", "", []Check{pass, partial}, legs, baseGuardLeft - time.Second},
-		{"exactly the guard window left", "", "", "", []Check{pass, partial}, legs, baseGuardLeft},
 		{"no base leg", "", "", "", []Check{pass, partial}, legs[:1], 10 * time.Minute},
 	} {
 		svc, _, runDir, _ := submitSvc(t)
 		is(t, "")(nil, svc.store.SaveChecks("run_s1", c.checks))
-		addSkippedRisks(t, svc, "run_s1")
 		_, err := svc.update("run_s1", func(r *Run) { r.Legs, r.Deadline = c.legs, svc.clock().Add(c.left) })
 		is(t, "")(nil, err)
 		v, err := svc.Submit(ctx, "s1", "x", c.skip)
@@ -1140,12 +719,12 @@ func TestSubmitRefusesHeadChecksNotComparedOnBase(t *testing.T) {
 func TestPreExistingHeadFailureIsLimitedNotBlocking(t *testing.T) {
 	long := strings.Repeat("n", 200)
 	checks := []Check{
-		{ID: "c1", Name: "x", Purpose: "risk", State: CheckFail, Note: long, Receipts: []Receipt{{Leg: "head"}}},
-		{ID: "c2", Name: "X", Purpose: "risk", State: CheckFail, Leg: "base", SameFault: true, Receipts: []Receipt{{Leg: "base", Action: "click", AfterPath: evidenceFile(t)}}},
+		{ID: "c1", Name: "x", State: CheckFail, Note: long, Receipts: []Receipt{{Leg: "head"}}},
+		{ID: "c2", Name: "X", State: CheckFail, Leg: "base", SameFault: true, Receipts: []Receipt{{Leg: "base", Action: "click", AfterPath: evidenceFile(t)}}},
 		{ID: "c3", Name: "y", State: CheckFail, Note: "regressed"},
 		{ID: "c4", Name: "y", State: CheckPass, Leg: "base"},
 	}
-	if got := checkLimit(checks, checks[0]); got != "c1 x: pre-existing, same on base: "+long {
+	if got := checkLimit(checks, checks[0]); got != "c1 x: pre-existing, same on base: "+strings.Repeat("n", 120)+"..." {
 		t.Errorf("limit %q", got)
 	}
 	if got := checkLimit(checks, checks[2]); got != "" { // it passes on the base: the PR broke it
@@ -1165,7 +744,7 @@ func TestPreExistingHeadFailureIsLimitedNotBlocking(t *testing.T) {
 func TestSubmitSkipBaseRecordsTheMainSideOfUnrepeatedChecks(t *testing.T) {
 	legs := []Leg{{Name: "head", State: "running"}, {Name: "base", State: "running"}}
 	rc := func(leg string) []Receipt { return []Receipt{{Seq: 9, Leg: leg, Action: "click", AfterPath: "x.png"}} }
-	a := Check{ID: "c1", Name: "a", State: CheckPass, Claim: true, Purpose: "claim", ClaimSentence: "A works.", Receipts: rc("head")}
+	a := Check{ID: "c1", Name: "a", State: CheckPass, Receipts: rc("head")}
 	aMain := Check{ID: "c2", Name: "a", State: CheckFail, Leg: "base", Receipts: rc("base")}
 	b := Check{ID: "c3", Name: "b", State: CheckPartial, Receipts: rc("head")}
 	for _, c := range []struct {
@@ -1180,18 +759,17 @@ func TestSubmitSkipBaseRecordsTheMainSideOfUnrepeatedChecks(t *testing.T) {
 	} {
 		svc, _, runDir, _ := submitSvc(t)
 		is(t, "")(nil, svc.store.SaveChecks("run_s1", c.checks))
-		addSkippedRisks(t, svc, "run_s1")
 		_, err := svc.update("run_s1", func(r *Run) { r.Legs, r.Deadline = legs, svc.clock().Add(20*time.Minute) }) // far from the deadline
 		is(t, "")(nil, err)
 		is(t, "TESTING_BASE_INCOMPLETE")(svc.Submit(ctx, "s1", "x", "")) // without the flag the missing main result is still refused
 		v, err := svc.Submit(ctx, "s1", "x", "main took too long")
 		is(t, "")(nil, err)
-		if len(v.Checks) != c.wantChecks+2 {
-			t.Fatalf("%s: %d checks, want %d: %+v", c.name, len(v.Checks), c.wantChecks+2, v.Checks)
+		if len(v.Checks) != c.wantChecks {
+			t.Fatalf("%s: %d checks, want %d: %+v", c.name, len(v.Checks), c.wantChecks, v.Checks)
 		}
 		if c.wantTwinNote != "" {
 			twin := v.Checks[len(v.Checks)-1]
-			if twin.Name != "b" || twin.Leg != "base" || twin.State != CheckSkipped || twin.Note != c.wantTwinNote || twin.ID != "c6" {
+			if twin.Name != "b" || twin.Leg != "base" || twin.State != CheckSkipped || twin.Note != c.wantTwinNote || twin.ID != "c4" {
 				t.Errorf("%s: twin %+v", c.name, twin)
 			}
 		}
@@ -1207,7 +785,7 @@ func TestSubmitSkipBaseRecordsTheMainSideOfUnrepeatedChecks(t *testing.T) {
 func TestHeadPartialBesideBaseFailIsNeverPreExisting(t *testing.T) {
 	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: "x.png"}} }
 	checks := []Check{
-		{ID: "c1", Name: "picker", Expect: "the picker lists agents", State: CheckPartial, Claim: true, Note: "the list shows, the Agent row does nothing", Receipts: rc("head")},
+		{ID: "c1", Name: "picker", Expect: "the picker lists agents", State: CheckPartial, Note: "the list shows, the Agent row does nothing", Receipts: rc("head")},
 		{ID: "c2", Name: "picker", Expect: "the picker lists agents", State: CheckFail, Leg: "base", Note: "there is no agent list", Receipts: rc("base")},
 	}
 	if preExisting(checks, checks[0]) {
@@ -1251,113 +829,5 @@ func TestAbsentIsNeverTheEqualState(t *testing.T) {
 	}
 	if !strings.Contains(headlineRule, "absent") {
 		t.Error("verdict.md does not state the absent rule")
-	}
-}
-
-func TestDeadlineNeutralizesComplexBrokenLinkLabels(t *testing.T) {
-	dir := t.TempDir()
-	for _, md := range []string{
-		"[outer [inner]](missing.png)",
-		"[shortcut]\n\n[shortcut]: missing.png",
-		"[label][ref]\n\n[ref]:\n  missing.png",
-	} {
-		if len(brokenRelativeLinks(dir, md)) == 0 {
-			t.Fatalf("fixture is not a parsed broken link: %q", md)
-		}
-		clean, warnings := neutralizeVerdictLinks(dir, md)
-		if warnings == 0 || len(brokenRelativeLinks(dir, clean)) > 0 {
-			t.Fatalf("deadline lost verdict to %q: clean %q warnings %d", md, clean, warnings)
-		}
-	}
-}
-
-func TestSameFaultHeadProblemsArePreExistingOnlyWithBaseAfterShot(t *testing.T) {
-	for _, state := range []CheckState{CheckFail, CheckPartial} {
-		t.Run(string(state), func(t *testing.T) {
-			head := Check{ID: "c5", Name: "existing-folder setup", Purpose: "risk", State: state, Attribution: "unknown"}
-			base := Check{ID: "c12", Name: head.Name, Purpose: "risk", Leg: "base", State: state, SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-			checks := []Check{head, base}
-
-			attributed := checkAgainstBase(checks, head)
-			if attributed.Attribution != "pre-existing" || !preExisting(checks, head) {
-				t.Fatalf("same fault with base after-shot was not attributed as pre-existing: %+v", attributed)
-			}
-
-			base.Receipts[0].AfterPath = filepath.Join(t.TempDir(), "missing-after.png")
-			checks[1] = base
-			if got := checkAgainstBase(checks, head); got.Attribution != "unknown" || preExisting(checks, head) {
-				t.Fatalf("same fault without a base after-shot became pre-existing: %+v", got)
-			}
-		})
-	}
-}
-
-func TestSameFaultEvidenceOverridesConflictingHeadAttribution(t *testing.T) {
-	for _, attribution := range []string{"pr", "environment"} {
-		for _, state := range []CheckState{CheckFail, CheckPartial} {
-			t.Run(attribution+"/"+string(state), func(t *testing.T) {
-				head := Check{ID: "c5", Name: "existing-folder setup", Purpose: "risk", State: state, Attribution: attribution}
-				base := Check{ID: "c12", Name: head.Name, Purpose: "risk", Leg: "base", State: state, SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-				checks := []Check{head, base}
-				if got := checkAgainstBase(checks, head); got.Attribution != "pre-existing" || !preExisting(checks, got) {
-					t.Fatalf("same-fault base evidence did not override %q attribution: %+v", attribution, got)
-				}
-			})
-		}
-	}
-}
-
-func TestEvidencedSameFaultRiskDoesNotCapVerdict(t *testing.T) {
-	proofHead := Check{ID: "c1", Name: "manage agents", Claim: true, State: CheckPass}
-	proofBase := Check{ID: "c7", Name: proofHead.Name, Claim: true, Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-	for _, state := range []CheckState{CheckFail, CheckPartial} {
-		t.Run(string(state), func(t *testing.T) {
-			riskHead := Check{ID: "c5", Name: "existing-folder setup", Purpose: "risk", State: state, Attribution: "unknown"}
-			riskBase := Check{ID: "c12", Name: riskHead.Name, Purpose: "risk", Leg: "base", State: state, SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-			checks := []Check{proofHead, proofBase, riskHead, riskBase}
-			if got, reasons := derive(checks); got != CheckPass {
-				t.Fatalf("same-fault %s capped the proven change: got %s, reasons %q", state, got, reasons)
-			}
-			if got := checkLimit(checks, riskHead); !strings.Contains(got, "pre-existing, same on base") {
-				t.Fatalf("same-fault %s lost its pre-existing note: %q", state, got)
-			}
-
-			riskBase.SameFault = false
-			checks[3] = riskBase
-			if state == CheckPartial {
-				if got, _ := derive(checks); got != CheckPartial {
-					t.Fatalf("unexplained partial stopped capping the verdict: got %s", got)
-				}
-			}
-		})
-	}
-}
-
-func TestSameFaultClaimCapsOtherPassingClaimsAtPartial(t *testing.T) {
-	for _, state := range []CheckState{CheckFail, CheckPartial} {
-		t.Run(string(state), func(t *testing.T) {
-			checks := []Check{
-				{ID: "c1", Name: "old behavior", Purpose: "claim", Claim: true, State: state, Attribution: "unknown"},
-				{ID: "c2", Name: "old behavior", Purpose: "claim", Claim: true, Leg: "base", State: state, SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}},
-				{ID: "c3", Name: "new behavior", Claim: true, State: CheckPass},
-				{ID: "c4", Name: "new behavior", Claim: true, Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}},
-			}
-			if got, reasons := derive(checks); got != CheckPartial || !slices.ContainsFunc(reasons, func(reason string) bool {
-				return strings.Contains(reason, "fails the same way on main and the PR build")
-			}) {
-				t.Fatalf("same-fault claim %s did not cap the passing claim: got %s, reasons %q", state, got, reasons)
-			}
-		})
-	}
-}
-
-func TestEnvironmentalHeadPartialStillCapsVerdict(t *testing.T) {
-	checks := []Check{
-		{ID: "c1", Name: "new behavior", Claim: true, State: CheckPass},
-		{ID: "c2", Name: "new behavior", Claim: true, Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}},
-		{ID: "c3", Name: "slow response", Purpose: "risk", State: CheckPartial, Attribution: "environment", EnvironmentCause: "timeout"},
-	}
-	if got, reasons := derive(checks); got != CheckPartial {
-		t.Fatalf("environmental partial was not a cap: got %s, reasons %q", got, reasons)
 	}
 }

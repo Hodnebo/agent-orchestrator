@@ -3419,40 +3419,30 @@ type UpdateTestingProjectSettingsRequest struct {
 // TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
 // only the fields it needs. SessionID attributes the call to the worker's run; start and recipe validate need none.
 type TestingRequest struct {
-	SessionID          string   `json:"sessionId,omitempty" description:"the calling session; start, post and prune refuse it when it is a Litmus tester's own session."`
-	ProjectID          string   `json:"projectId,omitempty" description:"start: the project the worker runs in; rerun: only for a run that did not record its project."`
-	RunID              string   `json:"runId,omitempty" description:"rerun only: the run whose pull request is tested again."`
-	Harness            string   `json:"harness,omitempty"`
-	PRURL              string   `json:"prUrl,omitempty"`
-	Leg                string   `json:"leg,omitempty" enum:"base,head"`
-	Agent              string   `json:"agent,omitempty" description:"agent-version only: agent identifier to set for the selected testing leg."`
-	Version            string   `json:"version,omitempty" description:"agent-version only: version to set for the selected testing leg."`
-	Name               string   `json:"name,omitempty"`
-	Expect             string   `json:"expect,omitempty"`
-	Replaces           string   `json:"replaces,omitempty" description:"check add only: ended fail or partial claim on the same leg and PR sentence to replace; requires a reason quoting the PR."`
-	Result             string   `json:"result,omitempty" enum:"pass,fail,partial,absent,skipped"`
-	Note               string   `json:"note,omitempty"`
-	Purpose            string   `json:"purpose,omitempty" enum:"claim,explore,risk" description:"check add/start/reclassify: coverage choice; check start and a base twin may inherit it."`
-	ClaimSentence      string   `json:"claimSentence,omitempty" description:"check add/start/reclassify: quote the PR author's title or body; required for claim."`
-	Risk               string   `json:"risk,omitempty" description:"check add/start/reclassify: what the diff could break; required for risk."`
-	SameFault          bool     `json:"sameFault,omitempty" description:"check end only, base leg: the failure or partial is the same fault as on the PR build."`
-	SameBug            string   `json:"sameBug,omitempty" description:"check end only: ended failed or partial head check that found the same bug. Set when ending; change only by re-ending."`
-	Shot               int      `json:"shot,omitempty" description:"check end only: head receipt number whose after-shot shows the failure."`
-	Attribution        string   `json:"attribution,omitempty" enum:"pr,pre-existing,environment,unknown" description:"check end only: cause of the observed outcome."`
-	EnvironmentCause   string   `json:"environmentCause,omitempty" description:"check end only: environment cause, required with attribution environment."`
-	AttributionReceipt int      `json:"attributionReceipt,omitempty" description:"check end only: receipt supporting an environment attribution."`
-	Summary            string   `json:"summary,omitempty"`
-	Blocked            bool     `json:"blocked,omitempty" description:"submit only: stop early with a reason; a recorded failure keeps the overall result fail."`
-	Reason             string   `json:"reason,omitempty" description:"submit with blocked: what failed; reclassify: why coverage changed; check add with replaces: PR sentence contradicting the old expect. Required in each case."`
-	SkipBase           string   `json:"skipBase,omitempty" description:"submit only: why the base was not run; lets a submit through while a prepared base is unlaunched."`
-	Action             string   `json:"action,omitempty"`
-	Args               []string `json:"args,omitempty" description:"drive: the action's arguments."`
-	Path               string   `json:"path,omitempty"`
-	NoComment          bool     `json:"noComment,omitempty" description:"start only: the run's verdict is written to comment.md but not posted to the pull request."`
-	NoEvidence         bool     `json:"noEvidence,omitempty" description:"start only: no screenshots or GIFs are published to the repo's litmus/evidence branch for the comment."`
-	KeepRuns           *int     `json:"keepRuns,omitempty" minimum:"0" description:"prune only: finished run dirs to keep besides unfinished ones (default 20)."`
-	KeepCheckouts      *int     `json:"keepCheckouts,omitempty" minimum:"0" description:"prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2)."`
-	DryRun             bool     `json:"dryRun,omitempty" description:"prune only: report what would be deleted and delete nothing."`
+	SessionID     string   `json:"sessionId,omitempty" description:"the calling session; start, post and prune refuse it when it is a Litmus tester's own session."`
+	ProjectID     string   `json:"projectId,omitempty" description:"start: the project the worker runs in; rerun: only for a run that did not record its project."`
+	RunID         string   `json:"runId,omitempty" description:"rerun only: the run whose pull request is tested again."`
+	Harness       string   `json:"harness,omitempty"`
+	PRURL         string   `json:"prUrl,omitempty"`
+	Leg           string   `json:"leg,omitempty" enum:"base,head"`
+	Name          string   `json:"name,omitempty"`
+	Expect        string   `json:"expect,omitempty"`
+	Result        string   `json:"result,omitempty" enum:"pass,fail,partial,absent,skipped"`
+	Note          string   `json:"note,omitempty"`
+	SameFault     bool     `json:"sameFault,omitempty" description:"check end only, base leg: the failure or partial is the same fault as on the PR build."`
+	Shot          int      `json:"shot,omitempty" description:"check end only: head receipt number whose after-shot shows the failure."`
+	Summary       string   `json:"summary,omitempty"`
+	Blocked       bool     `json:"blocked,omitempty" description:"submit only: stop early with a reason; a recorded failure keeps the overall result fail."`
+	Reason        string   `json:"reason,omitempty" description:"submit with blocked: what failed; required and non-empty."`
+	SkipBase      string   `json:"skipBase,omitempty" description:"submit only: why the base was not run; lets a submit through while a prepared base is unlaunched."`
+	Action        string   `json:"action,omitempty"`
+	Args          []string `json:"args,omitempty" description:"drive: the action's arguments."`
+	Path          string   `json:"path,omitempty"`
+	NoComment     bool     `json:"noComment,omitempty" description:"start only: the run's verdict is written to comment.md but not posted to the pull request."`
+	NoEvidence    bool     `json:"noEvidence,omitempty" description:"start only: no screenshots or GIFs are published to the repo's litmus/evidence branch for the comment."`
+	KeepRuns      *int     `json:"keepRuns,omitempty" minimum:"0" description:"prune only: finished run dirs to keep besides unfinished ones (default 20)."`
+	KeepCheckouts *int     `json:"keepCheckouts,omitempty" minimum:"0" description:"prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2)."`
+	DryRun        bool     `json:"dryRun,omitempty" description:"prune only: report what would be deleted and delete nothing."`
 }
 
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.

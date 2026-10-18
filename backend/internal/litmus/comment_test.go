@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,10 +111,10 @@ func commentChecks(t *testing.T) []Check {
 		return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: evidenceFile(t)}}
 	}
 	return []Check{
-		{ID: "c1", Name: "menu opens", Expect: "the menu stays open", State: CheckPass, Claim: true, Note: "Head: the menu stayed open and grew to 14 rows (ref @e12 | focus kept) <b> ![x](u) &commat;", Receipts: append(r("head"), r("head")...)},
-		{ID: "c2", Name: "menu opens", Expect: "the menu stays open", State: CheckFail, Claim: true, Leg: "base", Note: "Base: closed the submenu.", Receipts: r("base")},
-		{ID: "c3", Name: "last model", Expect: "the last model is remembered", State: CheckPass, Claim: true, Note: strings.Repeat("long note ", 20), Receipts: r("head")},
-		{ID: "c4", Name: "effort slider", Expect: "the effort slider moves", State: CheckSkipped, Claim: true, Note: "needs a paid key"},
+		{ID: "c1", Name: "menu opens", Expect: "the menu stays open", State: CheckPass, Note: "Head: the menu stayed open and grew to 14 rows (ref @e12 | focus kept) <b> ![x](u) &commat;", Receipts: append(r("head"), r("head")...)},
+		{ID: "c2", Name: "menu opens", Expect: "the menu stays open", State: CheckFail, Leg: "base", Note: "Base: closed the submenu.", Receipts: r("base")},
+		{ID: "c3", Name: "last model", Expect: "the last model is remembered", State: CheckPass, Note: strings.Repeat("long note ", 20), Receipts: r("head")},
+		{ID: "c4", Name: "effort slider", Expect: "the effort slider moves", State: CheckSkipped, Note: "needs a paid key"},
 	}
 }
 
@@ -137,25 +136,16 @@ func noSlop(t *testing.T, body string) {
 	}
 }
 
-// noSlopSummary checks generated result and coverage wording only. Tester notes
-// and check names may contain words such as head, base, or c1 and stay intact.
-func noSlopSummary(t *testing.T, run Run, v Verdict) {
-	t.Helper()
-	tally := count(v.Checks)
-	noSlop(t, verdictLine(v.Overall, tally, run.baseName())+"\n"+coverageLine(tally, run.baseName()))
-}
-
 // The builds finish before the tester's clock starts: the first line gives the build time and the testing time apart,
 // and the testing time is what the budget is measured against.
 func TestCommentSplitsBuildTimeFromTestingTime(t *testing.T) {
 	run := commentRun
 	run.Deadline = run.CreatedAt.Add(3*time.Minute + RunBudget) // prepare finished 3 minutes in
-	run.TestingEndedAt = run.CreatedAt.Add(10 * time.Minute)    // submit finished before verdict rendering
 	now := run.CreatedAt.Add(10 * time.Minute)
 	if got := renderComment(run, commentVerdict(commentChecks(t)), evidence{}, now); !strings.HasPrefix(got, "Litmus tried #7 on the PR build and on main (builds 3 minutes, testing 7 minutes).") {
 		t.Errorf("comment: %q", got[:min(len(got), 120)])
 	}
-	if md := renderVerdict(run, commentVerdict(commentChecks(t)), false, nil, t.TempDir(), now, nil); !strings.Contains(md, "Duration: builds 3m0s, testing 7m0s of a 25m budget, finalizing 0s.") {
+	if md := renderVerdict(run, commentVerdict(commentChecks(t)), false, nil, t.TempDir(), now, nil); !strings.Contains(md, "Duration: builds 3m0s, testing 7m0s of a 25m0s budget.") {
 		t.Errorf("verdict.md: %q", md[:min(len(md), 300)])
 	}
 }
@@ -163,67 +153,56 @@ func TestCommentSplitsBuildTimeFromTestingTime(t *testing.T) {
 func TestRenderCommentGolden(t *testing.T) {
 	now := commentRun.CreatedAt.Add(4*time.Minute + 3*time.Second)
 	got := renderComment(commentRun, commentVerdict(commentChecks(t)), evidence{}, now)
-	for _, want := range []string{
-		"Litmus tried #7 on the PR build and on main (4 minutes).",
-		"**Result: partial: not everything could be tested.**",
-		"Main reproduces the original problem in 1 claim check that passes on the PR build.",
-		"2 completed checks on the PR build; 1 check compared on main; 1 check with different results.",
-		"Passed: menu opens (main does not do this); last model (main: not compared)",
-		"Not tested: effort slider (needs a paid key; main: not compared)",
-		"<details><summary>Full check notes</summary>",
-		"- menu opens. Expected: the menu stays open.",
-		"The PR build: pass. Head: the menu stayed open",
-		"Main: fail. Base: closed the submenu.",
-		"- last model. Expected: the last model is remembered.",
-		"- effort slider. Expected: the effort slider moves.",
-		"The PR build: skipped. needs a paid key",
-		"</details>\n\n<!-- litmus:comment o/r#7 -->",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("comment missing %q:\n%s", want, got)
-		}
+	const want = `Litmus tried #7 on the PR build and on main (4 minutes).
+
+**Result: the PR does what it says in the 2 checks I finished. One check only ran on the PR build and one could not be done.**
+
+I checked that the menu stays open. On the PR build, the menu stayed open and grew to 14 rows (that element \| focus kept) &lt;b> !\[x](u) &amp;commat;. On main, closed the submenu.
+
+Next I checked that the last model is remembered. On the PR build, long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note long note. I could not compare it with main.
+
+I could not check that the effort slider moves. Needs a paid key.
+
+<!-- litmus:comment o/r#7 -->`
+	if got != want {
+		t.Fatalf("comment:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(got, "Checked:\n") || strings.Contains(got, "Litmus couldn't test this:\n") {
-		t.Fatalf("comment retained the old check sections:\n%s", got)
-	}
+	noSlop(t, got)
 }
 
-func TestRenderCommentKeepsFullCheckNotesInOneDetailsBlock(t *testing.T) {
+func TestRenderCommentFitsTheCapAndClipsTableRowsLast(t *testing.T) {
 	long := strings.Repeat("n", 300)
 	var checks []Check
 	for i := 1; i <= 6; i++ {
-		checks = append(checks, Check{ID: fmt.Sprint("c", i), Name: "check " + fmt.Sprint(i), State: CheckPartial, Claim: true, Note: long, Receipts: []Receipt{{Seq: i}}})
+		checks = append(checks, Check{ID: fmt.Sprint("c", i), Name: "check " + fmt.Sprint(i), State: CheckPartial, Note: long, Receipts: []Receipt{{Seq: i}}})
 	}
 	v := commentVerdict(checks)
 	for i := 0; i < 30; i++ { // far more Limits text than 6,000 characters
 		v.Reasons = append(v.Reasons, fmt.Sprintf("reason %d %s", i, long))
 	}
 	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if !strings.HasSuffix(got, "</details>\n\n"+commentMarker("o/r", 7)) || !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: partial: something misbehaved.**\n") {
-		t.Fatalf("comment did not end with the full notes and marker: %q", got[max(len(got)-120, 0):])
+	if len(got) > commentCap || !strings.HasSuffix(got, "\n"+commentMarker("o/r", 7)) || !strings.HasPrefix(got, "Litmus tried #7 on the PR build (under a minute).\n\n**Result: nothing failed, but I could not confirm the change from the app; read the diff before merging.**\n") {
+		t.Fatalf("len %d, ends %q", len(got), got[len(got)-60:])
 	}
-	if strings.Count(got, "<details><summary>Full check notes</summary>") != 1 {
-		t.Fatalf("expected one full check notes block:\n%s", got)
-	}
-	start := strings.Index(got, "<details><summary>Full check notes</summary>")
-	end := strings.Index(got[start:], "</details>") + start
-	if strings.Count(got[start:end], long) != 6 {
-		t.Fatalf("full notes lost or repeated observations: %d of 6\n%s", strings.Count(got[start:end], long), got)
-	}
-	for i := 1; i <= 6; i++ {
-		if !strings.Contains(got, fmt.Sprintf("- check %d: partial", i)) {
-			t.Errorf("partial check %d is missing from the compact rows:\n%s", i, got)
+	rows := 0
+	for _, l := range strings.Split(got, "\n") {
+		if strings.HasPrefix(l, "| check ") && strings.HasSuffix(l, strings.Repeat("n", 80)+"... |") {
+			rows++
 		}
 	}
+	if rows != 6 { // the Limits gave way; every table note kept its full clip
+		t.Fatalf("%d of 6 table notes kept the full clip:\n%s", rows, got)
+	}
+	if !strings.Contains(got, "\nAnd ") || strings.Contains(got, "AO session") {
+		t.Fatalf("squeezed Limits do not say so:\n%s", got)
+	}
 
-	for i := 0; i < 300; i++ { // required rows and notes outrank the soft prose cap
+	for i := 0; i < 300; i++ { // nothing fits: the body is cut, the marker survives
 		checks = append(checks, checks[0])
 	}
 	got = renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
-	start = strings.Index(got, "<details><summary>Full check notes</summary>")
-	end = strings.Index(got[start:], "</details>") + start
-	if !strings.HasSuffix(got, "</details>\n\n"+commentMarker("o/r", 7)) || strings.Count(got[start:end], long) != len(checks) || strings.Count(got, "<details><summary>Full check notes</summary>") != 1 {
-		t.Fatalf("required check notes or marker lost: len %d, notes %d of %d", len(got), strings.Count(got[start:end], long), len(checks))
+	if len(got) > commentCap || !strings.HasSuffix(got, commentMarker("o/r", 7)) {
+		t.Fatalf("hard cap: len %d", len(got))
 	}
 }
 
@@ -262,10 +241,10 @@ func TestBlockedRunKeepsTheReasonsTheFirstLineLeavesOut(t *testing.T) {
 	if !strings.HasPrefix(got, "Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.\n\n") || strings.Count(got, "I could not run the checks.") != 1 || !strings.Contains(got, "\nI could not run the checks. Word word ") {
 		t.Fatalf("second reason is not the one Limits bullet:\n%s", got)
 	}
-	v.Reasons = []string{strings.TrimSpace(long)} // a first reason now stays whole on the first line
+	v.Reasons = []string{strings.TrimSpace(long)} // a first reason the first line clips keeps its full text as a bullet
 	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if !strings.Contains(got, "Litmus could not start on #7 ("+strings.TrimSpace(long)+")") || strings.Count(got, strings.TrimSpace(long)) != 1 {
-		t.Fatalf("first reason was cut or duplicated:\n%s", got)
+	if strings.Count(got, "I could not run the checks.") != 1 {
+		t.Fatalf("a clipped first reason is lost:\n%s", got)
 	}
 }
 
@@ -276,21 +255,20 @@ func TestCommentSaysTheGapsAsLimitsWithoutChangingTheResult(t *testing.T) {
 	run.Gaps = []string{"I could not read the linked issue #123 (not found).", "The PR's patch is longer than 5.0 MB; I was shown the first 5.0 MB of it and read the rest with git (files.txt lists every file)."}
 	got := renderComment(run, commentVerdict(commentChecks(t)), evidence{}, now)
 	result := func(s string) string { return strings.SplitN(s, "\n", 4)[2] }
-	gap1, gap2 := mdText(run.Gaps[0], math.MaxInt), mdText(run.Gaps[1], math.MaxInt)
 	if result(got) != result(plain) || !strings.HasPrefix(result(got), "**Result: ") {
 		t.Fatalf("the result line changed: %q vs %q", result(got), result(plain))
 	}
-	if !strings.Contains(got, "\n"+gap1+"\n"+gap2+"\n\n<details><summary>Full check notes</summary>") {
-		t.Fatalf("gaps or final notes block are missing:\n%s", got)
+	if !strings.Contains(got, "\n"+run.Gaps[0]+"\n"+run.Gaps[1]+"\n\n<!-- litmus:comment") {
+		t.Fatalf("gaps are not the Limits bullets:\n%s", got)
 	}
-	noSlopSummary(t, run, commentVerdict(commentChecks(t)))
+	noSlop(t, got)
 
 	v := commentVerdict(commentChecks(t)) // with Limits text far over the cap, the gaps are not what gets folded
 	for i := 0; i < 30; i++ {
 		v.Reasons = append(v.Reasons, fmt.Sprintf("reason %d %s", i, strings.Repeat("n", 300)))
 	}
 	got = renderComment(run, v, evidence{}, now)
-	if !strings.Contains(got, gap1) || !strings.Contains(got, gap2) || !strings.Contains(got, "\nAnd ") {
+	if !strings.Contains(got, run.Gaps[0]) || !strings.Contains(got, run.Gaps[1]) || !strings.Contains(got, "\nAnd ") {
 		t.Fatalf("the cap folded the gaps:\n%s", got)
 	}
 }
@@ -306,10 +284,10 @@ func TestCommentKeepsEveryGapWholeAtEveryFit(t *testing.T) {
 	}
 	for _, f := range commentFits {
 		got := commentBody(run, v, evidence{}, run.CreatedAt, f)
-		if !strings.Contains(got, "\n"+mdText(long, len(long))+"\n"+mdText(run.Gaps[1], math.MaxInt)) {
+		if !strings.Contains(got, "\n"+mdText(long, len(long))+"\n"+run.Gaps[1]) {
 			t.Errorf("fit %+v lost or clipped a gap:\n%s", f, got)
 		}
-		if f.bullets <= len(run.Gaps) && !strings.Contains(got, "\nAnd 5 more.\n\n<details><summary>Full check notes</summary>") {
+		if f.bullets <= len(run.Gaps) && !strings.HasSuffix(got, "\nAnd 5 more.") {
 			t.Errorf("fit %+v: the other limits are not folded into one line:\n%s", f, got[max(len(got)-400, 0):])
 		}
 	}
@@ -321,22 +299,17 @@ func TestBlockedRunSkipsTheCheckParagraphs(t *testing.T) {
 	checks := []Check{{ID: "c1", Name: "artifactversions-tests", Expect: "the artifactversions package tests pass: files are captured after two stable ticks", Receipts: nil}}
 	v := Verdict{Overall: CheckBlocked, Checks: checks, Reasons: []string{"prepare refused: no checkout"}}
 	got := renderComment(run, v, evidence{}, run.CreatedAt.Add(7*time.Minute))
-	for _, want := range []string{
-		"Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.",
-		"**Result: could not test this one.**",
-		"Not tested: artifactversions tests (No result recorded; main: not compared)",
-		"Not checked by this run: tests (4 files).",
-		checks[0].Expect,
-		"The PR build: not recorded.",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("blocked comment lost %q:\n%s", want, got)
-		}
+	const want = `Litmus could not start on #7 (prepare refused: no checkout). Nothing was built or checked.
+
+**Result: could not test this one.**
+
+Not checked by this run: tests (4 files).
+
+<!-- litmus:comment o/r#7 -->`
+	if got != want {
+		t.Fatalf("blocked comment:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Contains(got, "I checked that") || strings.Contains(got, "| what was checked |") {
-		t.Fatalf("blocked check has a prose paragraph: %s", got)
-	}
-	noSlopSummary(t, run, v)
+	noSlop(t, got)
 
 	v.Overall = CheckPartial // not blocked: a check with nothing seen says so in one sentence, not an empty note
 	if got := checkPara(run, v, checks[0], 80, 0); got != "Artifactversions tests could not be run on the PR build." {
@@ -429,43 +402,36 @@ func TestMdTextDoublesBackslashes(t *testing.T) {
 	}
 }
 
-func TestMdTextShortensOnlyAtSentenceBoundaries(t *testing.T) {
-	for _, tc := range []struct {
-		text string
-		max  int
-		want string
-	}{
-		{"First observation. Second observation continues beyond this limit.", 30, "First observation."},
-		{"One long observation with no sentence stop inside the limit", 20, "One long observation with no sentence stop inside the limit"},
-		{"First check! Another check goes on too long", 22, "First check!"},
-	} {
-		if got := mdText(tc.text, tc.max); got != tc.want {
-			t.Errorf("mdText(%q, %d) = %q, want %q", tc.text, tc.max, got, tc.want)
-		}
-	}
-}
-
 func TestVerdictLineSentences(t *testing.T) {
+	counted := count(commentChecks(t)) // passed 2, one shown against main, one not compared, one unreached
 	for _, c := range []struct {
 		overall CheckState
 		t       tally
 		want    string
 	}{
-		{CheckPass, tally{}, "pass"},
-		{CheckPass, tally{worth: 1}, "pass, 1 thing worth a look"},
-		{CheckPass, tally{worth: 2}, "pass, 2 things worth a look"},
-		{CheckPartial, tally{headProblems: 1}, "partial: something misbehaved"},
-		{CheckPartial, tally{completed: 2, compared: 2}, "partial: no difference from main shown"},
-		{CheckPartial, tally{completed: 2, compared: 1, notRun: 1}, "partial: not everything could be tested"},
-		{CheckPartial, tally{}, "partial: not everything could be tested"},
-		{CheckPartial, tally{skippedClaims: []Check{{Name: "login"}}}, "partial: not everything could be tested; skipped claim checks: login on the PR build"},
-		{CheckFail, tally{}, "something broke; do not merge yet"},
-		{CheckUntested, tally{}, "the PR's stated behavior was not checked"},
+		{CheckPass, counted, "the PR does what it says in the 2 checks I finished. One check only ran on the PR build and one could not be done"},
+		{CheckPass, tally{passed: 3, shown: 1, notCompared: 2, unreached: 3}, "the PR does what it says in the 3 checks I finished. A few checks only ran on the PR build and a few could not be done"},
+		{CheckPass, tally{passed: 1, shown: 1, unreached: 1}, "the PR does what it says in the 1 check I finished. One check could not be done"},
+		{CheckPass, tally{passed: 1, shown: 1, unreached: 2}, "the PR does what it says in the 1 check I finished. A few checks could not be done"},
+		{CheckPass, tally{passed: 3, shown: 1, notCompared: 2}, "the PR does what it says in the 3 checks I finished. A few checks only ran on the PR build"},
+		{CheckPass, tally{passed: 1, shown: 1, notCompared: 1}, "the PR does what it says in the 1 check I finished. One check only ran on the PR build"},
+		{CheckPass, tally{passed: 1, shown: 1}, "the PR does what it says in the 1 check I finished"},
+		{CheckPass, tally{passed: 2, pre: 1}, "the PR does what it says in the 2 checks I finished"},
+		{CheckPartial, tally{passed: 2}, "the PR build works, but nothing differed from main; read the diff before merging"},
+		{CheckPartial, tally{partial: 2}, "nothing failed, but I could not confirm the change from the app; read the diff before merging"},
+		{CheckPartial, tally{pre: 1}, "nothing failed, but I could not confirm the change from the app; read the diff before merging"},
+		{CheckPartial, tally{unreached: 4}, "could not test this from the app"},
+		{CheckPartial, tally{unreached: 1, partial: 1}, "nothing failed, but I could not confirm the change from the app; read the diff before merging"},
+		{CheckFail, tally{failed: 1, passed: 2}, "something broke; do not merge yet"},
+		{CheckFail, tally{failed: 3}, "something broke; do not merge yet"},
 		{CheckBlocked, tally{}, "could not test this one"},
 	} {
 		if got := verdictLine(c.overall, c.t, "main"); got != c.want {
-			t.Errorf("%s %+v: got %q, want %q", c.overall, c.t, got, c.want)
+			t.Errorf("%s %+v:\n got %q\nwant %q", c.overall, c.t, got, c.want)
 		}
+	}
+	if got := verdictLine(CheckPartial, tally{passed: 1}, "develop"); got != "the PR build works, but nothing differed from develop; read the diff before merging" {
+		t.Errorf("a run against another base branch names it: %q", got)
 	}
 }
 
@@ -533,43 +499,62 @@ func TestAreaIsCoveredOnlyWhenACheckNamingItRan(t *testing.T) {
 	}
 }
 
+func TestClauseCutsAtAWordAndHasNoStopOfItsOwn(t *testing.T) {
+	long := "With sidebar expanded and brand shown, Collapse, Go back and Go forward buttons are all visible"
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{long, 160, long},
+		{"Ends with a stop...", 160, "Ends with a stop"},
+		{strings.Repeat("alpha ", 40), 160, strings.TrimSpace(strings.Repeat("alpha ", 26))},
+		{"it shows Go back and the", 20, "it shows Go back"},                           // a cut never ends on "and" or "the" // the 160th character is inside a word
+		{"alpha beta gamma delta", 16, "alpha beta gamma"},                             // the cut falls on a space: no word is lost
+		{"keep (open bracket and then a long tail", 20, "keep"},                        // an unclosed bracket goes with the cut
+		{"keep (both closed) and more words after", 30, "keep (both closed) and more"}, //
+	} {
+		if got := clause(c.in, c.n); got != c.want {
+			t.Errorf("clause(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
 func TestCommentSaysWholeSentencesInTheReadersWords(t *testing.T) {
 	long := "With sidebar expanded and brand shown, Collapse, Go back and Go forward buttons are all visible"
 	over := strings.Repeat("the sidebar keeps every button ", 8) + "and then some"
 	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg}} }
 	checks := []Check{
-		{ID: "c1", Name: "history-visible", Expect: long, State: CheckPass, Claim: true, Note: "Head shows the arrows", Receipts: rc("head")},
-		{ID: "c2", Name: "history-visible", Expect: long, State: CheckFail, Claim: true, Leg: "base", Note: "Base: expanded sidebar shows only Collapse", Receipts: rc("base")},
-		{ID: "c3", Name: "history-navigates", Expect: "Back/forward navigate and stay visible", State: CheckPartial, Claim: true, Note: "Forward did not land. C2 needs the arrows to navigate, so it cannot run there (see c1).", Receipts: rc("head")},
-		{ID: "c4", Name: "long", Expect: over, State: CheckPass, Claim: true, Note: "fine", Receipts: rc("head")},
+		{ID: "c1", Name: "history-visible", Expect: long, State: CheckPass, Note: "Head shows the arrows", Receipts: rc("head")},
+		{ID: "c2", Name: "history-visible", Expect: long, State: CheckFail, Leg: "base", Note: "Base: expanded sidebar shows only Collapse", Receipts: rc("base")},
+		{ID: "c3", Name: "history-navigates", Expect: "Back/forward navigate and stay visible", State: CheckPartial, Note: "Forward did not land. C2 needs the arrows to navigate, so it cannot run there (see c1).", Receipts: rc("head")},
+		{ID: "c4", Name: "long", Expect: over, State: CheckPass, Note: "fine", Receipts: rc("head")},
 	}
 	v := commentVerdict(checks)
 	v.SkipBase = "C2 has no arrows; base has none when expanded, head is slow"
 	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
 	for _, want := range []string{
-		"Passed: history visible (main does not do this); long (main: not compared)",
-		"- history navigates: partial (main: not compared). Forward did not land.",
-		"Expected: " + long,
-		"Expected: Back/forward navigate and stay visible",
-		"Expected: " + over,
+		"I checked that with sidebar expanded and brand shown, Collapse, Go back and Go forward buttons are all visible. The PR build shows the arrows. On main, expanded sidebar shows only Collapse.",
+		"Next I checked that Back/forward navigate and stay visible. On the PR build, forward did not land. History visible needs the arrows to navigate, so it cannot run there (see history visible).\n",
+		"I also checked that " + strings.TrimSuffix(strings.Repeat("the sidebar keeps every button ", 5), " ") + ". On the PR build, fine.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "....") || strings.Contains(got, "Worth a look") || strings.Contains(got, "could not compare this") {
-		t.Errorf("clipped sentence or old closing line:\n%s", got)
+	if strings.Contains(got, "....") || strings.Contains(got, "Worth a look") || strings.Contains(got, "could not compare this") || strings.Contains(got, "I did not run") {
+		t.Errorf("clipped sentence, the old closing line, or a run-wide skip over a run that compared a check:\n%s", got)
 	}
-	noSlopSummary(t, commentRun, v)
+	noSlop(t, got)
 
 	checks[1].State = CheckSkipped // nothing ran on main: the reason stands for the whole run, said once
 	v = commentVerdict(checks)
 	v.SkipBase = "C2 has no arrows; base has none when expanded, head is slow"
 	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if !strings.Contains(got, "Passed: history visible (not tested on main)") || !strings.Contains(got, "I did not run main: c2 has no arrows; base has none when expanded, head is slow") {
-		t.Errorf("the skipped twin state or run-wide reason was lost:\n%s", got)
+	if !strings.Contains(got, "\n\nI did not run main: history visible has no arrows; main has none when expanded, the PR build is slow.\n\n") || strings.Count(got, "I did not run") != 1 {
+		t.Errorf("skip reason not said exactly once:\n%s", got)
 	}
-	noSlopSummary(t, commentRun, v)
+	noSlop(t, got)
 }
 
 // A run that compared some checks on main says which, and never claims it did not run main.
@@ -584,48 +569,48 @@ func TestCommentSaysWhichChecksWereComparedOnMain(t *testing.T) {
 	if strings.Contains(got, "I did not run") {
 		t.Errorf("the comment says main was not run:\n%s", got)
 	}
-	noSlopSummary(t, commentRun, v)
+	noSlop(t, got)
 
-	checks = append(checks, Check{ID: "c5", Name: "last model", Expect: "the last model is remembered", State: CheckSkipped, Leg: "base", Note: "main took too long to start"}, Check{ID: "c6", Name: "pick", Expect: "the picker opens", State: CheckPass, Claim: true, Receipts: []Receipt{{Seq: 3, Leg: "head"}}})
+	checks = append(checks, Check{ID: "c5", Name: "last model", Expect: "the last model is remembered", State: CheckSkipped, Leg: "base", Note: "main took too long to start"}, Check{ID: "c6", Name: "pick", Expect: "the picker opens", State: CheckPass, Receipts: []Receipt{{Seq: 3, Leg: "head"}}})
 	v = commentVerdict(checks)
 	v.SkipBase = "main took too long to start"
 	got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
 	if want := "I compared 1 check on main; 2 were not run there: last model, pick."; !strings.Contains(got, want) {
 		t.Errorf("no %q in\n%s", want, got)
 	}
-	if !strings.Contains(got, "Passed: menu opens (main does not do this); last model (not tested on main); pick") || !strings.Contains(got, "Not tested: effort slider (needs a paid key; main: not compared)") {
-		t.Errorf("compact rows lost the head checks or skipped reason:\n%s", got)
-	}
-	if !strings.Contains(got, "- last model. Expected: the last model is remembered.") || !strings.Contains(got, "Main: skipped. main took too long to start") {
-		t.Errorf("the full notes lost the skipped twin reason:\n%s", got)
+	if !strings.Contains(got, "I did not repeat this on main: main took too long to start.") {
+		t.Errorf("the skipped twin's reason is not on its row:\n%s", got)
 	}
 }
 
+// The result line says how many checks ran on main when some did, and keeps "nothing was compared" for when none did.
 func TestVerdictLineSaysHowManyChecksWereComparedOnMain(t *testing.T) {
-	if got := count(commentChecks(t)); got.completed != 2 || got.compared != 1 || got.notRun != 1 || got.differed != 1 {
-		t.Errorf("counts = %+v, want 2 completed, 1 compared, 1 not run, 1 different", got)
+	if got := count(commentChecks(t)); got.compared != 1 || got.notRun != 1 {
+		t.Errorf("commentChecks compared %d, not run %d on main, want 1 and 1", got.compared, got.notRun)
 	}
 	for _, c := range []struct {
 		t    tally
 		want string
 	}{
-		{tally{completed: 7, compared: 5, differed: 2}, "7 completed checks on the PR build; 5 checks compared on main; 2 checks with different results."},
-		{tally{completed: 2, compared: 1, differed: 1}, "2 completed checks on the PR build; 1 check compared on main; 1 check with different results."},
-		{tally{completed: 2}, "2 completed checks on the PR build; 0 checks compared on main; 0 checks with different results."},
+		{tally{passed: 7, notCompared: 2, compared: 5, notRun: 2}, "the PR build works as far as I could check; 5 checks were compared on main and showed no difference, 2 were not; read the diff before merging"},
+		{tally{passed: 2, notCompared: 1, compared: 1, notRun: 1}, "the PR build works as far as I could check; 1 check was compared on main and showed no difference, 1 was not; read the diff before merging"},
+		{tally{passed: 2, notCompared: 2}, "the PR build works as far as I could check; nothing was compared against main, so read the diff before merging"},
 	} {
-		if got := coverageLine(c.t, "main"); got != c.want {
-			t.Errorf("coverageLine(%+v) = %q, want %q", c.t, got, c.want)
+		got := verdictLine(CheckPartial, c.t, "main")
+		if got != c.want {
+			t.Errorf("verdictLine(%+v) = %q, want %q", c.t, got, c.want)
 		}
+		noSlop(t, got)
 	}
 }
 
-func TestHeroCaptionKeepsBothNotesWhole(t *testing.T) {
+func TestHeroCaptionSaysWhatEachSideShowedInNinetyCharacters(t *testing.T) {
 	both := hero{pr: &shot{}, base: &shot{}}
 	if got := heroCaption(commentRun, both); got != "Main on the left, PR build on the right." {
 		t.Errorf("no notes: %q", got)
 	}
 	both.baseNote, both.prNote = "No Go back or Go forward buttons", "Expanded sidebar shows Collapse, Go back, Go forward (both disabled on Home) and Orchestrator.inc brand; still present after toggling a project row"
-	want := "Main on the left: no Go back or Go forward buttons. PR build on the right: expanded sidebar shows Collapse, Go back, Go forward (both disabled on Home) and Orchestrator.inc brand; still present after toggling a project row."
+	want := "Main on the left: no Go back or Go forward buttons. PR build on the right: expanded sidebar shows Collapse, Go back, Go forward (both disabled on Home)."
 	if got := heroCaption(commentRun, both); got != want {
 		t.Errorf("caption %q, want %q", got, want)
 	}
@@ -635,122 +620,37 @@ func TestHeroCaptionKeepsBothNotesWhole(t *testing.T) {
 	}
 }
 
-func TestPlainTesterPreservesTheTestersVocabulary(t *testing.T) {
+func TestPlainTesterRewritesTheTestersVocabulary(t *testing.T) {
 	checks := []Check{{ID: "c1", Name: "history-visible"}, {ID: "c3", Name: "menu opens"}}
 	run := commentRun
-	for _, in := range []string{
-		"Head: both arrows show",
-		"head leg shows it, the headline and database stay",
-		"Base has none; BASE too",
-		"C1 needs it, shown by c3, and c9 too",
-		"nothing to change here",
+	for in, want := range map[string]string{
+		"Head: both arrows show":                            "both arrows show",
+		"head leg shows it, the headline and database stay": "the PR build leg shows it, the headline and database stay",
+		"Base has none; BASE too":                           "Main has none; Main too",
+		"C1 needs it, shown by c3, and c9 too":              "History visible needs it, shown by menu opens, and that check too",
+		"nothing to change here":                            "nothing to change here",
 	} {
-		if got := plainTester(in, run, checks); got != in {
-			t.Errorf("plainTester(%q) = %q, want the tester's words unchanged", in, got)
+		if got := plainTester(in, run, checks); got != want {
+			t.Errorf("plainTester(%q) = %q, want %q", in, got, want)
 		}
 	}
 	run.BaseRef = "develop"
-	if got := plainTester("base differs", run, checks); got != "base differs" {
-		t.Errorf("tester text was changed to the configured branch name: %q", got)
+	if got := plainTester("base differs", run, checks); got != "develop differs" {
+		t.Errorf("another base branch is named: %q", got)
 	}
 }
 
-func TestPlainTesterLeavesPathAndCodeTokensAlone(t *testing.T) {
-	run := commentRun
-	checks := []Check{{ID: "c1", Name: "menu opens"}}
-	for _, in := range []string{"/head/base/c1", `C:\head\base\c1`, "path.head", "`head`", "`head and base`", "``echo head && cat base``", "```head and c1```", "head.md", "base/c1", "http://host/head"} {
-		if got := plainTester(in, run, checks); got != in {
-			t.Errorf("plainTester(%q) = %q, want it unchanged", in, got)
-		}
-	}
-	if got := plainTester("head and c1", run, checks); got != "head and c1" {
-		t.Errorf("plainTester rewrote tester words: %q", got)
-	}
-}
-
-func TestCommentGroupsNonClaimHeadPasses(t *testing.T) {
-	checks := []Check{
-		{ID: "c1", Name: "claim", Expect: "the claim works", Claim: true, State: CheckPass, Receipts: []Receipt{{Seq: 1}}},
-		{ID: "c2", Name: "menu opens", Expect: "the menu opens", State: CheckPass, Note: "The menu opened."},
-		{ID: "c3", Name: "sidebar opens", Expect: "the sidebar opens", Purpose: "risk", Risk: "layout changes hide sidebar controls", State: CheckPass, Note: "The sidebar opened."},
-		{ID: "c4", Name: "settings persist", Expect: "settings persist", Purpose: "risk", Risk: "settings moves lose saved choices", State: CheckPass, Note: "Settings retained the saved choice."},
-	}
-	v := commentVerdict(checks)
-	compact := compactChecks(commentRun, v)
-	if !strings.Contains(compact, "Passed: claim (main: not compared); menu opens (main: not compared); sidebar opens (main: not compared); settings persist (main: not compared)") {
-		t.Fatalf("all passing checks should use names in one line:\n%s", compact)
-	}
-	if strings.Contains(compact, "Risk:") || strings.Contains(compact, "layout changes hide") || strings.Contains(compact, "Settings moves lose") {
-		t.Fatalf("compact rows exposed full risks:\n%s", compact)
-	}
-	full := fullCheckNotes(commentRun, v)
-	for _, detail := range []string{"Risk: layout changes hide sidebar controls", "Risk: settings moves lose saved choices", "The menu opened.", "The sidebar opened.", "Settings retained the saved choice."} {
-		if !strings.Contains(full, detail) {
-			t.Errorf("full notes lost %q:\n%s", detail, full)
-		}
-	}
-}
-
-func TestCommentRendersRiskProblemsAsNonClaimChecks(t *testing.T) {
-	checks := []Check{
-		{ID: "c1", Name: "claim", Claim: true, State: CheckPass},
-		{ID: "c2", Name: "push", Expect: "push succeeds", Purpose: "risk", Risk: "moving HOME loses git credentials", State: CheckFail, Attribution: "pr", Note: "push rejected credentials"},
-		{ID: "b2", Name: "push", Leg: "base", Expect: "push succeeds", State: CheckPass, Note: "push worked"},
-		{ID: "c3", Name: "old chats", Expect: "old chat opens", Purpose: "risk", Risk: "moving HOME hides old transcripts", State: CheckPartial, Attribution: "pr", Note: "only recent chats opened"},
-		{ID: "b3", Name: "old chats", Leg: "base", Expect: "old chat opens", State: CheckPass, Note: "old chats opened"},
-		{ID: "c4", Name: "menu", Expect: "the menu opens", State: CheckFail, Attribution: "pr", Note: "the menu stayed closed"},
-		{ID: "b4", Name: "menu", Leg: "base", Expect: "the menu opens", State: CheckPass, Note: "the menu opened"},
-	}
-	v := commentVerdict(checks)
-	compact := compactChecks(commentRun, v)
-	for _, want := range []string{"- push: fail (works on main). push rejected credentials", "- old chats: partial (works on main). only recent chats opened", "- menu: fail (works on main). the menu stayed closed"} {
-		if !strings.Contains(compact, want) {
-			t.Errorf("failure row missing its first sentence %q:\n%s", want, compact)
-		}
-	}
-	if strings.Contains(compact, "Risk:") || strings.Contains(compact, "moving HOME") {
-		t.Fatalf("full risk text leaked into compact rows:\n%s", compact)
-	}
-	full := fullCheckNotes(commentRun, v)
-	for _, want := range []string{"Expected: push succeeds.", "Risk: moving HOME loses git credentials", "push rejected credentials", "Expected: old chat opens.", "Risk: moving HOME hides old transcripts", "only recent chats opened"} {
-		if !strings.Contains(full, want) {
-			t.Errorf("full details missing %q:\n%s", want, full)
-		}
-	}
-}
-
-func TestEnvironmentCheckIsNotABugComment(t *testing.T) {
-	head := Check{ID: "c1", Name: "menu opens", Expect: "the menu opens", Claim: true, State: CheckFail, Attribution: "environment", EnvironmentCause: "the browser could not launch", Receipts: []Receipt{{Seq: 1}}}
-	base := Check{Name: head.Name, Leg: "base", Claim: true, State: CheckSkipped, Note: "the browser could not launch"}
-	v := Verdict{Overall: CheckUntested, Checks: []Check{head, base}}
-	if bugs := failingBugComments(v.Checks); len(bugs) != 0 {
-		t.Fatalf("environment check became a bug: %#v", bugs)
-	}
-	body := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if !strings.Contains(body, "Environment: the browser could not launch.") {
-		t.Fatalf("environment cause missing from comment:\n%s", body)
-	}
-	if strings.Contains(body, "Bug 1 of 1") {
-		t.Fatalf("environment check became a bug comment:\n%s", body)
-	}
-}
-
-func TestEveryCheckUsesCompactRowsAtAnyCount(t *testing.T) {
+func TestChecksTableAppearsOnlyBeyondFourChecks(t *testing.T) {
 	var checks []Check
 	for i := 1; i <= 5; i++ {
-		checks = append(checks, Check{ID: fmt.Sprint("c", i), Name: fmt.Sprint("check ", i), Expect: fmt.Sprint("thing ", i, " works"), State: CheckPass, Claim: true, Note: "fine", Receipts: []Receipt{{Seq: i}}})
+		checks = append(checks, Check{ID: fmt.Sprint("c", i), Name: fmt.Sprint("check ", i), Expect: fmt.Sprint("thing ", i, " works"), State: CheckPass, Note: "fine", Receipts: []Receipt{{Seq: i}}})
 	}
-	got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
-	if !strings.Contains(got, "Passed: check 1 (main: not compared); check 2 (main: not compared); check 3 (main: not compared); check 4 (main: not compared); check 5 (main: not compared)") {
-		t.Fatalf("five checks are not listed by name on the compact pass line:\n%s", got)
+	const header = "| what was checked | PR build | main | note |"
+	if got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt); !strings.Contains(got, "\n\n"+header+"\n|---|---|---|---|\n| thing 1 works | works | not compared | fine |\n") || strings.Count(got, "checked that thing") != 5 {
+		t.Fatalf("five checks get a table and a paragraph each:\n%s", got)
 	}
-	if strings.Contains(got, "| what was checked |") || strings.Count(got, "<details><summary>Full check notes</summary>") != 1 {
-		t.Fatalf("check table or repeated details block appeared:\n%s", got)
-	}
-	for i := 1; i <= 5; i++ {
-		if !strings.Contains(got, fmt.Sprintf("Expected: thing %d works", i)) {
-			t.Errorf("full expectation %d missing:\n%s", i, got)
-		}
+	if got := renderComment(commentRun, commentVerdict(checks[:4]), evidence{}, commentRun.CreatedAt); strings.Contains(got, header) {
+		t.Fatalf("four checks read as paragraphs:\n%s", got)
 	}
 }
 
@@ -758,8 +658,26 @@ func TestPlainTextKeepsQuestionsAndEmailAddresses(t *testing.T) {
 	if got := plainSentence("does it save?", 80); got != "does it save?" {
 		t.Errorf("question: %q", got)
 	}
-	if got, want := mdText("mail a@e2e.com, ref @e12 and @e7", 80), "mail a@\u200be2e.com, ref @\u200be12 and @\u200be7"; got != want {
+	if got, want := mdText("mail a@e2e.com, ref @e12 and @e7", 80), "mail a@\u200be2e.com, that element and that element"; got != want {
 		t.Errorf("refs: %q, want %q", got, want)
+	}
+}
+
+func TestNoteSentencesScrubsReceiptClauses(t *testing.T) {
+	run := Run{BaseRef: "main"}
+	for _, tc := range []struct{ note, want string }{
+		{
+			"On first opening the board, the collapsed Agent updates available notice covered New task, Orchestrator and Notifications. Clicking New task was refused because the notice covered it, captured in receipts/11-after.png during the model-filter check. After Dismiss all updates, New task opened normally. The final screenshots show the workaround; the failure screenshot is receipt 11.",
+			"On first opening the board, the collapsed Agent updates available notice covered New task, Orchestrator and Notifications. Clicking New task was refused because the notice covered it. After Dismiss all updates, New task opened normally. The final screenshots show the workaround.",
+		},
+		{"Receipt 11 shows the failure. The menu stayed closed.", "The menu stayed closed."},
+		{"The menu stayed closed, see RECEIPTS/ 11-after.png! It reopened?", "The menu stayed closed! It reopened?"},
+		{"The menu stayed closed; see receipt 11 and receipts/12-after.png", "The menu stayed closed."},
+		{"The menu, when clicked, stayed closed; see receipt 11. It reopened.", "The menu, when clicked, stayed closed. It reopened."},
+	} {
+		if got := noteSentences(run, Verdict{}, Check{Note: tc.note}); got != tc.want {
+			t.Errorf("noteSentences(%q) = %q, want %q", tc.note, got, tc.want)
+		}
 	}
 }
 
@@ -795,7 +713,7 @@ func TestCommentFirstLineNamesTheClosedIssues(t *testing.T) {
 		if first, _, _ := strings.Cut(got, "\n"); first != c.want {
 			t.Errorf("first line %q, want %q", first, c.want)
 		}
-		noSlopSummary(t, run, commentVerdict(commentChecks(t)))
+		noSlop(t, got)
 	}
 	run.Issues = []IssueRef{{Number: 6390, URL: url(6390)}}
 	one := plainVerdict(run, commentVerdict(commentChecks(t)))
@@ -831,38 +749,35 @@ func TestCommentFirstLineSaysMainAtTheBranchPoint(t *testing.T) {
 func TestMainAbsentIsNewNotFailing(t *testing.T) {
 	rc := func(leg string) []Receipt { return []Receipt{{Seq: 1, Leg: leg, Action: "click", AfterPath: "x.png"}} }
 	for _, c := range []struct {
-		name   string
-		head   CheckState
-		note   string
-		result string // the result line
-		banned []string
+		name    string
+		head    CheckState
+		note    string
+		result  string // the result line
+		para    []string
+		banned  []string
+		partial bool
 	}{
 		{"head fail", CheckFail, "Clicking the Agent row closed the picker without switching.", "something broke; do not merge yet",
-			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "On main, it did not work"}},
-		{"head partial", CheckPartial, "The list showed but the Agent row did nothing.", "partial: something misbehaved",
-			[]string{"happens on main", "did not cause it", "fails on main"}},
-		{"head pass", CheckPass, "The picker switched agents.", "pass",
-			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "own problem"}},
+			[]string{"clicking the Agent row closed the picker without switching.", "main does not have this: no agent picker there", "Since main has no such feature, this is the PR's own problem."},
+			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "On main, it did not work"}, false},
+		{"head partial", CheckPartial, "The list showed but the Agent row did nothing.", "",
+			[]string{"the list showed but the Agent row did nothing.", "main does not have this", "Since main has no such feature, this is the PR's own problem."},
+			[]string{"happens on main", "did not cause it", "fails on main"}, true},
+		{"head pass", CheckPass, "The picker switched agents.", "the PR does what it says in the 1 check I finished",
+			[]string{"the picker switched agents.", "This is new in the PR; main does not have this: no agent picker there."},
+			[]string{"happens on main", "did not cause it", "nothing differed", "fails on main", "own problem"}, false},
 	} {
 		checks := []Check{
-			{ID: "c1", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: c.head, Claim: true, Note: c.note, Receipts: rc("head")},
-			{ID: "c2", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: CheckAbsent, Claim: true, Leg: "base", Note: "no agent picker there", Receipts: rc("base")},
+			{ID: "c1", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: c.head, Note: c.note, Receipts: rc("head")},
+			{ID: "c2", Name: "agent-row", Expect: "clicking the Agent row switches the agent", State: CheckAbsent, Leg: "base", Note: "no agent picker there", Receipts: rc("base")},
 		}
-		v := commentVerdict(checks)
-		got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-		if !strings.Contains(got, "**Result: "+c.result+".") {
+		got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
+		if c.result != "" && !strings.Contains(got, "**Result: "+c.result) {
 			t.Errorf("%s: result line lacks %q:\n%s", c.name, c.result, got)
 		}
-		want := fmt.Sprintf("- agent row: %s (not on main). %s", c.head, c.note)
-		if c.head == CheckPass {
-			want = "Passed: agent row (not on main)"
-		}
-		if !strings.Contains(compactChecks(commentRun, v), want) {
-			t.Errorf("%s: compact row lacks %q:\n%s", c.name, want, compactChecks(commentRun, v))
-		}
-		for _, detail := range []string{"Expected: clicking the Agent row switches the agent.", c.note, "Main: absent. no agent picker there"} {
-			if !strings.Contains(fullCheckNotes(commentRun, v), detail) {
-				t.Errorf("%s: full notes lost %q:\n%s", c.name, detail, fullCheckNotes(commentRun, v))
+		for _, want := range c.para {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: comment lacks %q:\n%s", c.name, want, got)
 			}
 		}
 		for _, banned := range c.banned {
@@ -870,49 +785,50 @@ func TestMainAbsentIsNewNotFailing(t *testing.T) {
 				t.Errorf("%s: comment says %q:\n%s", c.name, banned, got)
 			}
 		}
-		noSlopSummary(t, commentRun, commentVerdict(checks))
+		noSlop(t, got)
 		if cellWord(string(CheckAbsent)) == "fails" {
 			t.Errorf("%s: an absent cell reads as a failure", c.name)
 		}
 	}
 }
 
-func TestHeadAbsentAloneFailsAndSaysMissing(t *testing.T) {
+func TestHeadAbsentReadsAsFailure(t *testing.T) {
 	checks := []Check{
-		{ID: "c1", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Claim: true, Note: "The picker has no Agent row.", Receipts: []Receipt{{Seq: 1, Action: "click", AfterPath: "x.png"}}},
-		{ID: "c2", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Claim: true, Leg: "base", Note: "No picker.", Receipts: []Receipt{{Seq: 1, Leg: "base", Action: "click", AfterPath: "x.png"}}},
+		{ID: "c1", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Note: "The picker has no Agent row.", Receipts: []Receipt{{Seq: 1, Action: "click", AfterPath: "x.png"}}},
+		{ID: "c2", Name: "agent-row", Expect: "the Agent row is there", State: CheckAbsent, Leg: "base", Note: "No picker.", Receipts: []Receipt{{Seq: 1, Leg: "base", Action: "click", AfterPath: "x.png"}}},
 	}
-	v := commentVerdict(checks)
-	got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-	if !strings.Contains(got, "**Result: something broke; do not merge yet.**") || !strings.Contains(compactChecks(commentRun, v), "- agent row: absent (not on main). The picker has no Agent row.") || !strings.Contains(fullCheckNotes(commentRun, v), "Expected: the Agent row is there.") || strings.Contains(got, "This is new in the PR") {
-		t.Errorf("head absence is not named with its main state and full note:\n%s", got)
+	got := renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt)
+	if !strings.Contains(got, "The PR build does not have this.") || !strings.Contains(got, "the picker has no Agent row.") || !strings.Contains(got, "**Result: something broke; do not merge yet") || strings.Contains(got, "This is new in the PR") {
+		t.Errorf("head absent is not told as a failure:\n%s", got)
 	}
 }
 
 func TestEqualFailuresNeedSameFaultInComment(t *testing.T) {
 	for _, state := range []CheckState{CheckFail, CheckPartial} {
 		checks := []Check{
-			{ID: "c1", Name: "menu", State: state, Claim: true, Purpose: "claim", Note: "row does nothing", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
-			{ID: "c2", Name: "menu", State: state, Leg: "base", Claim: true, Purpose: "claim", Receipts: []Receipt{{Action: "click", Leg: "base", AfterPath: evidenceFile(t)}}},
+			{ID: "c1", Name: "menu", State: state, Note: "row does nothing", Receipts: []Receipt{{Action: "click", AfterPath: evidenceFile(t)}}},
+			{ID: "c2", Name: "menu", State: state, Leg: "base", Receipts: []Receipt{{Action: "click", Leg: "base", AfterPath: evidenceFile(t)}}},
 		}
 		v := commentVerdict(checks)
-		wantOverall := CheckPartial
+		wantOverall := CheckFail
+		if state == CheckFail {
+			wantOverall = CheckPartial
+		}
 		if v.Overall != wantOverall {
 			t.Fatalf("equal %s labels: %+v", state, v)
 		}
 		got := renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-		want := fmt.Sprintf("- menu: %s (%s). row does nothing", state, mainStatus("main", state, "claim"))
-		if !strings.Contains(compactChecks(commentRun, v), want) || strings.Contains(got, "Pre-existing") || strings.Contains(got, "the PR did not cause it") || (state == CheckFail && (strings.Contains(got, "do not merge yet") || strings.Contains(got, "fine to merge"))) {
+		want := "It also fails on main; I could not tell whether it is the same fault."
+		if state == CheckPartial {
+			want = "It is also partial on main; I could not tell whether it is the same fault."
+		}
+		if !strings.Contains(got, want) || strings.Contains(got, "the PR did not cause it") || (state == CheckFail && (strings.Contains(got, "do not merge yet") || strings.Contains(got, "fine to merge"))) {
 			t.Errorf("unproven %s sameness:\n%s", state, got)
 		}
 		checks[1].SameFault = true
 		v = commentVerdict(checks)
-		if v.Overall != CheckPartial || preExisting(checks, checks[0]) || !strings.Contains(strings.Join(v.Reasons, " "), "fails the same way on main and the PR build") {
+		if v.Overall != CheckPartial || !preExisting(checks, checks[0]) {
 			t.Fatalf("same %s fault: %+v", state, v)
-		}
-		got = renderComment(commentRun, v, evidence{}, commentRun.CreatedAt)
-		if strings.Contains(stripCommentDetails(got), "Pre-existing.") || !strings.Contains(fullCheckNotes(commentRun, v), "row does nothing") {
-			t.Errorf("same %s claim fault was exempted or its note was lost:\n%s", state, got)
 		}
 	}
 }
@@ -946,7 +862,7 @@ func TestBugCommentConsoleErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			head := Check{ID: "head", Name: "menu opens", State: tc.state, Note: "The menu closed.", Receipts: tc.receipts}
-			checks := []Check{head, {Name: head.Name, Leg: "base", State: CheckPass, Claim: true, Receipts: []Receipt{{Leg: "base", ConsoleTail: "other base error"}}}}
+			checks := []Check{head, {Name: head.Name, Leg: "base", State: CheckPass, Receipts: []Receipt{{Leg: "base", ConsoleTail: "other base error"}}}}
 			bug := bugComment{Check: head, Number: 1, Total: 1}
 			body := bugCommentBody(commentRun, Verdict{Checks: checks}, bug, "bug.png", "clip.mp4", false)
 			if len(tc.want) == 0 {
@@ -954,7 +870,7 @@ func TestBugCommentConsoleErrors(t *testing.T) {
 					t.Fatalf("unexpected console section: %s", body)
 				}
 			} else {
-				want := section + "\n\n" + strings.Join(tc.want, "\n\n") + "\n\n</details>"
+				want := section + "\n\n```\n" + strings.Join(tc.want, "\n") + "\n```\n\n</details>"
 				if strings.Count(body, section) != 1 || !strings.Contains(body, want) {
 					t.Fatalf("console section mismatch: %s", body)
 				}
@@ -965,133 +881,6 @@ func TestBugCommentConsoleErrors(t *testing.T) {
 			for _, absent := range append(tc.absent, "other base error") {
 				if strings.Contains(body, absent) {
 					t.Errorf("unexpected %q in %s", absent, body)
-				}
-			}
-		})
-	}
-}
-
-func TestBugCommentConsoleErrorsDedupesVolatileValues(t *testing.T) {
-	for name, lines := range map[string]string{
-		"ISO timestamps":   "request_id=abc port=4111 at 2026-10-16T18:08:51Z http://127.0.0.1:4111\nrequest_id=def port=4222 at 2027-11-17T19:09:52Z http://127.0.0.1:4222",
-		"clock timestamps": "[18:08:51.123] request_id=abc failed\n[19:09:52.456] request_id=def failed",
-		"epoch timestamps": "timestamp=1792174131123 request_id=abc failed\ntimestamp=1792264492456 request_id=def failed",
-	} {
-		t.Run(name, func(t *testing.T) {
-			c := Check{State: CheckFail, Receipts: []Receipt{{ConsoleTail: lines}}}
-			if got := checkConsoleErrors(c); len(got) != 1 {
-				t.Fatalf("volatile console lines were not normalized: %#v", got)
-			}
-		})
-	}
-}
-
-func TestCommentKeepsNotesInTheirRecordedSections(t *testing.T) {
-	run := commentRun
-	run.Gaps = []string{"Cleanup after submit failed; stop the test repo before retrying.", "The linked issue could not be read.", "The test repo showed the wrong result.", "The test repo creation failed because the new UI crashed.", "Cleanup button crashes."}
-	checks := []Check{{ID: "c1", Name: "menu", Expect: "the menu opens", Claim: true, State: CheckPass, Note: "Cleanup the test repo after the run. The test repo showed the wrong result. Cleanup button crashes."}}
-	v := commentVerdict(checks)
-	v.Summary = "Cleanup the test repo after the run. The test repo showed the wrong result."
-	body := renderComment(run, v, evidence{}, run.CreatedAt)
-	fullStart := strings.Index(body, "<details><summary>Full check notes</summary>")
-	if fullStart < 0 {
-		t.Fatalf("full check notes missing:\n%s", body)
-	}
-	visible := strings.ToLower(body[:fullStart])
-	if !strings.Contains(visible, "cleanup after submit failed") || !strings.Contains(visible, "stop the test repo") {
-		t.Fatalf("recorded run gap disappeared from PR comment:\n%s", body)
-	}
-	if !strings.Contains(visible, "tester summary:\n\ncleanup the test repo after the run. the test repo showed the wrong result.") {
-		t.Fatalf("tester summary was not kept as a summary:\n%s", body)
-	}
-	if !strings.Contains(body[fullStart:], "Cleanup the test repo after the run.") {
-		t.Fatalf("the tester note was not preserved in full notes:\n%s", body)
-	}
-	if !strings.Contains(body, "The linked issue could not be read.") {
-		t.Fatalf("user-facing gap disappeared from PR comment:\n%s", body)
-	}
-	if !strings.Contains(body, "The test repo showed the wrong result.") {
-		t.Fatalf("a finding that mentions a test repo disappeared from PR comment:\n%s", body)
-	}
-	for _, finding := range []string{"The test repo creation failed because the new UI crashed.", "Cleanup button crashes."} {
-		if !strings.Contains(body, finding) {
-			t.Fatalf("finding was misclassified as a resource: %q\n%s", finding, body)
-		}
-	}
-	md := renderVerdict(run, v, false, nil, t.TempDir(), run.CreatedAt, nil)
-	if strings.Contains(md, "## Resources\n") {
-		t.Fatalf("verdict guessed a resource category from tester prose:\n%s", md)
-	}
-	if !strings.Contains(md, "## Summary\n\n"+v.Summary) {
-		t.Fatalf("tester summary changed sections or wording:\n%s", md)
-	}
-	_, gapSection, ok := strings.Cut(md, "## Gaps\n")
-	if !ok {
-		t.Fatalf("verdict lost the Gaps section:\n%s", md)
-	}
-	gapSection, _, _ = strings.Cut(gapSection, "\n## ")
-	for _, gap := range run.Gaps {
-		if !strings.Contains(gapSection, gap) {
-			t.Fatalf("recorded gap was moved or lost: %q\n%s", gap, gapSection)
-		}
-	}
-	if !strings.Contains(md, "Note: "+checks[0].Note) {
-		t.Fatalf("check note was moved or lost:\n%s", md)
-	}
-}
-
-func TestCommentSaysMainReproducesAClaimFailureThatPassesOnThePR(t *testing.T) {
-	head := Check{ID: "c1", Name: "manage agents", Expect: "Manage agents opens interactive Settings.", Claim: true, State: CheckPass}
-	base := Check{ID: "c7", Name: head.Name, Expect: head.Expect, Claim: true, Leg: "base", State: CheckFail, Note: "The overlay blocked the search click.", Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-	checks := []Check{head, base}
-	want := "Main reproduces the original problem in 1 claim check that passes on the PR build."
-	for name, body := range map[string]string{
-		"comment": renderComment(commentRun, commentVerdict(checks), evidence{}, commentRun.CreatedAt),
-		"summary": summaryCommentBody(commentRun, commentVerdict(checks), commentRun.CreatedAt, false),
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("%s omitted the main-build reproduction: %s", name, body)
-		}
-	}
-
-	headDidNotPass := head
-	headDidNotPass.State = CheckPartial
-	for name, variant := range map[string][]Check{
-		"head did not pass":              []Check{headDidNotPass, {ID: "c7", Name: head.Name, Claim: true, Leg: "base", State: CheckFail, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}},
-		"base claim passed":              []Check{head, {ID: "c7", Name: head.Name, Claim: true, Leg: "base", State: CheckPass, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}},
-		"base failure has no after-shot": []Check{head, {ID: "c7", Name: head.Name, Claim: true, Leg: "base", State: CheckFail}},
-	} {
-		if got := originalProblemLine(commentRun, variant); got != "" {
-			t.Errorf("%s produced an unsupported reproduction claim: %q", name, got)
-		}
-	}
-}
-
-func TestCompactClaimLineDoesNotDoublePunctuateExpectation(t *testing.T) {
-	checks := []Check{{
-		ID: "c1", Name: "worker agent management", Claim: true, State: CheckPass,
-		Expect: "From cloned-project setup, Manage agents opens Settings and pointer input can focus and type in Search harnesses.",
-	}}
-	body := summaryCommentBody(commentRun, Verdict{Checks: checks}, commentRun.CreatedAt, false)
-	if !strings.Contains(body, "Passed: worker agent management (main: not compared)") || !strings.Contains(body, "Expected: "+checks[0].Expect) || strings.Contains(body, "Search harnesses..") {
-		t.Fatalf("claim expectation punctuation is malformed:\n%s", body)
-	}
-}
-
-func TestCommentsNameSameFaultHeadProblemsAsPreExisting(t *testing.T) {
-	for _, state := range []CheckState{CheckFail, CheckPartial} {
-		t.Run(string(state), func(t *testing.T) {
-			head := Check{ID: "c5", Name: "existing-folder setup", Expect: "existing-folder setup works.", Purpose: "risk", Risk: "existing folders", State: state, Attribution: "unknown"}
-			base := Check{ID: "c12", Name: head.Name, Expect: head.Expect, Purpose: "risk", Leg: "base", State: state, SameFault: true, Receipts: []Receipt{{Leg: "base", AfterPath: evidenceFile(t)}}}
-			checks := []Check{head, base}
-			v := Verdict{Overall: CheckPass, Checks: checks}
-			for name, body := range map[string]string{
-				"full comment":    renderComment(commentRun, v, evidence{}, commentRun.CreatedAt),
-				"summary comment": summaryCommentBody(commentRun, v, commentRun.CreatedAt, false),
-				"compact checks":  compactChecks(commentRun, v),
-			} {
-				if !strings.Contains(body, "Pre-existing") {
-					t.Errorf("%s omitted the pre-existing note for a %s check:\n%s", name, state, body)
 				}
 			}
 		})

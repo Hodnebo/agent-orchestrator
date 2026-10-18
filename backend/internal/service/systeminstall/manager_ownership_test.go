@@ -357,31 +357,6 @@ func TestNPMPrefixOwningBinaryFindsPrefixesOutsideDaemonNPM(t *testing.T) {
 	})
 }
 
-func TestLitmusGlobalNPMPrefixUpdatesInPlace(t *testing.T) {
-	const pkg = "@github/copilot"
-	prefix := filepath.Join(t.TempDir(), "litmus", "runs", "run_s1", "head")
-	entry := writeNPMPackage(t, filepath.Join(prefix, "lib", "node_modules"), pkg)
-	bin := filepath.Join(prefix, "bin", "copilot")
-	// agent-version delegates this relative link to npm install -g --prefix <leg>.
-	rel, err := filepath.Rel(filepath.Dir(bin), entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	linkBinary(t, bin, rel)
-	resolvedPrefix, err := filepath.EvalSymlinks(prefix)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := npmPrefixOwningBinary(bin, pkg); !ok || got != resolvedPrefix {
-		t.Fatalf("prefix = %q, %t; want leg directory %q", got, ok, resolvedPrefix)
-	}
-	plan := targetInstalledCopy("darwin", Plan{Method: "npm", Package: pkg, Command: []string{"npm", "install", "-g", "--prefix", "/daemon/npm", pkg + "@latest"}}, TargetCopilot, bin)
-	want := []string{"npm", "install", "-g", "--prefix", resolvedPrefix, pkg + "@latest"}
-	if !slices.Equal(plan.Command, want) || plan.PackagePrefix != resolvedPrefix {
-		t.Fatalf("command = %v prefix=%q, want %v", plan.Command, plan.PackagePrefix, want)
-	}
-}
-
 func TestManagerOwnsBinaryAcceptsNPMPrefixOtherThanDaemons(t *testing.T) {
 	const pkg = "@earendil-works/pi-coding-agent"
 	prefix := filepath.Join(t.TempDir(), ".nvm", "versions", "node", "v24.18.1")

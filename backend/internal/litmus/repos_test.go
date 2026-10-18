@@ -134,7 +134,7 @@ func TestIntakeRecordsRequestedRepoAndBlocksWhenUnresolved(t *testing.T) {
 
 func TestStartRefusesAnUnresolvableRepoBeforeSpawning(t *testing.T) {
 	spawned := 0
-	svc := newTestService(t, NewStore(t.TempDir()), nil).WithSpawner(func(context.Context, SpawnRequest) (string, error) { spawned++; return "ao-1", nil })
+	svc := New(NewStore(t.TempDir()), nil).WithSpawner(func(context.Context, SpawnRequest) (string, error) { spawned++; return "ao-1", nil })
 	svc.WithRepos(func(_ context.Context, names ...string) (string, error) {
 		if names[0] == "acme/web" {
 			return "/web", nil

@@ -5467,16 +5467,6 @@ func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, se
 // agent runs as a chat session, the only mode with the html tools and ao render.
 // requestedOutput is the deliverable requested at spawn.
 func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, requestedOutput domain.RequestedOutput, chat bool) (string, error) {
-	if m.isTestingSession(ctx, sessionID) {
-		body, err := skillassets.LitmusSkillBody()
-		if err != nil {
-			return "", err
-		}
-		skillFile := filepath.ToSlash(filepath.Join(skillassets.LitmusDir(m.dataDir), "SKILL.md"))
-		intro := "## Litmus tester\n\nThese are your standing instructions as a Litmus tester. The same text is at `" + skillFile + "` if you need to reread it. Do not load other ao guides."
-		return strings.Join([]string{intro, body, systemPromptGuard()}, "\n\n"), nil
-	}
-
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return "", err
@@ -5522,7 +5512,12 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
 	}
-	pointer := m.aoSkillPointer(chat)
+	var pointer string
+	if m.isTestingSession(ctx, sessionID) {
+		pointer = m.litmusSkillPointer()
+	} else {
+		pointer = m.aoSkillPointer(chat)
+	}
 	if pointer = strings.TrimSpace(pointer); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}

@@ -3507,23 +3507,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/testing/agent-version": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Set the agent version on a testing leg */
-        post: operations["setTestingAgentVersion"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/testing/checks": {
         parameters: {
             query?: never;
@@ -3569,23 +3552,6 @@ export interface paths {
         put?: never;
         /** End a check with an outcome; refused without a receipt */
         post: operations["endTestingCheck"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/testing/checks/{id}/reclassify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Change a pending or running check's coverage classification and record why */
-        post: operations["reclassifyTestingCheck"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3757,23 +3723,6 @@ export interface paths {
         put?: never;
         /** Validate a per-repo recipe file */
         post: operations["validateTestingRecipe"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/testing/relaunch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Kill and relaunch one testing leg while keeping its profile and data */
-        post: operations["relaunchTesting"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6721,48 +6670,16 @@ export interface components {
             requirements: components["schemas"]["SystemRequirement"][];
         };
         TestingCheck: {
-            /** @enum {string} */
-            attribution?: "pr" | "pre-existing" | "environment" | "unknown";
-            attributionReceipt?: number;
-            claim?: boolean;
-            claimSentence?: string;
             diff?: string;
-            environmentCause?: string;
             expect: string;
             id: string;
             leg?: string;
             name: string;
             note?: string;
-            noteHistory?: string[];
-            /** @enum {string} */
-            purpose?: "claim" | "explore" | "risk";
             receipts?: components["schemas"]["TestingReceipt"][];
-            reclassifications?: components["schemas"]["TestingCheckReclassification"][];
-            /** @description PR sentence that contradicts this check's expected observable. */
-            replaceReason?: string;
-            /** @description Replacement check id; replaced checks do not affect the verdict or public comment. */
-            replacedBy?: string;
-            /** @description Claim check on the same leg and PR sentence to replace; stays active until this claim ends pass, fail or partial. */
-            replaces?: string;
-            risk?: string;
-            sameBug?: string;
             sameFault?: boolean;
             shot?: number;
             state: string;
-        };
-        TestingCheckClassification: {
-            claimSentence?: string;
-            /** @enum {string} */
-            purpose: "claim" | "explore" | "risk";
-            risk?: string;
-        };
-        TestingCheckReclassification: {
-            /** Format: date-time */
-            at: string;
-            from: components["schemas"]["TestingCheckClassification"];
-            reason: string;
-            to: components["schemas"]["TestingCheckClassification"];
-            who: string;
         };
         TestingElementBox: {
             /** Format: double */
@@ -6779,7 +6696,6 @@ export interface components {
             y: number;
         };
         TestingEngineInfo: {
-            appOrigin?: string;
             binary?: string;
             endpoint: string;
             namespace: string;
@@ -6787,13 +6703,8 @@ export interface components {
             session: string;
             socketDir: string;
         };
-        TestingHint: {
-            checkId?: string;
-            text: string;
-        };
         TestingLeg: {
             buildManifest?: string;
-            control?: components["schemas"]["TestingLegControl"];
             daemonPort?: number;
             dataDir?: string;
             debugPort?: number;
@@ -6804,8 +6715,6 @@ export interface components {
             pidStart: string;
             recordCursor?: boolean;
             recordFps?: string;
-            recordJoined?: boolean;
-            recordSegments?: components["schemas"]["TestingRecordSegment"][];
             /** Format: date-time */
             recordStartedAt: string;
             /** Format: date-time */
@@ -6813,15 +6722,6 @@ export interface components {
             runFile?: string;
             state: string;
             worktree?: string;
-        };
-        TestingLegControl: {
-            /** @enum {string} */
-            cause?: "native_dialog" | "app_exited" | "app_unresponsive" | "browser_control_unusable";
-            detail?: string;
-            publicDetail?: string;
-            since?: number;
-            /** @enum {string} */
-            state: "ok" | "lost";
         };
         TestingPostedComment: {
             fixed?: boolean;
@@ -6879,7 +6779,6 @@ export interface components {
             install: components["schemas"]["TestingStep"];
             isolation: boolean;
             kind: string;
-            notes?: string;
             ready: components["schemas"]["TestingReady"];
             repo?: string;
             run: components["schemas"]["TestingStep"];
@@ -6887,32 +6786,14 @@ export interface components {
             timings?: string[];
             toolchain: components["schemas"]["TestingToolchain"];
         };
-        TestingRecordSegment: {
-            file: string;
-            /** Format: date-time */
-            startedAt: string;
-        };
         TestingRequest: {
             action?: string;
-            /** @description agent-version only: agent identifier to set for the selected testing leg. */
-            agent?: string;
             /** @description drive: the action's arguments. */
             args?: string[];
-            /**
-             * @description check end only: cause of the observed outcome.
-             * @enum {string}
-             */
-            attribution?: "pr" | "pre-existing" | "environment" | "unknown";
-            /** @description check end only: receipt supporting an environment attribution. */
-            attributionReceipt?: number;
             /** @description submit only: stop early with a reason; a recorded failure keeps the overall result fail. */
             blocked?: boolean;
-            /** @description check add/start/reclassify: quote the PR author's title or body; required for claim. */
-            claimSentence?: string;
             /** @description prune only: report what would be deleted and delete nothing. */
             dryRun?: boolean;
-            /** @description check end only: environment cause, required with attribution environment. */
-            environmentCause?: string;
             expect?: string;
             harness?: string;
             /** @description prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2). */
@@ -6931,23 +6812,12 @@ export interface components {
             prUrl?: string;
             /** @description start: the project the worker runs in; rerun: only for a run that did not record its project. */
             projectId?: string;
-            /**
-             * @description check add/start/reclassify: coverage choice; check start and a base twin may inherit it.
-             * @enum {string}
-             */
-            purpose?: "claim" | "explore" | "risk";
-            /** @description submit with blocked: what failed; reclassify: why coverage changed; check add with replaces: PR sentence contradicting the old expect. Required in each case. */
+            /** @description submit with blocked: what failed; required and non-empty. */
             reason?: string;
-            /** @description check add only: ended fail or partial claim on the same leg and PR sentence to replace; requires a reason quoting the PR. */
-            replaces?: string;
             /** @enum {string} */
             result?: "pass" | "fail" | "partial" | "absent" | "skipped";
-            /** @description check add/start/reclassify: what the diff could break; required for risk. */
-            risk?: string;
             /** @description rerun only: the run whose pull request is tested again. */
             runId?: string;
-            /** @description check end only: ended failed or partial head check that found the same bug. Set when ending; change only by re-ending. */
-            sameBug?: string;
             /** @description check end only, base leg: the failure or partial is the same fault as on the PR build. */
             sameFault?: boolean;
             /** @description the calling session; start, post and prune refuse it when it is a Litmus tester's own session. */
@@ -6957,8 +6827,6 @@ export interface components {
             /** @description submit only: why the base was not run; lets a submit through while a prepared base is unlaunched. */
             skipBase?: string;
             summary?: string;
-            /** @description agent-version only: version to set for the selected testing leg. */
-            version?: string;
         };
         TestingRerun: {
             name: string;
@@ -6996,10 +6864,6 @@ export interface components {
             requestedRepo?: string;
             sessionId: string;
             state: string;
-            /** @description Targets and clone cleanup completed; the home report may still be incomplete. */
-            teardownComplete?: boolean;
-            /** Format: date-time */
-            testingEndedAt?: string;
             title?: string;
             videoState?: string;
             videoUrls?: {
@@ -7024,7 +6888,7 @@ export interface components {
             startedAt: string;
             state: string;
             /** @enum {string} */
-            verdict: "pass" | "fail" | "partial" | "untested" | "blocked" | "expired" | "none";
+            verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
             verdictMd: string;
             videoState?: string;
         };
@@ -7039,9 +6903,7 @@ export interface components {
         };
         TestingRunStatus: {
             checks: components["schemas"]["TestingCheck"][];
-            hints?: components["schemas"]["TestingHint"][];
             inFlight?: components["schemas"]["LitmusInFlight"][];
-            openClaims?: components["schemas"]["TestingCheck"][];
             ownerLogins?: string;
             run: components["schemas"]["TestingRun"];
         };
@@ -7060,7 +6922,7 @@ export interface components {
             startedAt: string;
             state: string;
             /** @enum {string} */
-            verdict: "pass" | "fail" | "partial" | "untested" | "blocked" | "expired" | "none";
+            verdict: "pass" | "fail" | "partial" | "blocked" | "expired" | "none";
             videoState?: string;
         };
         TestingSeedStep: {
@@ -7090,9 +6952,7 @@ export interface components {
             commentUrl?: string;
             evidenceCommit?: string;
             evidenceState?: string;
-            intakeClaims?: string[];
             overall: string;
-            ownerLoginWarning?: string;
             reasons?: string[];
             skipBase?: string;
             stoppedEarly?: string;
@@ -20507,66 +20367,6 @@ export interface operations {
             };
         };
     };
-    setTestingAgentVersion: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TestingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TestingRun"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
     addTestingCheck: {
         parameters: {
             query?: never;
@@ -20693,69 +20493,6 @@ export interface operations {
         };
     };
     endTestingCheck: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Check id within the run, e.g. c1. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TestingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TestingCheck"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    reclassifyTestingCheck: {
         parameters: {
             query?: never;
             header?: never;
@@ -21450,66 +21187,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestingRecipe"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Service Unavailable */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    relaunchTesting: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TestingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TestingRun"];
                 };
             };
             /** @description Bad Request */

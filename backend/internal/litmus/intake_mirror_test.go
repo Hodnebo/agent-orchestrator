@@ -81,15 +81,14 @@ func TestIntakeReplays6588WithoutAskingGitHubForTheDiff(t *testing.T) {
 	}
 	pack := readRunFile(t, svc, run, "context-pack.md")
 	for _, want := range []string{"- Size: 298 files, +", "| area | files | added | deleted |", "| frontend/src/renderer |", "files with the most churn", "more files: files.txt",
-		"### Reading a big PR", "Do not try to cover the diff.", "`git diff " + fork6588 + "..." + head6588 + " --stat`", "## Gaps in this pack", "The PR branched from main 9 commits ago", "Base: main@" + fork6588[:12],
-		"- One thing next to the headline claim still works; pick it from the areas in section 4, not from the diff.", "- Smoke: the app opens and a chat runs.",
+		"### Reading a big PR", "Do not try to cover the diff.", "`git diff " + fork6588 + "..." + head6588 + " --stat`", "## Gaps in this pack", "The PR branched from main 9 commits ago", "Base: main@" + fork6588[:12], "- Smoke: the app opens and a chat runs.",
 		"UI files first, then files the PR text names, deletions and generated files last"} {
 		if !strings.Contains(pack, want) {
 			t.Errorf("context-pack.md lacks %q", want)
 		}
 	}
-	if strings.Count(pack, "- Something visible in") > 0 || strings.Count(strings.SplitN(strings.SplitN(pack, "## Suggested checks", 2)[1], "##", 2)[0], "\n- ") > 5 || strings.Contains(pack, "Plan at least 2") {
-		t.Errorf("suggested checks contain an unexpected quota:\n%s", pack[:min(len(pack), 1500)])
+	if strings.Count(pack, "- Something visible in") > 0 || strings.Count(strings.SplitN(strings.SplitN(pack, "## Suggested checks", 2)[1], "##", 2)[0], "\n- ") != 4 {
+		t.Errorf("a big PR gets the headline, the author's words, one nearby thing and a smoke check:\n%s", pack[:min(len(pack), 1500)])
 	}
 	// the excerpt opens with the UI file, not the lockfile that has the most added lines
 	if excerpt := strings.SplitN(strings.SplitN(pack, "```diff\n", 2)[1], "\n", 2)[0]; excerpt != "diff --git a/frontend/src/renderer/components/chat/AgentSwitchPicker.tsx b/frontend/src/renderer/components/chat/AgentSwitchPicker.tsx" {
@@ -238,14 +237,11 @@ func TestIntakeFileListFailureIsOneGapNotTwo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"I could not read the PR's file list with git, so the areas it changes are unknown."}; !slices.Equal(run.Gaps, want) {
+	if want := []string{"I could not read the PR's file list with git (fatal: boom), so the areas it changes are unknown."}; !slices.Equal(run.Gaps, want) {
 		t.Fatalf("gaps %q, want %q", run.Gaps, want)
 	}
 	if patch := readRunFile(t, svc, run, "diff.patch"); patch == "" {
 		t.Fatal("the patch call succeeded, diff.patch is empty")
-	}
-	if log := readRunFile(t, svc, run, intakeLogFile); !strings.Contains(log, "Could not read PR file list with git: fatal: boom") {
-		t.Fatalf("private intake log lacks git error: %q", log)
 	}
 }
 
@@ -317,9 +313,7 @@ func TestIntakeRefusesACommitIdThatIsNotOne(t *testing.T) {
 // become a gap: this test fails when a new failure is returned instead. TESTING_REPO_UNRESOLVED is not here on purpose:
 // a repo no registered project holds pins the run with Error "blocked at prepare: ..." and returns nil (see
 // TestIntakeRecordsRequestedRepoAndBlocksWhenUnresolved); prepare is what returns that code.
-// Cleanup admission is also fatal: intake must not recreate a run while its
-// stale targets are being removed. No GitHub or git failure adds this code.
-var fatalIntakeCodes = []string{"TESTING_PR_URL_INVALID", "SESSION_ID_REQUIRED", "TESTING_RUN_EXISTS", "TESTING_RUN_BUSY", "TESTING_GH_NOT_FOUND", "TESTING_COMMITS_MISSING"}
+var fatalIntakeCodes = []string{"TESTING_PR_URL_INVALID", "SESSION_ID_REQUIRED", "TESTING_RUN_EXISTS", "TESTING_GH_NOT_FOUND", "TESTING_COMMITS_MISSING"}
 
 // gateFile is the UI file of the fixture PR that the gate scan reads from the head commit.
 const gateFile = "frontend/src/renderer/components/chat/TurnSettingsBar.tsx"
@@ -334,15 +328,12 @@ func TestIntakeSaysWhenTheGateScanCouldNotRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", key, err)
 		}
-		want := []string{"The gate scan could not run, so the pack may lack notes on how the touched features are gated."}
+		want := []string{"The gate scan could not run: fatal: bad object, so the pack may lack notes on how the touched features are gated."}
 		if !slices.Equal(run.Gaps, want) {
 			t.Errorf("%s: gaps %q, want %q", key, run.Gaps, want)
 		}
 		if pack := readRunFile(t, svc, run, "context-pack.md"); !strings.Contains(pack, "- "+want[0]) {
 			t.Errorf("%s: the pack does not say it:\n%s", key, pack[:min(len(pack), 1500)])
-		}
-		if log := readRunFile(t, svc, run, intakeLogFile); !strings.Contains(log, "fatal: bad object") {
-			t.Errorf("%s: private intake log lacks scan error: %q", key, log)
 		}
 	}
 }
@@ -370,12 +361,8 @@ func TestIntakeGapsHideLocalPaths(t *testing.T) {
 			t.Fatalf("run gaps %q err %v", run.Gaps, err)
 		}
 		g := run.Gaps[0]
-		if strings.Contains(g, svc.store.dataDir()) || (c.hidden != "" && strings.Contains(g, c.hidden)) || g != "The gate scan could not run, so the pack may lack notes on how the touched features are gated." {
-			t.Errorf("gap %q still names a local path or is not the fixed public message", g)
-		}
-		log := readRunFile(t, svc, run, intakeLogFile)
-		if strings.Contains(log, svc.store.dataDir()) || (c.hidden != "" && strings.Contains(log, c.hidden)) || !strings.Contains(log, c.shown) {
-			t.Errorf("private intake log %q lacks scrubbed path %q", log, c.shown)
+		if strings.Contains(g, svc.store.dataDir()) || (c.hidden != "" && strings.Contains(g, c.hidden)) || !strings.Contains(g, c.shown) {
+			t.Errorf("gap %q lacks %q or still names a local path", g, c.shown)
 		}
 	}
 }
@@ -390,7 +377,7 @@ func TestIntakeGateScanTreatsGrepExit1AsNoMatch(t *testing.T) {
 		}
 		return fmt.Errorf("git grep: %w", err)
 	}
-	for code, want := range map[string][]string{"1": nil, "2": {"The gate scan could not run, so the pack may lack notes on how the touched features are gated."}} {
+	for code, want := range map[string][]string{"1": nil, "2": {"The gate scan could not run: git grep: exit status 2, so the pack may lack notes on how the touched features are gated."}} {
 		svc, _ := newSvc(t)
 		f := svc.runner.(*fakeRunner)
 		f.gitOut["show "+head6394+":"+gateFile] = "const settingsEnabled = true\n"
@@ -398,9 +385,6 @@ func TestIntakeGateScanTreatsGrepExit1AsNoMatch(t *testing.T) {
 		run, err := svc.Intake(ctx, "s1", prURL)
 		if err != nil || !slices.Equal(run.Gaps, want) {
 			t.Errorf("grep exit %s: gaps %q err %v, want %q", code, run.Gaps, err, want)
-		}
-		if code == "2" && !strings.Contains(readRunFile(t, svc, run, intakeLogFile), "Gate scan failed: git grep: exit status 2") {
-			t.Error("private intake log lacks grep failure details")
 		}
 	}
 }

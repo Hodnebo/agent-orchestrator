@@ -111,13 +111,13 @@ func shotChecks(t *testing.T, dir string) []Check {
 		return Receipt{Seq: seq, Leg: leg, AfterPath: p}
 	}
 	return []Check{
-		{ID: "c1", Name: "menu opens", State: CheckPass, Claim: true, Receipts: []Receipt{rc(1, "head", false), rc(2, "head", false)}},
-		{ID: "c2", Name: "menu opens", State: CheckFail, Claim: true, Leg: "base", Receipts: []Receipt{rc(3, "base", false), rc(4, "base", true)}}, // its last shot is gone: seq 3
-		{ID: "c3", Name: "last model", State: CheckPass, Claim: true, Receipts: []Receipt{rc(5, "head", false), rc(6, "base", false)}},             // looked at the base itself: observed
-		{ID: "c4", Name: "no base", State: CheckPartial, Claim: true, Receipts: []Receipt{rc(7, "head", false)}},                                   // nothing on the base
+		{ID: "c1", Name: "menu opens", State: CheckPass, Receipts: []Receipt{rc(1, "head", false), rc(2, "head", false)}},
+		{ID: "c2", Name: "menu opens", State: CheckFail, Leg: "base", Receipts: []Receipt{rc(3, "base", false), rc(4, "base", true)}}, // its last shot is gone: seq 3
+		{ID: "c3", Name: "last model", State: CheckPass, Receipts: []Receipt{rc(5, "head", false), rc(6, "base", false)}},             // looked at the base itself: observed
+		{ID: "c4", Name: "no base", State: CheckPartial, Receipts: []Receipt{rc(7, "head", false)}},                                   // nothing on the base
 		{ID: "c5", Name: "unreachable", State: CheckSkipped, Note: "needs a key"},
-		{ID: "c6", Name: "base only", State: CheckFail, Claim: true, Leg: "base", Receipts: []Receipt{rc(8, "base", false)}},
-		{ID: "c7", Name: "past the cap", State: CheckPass, Claim: true, Receipts: []Receipt{rc(9, "head", false)}},
+		{ID: "c6", Name: "base only", State: CheckFail, Leg: "base", Receipts: []Receipt{rc(8, "base", false)}},
+		{ID: "c7", Name: "past the cap", State: CheckPass, Receipts: []Receipt{rc(9, "head", false)}},
 	}
 }
 
@@ -283,12 +283,10 @@ func evidenceBug(t *testing.T, svc *Service) {
 	is(t, "")(nil, err)
 	checks[0].State, checks[0].Note = CheckFail, "The menu closed after the click."
 	checks[1].State, checks[1].Note = CheckPass, "The menu stayed open."
-	for i := range checks {
-		for j := range checks[i].Receipts {
-			receipt := &checks[i].Receipts[j]
+	for _, check := range checks {
+		for _, receipt := range check.Receipts {
 			if receipt.AfterPath != "" {
 				whitePNG(t, receipt.AfterPath, 800, 600)
-				receipt.ThemeShots = []ThemeShot{{Theme: "light", Path: receipt.AfterPath}}
 			}
 		}
 	}
@@ -426,11 +424,11 @@ func goldenRun(t *testing.T, dir string) (Run, Verdict) {
 	run := commentRun
 	run.SessionID, run.Areas = "ao-8", []Area{{Name: "Shell sidebar", Files: 3, Stems: []string{"Sidebar", "useHistory"}}, {Name: "Tests", Files: 2}}
 	checks := []Check{
-		{ID: "c1", Name: "arrows-visible", Expect: "the Go back and Go forward arrows show next to the brand", State: CheckPass, Claim: true, Note: "Head: both buttons are there, and Go back works",
+		{ID: "c1", Name: "arrows-visible", Expect: "the Go back and Go forward arrows show next to the brand", State: CheckPass, Note: "Head: both buttons are there, and Go back works",
 			Receipts: []Receipt{click(2, "head", "Go back", "2.png"), click(4, "head", "Go back", "4.png")}},
-		{ID: "c2", Name: "arrows-visible", Expect: "the Go back and Go forward arrows show next to the brand", State: CheckFail, Claim: true, Leg: "base", Note: "Base: there are no arrows at all",
+		{ID: "c2", Name: "arrows-visible", Expect: "the Go back and Go forward arrows show next to the brand", State: CheckFail, Leg: "base", Note: "Base: there are no arrows at all",
 			Receipts: []Receipt{click(5, "base", "Brand", "5.png")}},
-		{ID: "c3", Name: "last-model", Expect: "the last model picked is remembered after reopening", State: CheckPass, Claim: true, Note: "Head: the model picker in the sidebar still showed the last model",
+		{ID: "c3", Name: "last-model", Expect: "the last model picked is remembered after reopening", State: CheckPass, Note: "Head: the model picker in the sidebar still showed the last model",
 			Receipts: []Receipt{click(6, "head", "", "6.png")}},
 	}
 	v := commentVerdict(checks)
@@ -461,37 +459,50 @@ func TestRenderCommentWithImagesGolden(t *testing.T) {
 	videos := []vidItem{{leg: "head", url: "https://github.com/user-attachments/assets/11111111-2222-4333-8444-555555555555", span: 79 * time.Second},
 		{leg: "base", url: "https://github.com/user-attachments/assets/66666666-7777-4888-8999-aaaaaaaaaaaa", span: 15 * time.Second}}
 	got := renderComment(run, v, evidence{state: "published", commit: fakeSHA, items: items, videos: videos}, now)
-	for _, want := range []string{
-		"Litmus tried #7 on the PR build and on main (2 minutes).",
-		"**Result: pass.**",
-		"Passed: arrows visible (main does not do this); last model (main: not compared)",
-		"arrows visible",
-		"Not checked by this run: tests (2 files).",
-		"![base branch on the left, PR build on the right](" + base + "the-go-back-and-go-forward-arrows-show-main-vs-pr.png)",
-		"![PR build](" + base + "the-last-model-picked-is-remembered-pr.png)",
-		"Main on the left: base: there are no arrows at all. PR build on the right: head: both buttons are there, and Go back works.",
-		"PR build: head: the model picker in the sidebar still showed the last model.",
-		"https://github.com/user-attachments/assets/11111111-2222-4333-8444-555555555555",
-		"https://github.com/user-attachments/assets/66666666-7777-4888-8999-aaaaaaaaaaaa",
-		"![PR build recording](" + base + "pr.gif)",
-		"![base branch recording](" + base + "main.gif)",
-		"![](" + base + "the-go-back-and-go-forward-arrows-show-pr-step-2.png)",
-		"<details><summary>Full check notes</summary>",
-		"Expected: the Go back and Go forward arrows show next to the brand",
-		"The PR build: pass. Head: both buttons are there, and Go back works",
-		"Main: fail. Base: there are no arrows at all",
-		"Expected: the last model picked is remembered after reopening",
-		"The PR build: pass. Head: the model picker in the sidebar still showed the last model",
-		"</details>\n\n<!-- litmus:comment o/r#7 -->",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("comment missing %q:\n%s", want, got)
-		}
+	want := strings.ReplaceAll(`Litmus tried #7 on the PR build and on main (2 minutes).
+
+**Result: the PR does what it says in the 2 checks I finished. One check only ran on the PR build.**
+
+I compared 1 check on main; 1 was not run there: last model.
+
+I checked that the Go back and Go forward arrows show next to the brand. On the PR build, both buttons are there, and Go back works. On main, there are no arrows at all.
+
+Next I checked that the last model picked is remembered after reopening. On the PR build, the model picker in the sidebar still showed the last model.
+
+![base branch on the left, PR build on the right]({base}the-go-back-and-go-forward-arrows-show-main-vs-pr.png)
+Main on the left: there are no arrows at all. PR build on the right: both buttons are there, and Go back works.
+
+![PR build]({base}the-last-model-picked-is-remembered-pr.png)
+PR build: the model picker in the sidebar still showed the last model.
+
+Not checked by this run: tests (2 files).
+
+<details><summary>Recordings and every screenshot</summary>
+
+PR build, 1 min 19 s
+
+https://github.com/user-attachments/assets/11111111-2222-4333-8444-555555555555
+
+Main, 15 s
+
+https://github.com/user-attachments/assets/66666666-7777-4888-8999-aaaaaaaaaaaa
+
+PR build, the moments around each step
+![PR build recording]({base}pr.gif)
+
+Main, the moments around each step
+![base branch recording]({base}main.gif)
+
+Step 2, PR build: click "Go back"
+![]({base}the-go-back-and-go-forward-arrows-show-pr-step-2.png)
+
+</details>
+
+<!-- litmus:comment o/r#7 -->`, "{base}", base)
+	if got != want {
+		t.Fatalf("comment:\n%s\nwant:\n%s", got, want)
 	}
-	if strings.Count(got, "<details><summary>Full check notes</summary>") != 1 || strings.Index(got, "<details><summary>Full check notes</summary>") < strings.Index(got, "<details><summary>Recordings and every screenshot</summary>") {
-		t.Fatalf("check notes are not in one final block:\n%s", got)
-	}
-	noSlopSummary(t, run, v)
+	noSlop(t, got)
 	composite := []string{"-y", "-i", filepath.Join(shots, "5.png"), "-i", filepath.Join(shots, "4.png"),
 		"-filter_complex", "[0:v]scale=640:-2[l];[1:v]scale=640:-2[r];[l][r]xstack=inputs=2:layout=0_0|w0_0:fill=white", "-frames:v", "1", filepath.Join(dir, "the-go-back-and-go-forward-arrows-show-main-vs-pr.png")}
 	if !reflect.DeepEqual(media.calls[0], composite) {
@@ -501,33 +512,27 @@ func TestRenderCommentWithImagesGolden(t *testing.T) {
 
 func TestImageLinesDoNotCountAgainstTheCap(t *testing.T) {
 	long := strings.Repeat("n", 700)
-	checks := []Check{{ID: "c1", Name: "a", State: CheckPartial, Claim: true, Note: long, Receipts: []Receipt{{Seq: 1}}}}
+	checks := []Check{{ID: "c1", Name: "a", State: CheckPartial, Note: long, Receipts: []Receipt{{Seq: 1}}}}
 	var items []evItem
 	for i := 0; i < 6; i++ {
 		items = append(items, evItem{alt: "c1 head partial", caption: "*c1 a*", url: "https://raw.githubusercontent.com/o/r/" + fakeSHA + "/runs/7/20261011-090000/" + strings.Repeat("x", 1000) + ".png"})
 	}
 	ev := evidence{state: "published", items: items}
 	got := renderComment(commentRun, commentVerdict(checks), ev, commentRun.CreatedAt)
-	if len(got) <= commentCap || len(got)-ev.imageChars() > commentCap || strings.Count(got, "![") != 6 || !strings.Contains(got, long) {
+	if len(got) <= commentCap || len(got)-ev.imageChars() > commentCap || strings.Count(got, "![") != 6 || !strings.Contains(got, "On the PR build, "+strings.Repeat("n", 600)+"...") {
 		t.Fatalf("len %d, images %d: the images must stay and the text fit the cap", len(got), ev.imageChars())
 	}
-	for i := 0; i < 400; i++ { // required notes outrank the soft prose cap; optional images go
+	for i := 0; i < 400; i++ { // text alone cannot fit: the images go, the cap and the marker hold
 		checks = append(checks, checks[0])
 	}
 	got = renderComment(commentRun, commentVerdict(checks), ev, commentRun.CreatedAt)
-	start := strings.Index(got, "<details><summary>Full check notes</summary>")
-	end := strings.Index(got[start:], "</details>") + start
-	if strings.Count(got, "![") != 6 || !strings.HasSuffix(got, commentMarker("o/r", 7)) || start < 0 || strings.Count(got[start:end], long) != len(checks) {
-		notes := 0
-		if start >= 0 && end >= start {
-			notes = strings.Count(got[start:end], long)
-		}
-		t.Fatalf("required notes or marker lost: len %d, notes %d of %d", len(got), notes, len(checks))
+	if len(got) > commentCap || strings.Contains(got, "![") || !strings.HasSuffix(got, commentMarker("o/r", 7)) {
+		t.Fatalf("hard cap: len %d", len(got))
 	}
 }
 
 func TestEvidenceFailureReasonHidesLocalPaths(t *testing.T) {
-	svc := newTestService(t, NewStore("/data/ao"), nil)
+	svc := &Service{store: NewStore("/data/ao")}
 	ev := svc.evidenceFailed(Run{ID: "run_s1"}, errors.New("git clone: fatal: could not create work tree dir '/data/ao/litmus/evidence/o__r': denied"))
 	if strings.Contains(ev.state, "/data/ao") || strings.Contains(strings.Join(ev.limits, "\n"), "/data/ao") {
 		t.Fatalf("path leaked: %q %q", ev.state, ev.limits)
@@ -566,7 +571,7 @@ func TestCompositeFallsBackToThePRBuildShot(t *testing.T) {
 	if err == nil || len(limits) != 1 || !strings.HasPrefix(limits[0], "I could not build the side-by-side image for the Go back and Go forward") || !strings.HasSuffix(limits[0], ", so it shows the PR build only.") {
 		t.Fatalf("limits %q err %v", limits, err)
 	}
-	if items[0].file != "the-go-back-and-go-forward-arrows-show-pr.png" || items[0].alt != "PR build" || items[0].caption != "PR build: head: both buttons are there, and Go back works." {
+	if items[0].file != "the-go-back-and-go-forward-arrows-show-pr.png" || items[0].alt != "PR build" || items[0].caption != "PR build: both buttons are there, and Go back works." {
 		t.Fatalf("the lead image is the PR build shot: %+v", items[0])
 	}
 }
@@ -647,7 +652,7 @@ func TestUnattachedVideoSaysSoAndPointsAtTheGIFWhenThereIsOne(t *testing.T) {
 	if !strings.Contains(got, want) {
 		t.Fatalf("comment:\n%s", got)
 	}
-	noSlopSummary(t, commentRun, commentVerdict(commentChecks(t)))
+	noSlop(t, got)
 	if got = renderComment(commentRun, commentVerdict(commentChecks(t)), evidence{videos: videos[:1]}, commentRun.CreatedAt); !strings.Contains(got, "PR build video could not be attached.\n\n</details>") || strings.Contains(got, "GIF") {
 		t.Fatalf("no GIF to point at:\n%s", got)
 	}
@@ -669,7 +674,7 @@ func TestSubmitUploadsOnlyBugClipsAndKeepsPassingSummaryShort(t *testing.T) {
 	v, err := svc.Submit(ctx, "s1", "", "")
 	run, _ := svc.store.Get("run_s1")
 	body := gh.field(0, "body")
-	if err != nil || v.CommentState != "posted" || run.VideoState != "off" || gh.uploads != 0 || strings.Count(body, "<summary>Full check notes</summary>") != 1 || strings.Contains(body, "<summary>Recording") || strings.Contains(body, "![") {
+	if err != nil || v.CommentState != "posted" || run.VideoState != "off" || gh.uploads != 0 || strings.Contains(body, "<details>") || strings.Contains(body, "![") {
 		t.Fatalf("passing run uploaded evidence: %+v err %v body %s", run, err, body)
 	}
 

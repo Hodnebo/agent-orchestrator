@@ -3,8 +3,6 @@ package sessionmanager
 import (
 	"context"
 	"errors"
-	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,44 +43,6 @@ func wantPolicy(t *testing.T, perm ports.PermissionMode, allowed, denied []strin
 	}
 }
 
-func newLitmusTestingService(t *testing.T, dataDir string) *litmus.Service {
-	t.Helper()
-	home := t.TempDir()
-	return litmus.New(litmus.NewStore(dataDir), time.Now).WithOwnerHome(home, []string{
-		"HOME=" + home,
-		"PATH=" + filepath.Join(home, "bin"),
-		"npm_config_prefix=" + filepath.Join(home, ".npm-global"),
-		"HOMEBREW_PREFIX=" + filepath.Join(home, ".homebrew"),
-	})
-}
-
-func TestTestingEnvPreservesGitHubAuthentication(t *testing.T) {
-	for _, populated := range []bool{false, true} {
-		t.Run(fmt.Sprint(populated), func(t *testing.T) {
-			dataDir := t.TempDir()
-			runDir := litmus.RunDir(dataDir, "mer-1")
-			env := map[string]string{"PATH": "/usr/bin:/bin"}
-			if populated {
-				env["GH_TOKEN"] = "test-owner-token"
-				env["GITHUB_TOKEN"] = "test-github-token"
-				env["GH_CONFIG_DIR"] = filepath.Join(dataDir, "owner-gh")
-				env["GIT_CONFIG_COUNT"] = "1"
-				env["GIT_CONFIG_KEY_0"] = "safe.directory"
-				env["GIT_CONFIG_VALUE_0"] = "*"
-			}
-			want := maps.Clone(env)
-			want[litmus.EnvRun] = "run_mer-1"
-			applyTestingEnv(env, dataDir, "mer-1", runDir)
-			if !maps.Equal(env, want) {
-				t.Fatal("tester env changed GitHub authentication, git config or PATH")
-			}
-			if _, err := os.Stat(filepath.Join(runDir, "gh-config")); !os.IsNotExist(err) {
-				t.Fatalf("tester created a gh config directory: %v", err)
-			}
-		})
-	}
-}
-
 func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	m, st, agent, rt, ws, dataDir := newTestingManager(t, domain.HarnessClaudeCode)
 	rec := testingSpawn(t, m)
@@ -98,11 +58,11 @@ func TestSpawnTestingProfileLaunchesInRunDirUnderPolicy(t *testing.T) {
 	if c := agent.lastLaunch.Config; c.Model != litmus.TesterModel || c.Effort != litmus.TesterEffort {
 		t.Fatalf("tester runs on %q at %q, want %q at %q", c.Model, c.Effort, litmus.TesterModel, litmus.TesterEffort)
 	}
-	if rt.lastCfg.Env["GIT_CONFIG_COUNT"] != "" {
-		t.Fatal("tester env added git config")
+	if rt.lastCfg.Env["GIT_CONFIG_COUNT"] == "" || rt.lastCfg.Env["GIT_CONFIG_KEY_0"] != "url.litmus-blocks-push://.pushInsteadOf" {
+		t.Fatalf("tester env has no push block: %v", rt.lastCfg.Env)
 	}
-	if _, has := rt.lastCfg.Env["GH_TOKEN"]; has || rt.lastCfg.Env["GH_CONFIG_DIR"] != "" {
-		t.Fatal("tester env overrides inherited GitHub authentication")
+	if gh, ok := rt.lastCfg.Env["GH_TOKEN"]; !ok || gh != "" || rt.lastCfg.Env["GH_CONFIG_DIR"] != filepath.Join(runDir, "gh-config") {
+		t.Fatalf("tester env keeps a gh login: token %q config %q", gh, rt.lastCfg.Env["GH_CONFIG_DIR"])
 	}
 	if info, err := os.Stat(runDir); err != nil || !info.IsDir() {
 		t.Fatalf("run dir not created: %v", err)
@@ -158,7 +118,7 @@ func TestSpawnTestingProfileModelOrder(t *testing.T) {
 				st.projects["mer"] = p
 			}
 			if tc.settingsFile || tc.settingModel != "" || tc.settingEffrt != "" {
-				svc := newLitmusTestingService(t, dataDir)
+				svc := litmus.New(litmus.NewStore(dataDir), time.Now)
 				if _, err := svc.SetProjectSettings(ctx, "mer", litmus.ProjectSettings{Model: tc.settingModel, Effort: tc.settingEffrt}); err != nil {
 					t.Fatal(err)
 				}
@@ -173,7 +133,7 @@ func TestSpawnTestingProfileModelOrder(t *testing.T) {
 
 func TestSpawnTestingProfileSettingNeverReachesOrdinarySpawns(t *testing.T) {
 	m, _, agent, _, _, dataDir := newTestingManager(t, domain.HarnessClaudeCode)
-	svc := newLitmusTestingService(t, dataDir)
+	svc := litmus.New(litmus.NewStore(dataDir), time.Now)
 	if _, err := svc.SetProjectSettings(ctx, "mer", litmus.ProjectSettings{Model: "opus", Effort: "max"}); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +166,7 @@ func TestSpawnTestingProfileOnCodex(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, st, agent, rt, ws, dataDir := newTestingManager(t, domain.HarnessCodex)
-			if _, err := newLitmusTestingService(t, dataDir).SetProjectSettings(ctx, "mer", tc.settings); err != nil {
+			if _, err := litmus.New(litmus.NewStore(dataDir), time.Now).SetProjectSettings(ctx, "mer", tc.settings); err != nil {
 				t.Fatal(err)
 			}
 			rec := testingSpawn(t, m)
@@ -222,8 +182,8 @@ func TestSpawnTestingProfileOnCodex(t *testing.T) {
 			if l.WorkspacePath != runDir || rt.lastCfg.WorkspacePath != runDir || ws.createCount != 0 {
 				t.Fatalf("cwd launch %q runtime %q creates %d, want the run dir %q", l.WorkspacePath, rt.lastCfg.WorkspacePath, ws.createCount, runDir)
 			}
-			if rt.lastCfg.Env[litmus.EnvRun] != "run_"+string(rec.ID) || rt.lastCfg.Env["GIT_CONFIG_COUNT"] != "" {
-				t.Fatalf("tester env lacks the run id or adds git config: %v", rt.lastCfg.Env)
+			if rt.lastCfg.Env[litmus.EnvRun] != "run_"+string(rec.ID) || rt.lastCfg.Env["GIT_CONFIG_KEY_0"] != "url.litmus-blocks-push://.pushInsteadOf" {
+				t.Fatalf("tester env lacks the run id or the push block: %v", rt.lastCfg.Env)
 			}
 			skill := skillassets.LitmusDir(dataDir) + "/SKILL.md"
 			if !strings.Contains(l.SystemPrompt, skill) || strings.Contains(l.SystemPrompt, skillassets.Dir(dataDir)) {
@@ -311,7 +271,7 @@ func TestKillTestingSessionKeepsRunDir(t *testing.T) {
 
 func TestTestingSessionPromptPointsAtTheLitmusSkill(t *testing.T) {
 	m, _, _, _, _, dataDir := newTestingManager(t, domain.HarnessClaudeCode)
-	skill := filepath.ToSlash(filepath.Join(skillassets.LitmusDir(dataDir), "SKILL.md"))
+	skill := skillassets.LitmusDir(dataDir) + "/SKILL.md"
 	build := func(c context.Context, id domain.SessionID) string {
 		t.Helper()
 		p, err := m.buildSystemPrompt(c, domain.KindWorker, "mer", id, "", false)
@@ -321,70 +281,23 @@ func TestTestingSessionPromptPointsAtTheLitmusSkill(t *testing.T) {
 		return p
 	}
 
-	assertTesterPrompt := func(prompt string) {
-		t.Helper()
-		body, err := skillassets.LitmusSkillBody()
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := strings.Join([]string{
-			"## Litmus tester\n\nThese are your standing instructions as a Litmus tester. The same text is at `" + skill + "` if you need to reread it. Do not load other ao guides.",
-			body,
-			systemPromptGuard(),
-		}, "\n\n")
-		if prompt != want {
-			t.Fatalf("testing session prompt differs from the tester skill, path or guard:\n%s", prompt)
-		}
-		for _, section := range []string{"## Finding bugs", "## Owner safety", skill} {
-			if !strings.Contains(prompt, section) {
-				t.Errorf("testing session prompt missing %q", section)
-			}
-		}
-		for _, forbidden := range []string{"## AO Worker Role", "ao report", "ao review trigger", "## Project Rules", "## Publishing Scope", "## Session Artifacts", "## Artifact Output"} {
-			if strings.Contains(prompt, forbidden) {
-				t.Errorf("testing session prompt contains worker or artifact instruction %q", forbidden)
-			}
-		}
+	// The spawn path knows only the ctx marker (the run dir is made later); a relaunch finds the run dir.
+	if p := build(WithTestingProfile(ctx), "mer-9"); !strings.Contains(p, skill) || strings.Contains(p, skillassets.Dir(dataDir)) {
+		t.Fatalf("spawn prompt does not point only at the litmus skill:\n%s", p)
 	}
-
-	// The spawn path knows only the ctx marker; a relaunch finds the run dir.
-	spawnPrompt := build(WithTestingProfile(ctx), "mer-9")
-	assertTesterPrompt(spawnPrompt)
 	rec := testingSpawn(t, m)
-	restorePrompt := build(ctx, rec.ID)
-	assertTesterPrompt(restorePrompt)
-	if restorePrompt != spawnPrompt {
-		t.Fatalf("restored testing prompt differs from spawn prompt\nspawn:\n%s\nrestore:\n%s", spawnPrompt, restorePrompt)
+	if p := build(ctx, rec.ID); !strings.Contains(p, skill) || strings.Contains(p, "ao preview") {
+		t.Fatalf("relaunch prompt does not point only at the litmus skill:\n%s", p)
 	}
 	// A run dir alone does not make a session a tester: any session's `ao testing intake` creates one.
 	if err := os.MkdirAll(litmus.RunDir(dataDir, "mer-11"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if p := build(ctx, "mer-11"); strings.Contains(p, skill) {
-		t.Fatalf("a session with a stray run dir got the litmus instructions:\n%s", p)
+		t.Fatalf("a session with a stray run dir got the litmus pointer:\n%s", p)
 	}
 	if p := build(ctx, "mer-10"); strings.Contains(p, skill) || !strings.Contains(p, skillassets.Dir(dataDir)) {
 		t.Fatalf("an ordinary session lost the using-ao pointer:\n%s", p)
-	}
-}
-
-func TestOrdinaryWorkerPromptMatchesTheGenericPromptBytes(t *testing.T) {
-	m, _, _, _, _, _ := newTestingManager(t, domain.HarnessClaudeCode)
-	m.dataDir = ""
-
-	got, err := m.buildSystemPrompt(ctx, domain.KindWorker, "", "mer-ordinary", "", false)
-	if err != nil {
-		t.Fatalf("build ordinary worker prompt: %v", err)
-	}
-	want := buildSystemPromptText(systemPromptConfig{
-		Role:       sessionPromptRoleWorker,
-		Standalone: true,
-		AdditionalSections: []string{
-			strings.TrimSpace(m.aoSkillPointer(false)),
-		},
-	})
-	if got != want {
-		t.Fatalf("ordinary worker prompt changed from the generic prompt bytes\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

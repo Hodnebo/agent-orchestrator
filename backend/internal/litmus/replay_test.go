@@ -53,11 +53,10 @@ func TestDriveCoveredClickKeepsReceiptAndRefusal(t *testing.T) {
 
 func TestReplayMatchesFreshRoleNameAndStopsAtMissing(t *testing.T) {
 	svc, f, _, _ := driveSvc(t)
-	base, err := svc.attachEngine(context.Background(), "run_s1", Leg{Name: "base", State: "running", DebugPort: 9401, Engine: &EngineInfo{AppOrigin: "http://app.test"}})
+	base, err := svc.attachEngine(context.Background(), "run_s1", Leg{Name: "base", State: "running", DebugPort: 9401})
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc.engineFor("run_s1", base).identity = fakeDaemonIdentity
 	run, err := svc.store.Get("run_s1")
 	if err != nil {
 		t.Fatal(err)
@@ -116,11 +115,10 @@ func TestReplayStopsCoveredClickAndFailedLoad(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, f, _, _ := driveSvc(t)
-			base, err := svc.attachEngine(context.Background(), "run_s1", Leg{Name: "base", State: "running", DebugPort: 9401, Engine: &EngineInfo{AppOrigin: "http://app.test"}})
+			base, err := svc.attachEngine(context.Background(), "run_s1", Leg{Name: "base", State: "running", DebugPort: 9401})
 			if err != nil {
 				t.Fatal(err)
 			}
-			svc.engineFor("run_s1", base).identity = fakeDaemonIdentity
 			run, err := svc.store.Get("run_s1")
 			if err != nil {
 				t.Fatal(err)

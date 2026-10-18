@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -27,28 +26,32 @@ var (
 	shotRetry   = time.Second            // pause before the one retry of an after-shot that timed out
 )
 
-const (
-	actionOutputCap     = 2048
-	actionOutputFileCap = 1 << 20
-)
-
-var pageContentBoundary = regexp.MustCompile(`(?m)^--- (?:END_)?AGENT_BROWSER_PAGE_CONTENT[^\r\n]*---\r?\n?`)
-
-// replayVerbs describes the actions replay can safely retarget by accessible name.
-// Drive itself accepts all commands except the escape paths in drivepolicy.go.
+// verb says how a worker action maps onto the engine. No open, navigate, eval, upload,
+// download, cookies, storage, auth, plugin or pushstate verb exists here.
 type verb struct {
-	refs    int
-	receipt bool
+	engine   []string // engine words ahead of the caller's arguments; default is the action name
+	min, max int      // caller arguments, flags included
+	refs     int      // leading arguments that are element refs
+	receipt  bool     // changes state: settle, screenshot and record it
+	usage    string
 }
 
-var replayVerbs = map[string]verb{
-	"click": {refs: 1, receipt: true}, "dblclick": {refs: 1, receipt: true},
-	"hover": {refs: 1, receipt: true}, "focus": {refs: 1, receipt: true},
-	"fill": {refs: 1, receipt: true}, "type": {refs: 1, receipt: true},
-	"press": {receipt: true}, "keyboard": {receipt: true}, "scroll": {receipt: true},
-	"scrollintoview": {refs: 1, receipt: true}, "select": {refs: 1, receipt: true},
-	"check": {refs: 1, receipt: true}, "uncheck": {refs: 1, receipt: true},
-	"drag": {refs: 2, receipt: true},
+var verbs = map[string]verb{
+	"snapshot":   {max: 6, usage: "snapshot [-i] [-c] [-d <n>] [-s <selector>]"},
+	"click":      {min: 1, max: 1, refs: 1, receipt: true, usage: "click <ref>"},
+	"fill":       {min: 2, max: 2, refs: 1, receipt: true, usage: "fill <ref> <text>"},
+	"type":       {min: 2, max: 2, refs: 1, receipt: true, usage: "type <ref> <text>"},
+	"press":      {min: 1, max: 1, receipt: true, usage: "press <key>"},
+	"select":     {min: 2, max: 2, refs: 1, receipt: true, usage: "select <ref> <value>"},
+	"check":      {min: 1, max: 1, refs: 1, receipt: true, usage: "check <ref>"},
+	"uncheck":    {min: 1, max: 1, refs: 1, receipt: true, usage: "uncheck <ref>"},
+	"drag":       {min: 2, max: 2, refs: 2, receipt: true, usage: "drag <ref> <ref>"},
+	"wait":       {min: 1, max: 2, usage: "wait <selector|ms> | wait --text <text>"},
+	"screenshot": {max: 1, usage: "screenshot [path]"},
+	"console":    {usage: "console"},
+	"errors":     {usage: "errors"},
+	"network":    {engine: []string{"network", "requests"}, max: 2, usage: "network [--filter <pattern>]"},
+	"tab":        {engine: []string{"tab", "list"}, max: 1, usage: "tab list"},
 }
 
 var refPattern = regexp.MustCompile(`^@?(e\d+)$`)
@@ -95,95 +98,71 @@ func inRun(runDir, p string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(runDir, p)
 	}
-	rel, err := filepath.Rel(runDir, filepath.Clean(p))
-	if err != nil || !filepath.IsLocal(rel) {
+	if rel, err := filepath.Rel(runDir, filepath.Clean(p)); err != nil || !filepath.IsLocal(rel) {
 		return "", invalid("TESTING_PATH_INVALID", "output files must stay inside "+runDir)
-	}
-	if managedDrivePath(rel) {
-		return "", invalid("TESTING_PATH_INVALID", "engine control files are managed by Litmus")
-	}
-
-	// Resolve existing ancestors as well as the final file: scratch symlinks must not reach host files.
-	root, err := filepath.EvalSymlinks(runDir)
-	if err != nil {
-		return "", err
-	}
-	ancestor := filepath.Clean(p)
-	for {
-		resolved, e := filepath.EvalSymlinks(ancestor)
-		if e == nil {
-			rel, e := filepath.Rel(root, resolved)
-			if e != nil || (!filepath.IsLocal(rel) && rel != ".") {
-				return "", invalid("TESTING_PATH_INVALID", "file paths must stay inside "+runDir)
-			}
-			suffix, _ := filepath.Rel(ancestor, filepath.Clean(p))
-			if managedDrivePath(filepath.Join(rel, suffix)) {
-				return "", invalid("TESTING_PATH_INVALID", "run control files are managed by Litmus")
-			}
-			break
-		}
-		if !os.IsNotExist(e) {
-			return "", e
-		}
-		parent := filepath.Dir(ancestor)
-		if parent == ancestor {
-			return "", e
-		}
-		ancestor = parent
 	}
 	return filepath.Clean(p), os.MkdirAll(filepath.Dir(p), 0o750)
 }
 
-func managedDrivePath(rel string) bool {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if (parts[0] == "head" || parts[0] == "base") && len(parts) > 1 && slices.Contains([]string{"bin", "agents", "shell", "home"}, parts[1]) {
-		return true
+// argv validates one action and returns the engine command and, for screenshot, the file it writes.
+func argv(action string, args []string, runDir, leg string) (cmd []string, file string, err error) {
+	v := verbs[action]
+	bad := func(msg string) ([]string, string, error) {
+		return nil, "", invalid("TESTING_ARGS_INVALID", msg+"; usage: "+v.usage)
 	}
-	return slices.Contains([]string{"engine", "agents", "shell"}, parts[0]) || filepath.Base(rel) == "owned.json" || slices.Contains([]string{"run.json", "checks.json", "actions.jsonl", ownerLoginsFile, homeSnapshotFile, homeChangesFile, verdictFile, "verdict.md", "context-pack.md", "recipe.yaml", "comment.md", "intake-claims.json"}, rel)
+	if len(args) < v.min || len(args) > v.max {
+		return bad("wrong number of arguments")
+	}
+	for _, a := range args {
+		l := strings.ToLower(a)
+		if slices.ContainsFunc(forbiddenFlags, func(f string) bool { return l == f || strings.HasPrefix(l, f+"=") }) {
+			return bad("flag " + a + " is managed by Litmus")
+		}
+	}
+	args = slices.Clone(args)
+	for i := 0; i < v.refs; i++ {
+		m := refPattern.FindStringSubmatch(args[i])
+		if m == nil {
+			return bad(fmt.Sprintf("%q is not an element ref; take refs like @e12 from `snapshot`", args[i]))
+		}
+		args[i] = "@" + m[1]
+	}
+	switch action {
+	case "tab":
+		if len(args) == 1 && args[0] != "list" {
+			return bad("only `tab list` is supported")
+		}
+		args = nil
+	case "screenshot":
+		if file, err = inRun(runDir, cmp.Or(strings.Join(args, ""), filepath.Join("shots", fmt.Sprintf("%s-%d.png", leg, time.Now().UnixMilli())))); err != nil {
+			return nil, "", err
+		}
+		args = []string{file}
+	}
+	return append(slices.Clone(cmdWords(action, v)), args...), file, nil
+}
+
+func cmdWords(action string, v verb) []string {
+	if v.engine != nil {
+		return v.engine
+	}
+	return []string{action}
 }
 
 // Drive runs one worker action on a launched leg. It is refused unless the run is
 // running, inside its deadline and the named leg is launched.
-func (s *Service) Drive(ctx context.Context, sessionID, action string, args []string) (res map[string]any, err error) {
+func (s *Service) Drive(ctx context.Context, sessionID, action string, args []string) (map[string]any, error) {
+	v, ok := verbs[action]
+	if !ok {
+		return nil, invalid("TESTING_ACTION_UNSUPPORTED", "unsupported testing action "+fmt.Sprintf("%q", action))
+	}
 	legName, args := splitLeg(args)
 	s.mu.Lock()
 	run, err := s.load(sessionID)
 	s.mu.Unlock()
 	if err != nil {
-		if id, idErr := runID(sessionID); idErr == nil {
-			if _, readErr := s.store.Get(id); readErr == nil {
-				rec := actionRec{Leg: legName, Action: action, Args: args, At: s.clock(), Reason: err.Error()}
-				s.logAction(id, &rec)
-			}
-		}
 		return nil, err
 	}
-	runDir := filepath.Join(s.store.root, run.ID)
-	t0 := time.Now()
-	var out string
-	var actionStamp actionTime
-	recorded := false
-	defer func() {
-		if !recorded {
-			rec := actionRec{Leg: legName, Action: action, Args: args, At: s.clock(), SentAt: actionStamp.sentAt, EngineGeneration: actionStamp.generation, RecordOffsetMS: actionStamp.recordOffsetMS, RecordSegment: actionStamp.recordSegment, SegmentOffsetMS: actionStamp.recordOffsetMS, MS: time.Since(t0).Milliseconds()}
-			if outputAction(action) {
-				rec.Output = out
-			}
-			if err != nil {
-				rec.Reason = err.Error()
-			}
-			s.logAction(run.ID, &rec)
-			if res != nil && outputAction(action) {
-				if rec.Output != "" {
-					res["output"] = rec.Output
-				}
-				if rec.OutputPath != "" {
-					res["outputPath"] = relPath(runDir, rec.OutputPath)
-				}
-				addDriveText(res, runDir, "")
-			}
-		}
-	}()
 	if run.State != RunRunning {
 		return nil, conflict("TESTING_RUN_NOT_RUNNING", fmt.Sprintf("run %s is %s; launch a leg first", run.ID, run.State))
 	}
@@ -191,280 +170,93 @@ func (s *Service) Drive(ctx context.Context, sessionID, action string, args []st
 	if err != nil {
 		return nil, err
 	}
-	legName = leg.Name
+	runDir := filepath.Join(s.store.root, run.ID)
 	cmd, file, err := argv(action, args, runDir, leg.Name)
 	if err != nil {
 		return nil, err
 	}
-	if action == "batch" {
-		// Dispatch each child through Drive so it gets the same guards, binding and log.
-		_, options, _ := browserOptions(args, runDir)
-		var results []map[string]any
-		for _, child := range cmd[1:] {
-			if child == "--bail" || child == "--json" {
-				continue
-			}
-			words, parseErr := commandWords(child)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			out, childErr := s.Drive(ctx, sessionID, words[0], append(append(words[1:], options...), "--leg", leg.Name))
-			results = append(results, out)
-			if childErr != nil {
-				err = errors.Join(err, childErr)
-				if captureBlocked(childErr) || slices.Contains(cmd, "--bail") {
-					break
-				}
-			}
-		}
-		_, current, done, beginErr := s.beginLegCommand(sessionID, leg.Name)
-		if beginErr != nil {
-			return nil, errors.Join(err, beginErr)
-		}
-		defer done()
-		leg = current
-		e := s.engineFor(run.ID, leg)
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		defer reportEngineRestart(ctx, e, &err)
-		reason := ""
-		if err != nil {
-			reason = err.Error()
-		}
-		var rec actionRec
-		if captureBlocked(err) {
-			rec = s.noCaptureReceipt(run.ID, e, leg.Name, action, cmd[1:], refInfo{}, actionTime{}, time.Since(t0), reason, out)
-		} else {
-			var receiptErr error
-			rec, receiptErr = s.receipt(ctx, run.ID, e, leg.Name, action, cmd[1:], refInfo{}, nil, nil, nil, actionTime{}, time.Since(t0), reason, out)
-			err = errors.Join(err, receiptErr)
-		}
-		recorded = true
-		res = map[string]any{"leg": leg.Name, "action": action, "results": results, "receipt": rec}
-		addDriveText(res, runDir, "")
-		return res, err
-	}
-	_, current, done, err := s.beginLegCommand(sessionID, leg.Name)
-	if err != nil {
-		return nil, err
-	}
-	defer done()
-	leg = current
+
 	e := s.engineFor(run.ID, leg)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	defer func() {
-		if e.life.Err() != nil {
-			return
-		}
-		if err == nil {
-			err = s.setControl(run.ID, leg.Name, LegControl{State: "ok"}, e)
-		} else if isLegDown(err) {
-			var diagnosed *diagnosedControlError
-			if !errors.As(err, &diagnosed) {
-				err = driveEngineError(e.unavailable(ctx, err))
-			}
-		}
-	}()
-	defer reportEngineRestart(ctx, e, &err)
-	if e.restartNote != "" {
-		return nil, driveEngineError(&engineInterruption{actionNotSent(errors.New(e.restartNote))})
+	var target refInfo // what the last snapshot called the element about to be acted on, read before the page changes
+	if v.refs > 0 {
+		target = e.refs[cmd[len(cmdWords(action, v))]]
 	}
-	pending := actionRec{Leg: leg.Name, Action: cmd[0], Args: cmd[1:], Reason: "command has not completed"}
-	e.pendingAction = &pending
-	defer func() { e.pendingAction = nil }()
-	var target refInfo
-	for _, i := range refArgs(action, cmd[1:]) {
-		if i+1 < len(cmd) {
-			target = e.refs[cmd[i+1]]
-			break
-		}
-	}
-	changing := !readOnly(action, cmd[1:])
 	var click *clickAt
 	var box *ElementBox
-	var receiptBox *ElementBox
-	var pointErr error
-	if pointerTargetAction(action) && len(cmd) > 1 {
-		click, box, receiptBox, pointErr = e.clickTarget(ctx, cmd[1])
-		if pointErr != nil && !isTabDrift(pointErr) {
-			slog.Default().Debug("litmus: click point unavailable", "action", action, "ref", cmd[1], "error", pointErr)
+	if action == "click" { // read before the click: the page may move or close the element
+		var pointErr error
+		click, box, pointErr = e.clickTarget(ctx, cmd[1])
+		if pointErr != nil {
+			if isTabDrift(pointErr) {
+				return nil, apierr.Unavailable("TESTING_ENGINE_FAILED", pointErr.Error())
+			}
+			slog.Default().Debug("litmus: click point unavailable", "ref", cmd[1], "error", pointErr)
 		}
 	}
-	if changing && e.last == "" && !captureBlocked(pointErr) {
+	if v.receipt && e.last == "" { // nothing before it yet: this leg's first state change gets a before-shot of its own
 		p := filepath.Join(runDir, "receipts", leg.Name+"-before.png")
-		shotErr := s.shoot(ctx, e, p)
-		if captureBlocked(shotErr) {
-			pointErr = shotErr
-		} else if shotErr == nil || fileExists(p) {
+		if err := s.shoot(ctx, e, p); err == nil || fileExists(p) {
 			e.last = p
-			if shotErr != nil {
-				slog.Default().Warn("litmus: before-shot", "error", shotErr)
+			if err != nil {
+				slog.Default().Warn("litmus: before-shot", "error", err)
 			}
 		}
 	}
-	if captureBlocked(pointErr) {
-		err = pointErr
-	} else if action == "cdp" {
-		out, err = e.rawCDP(ctx, cmd[1:], func(point *clickAt) {
-			click = point
-			actionStamp = s.actionSent(run.ID, leg.Name)
-			actionStamp.generation = e.generation
-			pending.SentAt = actionStamp.sentAt
-			pending.EngineGeneration = actionStamp.generation
-		})
-	} else {
-		out, err = e.runBeforeSend(ctx, cmdTimeout, func() {
-			actionStamp = s.actionSent(run.ID, leg.Name)
-			actionStamp.generation = e.generation
-			pending.SentAt = actionStamp.sentAt
-			pending.EngineGeneration = actionStamp.generation
-		}, cmd...)
-		if err == nil && slices.Contains([]string{"close", "quit", "exit"}, action) {
-			e.once = sync.Once{}
-			e.ierr = nil
-			e.tab = ""
-			e.ready = false
-			e.daemon = daemonIdentity{}
-		}
-	}
-	pending.Reason = ""
+	t0 := time.Now()
+	out, err := e.Run(ctx, cmdTimeout, cmd...)
 	if err != nil {
-		pending.Reason = err.Error()
-	}
-	res = map[string]any{"leg": leg.Name, "action": action, "output": s.shortActionOutput(action, out)}
-	if captureBlocked(err) {
-		if actionStamp.sentAt.IsZero() {
-			err = actionNotSent(err)
-		}
-		rec := s.noCaptureReceipt(run.ID, e, leg.Name, action, cmd[1:], target, actionStamp, time.Since(t0), driveErrorMessage(err), out)
-		recorded = true
-		res["receipt"] = rec
-		if rec.Output != "" {
-			res["output"] = rec.Output
-		}
-		if rec.OutputPath != "" {
-			res["outputPath"] = relPath(runDir, rec.OutputPath)
-		}
-		addDriveText(res, runDir, "")
-		return res, driveEngineError(err)
-	}
-	if action == "snapshot" && err == nil {
-		tree := snapshotTree(out)
-		e.refs = parseRefs(tree)
-		res["snapshot"] = compactSnapshot(tree)
-	}
-	if action == "screenshot" && err == nil {
-		if flattenErr := e.flatten(ctx, file); flattenErr != nil {
-			res["warning"] = "opaque screenshot: " + flattenErr.Error()
-			if captureBlocked(flattenErr) {
-				err = flattenErr
+		if action == "click" && isCoveredClickError(err) {
+			// A covered click is a useful, reproducible result. Keep the same
+			// after-shot and receipt evidence as a successful state change, then
+			// return the refusal so the tester stops rather than guessing.
+			rec := s.receipt(ctx, run.ID, e, leg.Name, action, cmd[len(cmdWords(action, v)):], target, click, box, time.Since(t0), err.Error())
+			res := map[string]any{"leg": leg.Name, "action": action, "output": out, "receipt": rec, "refused": true, "reason": err.Error()}
+			if rec.After != "" {
+				res["after"] = relPath(runDir, rec.After)
 			}
+			if snap, snapErr := e.Run(ctx, cmdTimeout, "snapshot", "-i"); snapErr == nil {
+				e.refs = parseRefs(snap)
+				res["snapshot"] = compactSnapshot(snap)
+			}
+			addDriveText(res, runDir, "")
+			message := "click refused because the element is covered: " + err.Error()
+			if text, ok := res["text"].(string); ok && text != "" {
+				message += "\n" + text
+			}
+			return res, apierr.Conflict("TESTING_ELEMENT_COVERED", message, nil)
+		}
+		return nil, apierr.Unavailable("TESTING_ENGINE_FAILED", err.Error())
+	}
+	if action == "snapshot" {
+		e.refs = parseRefs(out)
+	}
+	res := map[string]any{"leg": leg.Name, "action": action, "output": out}
+	if action == "screenshot" {
+		if err := e.flatten(ctx, file); err != nil {
+			res["warning"] = "opaque screenshot: " + err.Error()
 		}
 	}
 	if file != "" {
 		res["path"] = file
 	}
-	if actionStamp.sentAt.IsZero() {
-		// A point measured before a health-probe refusal did not belong to a
-		// dispatched action and must not be drawn as one.
-		click = nil
-	}
-	if changing {
-		reason := ""
-		if err != nil {
-			reason = err.Error()
-		}
-		rec, receiptErr := s.receipt(ctx, run.ID, e, leg.Name, action, cmd[1:], target, click, box, receiptBox, actionStamp, time.Since(t0), reason, out)
-		recorded = true
+	if v.receipt {
+		rec := s.receipt(ctx, run.ID, e, leg.Name, action, cmd[len(cmdWords(action, v)):], target, click, box, time.Since(t0), "")
 		res["receipt"] = rec
-		if rec.Output != "" {
-			res["output"] = rec.Output
-		}
-		if rec.OutputPath != "" {
-			res["outputPath"] = relPath(runDir, rec.OutputPath)
-		}
-		if receiptErr != nil {
-			err = errors.Join(err, receiptErr)
-			addDriveText(res, runDir, "")
-			return res, driveEngineError(err)
-		}
-		if rec.After != "" {
+		if rec.After != "" { // the tester reads this shot to judge anything visual
 			res["after"] = relPath(runDir, rec.After)
 		}
-		if snap, snapErr := e.Run(ctx, cmdTimeout, "snapshot", "-i"); snapErr == nil {
+		if snap, err := e.Run(ctx, cmdTimeout, "snapshot", "-i"); err == nil {
 			e.refs = parseRefs(snap)
 			res["snapshot"] = compactSnapshot(snap)
-		} else if captureBlocked(snapErr) {
-			err = errors.Join(err, snapErr)
 		}
+	}
+	if action == "snapshot" {
+		res["snapshot"] = compactSnapshot(out)
 	}
 	addDriveText(res, runDir, "")
-	if err != nil {
-		if action == "click" && !captureBlocked(err) && isCoveredClickError(err) {
-			res["refused"], res["reason"] = true, err.Error()
-			return res, apierr.Conflict("TESTING_ELEMENT_COVERED", "click refused because the element is covered: "+err.Error()+"\n"+res["text"].(string), nil)
-		}
-		return res, driveEngineError(err)
-	}
 	return res, nil
-}
-
-// driveErrorMessage includes recovery advice for tester errors and receipts.
-func driveErrorMessage(err error) string {
-	message := err.Error()
-	var diagnosed *diagnosedControlError
-	if errors.As(err, &diagnosed) && diagnosed.leg != "" {
-		message = diagnosed.detail + ": " + message + "; relaunch with: ao testing relaunch " + diagnosed.leg
-	}
-	return message
-}
-
-// Preserve the interruption marker through the HTTP error boundary so a batch
-// cannot continue with stale refs or missing tester setup after a child fails.
-func driveEngineError(err error) error {
-	failure := apierr.Unavailable("TESTING_ENGINE_FAILED", driveErrorMessage(err))
-	var out error = failure
-	if isLegDown(err) {
-		out = &diagnosedControlError{error: failure, cause: errors.Join(failure, err)}
-	}
-	var interrupted *engineInterruption
-	if errors.As(err, &interrupted) {
-		return &engineInterruption{out}
-	}
-	return out
-}
-
-func reportEngineRestart(ctx context.Context, e *Engine, err *error) {
-	if e.restartNote != "" {
-		// Keep the notice for the next Drive if HTTP can no longer reply.
-		if *err == nil || !strings.Contains((*err).Error(), e.restartNote) {
-			*err = &engineInterruption{errors.Join(*err, errors.New(e.restartNote))}
-		}
-		if ctx.Err() == nil {
-			e.restartNote = ""
-		}
-	}
-	if captureBlocked(*err) {
-		// The envelope renders the first API error's Message. Put the complete
-		// aggregate there so an earlier batch error cannot hide state loss.
-		*err = driveEngineError(*err)
-	}
-}
-
-// logAction records read-only commands and refusals without attaching a receipt.
-func (s *Service) logAction(runID string, rec *actionRec) {
-	if rec.RecordSegment == "" && rec.RecordOffsetMS == nil {
-		stamp := s.actionSent(runID, rec.onLeg())
-		rec.RecordSegment, rec.RecordOffsetMS, rec.SegmentOffsetMS = stamp.recordSegment, stamp.recordOffsetMS, stamp.recordOffsetMS
-	}
-	s.mu.Lock()
-	rec.Seq = s.nextSeq(runID)
-	s.mu.Unlock()
-	s.prepareActionOutput(runID, rec, rec.Output)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.appendAction(runID, rec)
 }
 
 // isCoveredClickError recognizes agent-browser's refusal when another painted
@@ -517,15 +309,6 @@ func compactSnapshot(snapshot string) string {
 	return b.String()
 }
 
-// snapshotTree accepts agent-browser's optional JSON envelope as well as plain text.
-func snapshotTree(output string) string {
-	var reply struct{ Data struct{ Snapshot string } }
-	if json.Unmarshal([]byte(output), &reply) == nil && reply.Data.Snapshot != "" {
-		return reply.Data.Snapshot
-	}
-	return output
-}
-
 func validUTF8Prefix(s string, n int) int {
 	if n >= len(s) {
 		return len(s)
@@ -562,97 +345,14 @@ func addDriveText(res map[string]any, runDir, fallbackSnapshot string) {
 	if snapshot != "" {
 		lines = append(lines, snapshot)
 	}
-	if action, _ := res["action"].(string); action != "snapshot" || snapshot == "" {
-		if output, _ := res["output"].(string); output != "" {
-			lines = append(lines, output)
+	if len(lines) == 0 {
+		if action, _ := res["action"].(string); action != "snapshot" {
+			if output, _ := res["output"].(string); output != "" {
+				lines = append(lines, output)
+			}
 		}
 	}
 	res["text"] = strings.Join(lines, "\n")
-}
-
-func stripPageContentBoundary(out string) string {
-	return strings.TrimSpace(pageContentBoundary.ReplaceAllString(out, ""))
-}
-
-func outputAction(action string) bool {
-	return slices.Contains([]string{"eval", "get", "cdp", "tab"}, action)
-}
-
-func pointerTargetAction(action string) bool {
-	return slices.Contains([]string{"click", "dblclick", "hover", "tap", "check", "uncheck"}, action)
-}
-
-// prepareActionOutput keeps actions.jsonl useful without allowing a browser
-// query to fill the run log. Oversized output gets a bounded copy under the run.
-func (s *Service) prepareActionOutput(runID string, rec *actionRec, output string) {
-	if !outputAction(rec.Action) || output == "" {
-		return
-	}
-	output = s.scrub(stripPageContentBoundary(output))
-	if output == "" {
-		return
-	}
-	truncated := len([]byte(output)) > actionOutputCap
-	if !truncated {
-		rec.Output = output
-		return
-	}
-	setBounded := func(marker string) {
-		limit := actionOutputCap - len([]byte(marker)) - 1
-		if limit < 0 {
-			limit = 0
-		}
-		rec.Output = clipBytes(output, limit) + "\n" + marker
-	}
-	setBounded("[truncated; full output unavailable]")
-	runDir := filepath.Join(s.store.root, runID)
-	rel := filepath.ToSlash(filepath.Join("outputs", fmt.Sprintf("%d-%s.txt", rec.Seq, rec.Action)))
-	path := filepath.Join(runDir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		rec.Warnings = append(rec.Warnings, "output file: "+err.Error())
-		return
-	}
-	fileOutput := output
-	if len([]byte(fileOutput)) > actionOutputFileCap {
-		marker := fmt.Sprintf("\n[full output truncated at %d bytes]", actionOutputFileCap)
-		fileOutput = clipBytes(fileOutput, actionOutputFileCap-len([]byte(marker))) + marker
-	}
-	if err := writeAtomic(path, []byte(fileOutput)); err != nil {
-		rec.Warnings = append(rec.Warnings, "output file: "+err.Error())
-		return
-	}
-	rec.OutputPath = path
-	if truncated {
-		setBounded(fmt.Sprintf("[truncated; full output: %s]", rel))
-	}
-}
-
-func (s *Service) shortActionOutput(action, output string) string {
-	if !outputAction(action) {
-		return output
-	}
-	output = s.scrub(stripPageContentBoundary(output))
-	if len([]byte(output)) <= actionOutputCap {
-		return output
-	}
-	marker := "[truncated; see outputPath]"
-	limit := actionOutputCap - len([]byte(marker)) - 1
-	if limit < 0 {
-		limit = 0
-	}
-	return clipBytes(output, limit) + "\n" + marker
-}
-
-func clipBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	b := []byte(s)
-	if len(b) <= n {
-		return s
-	}
-	b = b[:n]
-	return strings.ToValidUTF8(string(b), "")
 }
 
 // clickAt is where a click lands: the element's centre and the viewport it is in, both in CSS pixels, so the point
@@ -695,61 +395,44 @@ func isTabDrift(err error) bool {
 // clickTarget reads the element box and viewport before a click. The box is
 // returned even when the viewport lookup fails, so a refused click can still
 // leave useful evidence.
-func (e *Engine) clickTarget(ctx context.Context, ref string) (*clickAt, *ElementBox, *ElementBox, error) {
+func (e *Engine) clickTarget(ctx context.Context, ref string) (*clickAt, *ElementBox, error) {
+	if _, err := e.Run(ctx, pointTimeout, "scrollintoview", ref); err != nil {
+		return nil, nil, err
+	}
 	box, err := e.Run(ctx, pointTimeout, "get", "box", ref)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	x, okx := boxField(box, "x")
 	y, oky := boxField(box, "y")
 	w, okw := boxField(box, "width")
 	h, okh := boxField(box, "height")
 	if !okx || !oky || !okw || !okh {
-		return nil, nil, nil, errors.New("get box returned no usable coordinates")
+		return nil, nil, errors.New("get box returned no usable coordinates")
 	}
 	element := &ElementBox{X: x, Y: y, W: w, H: h}
-	target := e.refs[ref]
-	iframe := target.inIframe || strings.EqualFold(strings.TrimSpace(target.role), "iframe")
 	ctx, cancel := context.WithTimeout(ctx, pointTimeout)
 	defer cancel()
 	p, err := e.pageCDP(ctx)
 	if err != nil {
-		return nil, element, nil, err
+		return nil, element, err
 	}
 	if p.conn != nil {
 		defer func() { _ = p.conn.CloseNow() }()
 	}
 	var size []float64
 	if err := p.evaluate(ctx, "[innerWidth, innerHeight]", &size); err != nil {
-		return nil, element, nil, err
+		return nil, element, err
 	}
 	if len(size) != 2 {
-		return nil, element, nil, errors.New("viewport size was not returned")
+		return nil, element, errors.New("viewport size was not returned")
 	}
 	vw, vh := size[0], size[1]
 	if vw <= 0 || vh <= 0 {
-		return nil, element, nil, errors.New("viewport size was invalid")
+		return nil, element, errors.New("viewport size was invalid")
 	}
 	element.ViewportWidth, element.ViewportHeight = vw, vh
-	point := element
-	if iframe || w <= 0 || h <= 0 || x < 0 || y < 0 || x+w > vw || y+h > vh {
-		if _, err := e.Run(ctx, pointTimeout, "scrollintoview", ref); err != nil {
-			return nil, element, nil, err
-		}
-		moved, err := e.Run(ctx, pointTimeout, "get", "box", ref)
-		if err != nil {
-			return nil, element, nil, err
-		}
-		mx, mokx := boxField(moved, "x")
-		my, moky := boxField(moved, "y")
-		mw, mokw := boxField(moved, "width")
-		mh, mokh := boxField(moved, "height")
-		if !mokx || !moky || !mokw || !mokh {
-			return nil, element, nil, errors.New("get box after scroll returned no usable coordinates")
-		}
-		point = &ElementBox{X: mx, Y: my, W: mw, H: mh, ViewportWidth: vw, ViewportHeight: vh}
-	}
-	return &clickAt{X: point.X + point.W/2, Y: point.Y + point.H/2, W: vw, H: vh}, element, point, nil
+	return &clickAt{X: x + w/2, Y: y + h/2, W: vw, H: vh}, element, nil
 }
 
 // shoot saves a screenshot and, on macOS, downsizes it with the built-in sips (no Go image dependency).
@@ -769,105 +452,49 @@ func (s *Service) shoot(ctx context.Context, e *Engine, path string) error {
 
 // actionRec is one line of actions.jsonl.
 type actionRec struct {
-	Seq              int         `json:"seq"`
-	Leg              string      `json:"leg"`
-	Action           string      `json:"action"`
-	Planned          bool        `json:"planned,omitempty"`
-	Args             []string    `json:"args,omitempty"`
-	Output           string      `json:"output,omitempty"`
-	OutputPath       string      `json:"outputPath,omitempty"`
-	Before           string      `json:"before"`
-	After            string      `json:"after"`
-	ConsoleTail      string      `json:"consoleTail"`
-	At               time.Time   `json:"at"`
-	SentAt           time.Time   `json:"sentAt,omitzero"`
-	EngineGeneration uint64      `json:"engineGeneration,omitempty"`
-	RecordOffsetMS   *int64      `json:"recordOffsetMs,omitempty"`
-	RecordSegment    string      `json:"recordSegment,omitempty"`
-	SegmentOffsetMS  *int64      `json:"segmentOffsetMs,omitempty"`
-	MS               int64       `json:"ms"`
-	Click            *clickAt    `json:"click,omitempty"` // pointer action: where the pointer went
-	Box              *ElementBox `json:"box,omitempty"`   // pointer action: the element's CSS-pixel box
-	PageErrors       string      `json:"pageErrors,omitempty"`
-	Reason           string      `json:"reason,omitempty"`
-	Error            string      `json:"error,omitempty"`
-	Unassigned       bool        `json:"unassigned,omitempty"` // no check on this leg was open when it happened
-	Warnings         []string    `json:"warnings,omitempty"`
-	Control          *LegControl `json:"control,omitempty"`
-	TargetRole       string      `json:"targetRole,omitempty"` // from the last snapshot: the element acted on, for plain captions
-	TargetName       string      `json:"targetName,omitempty"`
+	Seq         int         `json:"seq"`
+	Leg         string      `json:"leg"`
+	Action      string      `json:"action"`
+	Args        []string    `json:"args,omitempty"`
+	Before      string      `json:"before"`
+	After       string      `json:"after"`
+	ConsoleTail string      `json:"consoleTail"`
+	At          time.Time   `json:"at"`
+	MS          int64       `json:"ms"`
+	Click       *clickAt    `json:"click,omitempty"` // click only: where the pointer went
+	Box         *ElementBox `json:"box,omitempty"`   // click only: the element's CSS-pixel box
+	PageErrors  string      `json:"pageErrors,omitempty"`
+	Reason      string      `json:"reason,omitempty"`
+	Unassigned  bool        `json:"unassigned,omitempty"` // no check was open when it happened
+	Warnings    []string    `json:"warnings,omitempty"`
+	TargetRole  string      `json:"targetRole,omitempty"` // from the last snapshot: the element acted on, for plain captions
+	TargetName  string      `json:"targetName,omitempty"`
 }
 
 // receipt settles the UI, takes the after-shot and the console tail, appends the record to
 // actions.jsonl and attaches it to the open check. Its failures are warnings: the action already happened.
-func (s *Service) receipt(ctx context.Context, runID string, e *Engine, leg, action string, args []string, target refInfo, click *clickAt, box, receiptBox *ElementBox, stamp actionTime, took time.Duration, reason string, output ...string) (actionRec, error) {
-	// The action or HTTP deadline may already have expired. Receipt probes have
-	// their own bounded lifetime, and Engine.Run still observes engine closure.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
+func (s *Service) receipt(ctx context.Context, runID string, e *Engine, leg, action string, args []string, target refInfo, click *clickAt, box *ElementBox, took time.Duration, reason string) actionRec {
 	s.mu.Lock()
 	seq := s.nextSeq(runID)
 	s.mu.Unlock()
-	rec := actionRec{Seq: seq, Leg: leg, Action: action, Args: args, Before: e.last, At: s.clock(), SentAt: stamp.sentAt, EngineGeneration: stamp.generation, RecordOffsetMS: stamp.recordOffsetMS, RecordSegment: stamp.recordSegment, SegmentOffsetMS: stamp.recordOffsetMS, MS: took.Milliseconds(), TargetRole: target.role, TargetName: target.name, Click: click, Box: box, Reason: reason}
-	if outputAction(action) && len(output) > 0 {
-		rec.Output = output[0]
-	}
+	rec := actionRec{Seq: seq, Leg: leg, Action: action, Args: args, Before: e.last, At: s.clock(), MS: took.Milliseconds(), TargetRole: target.role, TargetName: target.name, Click: click, Box: box, Reason: reason}
 	warn := func(what string, err error) { rec.Warnings = append(rec.Warnings, what+": "+err.Error()) }
-	finish := func() actionRec {
-		s.prepareActionOutput(runID, &rec, rec.Output)
-		if receiptBox == nil {
-			receiptBox = rec.Box
-		}
-		s.attach(runID, &rec, Receipt{Seq: seq, Leg: leg, Action: action, Args: args, BeforePath: rec.Before, AfterPath: rec.After, ConsoleTail: rec.ConsoleTail, At: rec.At, MS: rec.MS, TargetRole: target.role, TargetName: target.name, Box: receiptBox, Reason: rec.Reason, PageErrors: rec.PageErrors})
-		return rec
-	}
 
 	select {
 	case <-time.After(settleDelay):
 	case <-ctx.Done():
 	}
-	// Bound the operation in the daemon too: killing only its client leaves
-	// the daemon's state lock held until the default load timeout expires.
-	if _, err := e.Run(ctx, cmdTimeout, "wait", "--load", "load", "--timeout", strconv.FormatInt(settleLoad.Milliseconds(), 10)); err != nil {
-		if captureBlocked(err) {
-			warn("load", err)
-			if rec.Reason == "" {
-				rec.Reason = driveErrorMessage(err)
-			}
-			return finish(), err
-		}
-		if ctx.Err() == nil {
-			warn("load", err)
-		}
+	if _, err := e.Run(ctx, settleLoad, "wait", "--load", "load"); err != nil && ctx.Err() == nil {
+		warn("load", err)
 	}
 	rec.After = filepath.Join(e.RunDir, "receipts", fmt.Sprintf("%d-after.png", seq))
 	err := s.shoot(ctx, e, rec.After)
-	if captureBlocked(err) {
-		if !fileExists(rec.After) {
-			rec.After = ""
-		}
-		warn("after-shot", err)
-		if rec.Reason == "" {
-			rec.Reason = driveErrorMessage(err)
-		}
-		return finish(), err
-	}
 	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil { // a window the OS hid often paints on the next frame
 		select {
 		case <-time.After(shotRetry):
 			err = s.shoot(ctx, e, rec.After)
 		case <-ctx.Done():
 		}
-	}
-	if captureBlocked(err) {
-		if !fileExists(rec.After) {
-			rec.After = ""
-		}
-		warn("after-shot", err)
-		if rec.Reason == "" {
-			rec.Reason = driveErrorMessage(err)
-		}
-		return finish(), err
 	}
 	if err != nil {
 		if !fileExists(rec.After) {
@@ -881,47 +508,16 @@ func (s *Service) receipt(ctx context.Context, runID string, e *Engine, leg, act
 	}
 	if out, err := e.Run(ctx, cmdTimeout, "errors"); err != nil {
 		warn("page errors", err)
-		if captureBlocked(err) {
-			if rec.Reason == "" {
-				rec.Reason = driveErrorMessage(err)
-			}
-			return finish(), err
-		}
 	} else {
-		rec.PageErrors = compactErrors(s.scrub(stripPageContentBoundary(out)))
+		rec.PageErrors = compactErrors(out)
 	}
 	if out, err := e.Run(ctx, cmdTimeout, "console"); err != nil {
 		warn("console", err)
-		if captureBlocked(err) {
-			if rec.Reason == "" {
-				rec.Reason = driveErrorMessage(err)
-			}
-			return finish(), err
-		}
 	} else {
-		rec.ConsoleTail = consoleErrorTail(s.scrub(stripPageContentBoundary(out)))
+		rec.ConsoleTail = consoleErrorTail(out)
 	}
-	return finish(), nil
-}
 
-// noCaptureReceipt records a failed action without settling, capturing, or
-// probing the browser again. The tester still gets a receipt it can cite.
-func (s *Service) noCaptureReceipt(runID string, e *Engine, leg, action string, args []string, target refInfo, stamp actionTime, took time.Duration, reason string, output string) actionRec {
-	if stamp.recordOffsetMS == nil {
-		// A refusal has no send time, but its hide event still needs the
-		// recording clock when wall time has moved.
-		sample := s.actionSent(runID, leg)
-		stamp.recordOffsetMS, stamp.recordSegment = sample.recordOffsetMS, sample.recordSegment
-	}
-	s.mu.Lock()
-	seq := s.nextSeq(runID)
-	s.mu.Unlock()
-	rec := actionRec{Seq: seq, Leg: leg, Action: action, Args: args, Before: e.last, At: s.clock(), SentAt: stamp.sentAt, EngineGeneration: stamp.generation, RecordOffsetMS: stamp.recordOffsetMS, RecordSegment: stamp.recordSegment, SegmentOffsetMS: stamp.recordOffsetMS, MS: took.Milliseconds(), TargetRole: target.role, TargetName: target.name, Reason: reason}
-	if outputAction(action) {
-		rec.Output = output
-	}
-	s.prepareActionOutput(runID, &rec, output)
-	s.attach(runID, &rec, Receipt{Seq: seq, Leg: leg, Action: action, Args: args, BeforePath: rec.Before, At: rec.At, MS: rec.MS, TargetRole: target.role, TargetName: target.name, Reason: reason})
+	s.attach(runID, &rec, Receipt{Seq: seq, Leg: leg, Action: action, Args: args, BeforePath: rec.Before, AfterPath: rec.After, ConsoleTail: rec.ConsoleTail, At: rec.At, MS: rec.MS, TargetRole: target.role, TargetName: target.name, Box: rec.Box, Reason: rec.Reason, PageErrors: rec.PageErrors})
 	return rec
 }
 
@@ -947,14 +543,14 @@ func consoleErrorTail(out string) string {
 	return clip(tail, 4000)
 }
 
-// attach adds r to the open check on its leg (otherwise rec is marked unassigned) and appends rec to
+// attach adds r to the open check (rec is marked unassigned when none is open) and appends rec to
 // actions.jsonl. Failures are warnings on rec: the action already happened.
 func (s *Service) attach(runID string, rec *actionRec, r Receipt) {
 	warn := func(what string, err error) { rec.Warnings = append(rec.Warnings, what+": "+err.Error()) }
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	checks, err := s.store.Checks(runID)
-	if i := slices.IndexFunc(checks, func(c Check) bool { return c.State == CheckRunning && c.onLeg() == r.onLeg() }); err == nil && i >= 0 {
+	if i := slices.IndexFunc(checks, func(c Check) bool { return c.State == CheckRunning }); err == nil && i >= 0 {
 		checks[i].Receipts = append(checks[i].Receipts, r)
 		err = s.store.SaveChecks(runID, checks)
 	} else {
@@ -963,12 +559,6 @@ func (s *Service) attach(runID string, rec *actionRec, r Receipt) {
 	if err != nil {
 		warn("check", err)
 	}
-	s.appendAction(runID, rec)
-}
-
-// appendAction writes a command to the action log. The caller holds s.mu.
-func (s *Service) appendAction(runID string, rec *actionRec) {
-	warn := func(what string, err error) { rec.Warnings = append(rec.Warnings, what+": "+err.Error()) }
 	if path, err := s.store.path(runID, "actions.jsonl"); err != nil {
 		warn("actions.jsonl", err)
 	} else if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err != nil {
@@ -998,73 +588,20 @@ func (s *Service) engineFor(runID string, leg Leg) *Engine {
 	defer s.mu.Unlock()
 	key := runID + "/" + leg.Name
 	if s.engines[key] == nil {
-		e := newEngine(*leg.Engine, s.engExec)
-		s.initEngineCallbacks(runID, leg, e)
-		s.engines[key] = e
+		s.engines[key] = newEngine(*leg.Engine, s.engExec)
 	}
 	return s.engines[key]
 }
 
-// initEngineCallbacks runs before the engine is shared. Lookups never rewrite
-// callbacks that commands invoke while holding the engine's mutex.
-func (s *Service) initEngineCallbacks(runID string, leg Leg, e *Engine) {
-	e.leg = leg.Name
-	e.diagnose = func(ctx context.Context) (LegControl, error) { return s.controlDiagnosis(ctx, runID, leg.Name) }
-	e.onControl = func(control LegControl) error { return s.setControl(runID, leg.Name, control, e) }
-	var since int
-	var boundaryErr error
-	e.onInit = func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		since, boundaryErr = setupLogBoundary(e.RunDir)
-	}
-	e.lostState = func() string {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return loggedDaemonState(e.RunDir, leg.Name, since, e.generation, boundaryErr, e.pendingAction)
-	}
-	e.onRestart = func(message string) {
-		rec := actionRec{Leg: leg.Name, Action: "browser-restart", At: s.clock(), Reason: message}
-		s.logAction(runID, &rec)
-	}
-	e.onReattach = func(oldTab, newTab, appURL string) {
-		rec := actionRec{Leg: leg.Name, Action: "reattach", Args: []string{oldTab, newTab}, At: s.clock(), Reason: "app tab reattached at " + s.scrub(diagnosticURL(appURL))}
-		s.logAction(runID, &rec)
-	}
-	e.abortAdvice = func() string {
-		message := "The " + leg.Name + " leg's browser control is unusable."
-		run, err := s.store.Get(runID)
-		if err != nil {
-			return message + " Could not read available legs: " + err.Error() + "."
-		}
-		for _, other := range run.Legs {
-			if other.Name != leg.Name && other.State == "running" && other.Engine != nil {
-				message += " Finish other checks on the " + other.Name + " leg."
-			}
-		}
-		return message
-	}
-}
-
-// attachEngine gives a freshly launched leg its engine. The caller owns failure
-// cleanup, which preserves profile/data for relaunch and wipes it for launch.
+// attachEngine gives a freshly launched leg its engine. Failing here undoes the launch.
 func (s *Service) attachEngine(ctx context.Context, runID string, leg Leg) (Leg, error) {
-	if err := s.closeLegEngine(runID, leg); err != nil {
-		leg.State = "failed"
-		return leg, err
-	}
-	appOrigin := ""
-	if leg.Engine != nil {
-		appOrigin = leg.Engine.AppOrigin
-	}
 	e, err := NewEngine(s.binary, filepath.Join(s.store.root, runID), leg.Name, leg.DebugPort, s.engExec)
 	if err != nil {
+		_ = cleanLeg(ctx, s.sys, s.store.legDir(runID, leg.Name), false)
 		leg.State = "failed"
 		return leg, err
 	}
-	e.AppOrigin = appOrigin
 	leg.Engine = &e.EngineInfo
-	s.initEngineCallbacks(runID, leg, e)
 	s.mu.Lock()
 	s.engines[runID+"/"+leg.Name] = e
 	s.mu.Unlock()
@@ -1130,22 +667,18 @@ func (s *Service) Compare(ctx context.Context, sessionID, checkID string) (map[s
 	if head == "" || base == "" {
 		return nil, conflict("TESTING_COMPARE_INCOMPLETE", fmt.Sprintf("check %s needs an after-shot on both legs to compare (head %t, base %t); act on it with --leg head and --leg base", checkID, head != "", base != ""))
 	}
-	run, leg, done, err := s.beginLegCommand(sessionID, "head")
+	leg, err := pickLeg(run, "head")
 	if err != nil {
 		return nil, err
 	}
-	defer done()
 	out := filepath.Join(s.store.root, run.ID, "receipts", "diff-"+checkID+".png")
 	_ = os.Remove(out) // an older image must not stand in for this one
 	e := s.engineFor(run.ID, leg)
 	e.mu.Lock()
 	text, err := e.Run(ctx, cmdTimeout, "diff", "screenshot", "--baseline", base, "--output", out)
-	if err == nil && e.life.Err() == nil {
-		err = s.setControl(run.ID, leg.Name, LegControl{State: "ok"}, e)
-	}
 	e.mu.Unlock()
 	if err != nil {
-		return nil, driveEngineError(err)
+		return nil, apierr.Unavailable("TESTING_ENGINE_FAILED", err.Error())
 	}
 	res := map[string]any{"check": checkID, "base": base, "head": head, "output": text}
 	if !fileExists(out) { // the engine may skip the image (nothing differs, or it could not diff); the check keeps no path to a file that is not there

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,18 +30,9 @@ func testingDaemon(t *testing.T, status int, respBody string) *testingCapture {
 	got := &testingCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		// Check mutations fetch status to render their countdown. Keep the
-		// mutation as the captured request so the wire assertions remain useful.
-		followupStatus := r.URL.Path == "/api/v1/testing/status" && got.path != "" && got.path != "/internal/telemetry/cli-invoked" && got.path != "/api/v1/testing/status"
-		if !followupStatus {
-			*got = testingCapture{method: r.Method, path: r.URL.RequestURI()}
-			_ = json.Unmarshal(raw, &got.body)
-		}
+		*got = testingCapture{method: r.Method, path: r.URL.RequestURI()}
+		_ = json.Unmarshal(raw, &got.body)
 		w.WriteHeader(status)
-		if followupStatus {
-			_, _ = io.WriteString(w, fmt.Sprintf(`{"run":{"deadline":%q}}`, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
-			return
-		}
 		_, _ = io.WriteString(w, respBody)
 	}))
 	t.Cleanup(srv.Close)
@@ -69,9 +59,6 @@ func TestTestingCheckEndSendsFlags(t *testing.T) {
 		var body map[string]any
 		calls := 0
 		deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Path == "/api/v1/testing/status" {
-				return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-			}
 			if req.URL.Path != "/api/v1/testing/checks/c1/end" {
 				return jsonResponse(http.StatusNoContent, ""), nil
 			}
@@ -110,422 +97,6 @@ func TestTestingCheckEndRejectsNonpositiveShot(t *testing.T) {
 	}
 }
 
-func TestTestingCheckEndRejectsEmptySameBug(t *testing.T) {
-	_, _, err := executeCLI(t, Deps{}, "testing", "check", "end", "c1", "--result", "fail", "--same-bug", " ")
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "--same-bug requires a check id") {
-		t.Fatalf("empty same-bug: %v", err)
-	}
-}
-
-func TestTestingCheckAddReplacementFlags(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	var body map[string]any
-	statusCalls := 0
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/internal/telemetry/cli-invoked":
-			return jsonResponse(http.StatusNoContent, ""), nil
-		case "/api/v1/testing/checks":
-			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			return jsonResponse(http.StatusOK, `{"id":"c2","name":"menu-v2","state":"pending"}`), nil
-		case "/api/v1/testing/status":
-			statusCalls++
-			return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-		default:
-			return jsonResponse(http.StatusNotFound, `{}`), nil
-		}
-	})}
-	deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client, Now: func() time.Time { return time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC) }}
-	out, _, err := executeCLI(t, deps, "testing", "check", "add", "menu-v2", "--expect", "shown", "--explore", "--replaces", "c1", "--reason", "The menu remains open after the update")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body["sessionId"] != "w1" || body["name"] != "menu-v2" || body["expect"] != "shown" || body["purpose"] != "explore" || body["replaces"] != "c1" || body["reason"] != "The menu remains open after the update" {
-		t.Fatalf("replacement body = %v", body)
-	}
-	if statusCalls != 1 || !strings.Contains(out, "10 min left") {
-		t.Fatalf("out=%q status calls=%d", out, statusCalls)
-	}
-}
-
-func TestTestingCheckAddReplacementFlagsMustBePaired(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "missing reason", args: []string{"--replaces", "c1"}, want: "must be provided together"},
-		{name: "missing replaces", args: []string{"--reason", "the PR sentence"}, want: "must be provided together"},
-		{name: "empty replaces", args: []string{"--replaces", "", "--reason", "the PR sentence"}, want: "must be non-empty"},
-		{name: "empty reason", args: []string{"--replaces", "c1", "--reason", " "}, want: "must be non-empty"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"testing", "check", "add", "menu", "--expect", "shown", "--explore"}, tc.args...)
-			_, _, err := executeCLI(t, Deps{}, args...)
-			if ExitCode(err) != 2 || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("args=%v err=%v", args, err)
-			}
-		})
-	}
-}
-
-func TestTestingCheckMutationsShowFixedClockTimeLeft(t *testing.T) {
-	now := time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name string
-		args []string
-	}{
-		{name: "add", args: []string{"testing", "check", "add", "menu", "--expect", "shown", "--explore"}},
-		{name: "start", args: []string{"testing", "check", "start", "c1", "--explore"}},
-		{name: "end", args: []string{"testing", "check", "end", "c1", "--result", "skipped"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("AO_SESSION_ID", "w1")
-			cfg := setConfigEnv(t)
-			if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-				t.Fatal(err)
-			}
-			statusCalls := 0
-			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				switch req.URL.Path {
-				case "/internal/telemetry/cli-invoked":
-					return jsonResponse(http.StatusNoContent, ""), nil
-				case "/api/v1/testing/status":
-					statusCalls++
-					return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-				case "/api/v1/testing/checks", "/api/v1/testing/checks/c1/start", "/api/v1/testing/checks/c1/end":
-					return jsonResponse(http.StatusOK, `{"id":"c1","name":"menu","state":"pending"}`), nil
-				default:
-					return jsonResponse(http.StatusNotFound, `{}`), nil
-				}
-			})}
-			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client, Now: func() time.Time { return now }}, tc.args...)
-			if err != nil || statusCalls != 1 || !strings.Contains(out, "10 min left") {
-				t.Fatalf("out=%q status calls=%d err=%v", out, statusCalls, err)
-			}
-		})
-	}
-}
-
-func TestTestingCheckJSONOmitsTextCountdown(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	statusCalls := 0
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/internal/telemetry/cli-invoked":
-			return jsonResponse(http.StatusNoContent, ""), nil
-		case "/api/v1/testing/checks":
-			return jsonResponse(http.StatusOK, `{"id":"c1","name":"menu","state":"pending","replacedBy":"c2","replaceReason":"The PR changed the expected wording."}`), nil
-		case "/api/v1/testing/status":
-			statusCalls++
-			return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-		default:
-			return jsonResponse(http.StatusNotFound, `{}`), nil
-		}
-	})}
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client, Now: func() time.Time { return time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC) }}, "testing", "--json", "check", "add", "menu", "--expect", "shown", "--explore")
-	if err != nil || statusCalls != 0 || strings.Contains(out, "min left") || !strings.Contains(out, `"replacedBy": "c2"`) || !strings.Contains(out, `"replaceReason": "The PR changed the expected wording."`) {
-		t.Fatalf("out=%q status calls=%d err=%v", out, statusCalls, err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(out), &decoded); err != nil || decoded["id"] != "c1" {
-		t.Fatalf("JSON output=%q decoded=%v err=%v", out, decoded, err)
-	}
-}
-
-func TestTestingCheckMutationReportsMissingDeadlineAfterSuccess(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/internal/telemetry/cli-invoked":
-			return jsonResponse(http.StatusNoContent, ""), nil
-		case "/api/v1/testing/checks":
-			return jsonResponse(http.StatusOK, `{"id":"c1","name":"menu","state":"pending"}`), nil
-		case "/api/v1/testing/status":
-			return jsonResponse(http.StatusOK, `{"run":{"id":"run_w1"}}`), nil
-		default:
-			return jsonResponse(http.StatusNotFound, `{}`), nil
-		}
-	})}
-	out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, "testing", "check", "add", "menu", "--expect", "shown", "--explore")
-	if err != nil || !strings.Contains(stderr, "warning: minutes-left unavailable:") || !strings.Contains(stderr, "run deadline") || !strings.Contains(out, "c1 pending menu") {
-		t.Fatalf("out=%q stderr=%q err=%v", out, stderr, err)
-	}
-}
-
-func TestTestingCheckMutationReportsStatusFailureAfterSuccess(t *testing.T) {
-	for _, args := range [][]string{
-		{"testing", "check", "add", "menu", "--expect", "shown", "--explore"},
-		{"testing", "check", "start", "c1", "--explore"},
-		{"testing", "check", "end", "c1", "--result", "skipped"},
-	} {
-		t.Run(args[2], func(t *testing.T) {
-			t.Setenv("AO_SESSION_ID", "w1")
-			cfg := setConfigEnv(t)
-			if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-				t.Fatal(err)
-			}
-			mutations := 0
-			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				switch req.URL.Path {
-				case "/internal/telemetry/cli-invoked":
-					return jsonResponse(http.StatusNoContent, ""), nil
-				case "/api/v1/testing/checks", "/api/v1/testing/checks/c1/start", "/api/v1/testing/checks/c1/end":
-					mutations++
-					return jsonResponse(http.StatusOK, `{"id":"c1","name":"menu","state":"pending"}`), nil
-				case "/api/v1/testing/status":
-					return nil, fmt.Errorf("status unavailable")
-				default:
-					return jsonResponse(http.StatusNotFound, `{}`), nil
-				}
-			})}
-			out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, args...)
-			if err != nil || mutations != 1 || !strings.Contains(stderr, "warning: minutes-left unavailable:") || !strings.Contains(stderr, "status unavailable") || !strings.Contains(out, "c1 pending menu") {
-				t.Fatalf("out=%q stderr=%q mutations=%d err=%v", out, stderr, mutations, err)
-			}
-		})
-	}
-}
-
-func TestCheckTimeLeftRoundsUpAndClampsAtZero(t *testing.T) {
-	now := time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name     string
-		deadline time.Time
-		want     string
-	}{
-		{name: "just over nine minutes", deadline: now.Add(9*time.Minute + time.Second), want: "10 min left"},
-		{name: "exactly nine minutes", deadline: now.Add(9 * time.Minute), want: "9 min left"},
-		{name: "at deadline", deadline: now, want: "0 min left"},
-		{name: "past deadline", deadline: now.Add(-time.Second), want: "0 min left"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := checkTimeLeft(litmus.Run{Deadline: tc.deadline}, now); got != tc.want {
-				t.Fatalf("checkTimeLeft = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestTestingAgentVersionForwardsLegAgentAndVersion(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	var body map[string]any
-	calls := 0
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		calls++
-		if req.Method != http.MethodPost || req.URL.Path != "/api/v1/testing/agent-version" {
-			t.Fatalf("request = %s %s", req.Method, req.URL.Path)
-		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		return jsonResponse(http.StatusOK, `{"id":"run_1","state":"running","repo":"o/r","prNumber":7}`), nil
-	})}
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, "testing", "agent-version", "claude-code", "2.1", "--leg", "head")
-	if err != nil || calls != 1 || body["sessionId"] != "w1" || body["leg"] != "head" || body["agent"] != "claude-code" || body["version"] != "2.1" {
-		t.Fatalf("calls=%d body=%v out=%q err=%v", calls, body, out, err)
-	}
-}
-
-func TestTestingAgentVersionRequiresValidLegAndValues(t *testing.T) {
-	for _, args := range [][]string{
-		{"agent-version", "claude-code", "2.1"},
-		{"agent-version", "claude-code", "2.1", "--leg", "main"},
-		{"agent-version", " ", "2.1", "--leg", "head"},
-		{"agent-version", "claude-code", " ", "--leg", "base"},
-	} {
-		_, _, err := executeCLI(t, Deps{}, append([]string{"testing"}, args...)...)
-		if ExitCode(err) != 2 {
-			t.Fatalf("args=%v err=%v exit=%d", args, err, ExitCode(err))
-		}
-	}
-}
-
-func TestTestingRelaunchWireAndErrors(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	var got testingCapture
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		raw, err := io.ReadAll(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(raw, &got.body); err != nil {
-			return nil, err
-		}
-		got.method, got.path = req.Method, req.URL.RequestURI()
-		return jsonResponse(http.StatusOK, `{"id":"run_w1","state":"running","repo":"o/r","prNumber":7}`), nil
-	})}
-	deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}
-	out, _, err := executeCLI(t, deps, "testing", "relaunch", "head")
-	if err != nil || !strings.Contains(out, "run run_w1 running o/r#7") {
-		t.Fatalf("out=%q err=%v", out, err)
-	}
-	if got.method != http.MethodPost || got.path != "/api/v1/testing/relaunch" || got.body["sessionId"] != "w1" || got.body["leg"] != "head" {
-		t.Fatalf("request = %s %s %v", got.method, got.path, got.body)
-	}
-
-	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		return jsonResponse(http.StatusConflict, `{"code":"TESTING_RUN_CLOSED","message":"testing run is closed","requestId":"req-relaunch"}`), nil
-	})
-	_, _, err = executeCLI(t, deps, "testing", "relaunch", "base")
-	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "TESTING_RUN_CLOSED") || !strings.Contains(err.Error(), "req-relaunch") {
-		t.Fatalf("relaunch error = %v", err)
-	}
-
-	_, _, err = executeCLI(t, deps, "testing", "relaunch", "main")
-	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "requires head or base") {
-		t.Fatalf("invalid leg error = %v", err)
-	}
-}
-
-func TestTestingCheckStartSendsClassificationAndSupportsBeginAlias(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		verb, purpose, sentence string
-	}{
-		{"start", "claim", `Clicking "Other models" in the chat model menu no longer closes the menu`},
-		{"begin", "explore", ""},
-	} {
-		var body map[string]any
-		client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Path == "/internal/telemetry/cli-invoked" {
-				return jsonResponse(http.StatusNoContent, ""), nil
-			}
-			if req.URL.Path == "/api/v1/testing/status" {
-				return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-			}
-			if req.URL.Path != "/api/v1/testing/checks/c1/start" {
-				t.Fatalf("path = %s", req.URL.Path)
-			}
-			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			return jsonResponse(http.StatusOK, `{"id":"c1","state":"running","purpose":"`+tc.purpose+`"}`), nil
-		})}
-		args := []string{"testing", "check", tc.verb, "c1", "--explore"}
-		if tc.purpose == "claim" {
-			args = []string{"testing", "check", tc.verb, "c1", "--claim", tc.sentence}
-		}
-		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, args...)
-		if err != nil || body["sessionId"] != "w1" || body["purpose"] != tc.purpose || (tc.sentence != "" && body["claimSentence"] != tc.sentence) {
-			t.Fatalf("verb=%s purpose=%s body=%v err=%v", tc.verb, tc.purpose, body, err)
-		}
-	}
-}
-
-func TestTestingCheckClassificationRequiresOneChoice(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	for _, args := range [][]string{
-		{"check", "add", "menu", "--expect", "shown"},
-		{"check", "add", "menu", "--expect", "shown", "--claim", ""},
-		{"check", "add", "menu", "--expect", "shown", "--claim", "sentence", "--explore"},
-		{"check", "add", "menu", "--expect", "shown", "--risk", " "},
-		{"check", "add", "menu", "--expect", "shown", "--risk", "git-push", "--claim", "sentence"},
-		{"check", "add", "menu", "--expect", "shown", "--risk", "git-push", "--explore"},
-		{"check", "start", "c1", "--risk", "git-push", "--claim", "sentence"},
-		{"check", "reclassify", "c1", "--risk", "git-push"},
-		{"check", "start", "c1", "--claim", "sentence", "--explore"},
-		{"check", "reclassify", "c1", "--explore"},
-		{"check", "reclassify", "c1", "--claim", "sentence", "--reason", ""},
-	} {
-		_, _, err := executeCLI(t, Deps{}, append([]string{"testing"}, args...)...)
-		if ExitCode(err) != 2 {
-			t.Fatalf("args=%v err=%v exit=%d", args, err, ExitCode(err))
-		}
-	}
-}
-
-func TestTestingCheckEndSendsAttribution(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001}); err != nil {
-		t.Fatal(err)
-	}
-	var body map[string]any
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		if req.URL.Path == "/api/v1/testing/status" {
-			return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		return jsonResponse(http.StatusOK, `{"id":"c1","state":"absent"}`), nil
-	})}
-	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, "testing", "check", "end", "c1", "--result", "absent", "--attribution", "environment", "--cause", "outage", "--receipt", "8", "--same-bug", "c0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body["attribution"] != "environment" || body["environmentCause"] != "outage" || body["attributionReceipt"] != float64(8) || body["sameBug"] != "c0" {
-		t.Fatalf("attribution body = %v", body)
-	}
-}
-
-func TestTestingCheckEndSendsSameBugWithoutAttribution(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001}); err != nil {
-		t.Fatal(err)
-	}
-	var body map[string]any
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		if req.URL.Path == "/api/v1/testing/status" {
-			return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		return jsonResponse(http.StatusOK, `{"id":"c2","state":"fail","sameBug":"c1"}`), nil
-	})}
-	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, "testing", "check", "end", "c2", "--result", "fail", "--same-bug", "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if body["sessionId"] != "w1" || body["sameBug"] != "c1" || body["attribution"] != nil {
-		t.Fatalf("same-bug body = %v", body)
-	}
-}
-
 func TestTestingVerbsSendOneRequestEach(t *testing.T) {
 	verdict := filepath.Join(t.TempDir(), "verdict.txt")
 	if err := os.WriteFile(verdict, []byte("head only"), 0o600); err != nil {
@@ -534,47 +105,41 @@ func TestTestingVerbsSendOneRequestEach(t *testing.T) {
 	recipe, _ := filepath.Abs("recipe.yaml")
 	type M = map[string]any
 	type row struct {
-		args []string
-		path string
-		body M // sessionId is added to every expected body
+		args, path string
+		body       M // sessionId is added to every expected body
 	}
 	const pr = "https://github.com/aoagents/agent-orchestrator/pull/6394"
 	tests := []row{
-		{[]string{"intake", pr}, "POST /testing/intake", M{"prUrl": pr}},
-		{[]string{"prepare"}, "POST /testing/prepare", M{}},
-		{[]string{"launch", "head"}, "POST /testing/launch", M{"leg": "head"}},
-		{[]string{"launch", "base"}, "POST /testing/launch", M{"leg": "base"}},
-		{[]string{"status"}, "GET /testing/status?sessionId=w1", nil},
-		{[]string{"check", "add", "menu", "--expect", "shown", "--explore"}, "POST /testing/checks", M{"name": "menu", "expect": "shown", "purpose": "explore"}},
-		{[]string{"check", "add", "menu", "--expect", "shown", "--claim", `Clicking "Other models" in the chat model menu no longer closes the menu`, "--leg", "base"}, "POST /testing/checks", M{"name": "menu", "expect": "shown", "purpose": "claim", "claimSentence": `Clicking "Other models" in the chat model menu no longer closes the menu`, "leg": "base"}},
-		{[]string{"check", "start", "c1", "--claim", `Clicking "Other models" in the chat model menu no longer closes the menu`}, "POST /testing/checks/c1/start", M{"purpose": "claim", "claimSentence": `Clicking "Other models" in the chat model menu no longer closes the menu`}},
-		{[]string{"check", "reclassify", "c1", "--explore", "--reason", "changed"}, "POST /testing/checks/c1/reclassify", M{"purpose": "explore", "reason": "changed"}},
-		{[]string{"check", "add", "git-push", "--expect", "pushed", "--risk", "credentials-moved"}, "POST /testing/checks", M{"name": "git-push", "expect": "pushed", "purpose": "risk", "risk": "credentials-moved"}},
-		{[]string{"check", "start", "c1", "--risk", "credentials-moved"}, "POST /testing/checks/c1/start", M{"purpose": "risk", "risk": "credentials-moved"}},
-		{[]string{"check", "reclassify", "c1", "--risk", "credentials-moved", "--reason", "diff"}, "POST /testing/checks/c1/reclassify", M{"purpose": "risk", "risk": "credentials-moved", "reason": "diff"}},
-		{[]string{"compare", "c1"}, "POST /testing/checks/c1/compare", M{}},
-		{[]string{"replay", "c1", "--leg", "base"}, "POST /testing/checks/c1/replay", M{"leg": "base"}},
-		{[]string{"check", "end", "c1", "--result", "fail", "--note", "clipped"}, "POST /testing/checks/c1/end", M{"result": "fail", "note": "clipped"}},
-		{[]string{"check", "end", "c1", "--result", "fail", "--note", "same", "--same-fault"}, "POST /testing/checks/c1/end", M{"result": "fail", "note": "same", "sameFault": true}},
-		{[]string{"check", "end", "c3", "--result", "fail", "--same-bug", "c1"}, "POST /testing/checks/c3/end", M{"result": "fail", "note": "", "sameBug": "c1"}},
-		{[]string{"check", "end", "c2", "--result", "absent", "--note", "nopicker", "--attribution", "environment", "--cause", "outage", "--receipt", "8"}, "POST /testing/checks/c2/end", M{"result": "absent", "note": "nopicker", "attribution": "environment", "environmentCause": "outage", "attributionReceipt": 8}},
-		{[]string{"submit"}, "POST /testing/submit", M{}},
-		{[]string{"submit", "--verdict-file", verdict}, "POST /testing/submit", M{"summary": "head only"}},
-		{[]string{"submit", "--blocked", "--reason", "prepare-refused"}, "POST /testing/submit", M{"blocked": true, "reason": "prepare-refused"}},
-		{[]string{"submit", "--skip-base", "--reason", "time-ran-out"}, "POST /testing/submit", M{"skipBase": "time-ran-out"}},
-		{[]string{"submit", "--skip-base", "--reason", "time-ran-out", "--verdict-file", verdict}, "POST /testing/submit", M{"summary": "head only", "skipBase": "time-ran-out"}},
-		{[]string{"cleanup"}, "POST /testing/cleanup", M{}},
-		{[]string{"recipe", "validate", "recipe.yaml"}, "POST /testing/recipe/validate", M{"path": recipe}},
+		{"intake " + pr, "POST /testing/intake", M{"prUrl": pr}},
+		{"prepare", "POST /testing/prepare", M{}},
+		{"launch head", "POST /testing/launch", M{"leg": "head"}},
+		{"launch base", "POST /testing/launch", M{"leg": "base"}},
+		{"status", "GET /testing/status?sessionId=w1", nil},
+		{"check add menu --expect shown", "POST /testing/checks", M{"name": "menu", "expect": "shown"}},
+		{"check add menu --expect shown --leg base", "POST /testing/checks", M{"name": "menu", "expect": "shown", "leg": "base"}},
+		{"check start c1", "POST /testing/checks/c1/start", M{}},
+		{"compare c1", "POST /testing/checks/c1/compare", M{}},
+		{"replay c1 --leg base", "POST /testing/checks/c1/replay", M{"leg": "base"}},
+		{"check end c1 --result fail --note clipped", "POST /testing/checks/c1/end", M{"result": "fail", "note": "clipped"}},
+		{"check end c1 --result fail --note same --same-fault", "POST /testing/checks/c1/end", M{"result": "fail", "note": "same", "sameFault": true}},
+		{"check end c2 --result absent --note nopicker", "POST /testing/checks/c2/end", M{"result": "absent", "note": "nopicker"}},
+		{"submit", "POST /testing/submit", M{}},
+		{"submit --verdict-file " + verdict, "POST /testing/submit", M{"summary": "head only"}},
+		{"submit --blocked --reason prepare-refused", "POST /testing/submit", M{"blocked": true, "reason": "prepare-refused"}},
+		{"submit --skip-base --reason time-ran-out", "POST /testing/submit", M{"skipBase": "time-ran-out"}},
+		{"submit --skip-base --reason time-ran-out --verdict-file " + verdict, "POST /testing/submit", M{"summary": "head only", "skipBase": "time-ran-out"}},
+		{"cleanup", "POST /testing/cleanup", M{}},
+		{"recipe validate recipe.yaml", "POST /testing/recipe/validate", M{"path": recipe}},
 	}
 	// Driving verbs all post {action: first word, args: the rest} to /testing/drive.
 	for _, d := range []string{"snapshot", "click e12", "fill e3 hello", "type e3 hi", "press Enter", "wait 500", "wait --text Saved", "screenshot", "screenshot a.png", "console", "errors", "network", "record start run.mp4", "record stop"} {
 		w := strings.Fields(d)
-		tests = append(tests, row{w, "POST /testing/drive", M{"action": w[0], "args": w[1:]}})
+		tests = append(tests, row{d, "POST /testing/drive", M{"action": w[0], "args": w[1:]}})
 	}
 	for _, tc := range tests {
-		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+		t.Run(tc.args, func(t *testing.T) {
 			got := testingDaemon(t, http.StatusOK, `{}`)
-			if _, err := runTesting(t, tc.args...); err != nil {
+			if _, err := runTesting(t, strings.Fields(tc.args)...); err != nil {
 				t.Fatal(err)
 			}
 			method, path, _ := strings.Cut(tc.path, " ")
@@ -611,7 +176,6 @@ func TestTestingLongCallsOutlastServerBudgets(t *testing.T) {
 		{"recipe validate with SHA", "/testing/recipe/validate", []string{"recipe", "validate", "recipe.yaml", "--sha", strings.Repeat("a", 40)}, litmus.RecipeValidateBudget},
 		{"post", "/testing/runs/run_w1/post", []string{"post", "run_w1"}, litmus.PostBudget},
 		{"submit", "/testing/submit", []string{"submit"}, litmus.SubmitBudget},
-		{"drive wait", "/testing/drive", []string{"drive", "wait", strconv.FormatInt(litmus.MaxDriveWait.Milliseconds(), 10)}, litmus.DriveBudget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AO_SESSION_ID", "w1")
@@ -659,9 +223,6 @@ func TestTestingCheckEndNamesThemeFiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.URL.Path == "/api/v1/testing/status" {
-					return jsonResponse(http.StatusOK, `{"run":{"deadline":"2030-01-01T10:09:01Z"}}`), nil
-				}
 				if req.URL.Path != "/api/v1/testing/checks/c1/end" {
 					return jsonResponse(http.StatusOK, `{}`), nil
 				}
@@ -690,14 +251,9 @@ func TestTestingDrivePrintsCompactText(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "receipt 7: receipts/7-after.png 12ms page errors: none\n- button \"Save\" [ref=e1]"
-	finishHint := "Finish now: open claim checks c1 \"Save button works\". Main twins are optional from here."
-	deadline := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
 	for _, action := range []string{"click", "replay"} {
 		t.Run(action, func(t *testing.T) {
 			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.URL.Path == "/api/v1/testing/status" {
-					return jsonResponse(http.StatusOK, fmt.Sprintf(`{"run":{"deadline":%q},"hints":[{"text":%q},{"checkId":"c2","text":"check-specific hint"}]}`, deadline, finishHint)), nil
-				}
 				if !strings.HasPrefix(req.URL.Path, "/api/v1/testing/") {
 					return jsonResponse(http.StatusNoContent, ""), nil
 				}
@@ -725,12 +281,8 @@ func TestTestingDrivePrintsCompactText(t *testing.T) {
 				args = []string{"testing", "replay", "c1", "--leg", "base"}
 			}
 			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, args...)
-			wantOutput := want
-			if action == "click" {
-				wantOutput += "\n60 min left\n" + finishHint
-			}
-			if err != nil || strings.TrimSpace(out) != wantOutput {
-				t.Fatalf("output %q, error %v; want %q", out, err, wantOutput)
+			if err != nil || strings.TrimSpace(out) != want {
+				t.Fatalf("output %q, error %v; want %q", out, err, want)
 			}
 		})
 	}
@@ -772,79 +324,6 @@ func TestTestingOutputAndDaemonErrors(t *testing.T) {
 	testingDaemon(t, http.StatusNotImplemented, `{"message":"not implemented in T1: prepare","code":"TESTING_NOT_IMPLEMENTED"}`)
 	if _, err = runTesting(t, "prepare"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "not implemented in T1: prepare (TESTING_NOT_IMPLEMENTED)") {
 		t.Fatalf("err=%v", err)
-	}
-}
-
-func TestTestingStatusJSONKeepsItsExistingShape(t *testing.T) {
-	response := `{"ownerLogins":"owner logins: unchanged","run":{"id":"run_1","state":"running","repo":"o/r","prNumber":7},"checks":[{"id":"c1","name":"menu","state":"pending"}],"inFlight":[{"verb":"prepare","seconds":4}],"openClaims":[{"id":"c1","name":"menu","state":"pending"}],"hints":[{"text":"Finish now: open claim checks c1 \"menu\". Main twins are optional from here."}]}`
-	for _, args := range [][]string{{"status", "--json"}, {"check", "list", "--json"}} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			t.Setenv("AO_SESSION_ID", "w1")
-			cfg := setConfigEnv(t)
-			if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-				t.Fatal(err)
-			}
-			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.URL.Path == "/api/v1/testing/status" {
-					return jsonResponse(http.StatusOK, response), nil
-				}
-				return jsonResponse(http.StatusNoContent, ""), nil
-			})}
-			deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}
-			out, _, err := executeCLI(t, deps, append([]string{"testing"}, args...)...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal([]byte(out), &fields); err != nil {
-				t.Fatalf("output %q is not JSON: %v", out, err)
-			}
-			if _, ok := fields["hints"]; ok {
-				t.Fatalf("structured output exposed text hints: %s", out)
-			}
-			if _, ok := fields["openClaims"]; ok {
-				t.Fatalf("structured output exposed open claims: %s", out)
-			}
-			for _, key := range []string{"run", "checks", "ownerLogins", "inFlight"} {
-				if _, ok := fields[key]; !ok {
-					t.Errorf("structured output lost %q: %s", key, out)
-				}
-			}
-		})
-	}
-}
-
-func TestTestingCheckEndPrintsOnlyItsHints(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Unix(100, 0).UTC()}); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/internal/telemetry/cli-invoked":
-			return jsonResponse(http.StatusNoContent, ""), nil
-		case "/api/v1/testing/checks/c1/end":
-			return jsonResponse(http.StatusOK, `{"id":"c1","name":"menu","state":"fail"}`), nil
-		case "/api/v1/testing/status":
-			return jsonResponse(http.StatusOK, fmt.Sprintf(`{"run":{"deadline":%q},"hints":[{"text":"general finish guidance"},{"checkId":"c1","text":"replay this check on main"},{"checkId":"c2","text":"unrelated check guidance"}]}`, deadline.Format(time.RFC3339Nano))), nil
-		default:
-			return jsonResponse(http.StatusNotFound, `{}`), nil
-		}
-	})}
-	deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client, Now: func() time.Time { return time.Date(2030, 1, 1, 9, 1, 0, 0, time.UTC) }}
-	out, _, err := executeCLI(t, deps, "testing", "check", "end", "c1", "--result", "fail", "--note", "menu closed")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"c1 fail menu", "59 min left", "general finish guidance", "replay this check on main"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output %q lacks %q", out, want)
-		}
-	}
-	if strings.Contains(out, "unrelated check guidance") {
-		t.Fatalf("end printed another check's hint: %q", out)
 	}
 }
 
@@ -891,7 +370,6 @@ func TestTestingSubmitPrintsWhatBecameOfTheComment(t *testing.T) {
 		`{"overall":"fail","commentState":"failed:HTTP 403: Resource not accessible"}`:                           "verdict: fail\ncomment failed:HTTP 403: Resource not accessible",
 		`{"overall":"blocked","commentState":"off"}`:                                                             "verdict: blocked\ncomment off",
 		`{"overall":"pass"}`: "verdict: pass",
-		`{"overall":"pass","intakeClaims":["Title claim","Body claim"]}`: "verdict: pass\nPR claims from intake:\n- Title claim\n- Body claim",
 	} {
 		testingDaemon(t, http.StatusOK, reply)
 		if out, err := runTesting(t, "submit"); err != nil || strings.TrimSpace(out) != want {
@@ -1065,9 +543,6 @@ func TestTestingShow(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "home-changes.txt"), []byte("MODIFIED \"/owner/.codex/config.toml\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	for name, body := range map[string]string{
 		"1.md":     "first bug\n\n![comparison](bug-7.png)\n\n[Watch the check](../clips/menu.mp4)",
 		"2.md":     "second bug",
@@ -1082,7 +557,7 @@ func TestTestingShow(t *testing.T) {
 	if err != nil || got.method != "GET" || got.path != "/api/v1/testing/runs/run_w1" {
 		t.Fatalf("request %s %s, err %v", got.method, got.path, err)
 	}
-	for _, want := range []string{"run run_w1 o/r#7 awaiting-approval verdict fail", table, "first bug", "second bug", "tenth bug", "Owner home changes:\nAny process on this Mac can cause these; Litmus does not attribute them.\nMODIFIED \"/owner/.codex/config.toml\"", filepath.Join(dir, "1.md"), "media: " + filepath.Join(dir, "bug-7.png"), "media: " + filepath.Join(filepath.Dir(dir), "clips", "menu.mp4")} {
+	for _, want := range []string{"run run_w1 o/r#7 awaiting-approval verdict fail", table, "first bug", "second bug", "tenth bug", filepath.Join(dir, "1.md"), "media: " + filepath.Join(dir, "bug-7.png"), "media: " + filepath.Join(filepath.Dir(dir), "clips", "menu.mp4")} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q: %s", want, out)
 		}
@@ -1139,103 +614,5 @@ func TestTestingShowFallbackAndErrors(t *testing.T) {
 				t.Fatalf("output %q lacks %q", out, tc.want)
 			}
 		})
-	}
-}
-
-func TestTestingDrivePassesBrowserFlagsAndLeg(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	for _, row := range []struct {
-		args, want []string
-		action     string
-	}{
-		{[]string{"drive", "hover", "e1", "--leg", "head"}, []string{"e1", "--leg", "head"}, "hover"},
-		{[]string{"drive", "scroll", "down", "500", "--leg=base"}, []string{"down", "500", "--leg=base"}, "scroll"},
-		{[]string{"drive", "snapshot", "-i", "--json", "--leg", "head"}, []string{"-i", "--json", "--leg", "head"}, "snapshot"},
-		{[]string{"drive", "eval", "document.title"}, []string{"document.title"}, "eval"},
-		{[]string{"drive", "cdp", "Page.reload", `{"ignoreCache":true}`}, []string{"Page.reload", `{"ignoreCache":true}`}, "cdp"},
-		{[]string{"--leg", "head", "drive", "dblclick", "e1"}, []string{"e1", "--leg", "head"}, "dblclick"},
-	} {
-		calls := 0
-		deps := Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Path != "/api/v1/testing/drive" {
-				return jsonResponse(http.StatusNoContent, ""), nil
-			}
-			calls++
-			var body struct {
-				Action    string
-				Args      []string
-				SessionID string
-			}
-			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body.Action != row.action || strings.Join(body.Args, "|") != strings.Join(row.want, "|") || body.SessionID != "w1" {
-				t.Errorf("request %+v want action=%s args=%v", body, row.action, row.want)
-			}
-			return jsonResponse(http.StatusOK, `{"text":"browser result"}`), nil
-		})}}
-		out, _, err := executeCLI(t, deps, append([]string{"testing"}, row.args...)...)
-		if err != nil || calls != 1 || !strings.Contains(out, "browser result") {
-			t.Fatalf("%v: calls=%d out=%q err=%v", row.args, calls, out, err)
-		}
-	}
-}
-
-func TestTestingDriveHelpListsNewActions(t *testing.T) {
-	out, _, err := executeCLI(t, Deps{}, "testing", "drive", "--help")
-	if err != nil || !strings.Contains(out, "cdp") || !strings.Contains(out, "Page-changing") {
-		t.Fatalf("drive help %q %v", out, err)
-	}
-}
-
-func TestTestingCheckLineShowsRisk(t *testing.T) {
-	line := checkLine(litmus.Check{ID: "c1", Name: "git push", State: litmus.CheckPending, Purpose: "risk", Risk: "HOME moves credentials"})
-	if !strings.Contains(line, "[risk]: HOME moves credentials") {
-		t.Fatalf("status check line = %q", line)
-	}
-}
-
-func TestTestingCheckLineShowsSameBug(t *testing.T) {
-	line := checkLine(litmus.Check{ID: "c2", Name: "settings", State: litmus.CheckFail, SameBug: "c1"})
-	if !strings.Contains(line, "[same-bug: c1]") {
-		t.Fatalf("status check line = %q", line)
-	}
-}
-
-func TestTestingCheckEndHelpExplainsSameBugLifecycle(t *testing.T) {
-	out, _, err := executeCLI(t, Deps{}, "testing", "check", "end", "--help")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "an ended failed or partial head check for the same bug; set when ending and change only by re-ending") {
-		t.Fatalf("check end help = %q", out)
-	}
-}
-
-func TestTestingCheckListShowsSameBug(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "w1")
-	cfg := setConfigEnv(t)
-	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001}); err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path == "/internal/telemetry/cli-invoked" {
-			return jsonResponse(http.StatusNoContent, ""), nil
-		}
-		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/testing/status" || req.URL.Query().Get("sessionId") != "w1" {
-			t.Fatalf("request = %s %s", req.Method, req.URL.RequestURI())
-		}
-		return jsonResponse(http.StatusOK, `{"checks":[{"id":"c2","name":"settings","expect":"opens","state":"fail","sameBug":"c1"}]}`), nil
-	})}
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, HTTPClient: client}, "testing", "check", "list")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "c2 fail settings [same-bug: c1] (0 receipts): opens"; !strings.Contains(out, want) {
-		t.Fatalf("check list output = %q, want %q", out, want)
 	}
 }
