@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
@@ -84,5 +85,34 @@ func TestWorkspaceStartupErrorSurvivesHeartbeatsUntilReady(t *testing.T) {
 	}
 	if code, _, _ := read(); code != "" {
 		t.Fatalf("heartbeat kept a reconciler error: %q", code)
+	}
+}
+
+// Each failure the worker reports is a new one: a retried Setup that fails
+// with the same code and message moves the error's time, so the desktop can
+// tell the new failure from the one it retried.
+func TestWorkspaceStartupErrorTimeMovesOnARepeatedFailure(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running'
+		WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	record := func() time.Time {
+		t.Helper()
+		if err := store.RecordWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+			domain.WorkspaceStartupErrorProjectSetup, "Setup step 1 failed: exit status 3.", "missing secret"); err != nil {
+			t.Fatalf("record: %v", err)
+		}
+		session, err := store.GetSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID)
+		if err != nil || session.StartupErrorAt == nil {
+			t.Fatalf("session = %+v (%v)", session, err)
+		}
+		return *session.StartupErrorAt
+	}
+	first := record()
+	time.Sleep(10 * time.Millisecond)
+	if again := record(); !again.After(first) {
+		t.Fatalf("a repeated failure kept its time: %s, then %s", first, again)
 	}
 }

@@ -18,7 +18,12 @@ const maxWorkspaceStartupMessage = 1024
 // worker reported because it could not prepare the workspace (see
 // domain.WorkspaceStartupErrorCodes). Unlike a reconciler startup error it
 // survives the worker's heartbeats, so the desktop keeps showing it until the
-// worker reports the workspace ready.
+// worker reports the workspace ready. The worker reports a failure once per
+// startup attempt, so each report is a new failure and moves startup_error_at
+// even when it repeats the last one: a retried Setup that fails the same way
+// again is told apart from the failure it retried. (The reconciler's
+// RecordSandboxStartupError keeps its time while the same error repeats, as
+// it records the same ongoing condition on every pass.)
 func (s *Store) RecordWorkspaceStartupError(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -43,13 +48,7 @@ func (s *Store) RecordWorkspaceStartupError(
 			SET startup_error_code = $3,
 				startup_error_message = $4,
 				startup_error_detail = $5,
-				startup_error_at = CASE
-					WHEN startup_error_code IS DISTINCT FROM $3
-						OR startup_error_message IS DISTINCT FROM $4
-						OR startup_error_at IS NULL
-						THEN now()
-					ELSE startup_error_at
-				END,
+				startup_error_at = now(),
 				updated_at = now()
 			WHERE session_id = $1 AND org_id = $2 AND desired_state = 'running'`,
 			sessionID, orgID, code, message, detail,
