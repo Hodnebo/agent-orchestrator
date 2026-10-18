@@ -468,8 +468,13 @@ export function CloudSessionChatSurface({
 		}
 	};
 	const modelsQuery = useQuery({
-		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready && (session.provider === "codex" || session.provider === "claude-code")),
+		// A deleted session has no worker and cannot be resumed (only restored),
+		// so it is not asked. Keying on the worker generation reloads the
+		// catalog for each new worker, including the one a restore starts,
+		// instead of keeping an answer from a worker that is gone.
+		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.terminalGeneration ?? ""],
+		enabled: Boolean(cloud && ready && session.isTerminated !== true &&
+			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
 		refetchOnMount: "always",
