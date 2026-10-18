@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "{{duration}} 后超时",
 	"scriptRun.waitingForOutput": "暂无输出",
 	"scriptRun.noOutput": "无输出",
+	"scriptRun.outputHidden": "输出仅对组织成员可见。",
 	"scriptRun.outputLabel": "第 {{step}} 步的输出",
 	"scriptRun.copyOutput": "复制输出",
 	"scriptRun.copied": "已复制",

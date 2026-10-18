@@ -218,6 +218,25 @@ describe("ScriptRunPanel", () => {
 		expect(announcer().textContent).not.toContain("boom");
 	});
 
+	it("lists a hidden run's steps and statuses with a note instead of output, and nothing to copy", () => {
+		const run = runOf(
+			{ step: 1, status: "succeeded", command: "npm ci", exitCode: 0, durationMs: 1000, outputHidden: true, output: "" },
+			{ step: 2, status: "failed", command: "make", exitCode: 1, durationMs: 500, outputHidden: true, output: "" },
+			{ step: 3, status: "skipped", command: "npm test" },
+		);
+		render(<ScriptRunPanel run={run} />);
+		expect(screen.getByText("Failed at step 2")).toBeInTheDocument();
+		expect(steps().map((row) => row.getAttribute("data-status"))).toEqual(["succeeded", "failed", "skipped"]);
+		const failed = steps()[1];
+		expect(toggleOf(failed)).toHaveAttribute("aria-expanded", "true");
+		expect(within(failed).getByText("Output is visible to organization members only.")).toBeInTheDocument();
+		expect(within(failed).getByText("Exited with code 1")).toBeInTheDocument();
+		expect(within(failed).queryByTestId("script-step-output")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Copy output" })).toBeNull();
+		fireEvent.click(toggleOf(steps()[0])!);
+		expect(within(steps()[0]).getByText("Output is visible to organization members only.")).toBeInTheDocument();
+	});
+
 	it("stops the spinner of a run that ended without reporting its last step", () => {
 		const run = groupScriptRuns([
 			stepEvent({ total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T10:00:00Z", output: "added 10" }),

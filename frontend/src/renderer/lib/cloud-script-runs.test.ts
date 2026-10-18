@@ -121,6 +121,19 @@ describe("groupScriptRuns", () => {
 		expect(cleanup.steps[0]).toMatchObject({ command: "", startedAt: undefined, durationMs: undefined, outputTruncated: true });
 	});
 
+	it("withholds a hidden step's output and where it ran, but keeps its status and outcome", () => {
+		sequence = 0;
+		const [run] = groupScriptRuns([
+			step({ total: 1, step: 1, status: "failed", exitCode: 2, outputHidden: true, output: "leaked", logPath: "/x.log", user: "ao-worker", dir: "/app", hint: "Check the script" }),
+		]);
+		expect(run.status).toBe("failed");
+		expect(run.steps[0]).toMatchObject({ status: "failed", exitCode: 2, outputHidden: true, output: "", hint: "Check the script" });
+		expect(run.steps[0].logPath).toBeUndefined();
+		expect(run.steps[0].user).toBeUndefined();
+		expect(run.steps[0].dir).toBeUndefined();
+		expect(parseScriptStepPayload({ phase: "setup", runId: "r", step: 1, status: "running" })?.outputHidden).toBe(false);
+	});
+
 	it("handles an old hook's single cleanup event without markers", () => {
 		sequence = 0;
 		const [run] = groupScriptRuns([step({ phase: "cleanup", runId: "cleanup-1", step: 1, total: 1, status: "failed", exitCode: 1, output: "rm: busy" })]);

@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "Zeitlimit nach {{duration}} überschritten",
 	"scriptRun.waitingForOutput": "Noch keine Ausgabe",
 	"scriptRun.noOutput": "Keine Ausgabe",
+	"scriptRun.outputHidden": "Die Ausgabe ist nur für Mitglieder der Organisation sichtbar.",
 	"scriptRun.outputLabel": "Ausgabe von Schritt {{step}}",
 	"scriptRun.copyOutput": "Ausgabe kopieren",
 	"scriptRun.copied": "Kopiert",

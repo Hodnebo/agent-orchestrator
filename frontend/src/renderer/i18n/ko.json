@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "{{duration}} 후 시간 초과",
 	"scriptRun.waitingForOutput": "아직 출력 없음",
 	"scriptRun.noOutput": "출력 없음",
+	"scriptRun.outputHidden": "출력은 조직 구성원에게만 표시됩니다.",
 	"scriptRun.outputLabel": "{{step}}단계 출력",
 	"scriptRun.copyOutput": "출력 복사",
 	"scriptRun.copied": "복사됨",

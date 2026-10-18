@@ -55,6 +55,9 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 		const node = pre.current;
 		if (node && follow.current) node.scrollTop = node.scrollHeight;
 	}, [output]);
+	if (step.outputHidden) {
+		return <p className="px-1 text-caption text-muted-foreground" data-testid="script-step-output-hidden">{t("scriptRun.outputHidden")}</p>;
+	}
 	if (!output) {
 		return <p className="px-1 text-caption text-muted-foreground">{running ? t("scriptRun.waitingForOutput") : t("scriptRun.noOutput")}</p>;
 	}

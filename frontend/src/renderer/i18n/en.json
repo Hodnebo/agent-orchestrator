@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "Timed out after {{duration}}",
 	"scriptRun.waitingForOutput": "No output yet",
 	"scriptRun.noOutput": "No output",
+	"scriptRun.outputHidden": "Output is visible to organization members only.",
 	"scriptRun.outputLabel": "Output of step {{step}}",
 	"scriptRun.copyOutput": "Copy output",
 	"scriptRun.copied": "Copied",

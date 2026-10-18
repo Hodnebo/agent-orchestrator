@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "{{duration}} 後にタイムアウトしました",
 	"scriptRun.waitingForOutput": "まだ出力はありません",
 	"scriptRun.noOutput": "出力なし",
+	"scriptRun.outputHidden": "出力は組織のメンバーにのみ表示されます。",
 	"scriptRun.outputLabel": "ステップ {{step}} の出力",
 	"scriptRun.copyOutput": "出力をコピー",
 	"scriptRun.copied": "コピーしました",

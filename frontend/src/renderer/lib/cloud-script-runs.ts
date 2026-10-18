@@ -42,6 +42,12 @@ export interface ScriptStepEventPayload {
 	/** Redacted, ANSI-stripped tail of combined stdout and stderr (at most 16 KiB). */
 	output?: string;
 	outputTruncated?: boolean;
+	/**
+	 * The reader may not see this step's output (a share grantee outside the
+	 * organization): `output` is empty and the user, groups, folder and log
+	 * path are left out.
+	 */
+	outputHidden?: boolean;
 	logPath?: string;
 	user?: string;
 	groups?: string[];
@@ -60,6 +66,8 @@ export interface ScriptRunStep {
 	durationMs?: number;
 	output: string;
 	outputTruncated: boolean;
+	/** The output is withheld from this reader; see {@link ScriptStepEventPayload.outputHidden}. */
+	outputHidden: boolean;
 	logPath?: string;
 	user?: string;
 	groups?: string[];
@@ -140,6 +148,7 @@ export function parseScriptStepPayload(payload: unknown): ScriptStepEventPayload
 		durationMs: integer(value.durationMs),
 		output: text(value.output),
 		outputTruncated: value.outputTruncated === true,
+		outputHidden: value.outputHidden === true,
 		logPath: nonEmpty(value.logPath),
 		user: nonEmpty(value.user),
 		groups: groups && groups.length > 0 ? groups : undefined,
@@ -154,7 +163,7 @@ export function scriptStepFinished(status: ScriptRunStep["status"]): boolean {
 }
 
 function pendingStep(step: number): ScriptRunStep {
-	return { step, status: "pending", command: "", repository: "", output: "", outputTruncated: false };
+	return { step, status: "pending", command: "", repository: "", output: "", outputTruncated: false, outputHidden: false };
 }
 
 function timeOf(value: string | undefined): number | undefined {
@@ -215,12 +224,14 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 				exitCode: finished ? payload.exitCode : undefined,
 				startedAt: payload.startedAt,
 				durationMs: finished ? payload.durationMs : undefined,
-				output: payload.output ?? "",
+				output: payload.outputHidden ? "" : payload.output ?? "",
 				outputTruncated: payload.outputTruncated === true,
-				logPath: payload.logPath,
-				user: failed ? payload.user : undefined,
-				groups: failed ? payload.groups : undefined,
-				dir: failed ? payload.dir : undefined,
+				outputHidden: payload.outputHidden === true,
+				// Withheld with the output, whatever an older control plane sent.
+				logPath: payload.outputHidden ? undefined : payload.logPath,
+				user: failed && !payload.outputHidden ? payload.user : undefined,
+				groups: failed && !payload.outputHidden ? payload.groups : undefined,
+				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
 			});
 		}

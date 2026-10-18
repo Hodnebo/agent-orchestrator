@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "Délai dépassé après {{duration}}",
 	"scriptRun.waitingForOutput": "Pas encore de sortie",
 	"scriptRun.noOutput": "Aucune sortie",
+	"scriptRun.outputHidden": "La sortie n'est visible que par les membres de l'organisation.",
 	"scriptRun.outputLabel": "Sortie de l'étape {{step}}",
 	"scriptRun.copyOutput": "Copier la sortie",
 	"scriptRun.copied": "Copié",

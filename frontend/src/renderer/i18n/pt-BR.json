@@ -57,6 +57,7 @@
 	"scriptRun.timedOutAfter": "Tempo esgotado após {{duration}}",
 	"scriptRun.waitingForOutput": "Ainda sem saída",
 	"scriptRun.noOutput": "Sem saída",
+	"scriptRun.outputHidden": "A saída é visível apenas para membros da organização.",
 	"scriptRun.outputLabel": "Saída da etapa {{step}}",
 	"scriptRun.copyOutput": "Copiar saída",
 	"scriptRun.copied": "Copiado",
