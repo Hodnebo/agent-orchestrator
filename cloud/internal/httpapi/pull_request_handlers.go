@@ -250,8 +250,7 @@ type pullRequestOpenerResponse struct {
 }
 
 // openedByAO reports whether a pull request's GitHub author is a bot account,
-// the AO GitHub App in practice: it opens pull requests for sessions whose
-// person never connected their own GitHub account to AO.
+// the AO GitHub App in practice: it opens every pull request a session raises.
 func (s *Server) openedByAO(author string) bool {
 	login := strings.ToLower(strings.TrimSpace(author))
 	if login == "" {

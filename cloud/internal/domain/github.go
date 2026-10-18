@@ -131,9 +131,6 @@ type GitHubCheckoutContext struct {
 	// ScopeUserID's GitHub access before any token is minted.
 	AccessScope string
 	ScopeUserID string
-	// SessionUserID is the AO user who started the session. A pull request is
-	// opened as that user on GitHub when they connected their GitHub account.
-	SessionUserID string
 }
 
 type GitHubRepositoryCapability struct {
