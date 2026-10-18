@@ -143,16 +143,30 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
+	before, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
+		ApprovalMode: domain.PermissionModeAcceptEdits,
+	})
+	if err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
 	driver.startErr = errProviderSwitchTarget
 
-	err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
-		TargetHarness: domain.HarnessClaudeCode,
+	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "claude-foreign-model", Effort: "max",
 	})
 	if err == nil || !strings.Contains(err.Error(), "start target provider") {
 		t.Fatalf("SwitchProvider error = %v, want target-start failure", err)
 	}
 	if _, err := h.svc.Controller(testSession); err != nil {
 		t.Fatalf("source controller was not restored: %v", err)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	got := snapshot.Conversation.Settings
+	if got.Model != before.Model || got.ReasoningEffort != before.ReasoningEffort || got.ApprovalMode != domain.PermissionModeAcceptEdits {
+		t.Fatalf("settings after a failed switch = %+v, want the source's %+v", got, before)
 	}
 }
 

@@ -219,6 +219,11 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	targetStarted := time.Now()
 	target, err := s.startLocked(operationCtx, targetCfg)
 	if err != nil {
+		// Starting the target saved its model, effort and permission mode on the
+		// conversation. The source keeps running on its own, so put them back.
+		if settingsErr := s.store.SetConversationSettings(operationCtx, conversation.ID, conversation.Settings, s.now()); settingsErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore source settings: %w", settingsErr))
+		}
 		if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
 			err = errors.Join(err, restoreErr)
 		} else {
