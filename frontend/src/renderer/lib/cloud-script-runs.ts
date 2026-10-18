@@ -217,9 +217,11 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 				const stepStart = timeOf(step.startedAt);
 				return stepStart !== undefined && step.durationMs !== undefined ? [stepStart + step.durationMs] : [];
 			});
+			const timed = steps.filter((step) => step.durationMs !== undefined);
+			// An old Cleanup hook reports no times at all: show none rather than 0:00.
 			durationMs = start !== undefined && ends.length > 0
 				? Math.max(0, Math.max(...ends) - start)
-				: steps.reduce((sum, step) => sum + (step.durationMs ?? 0), 0);
+				: timed.length > 0 ? timed.reduce((sum, step) => sum + step.durationMs!, 0) : undefined;
 		}
 		return {
 			runId, phase: run.phase, total: run.total, steps, status, failedStep, runningStep, startedAt, durationMs,

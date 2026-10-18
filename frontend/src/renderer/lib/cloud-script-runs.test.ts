@@ -107,6 +107,19 @@ describe("groupScriptRuns", () => {
 		expect(latestScriptRun(runs, "cleanup")?.runId).toBe("c");
 	});
 
+	it("accepts a fast step that never sent running and an old cleanup hook with no times", () => {
+		sequence = 0;
+		const [fast] = groupScriptRuns([step({ total: 1, step: 1, status: "succeeded", exitCode: 0, durationMs: 40, startedAt: "2026-10-18T10:00:00Z" })]);
+		expect(fast).toMatchObject({ status: "succeeded", durationMs: 40 });
+		const [cleanup] = groupScriptRuns([
+			step({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "succeeded", exitCode: 0, command: "", output: "", outputTruncated: true }),
+			step({ phase: "cleanup", runId: "c", total: 2, step: 2, status: "succeeded", exitCode: 0, command: "", output: "", outputTruncated: true }),
+		]);
+		expect(cleanup.status).toBe("succeeded");
+		expect(cleanup.durationMs).toBeUndefined();
+		expect(cleanup.steps[0]).toMatchObject({ command: "", startedAt: undefined, durationMs: undefined, outputTruncated: true });
+	});
+
 	it("handles an old hook's single cleanup event without markers", () => {
 		sequence = 0;
 		const [run] = groupScriptRuns([step({ phase: "cleanup", runId: "cleanup-1", step: 1, total: 1, status: "failed", exitCode: 1, output: "rm: busy" })]);

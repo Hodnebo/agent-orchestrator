@@ -153,6 +153,25 @@ describe("ScriptRunPanel", () => {
 		expect(screen.getByText("No output")).toBeInTheDocument();
 	});
 
+	it("draws an old Cleanup hook's steps without durations or a bogus truncation note", () => {
+		const run = groupScriptRuns([
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "succeeded", exitCode: 0, command: "", output: "", outputTruncated: true, logPath: "/x/cleanup.log" }),
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 2, status: "failed", exitCode: 1, command: "", output: "cleanup step 2 failed\nran as ao-worker", logPath: "/x/cleanup.log" }),
+		])[0];
+		render(<ScriptRunPanel run={run} />);
+		expect(screen.getByText("Failed at step 2")).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Elapsed/)).toBeNull();
+		const [first, second] = steps();
+		expect(within(first).getByText("Step 1")).toBeInTheDocument();
+		expect(within(first).queryByText(/\d:\d\d/)).toBeNull();
+		fireEvent.click(toggleOf(first)!);
+		expect(within(first).getByText("No output")).toBeInTheDocument();
+		expect(within(first).getByText("Full output: /x/cleanup.log")).toBeInTheDocument();
+		expect(within(first).queryByText(/Showing the end/)).toBeNull();
+		expect(within(second).getByTestId("script-step-output")).toHaveTextContent("cleanup step 2 failed");
+		expect(within(second).getByText("Exited with code 1")).toBeInTheDocument();
+	});
+
 	it("shows a cleanup run and an interrupted run truthfully", () => {
 		const runs = groupScriptRuns([
 			stepEvent({ runId: "old", total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T09:00:00Z" }),

@@ -94,8 +94,11 @@ function StepNotes({ step }: { step: ScriptRunStep }) {
 			: t("chat.projectSetup.ranAs", { user: step.user }));
 	}
 	if (failed && step.dir) lines.push(t("chat.projectSetup.ranIn", { dir: step.dir }));
-	if (step.outputTruncated) lines.push(step.logPath ? t("scriptRun.outputTruncated", { path: step.logPath }) : t("scriptRun.outputTruncatedNoPath"));
-	else if (failed && step.logPath) lines.push(t("chat.projectSetup.fullOutput", { path: step.logPath }));
+	// An old Cleanup hook marks steps it kept no output for as truncated: there
+	// is no tail to call the end of, only the run's full log.
+	const hasOutput = step.output.trim() !== "";
+	if (step.outputTruncated && hasOutput) lines.push(step.logPath ? t("scriptRun.outputTruncated", { path: step.logPath }) : t("scriptRun.outputTruncatedNoPath"));
+	else if (step.logPath && (failed || step.outputTruncated)) lines.push(t("chat.projectSetup.fullOutput", { path: step.logPath }));
 	if (!lines.length && !(failed && step.hint)) return null;
 	return (
 		<div className="flex flex-col gap-0.5 px-1 text-caption leading-relaxed text-muted-foreground select-text">
