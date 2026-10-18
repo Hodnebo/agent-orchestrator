@@ -170,3 +170,40 @@ func TestSandboxFailureOpensStartupWindowForUnstartedWorker(t *testing.T) {
 		t.Fatalf("a checked-in worker's failure opened a startup window at %v", at)
 	}
 }
+
+// The failed build the reconciler acted on is stored under the reconcile
+// lease and read back on the next claim, so each failure is acted on once.
+func TestSandboxProviderFailureIsFencedAndClaimed(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	const owner = "provider-failure-test-owner"
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running',
+		reconcile_lease_owner = $3, reconcile_lease_until = now() + interval '1 minute'
+		WHERE session_id = $1 AND org_id = $2`, fixture.sessionID, fixture.orgID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, "someone-else", fixture.orgID, fixture.sessionID,
+		"build-1"); !errors.Is(err, ErrSandboxLeaseLost) {
+		t.Fatalf("record without the lease = %v, want ErrSandboxLeaseLost", err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, owner, fixture.orgID, fixture.sessionID, "build-1#restarted"); err != nil {
+		t.Fatalf("record provider failure: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET reconcile_lease_owner = '', reconcile_lease_until = NULL,
+		reconcile_after = now() - interval '1 hour' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimSandboxes(ctx, owner, 100, time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	for _, record := range claimed {
+		if record.SessionID == fixture.sessionID {
+			if record.ProviderFailureID != "build-1#restarted" {
+				t.Fatalf("claimed provider failure = %q", record.ProviderFailureID)
+			}
+			return
+		}
+	}
+	t.Fatal("sandbox was not claimed")
+}

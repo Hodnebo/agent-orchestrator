@@ -23,6 +23,8 @@ type lifecycleStore struct {
 	failures      []string
 	startupErrors []startupErrorRecord
 	repairs       int
+	// providerFailures are the provider_failure_id values written, in order.
+	providerFailures []string
 }
 
 type startupErrorRecord struct{ code, message string }
@@ -70,6 +72,10 @@ func (s *lifecycleStore) RecordSandboxStartupRepair(context.Context, string, str
 }
 func (s *lifecycleStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
 	s.startupErrors = append(s.startupErrors, startupErrorRecord{code: code, message: message})
+	return nil
+}
+func (s *lifecycleStore) RecordSandboxProviderFailure(_ context.Context, _, _, _, failureID string) error {
+	s.providerFailures = append(s.providerFailures, failureID)
 	return nil
 }
 

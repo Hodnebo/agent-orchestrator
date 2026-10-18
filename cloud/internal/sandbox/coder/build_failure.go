@@ -39,16 +39,9 @@ func buildFailure(build workspaceBuild) *sandbox.Failure {
 	if buildStatus(build) == buildStatusCanceled {
 		message = "The workspace build was canceled in Coder before the workspace started."
 	}
-	at := build.UpdatedAt
-	if build.Job.CompletedAt != nil {
-		at = *build.Job.CompletedAt
-	}
-	if at.IsZero() {
-		at = build.CreatedAt
-	}
 	return &sandbox.Failure{
+		ID:  build.ID,
 		Err: &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceBuildFailed, Message: message},
-		At:  at.UTC(),
 	}
 }
 

@@ -79,12 +79,11 @@ type Environment struct {
 // Failure is a provider operation that failed and will not converge on its
 // own, such as a Coder workspace build that failed or was canceled.
 type Failure struct {
+	// ID identifies the failed operation (the Coder build id), so the
+	// reconciler acts on each failure once, without comparing clocks.
+	ID string
 	// Err is the user-facing reason, code StartupErrorWorkspaceBuildFailed.
 	Err *StartupError
-	// At is when the failed operation finished, by the provider's clock. A
-	// failure that finished before the sandbox's current startup window opened
-	// (a user retry, a resume) belongs to an earlier attempt.
-	At time.Time
 }
 
 // DeadlineExtender is an optional provider capability. The reconciler uses it

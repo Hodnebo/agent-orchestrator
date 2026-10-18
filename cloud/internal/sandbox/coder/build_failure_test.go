@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
@@ -28,7 +27,7 @@ var vcpuLimitBuildLog = []buildLogLine{
 
 // failedBuildServer serves one workspace whose latest build ended with status
 // and transition, and the build log (or a 500 when logs is nil).
-func failedBuildServer(t *testing.T, status, transition string, completedAt time.Time, logs []buildLogLine) (*httptest.Server, *atomic.Int32) {
+func failedBuildServer(t *testing.T, status, transition string, logs []buildLogLine) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var logReads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -38,9 +37,8 @@ func failedBuildServer(t *testing.T, status, transition string, completedAt time
 			view.LatestBuild = workspaceBuild{
 				ID: testBuildID, Status: status, Transition: transition,
 				Job: workspaceBuildJob{
-					Status: status, Error: "terraform apply: exit status 1", CompletedAt: &completedAt,
+					Status: status, Error: "terraform apply: exit status 1",
 				},
-				CreatedAt: completedAt.Add(-time.Minute), UpdatedAt: completedAt,
 			}
 			writer.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(writer).Encode(view); err != nil {
@@ -66,8 +64,7 @@ func failedBuildServer(t *testing.T, status, transition string, completedAt time
 
 func TestGetReportsFailedStartBuildWithBuildLogReason(t *testing.T) {
 	t.Parallel()
-	completedAt := time.Date(2026, 10, 18, 15, 26, 23, 0, time.UTC)
-	server, _ := failedBuildServer(t, "failed", "start", completedAt, vcpuLimitBuildLog)
+	server, _ := failedBuildServer(t, "failed", "start", vcpuLimitBuildLog)
 	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -76,8 +73,8 @@ func TestGetReportsFailedStartBuildWithBuildLogReason(t *testing.T) {
 		t.Fatalf("environment = %+v, want failed with a failure", environment)
 	}
 	failure := environment.Failure
-	if failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed || !failure.At.Equal(completedAt) {
-		t.Fatalf("failure = %+v at %s", failure.Err, failure.At)
+	if failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed || failure.ID != testBuildID {
+		t.Fatalf("failure = %+v of build %q", failure.Err, failure.ID)
 	}
 	const want = "The workspace failed to build: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 32 allows"
 	if !strings.HasPrefix(failure.Err.Message, want) {
@@ -91,7 +88,7 @@ func TestGetReportsFailedStartBuildWithBuildLogReason(t *testing.T) {
 
 func TestGetFallsBackToJobErrorWhenBuildLogIsUnavailable(t *testing.T) {
 	t.Parallel()
-	server, logReads := failedBuildServer(t, "failed", "start", time.Now(), nil)
+	server, logReads := failedBuildServer(t, "failed", "start", nil)
 	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -107,15 +104,14 @@ func TestGetFallsBackToJobErrorWhenBuildLogIsUnavailable(t *testing.T) {
 
 func TestGetReportsCanceledStartBuild(t *testing.T) {
 	t.Parallel()
-	completedAt := time.Date(2026, 10, 18, 15, 30, 0, 0, time.UTC)
-	server, logReads := failedBuildServer(t, "canceled", "start", completedAt, vcpuLimitBuildLog)
+	server, logReads := failedBuildServer(t, "canceled", "start", vcpuLimitBuildLog)
 	environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if environment.State != sandbox.StateFailed || environment.Failure == nil ||
 		environment.Failure.Err.Code != sandbox.StartupErrorWorkspaceBuildFailed ||
-		!strings.Contains(environment.Failure.Err.Message, "canceled") || !environment.Failure.At.Equal(completedAt) {
+		!strings.Contains(environment.Failure.Err.Message, "canceled") || environment.Failure.ID != testBuildID {
 		t.Fatalf("environment = %+v failure = %+v", environment, environment.Failure)
 	}
 	if logReads.Load() != 0 {
@@ -128,7 +124,7 @@ func TestGetReportsCanceledStartBuild(t *testing.T) {
 func TestFailedStopBuildCarriesNoStartupFailure(t *testing.T) {
 	t.Parallel()
 	for _, transition := range []string{"stop", "delete"} {
-		server, logReads := failedBuildServer(t, "failed", transition, time.Now(), vcpuLimitBuildLog)
+		server, logReads := failedBuildServer(t, "failed", transition, vcpuLimitBuildLog)
 		environment, err := newTestClient(t, server.URL, nil).Get(context.Background(), testWorkspaceID)
 		if err != nil {
 			t.Fatalf("%s: get: %v", transition, err)

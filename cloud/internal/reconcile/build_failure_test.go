@@ -37,21 +37,25 @@ func (p *buildFailureProvider) Create(context.Context, sandbox.Spec) (sandbox.En
 	return p.environment, nil
 }
 
-const vcpuBuildMessage = "The workspace failed to build: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 32 allows."
+const (
+	vcpuBuildMessage = "The workspace failed to build: VcpuLimitExceeded: You have requested more vCPU capacity than your current vCPU limit of 32 allows."
+	failedBuildID    = "build-1"
+)
 
-func failedBuildEnvironment(failedAt time.Time) sandbox.Environment {
+func failedBuildEnvironment(buildID string) sandbox.Environment {
 	return sandbox.Environment{
 		ID: "workspace-1", State: sandbox.StateFailed,
 		Failure: &sandbox.Failure{
+			ID:  buildID,
 			Err: &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceBuildFailed, Message: vcpuBuildMessage},
-			At:  failedAt,
 		},
 	}
 }
 
 // startingRecord is a session whose worker has not checked in, in a startup
-// window opened at startedAt.
-func startingRecord(startedAt time.Time, connectionID string) domain.Sandbox {
+// window opened a minute and a half ago.
+func startingRecord(connectionID string) domain.Sandbox {
+	startedAt := time.Now().Add(-90 * time.Second)
 	return domain.Sandbox{
 		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderCoder,
 		ProviderEnvironmentID: "workspace-1",
@@ -63,12 +67,21 @@ func startingRecord(startedAt time.Time, connectionID string) domain.Sandbox {
 	}
 }
 
-// A workspace build that failed in the current startup attempt parks the
-// session at once with Coder's reason, instead of leaving it "provisioning"
-// for the whole startup budget.
+func terminatedObservations(observations []string) int {
+	count := 0
+	for _, state := range observations {
+		if state == domain.SandboxObservedTerminated {
+			count++
+		}
+	}
+	return count
+}
+
+// A workspace build that failed parks the session at once with Coder's
+// reason, instead of leaving it "provisioning" for the whole startup budget,
+// and remembers the failed build so it is reported once.
 func TestFailedBuildParksSessionWithBuildError(t *testing.T) {
 	t.Parallel()
-	started := time.Now().Add(-90 * time.Second)
 	for _, test := range []struct {
 		name         string
 		connectionID string
@@ -82,10 +95,10 @@ func TestFailedBuildParksSessionWithBuildError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &lifecycleStore{}
 			provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
-				environment: failedBuildEnvironment(started.Add(80 * time.Second)),
+				environment: failedBuildEnvironment(failedBuildID),
 			}}
 			if err := testReconciler(store, provider).reconcileSandbox(
-				context.Background(), startingRecord(started, test.connectionID),
+				context.Background(), startingRecord(test.connectionID),
 			); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
@@ -96,6 +109,9 @@ func TestFailedBuildParksSessionWithBuildError(t *testing.T) {
 			if len(store.observations) != 1 || store.observations[0] != domain.SandboxObservedTerminated {
 				t.Fatalf("observations = %v, want terminated", store.observations)
 			}
+			if strings.Join(store.providerFailures, ",") != failedBuildID {
+				t.Fatalf("provider failures = %v, want the failed build recorded", store.providerFailures)
+			}
 			if provider.starts != 0 || provider.stops != test.wantStops {
 				t.Fatalf("starts = %d stops = %d, want 0 and %d", provider.starts, provider.stops, test.wantStops)
 			}
@@ -103,17 +119,41 @@ func TestFailedBuildParksSessionWithBuildError(t *testing.T) {
 	}
 }
 
-// A user retry opens a new startup window. The failed build predates it, so
-// the reconciler starts a new build (once) and clears nothing it should keep.
-func TestRetryAfterFailedBuildStartsNewBuild(t *testing.T) {
+// A reported failure that was not retried stays parked: no new build, no
+// second report, no stop.
+func TestReportedBuildFailureStaysParked(t *testing.T) {
 	t.Parallel()
-	failedAt := time.Now().Add(-10 * time.Minute)
 	store := &lifecycleStore{}
 	provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
-		environment: failedBuildEnvironment(failedAt),
+		environment: failedBuildEnvironment(failedBuildID),
+	}}
+	record := startingRecord("connection-1")
+	record.ObservedState = domain.SandboxObservedTerminated
+	record.ProviderFailureID = failedBuildID
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.starts != 0 || provider.stops != 0 || len(store.startupErrors) != 0 || len(store.providerFailures) != 0 {
+		t.Fatalf("starts = %d stops = %d startup errors = %+v marks = %v",
+			provider.starts, provider.stops, store.startupErrors, store.providerFailures)
+	}
+	if strings.Join(store.observations, ",") != domain.SandboxObservedTerminated {
+		t.Fatalf("observations = %v, want still terminated", store.observations)
+	}
+}
+
+// A user retry re-arms a parked session (observed provisioning). The reported
+// failed build is replaced by exactly one new build, even if a later pass
+// still sees the old failed build.
+func TestRetryAfterFailedBuildStartsOneNewBuild(t *testing.T) {
+	t.Parallel()
+	store := &lifecycleStore{}
+	provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
+		environment: failedBuildEnvironment(failedBuildID),
 	}}
 	reconciler := testReconciler(store, provider)
-	retried := startingRecord(time.Now(), "connection-1")
+	retried := startingRecord("connection-1")
+	retried.ProviderFailureID = failedBuildID
 	if err := reconciler.reconcileSandbox(context.Background(), retried); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -121,45 +161,127 @@ func TestRetryAfterFailedBuildStartsNewBuild(t *testing.T) {
 		t.Fatalf("starts = %d stops = %d startup errors = %+v; want one new build and no error",
 			provider.starts, provider.stops, store.startupErrors)
 	}
-	if len(store.observations) != 1 || store.observations[0] != domain.SandboxObservedProvisioning {
+	if strings.Join(store.providerFailures, ",") != failedBuildID+"#restarted" {
+		t.Fatalf("provider failures = %v, want the restart recorded before Start", store.providerFailures)
+	}
+	if strings.Join(store.observations, ",") != domain.SandboxObservedProvisioning {
 		t.Fatalf("observations = %v, want provisioning", store.observations)
 	}
 
-	// Once the new build runs the provider reports it provisioning, so the
-	// next pass waits instead of starting another build.
-	provider.environment = sandbox.Environment{ID: "workspace-1", State: sandbox.StateProvisioning}
+	// The same failed build seen again in this window starts nothing.
+	retried.ProviderFailureID = failedBuildID + "#restarted"
 	if err := reconciler.reconcileSandbox(context.Background(), retried); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 	if provider.starts != 1 {
-		t.Fatalf("starts = %d after the new build began, want 1", provider.starts)
+		t.Fatalf("starts = %d after the restart was recorded, want 1", provider.starts)
 	}
 
-	// The new build fails too, after the retry: that failure is reported.
-	provider.environment = failedBuildEnvironment(time.Now())
+	// The new build fails too: a new failure, reported and parked.
+	provider.environment = failedBuildEnvironment("build-2")
 	if err := reconciler.reconcileSandbox(context.Background(), retried); err != nil {
 		t.Fatalf("third reconcile: %v", err)
 	}
 	if provider.starts != 1 || len(store.startupErrors) != 1 ||
-		store.startupErrors[0].code != sandbox.StartupErrorWorkspaceBuildFailed {
-		t.Fatalf("starts = %d startup errors = %+v; want the new failure parked", provider.starts, store.startupErrors)
+		store.startupErrors[0].code != sandbox.StartupErrorWorkspaceBuildFailed ||
+		store.providerFailures[len(store.providerFailures)-1] != "build-2" {
+		t.Fatalf("starts = %d startup errors = %+v marks = %v; want the new failure parked",
+			provider.starts, store.startupErrors, store.providerFailures)
 	}
 }
 
-// A failed build seen for a session whose startup window is closed (it was
-// running) is recovered by a new build rather than parked: a retry would be
-// refused for a worker that once checked in.
-func TestFailedBuildOfRunningSessionStartsNewBuild(t *testing.T) {
+// startFailingProvider refuses the new build a retry asks for.
+type startFailingProvider struct{ buildFailureProvider }
+
+func (p *startFailingProvider) Start(context.Context, sandbox.ID) error {
+	p.starts++
+	return errors.New("coder: API returned 500: internal error")
+}
+
+// A retry whose new build cannot be started parks the session again and lets
+// the next retry try once more.
+func TestRetryWhoseNewBuildCannotStartParksAgain(t *testing.T) {
+	t.Parallel()
+	store := &lifecycleStore{}
+	provider := &startFailingProvider{buildFailureProvider{lifecycleProvider: lifecycleProvider{
+		environment: failedBuildEnvironment(failedBuildID),
+	}}}
+	retried := startingRecord("connection-1")
+	retried.ProviderFailureID = failedBuildID
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), retried); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.starts != 1 || terminatedObservations(store.observations) != 1 || len(store.startupErrors) != 1 ||
+		strings.Contains(store.startupErrors[0].message, "internal error") {
+		t.Fatalf("starts = %d observations = %v startup errors = %+v",
+			provider.starts, store.observations, store.startupErrors)
+	}
+	if strings.Join(store.providerFailures, ",") != failedBuildID+"#restarted,"+failedBuildID {
+		t.Fatalf("provider failures = %v, want the restart undone", store.providerFailures)
+	}
+}
+
+// markingStore applies provider failure marks to the record the test feeds
+// back, as the database would.
+type markingStore struct {
+	lifecycleStore
+	record *domain.Sandbox
+}
+
+func (s *markingStore) RecordSandboxProviderFailure(ctx context.Context, owner, orgID, sessionID, failureID string) error {
+	s.record.ProviderFailureID = failureID
+	return s.lifecycleStore.RecordSandboxProviderFailure(ctx, owner, orgID, sessionID, failureID)
+}
+
+// While a worker is still checking in (an old workspace serving it), a build
+// that keeps failing is left alone exactly as before: no build is started and
+// the session is not parked, including on passes where the observation has
+// cleared the worker's last check-in.
+func TestFailedBuildWithConnectedWorkerNeverStartsABuild(t *testing.T) {
+	t.Parallel()
+	record := startingRecord("connection-1")
+	store := &markingStore{record: &record}
+	provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
+		environment: failedBuildEnvironment(failedBuildID),
+	}}
+	reconciler := testReconciler(store, provider)
+	for pass := range 6 {
+		if pass%2 == 0 {
+			seen := time.Now()
+			record.WorkerLastSeenAt = &seen
+			record.StartupStartedAt = nil
+			record.ObservedState = domain.SandboxObservedRunning
+		} else {
+			started := time.Now()
+			record.WorkerLastSeenAt = nil
+			record.StartupStartedAt = &started
+			record.ObservedState = domain.SandboxObservedProvisioning
+		}
+		if err := reconciler.reconcileSandbox(context.Background(), record); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+	}
+	if provider.starts != 0 || terminatedObservations(store.observations) != 0 || len(store.startupErrors) != 0 {
+		t.Fatalf("starts = %d parked = %d startup errors = %+v; want the failure left alone",
+			provider.starts, terminatedObservations(store.observations), store.startupErrors)
+	}
+}
+
+// A failed stop or delete build is not a startup failure. A customer's
+// workspace in that state is never started by AO on its own.
+func TestFailedStopBuildOfCustomerWorkspaceStartsNothing(t *testing.T) {
 	t.Parallel()
 	store := &lifecycleStore{}
 	provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
-		environment: failedBuildEnvironment(time.Now()),
+		environment: sandbox.Environment{ID: "workspace-1", State: sandbox.StateFailed},
 	}}
-	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), runningRecord(false)); err != nil {
+	if err := testReconciler(store, provider).reconcileSandbox(
+		context.Background(), startingRecord("connection-1"),
+	); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if provider.starts != 1 || len(store.startupErrors) != 0 {
-		t.Fatalf("starts = %d startup errors = %+v, want one new build", provider.starts, store.startupErrors)
+	if provider.starts != 0 || provider.stops != 0 || terminatedObservations(store.observations) != 0 {
+		t.Fatalf("starts = %d stops = %d observations = %v", provider.starts, provider.stops, store.observations)
 	}
 }
 
