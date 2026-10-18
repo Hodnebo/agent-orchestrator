@@ -53,6 +53,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
@@ -527,8 +528,8 @@ func Run() error {
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,
 		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
-		// from whichever provider is configured. An error here is expected and
-		// harmless: discovery falls back to the static aliases.
+		// from whichever provider is configured. On failure, the service retains
+		// the matching persisted catalog instead of inventing model aliases.
 		ClaudeModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 			return claudecodeagent.ProviderModels(listCtx, request.Binary, request.WorkingDir, request.Env)
 		},
@@ -573,7 +574,7 @@ func Run() error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -606,6 +607,17 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if runner, ok := sessMgr.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
+	}); ok {
+		chatSvc.SetPromptSuggestionRunner(func(requestCtx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+			taskCtx, cancel := context.WithCancel(requestCtx)
+			stopOnShutdown := context.AfterFunc(ctx, cancel)
+			defer stopOnShutdown()
+			defer cancel()
+			return runner.RunPromptSuggestionTask(taskCtx, id, turnID, systemPrompt, prompt)
+		})
+	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
@@ -666,10 +678,12 @@ func Run() error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:           store,
-		Verifier:           systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:           store,
-		PrivateNPMPrefixes: privateNPMPrefixes,
+		JobStore:            store,
+		Verifier:            systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:            store,
+		Reviewers:           store,
+		DisableUpdateChecks: !cfg.HarnessUpdateChecks,
+		PrivateNPMPrefixes:  privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -881,17 +895,24 @@ func Run() error {
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
 	}
-	if res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir)); !res.NeedsInstall {
+	// A system cloudflared is version-checked by running it (30-120ms, up to a
+	// 5s timeout), so resolve off the boot path. Status reads and anything that
+	// needs a connector, such as restoring an enabled bridge, wait for this
+	// lookup rather than racing it.
+	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		if res.NeedsInstall {
+			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
+			// Mobile behaves exactly as it did before remote access existed.
+			log.Info("mobile remote access unavailable; cloudflared not installed",
+				"rejectedSystemPath", res.SystemPath)
+			return nil
+		}
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		bs.Tunnel = mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
+		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
-	} else {
-		// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-		// Mobile behaves exactly as it did before remote access existed.
-		log.Info("mobile remote access unavailable; cloudflared not installed",
-			"rejectedSystemPath", res.SystemPath)
-	}
+	})
 
 	// Stable, machine-bound host identity, served by the unauthenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
@@ -910,15 +931,31 @@ func Run() error {
 		go dispatcher.Run(ctx)
 	}
 	if mobilebridge.KeepAwakeSupported() {
-		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
+		ka := mobilebridge.NewKeepAwake(os.Getpid())
+		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir))
+		bs.KeepAwake = ka
 	}
+	awakeHost := awakesvc.NewHost(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir)
+	awakeSvc, stopAwake := startAwake(ctx, store, awakeHost, awakesvc.BindingFuncs{
+		Session: func(ctx context.Context, id string) (bool, error) {
+			row, found, err := store.GetSession(ctx, domain.SessionID(id))
+			return found && !row.IsTerminated, err
+		},
+		Agent:       store.HasAwakeAgentActivity,
+		Interrupted: chatSvc.InterruptedAwakeAgents,
+		Reconnect:   sessMgr.ReconnectAwakeAgent,
+		App:         awakeHost.AppAlive,
+	}, log)
+	defer stopAwake()
 	var nativeSessions ports.AgentNativeSessionResolver
 	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		Awake:              awakeSvc,
 		Projects:           projectSvc,
+		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
 		Agents:             agentSvc,
@@ -942,7 +979,7 @@ func Run() error {
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
-		GitHub:             githubpat.New(cfg.DataDir),
+		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
 		CDC:                store,
@@ -1038,7 +1075,12 @@ func Run() error {
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		agentSvc.WarmReadiness()
+		readinessDone := agentSvc.WarmReadiness()
+		if cfg.HarnessUpdateChecks {
+			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target, refresh)
+			}, log)
+		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {
