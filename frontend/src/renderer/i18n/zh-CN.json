@@ -122,6 +122,7 @@
 	"agentSwitch.switchTerminalTo": "将此终端切换到 {{target}}",
 	"agentSwitch.switchToChat": "切换到聊天界面",
 	"agentSwitch.switched": "已切换",
+	"agentSwitch.switching": "正在切换",
 	"agentSwitch.switchedFromTo": "已从 {{from}} 切换到 {{to}}",
 	"session.statusChecking": "正在检查…",
 	"session.statusUnavailable": "无法验证",

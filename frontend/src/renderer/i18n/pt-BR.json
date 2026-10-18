@@ -122,6 +122,7 @@
 	"agentSwitch.switchTerminalTo": "Mudar este terminal para {{target}}",
 	"agentSwitch.switchToChat": "Mudar para a interface de chat",
 	"agentSwitch.switched": "Trocado",
+	"agentSwitch.switching": "Trocando",
 	"agentSwitch.switchedFromTo": "Trocado de {{from}} para {{to}}",
 	"session.statusChecking": "Verificando…",
 	"session.statusUnavailable": "Não foi possível verificar",

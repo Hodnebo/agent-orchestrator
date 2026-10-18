@@ -3239,28 +3239,62 @@ export function Timeline({
 							echoMatchesItem(echo, item, backgroundQueuedTurnIds),
 					),
 			)
-			.map((echo, index): ConversationMessage => ({
-				kind: "message",
-				id: `local:${echo.clientMessageId}`,
-				turnId: `local:${echo.clientMessageId}`,
-				clientMessageId: echo.clientMessageId,
-				sequence: snapshot.latestSequence + index + 0.01,
-				revision: 0,
-				role: "user",
-				origin: "human",
-				text: echo.text,
-				continuation: echo.continuation,
-				content: echo.excerpts?.map((excerpt) => ({
-					type: "excerpt",
-					text: excerpt.text,
-					sourceConversationId: excerpt.conversationId,
-					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision,
-				})),
-				streaming: false,
-				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
-				createdAt: echo.createdAt,
-			}));
+			.flatMap((echo, index): ConversationItem[] => {
+				const sequence = snapshot.latestSequence + index + 0.01;
+				const message: ConversationMessage = {
+					kind: "message",
+					id: `local:${echo.clientMessageId}`,
+					turnId: `local:${echo.clientMessageId}`,
+					clientMessageId: echo.clientMessageId,
+					sequence,
+					revision: 0,
+					role: "user",
+					origin: "human",
+					text: echo.text,
+					continuation: echo.continuation,
+					content: echo.excerpts?.map((excerpt) => ({
+						type: "excerpt",
+						text: excerpt.text,
+						sourceConversationId: excerpt.conversationId,
+						sourceMessageId: excerpt.messageId,
+						sourceRevision: excerpt.revision,
+					})),
+					streaming: false,
+					delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
+					createdAt: echo.createdAt,
+				};
+				const sent = echo.providerSwitch;
+				// A message sent with an agent switch shows the "Switched" line above it
+				// at once, until the daemon's own line arrives and takes its place.
+				const switchArrived = sent && items.some(
+					(item) =>
+						item.kind === "activity" &&
+						item.detail?.event === "provider_switch" &&
+						item.detail.targetHarness === sent.targetHarness &&
+						item.sequence > sent.afterSequence,
+				);
+				if (!sent || switchArrived) return [message];
+				const marker: ConversationActivity = {
+					kind: "activity",
+					id: `local-switch:${echo.clientMessageId}`,
+					sequence: sequence - 0.005,
+					revision: 0,
+					activityKind: "system",
+					status: "completed",
+					summary: "Switched agent",
+					createdAt: echo.createdAt,
+					detail: {
+						event: "provider_switch",
+						sourceHarness: sent.sourceHarness,
+						targetHarness: sent.targetHarness,
+						sourceModel: sent.sourceModel,
+						targetModel: sent.targetModel,
+						targetEffort: sent.targetEffort,
+						switching: true,
+					},
+				};
+				return [marker, message];
+			});
 	}, [items, localEchos, snapshot.latestSequence, snapshot.turns]);
 	const backgroundQueuedTurnIds = useMemo(
 		() => new Set(
@@ -3273,14 +3307,14 @@ export function Timeline({
 	);
 	const timelineItems = useStableList(
 		[
-			...items.filter(
+			...withSwitchMarkerKeys(items.filter(
 				(item) => !(item.kind === "message" && item.role === "user" && (
 					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
 					// A terminal switch hands the note to the agent as its first prompt, so a
 					// conversation read back from the terminal carries it. It is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
 				)),
-			),
+			)),
 			...localItems,
 		],
 		itemKey,
@@ -4624,6 +4658,23 @@ const itemKey = (item: ConversationItem): string =>
 	item.kind === "message" && item.role === "user" && item.clientMessageId
 		? `client:${item.clientMessageId}`
 		: item.id;
+
+/**
+ * The daemon's "Switched" line takes the id of the optimistic one drawn above the
+ * same message, so React keeps the node and its label morphs from "Switching…" to
+ * "Switched" instead of one line unmounting for the other.
+ */
+function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
+	return items.map((item) => {
+		if (item.kind !== "activity" || item.detail?.event !== "provider_switch") return item;
+		let next: ConversationMessage | undefined;
+		for (const candidate of items) {
+			if (candidate.kind !== "message" || candidate.role !== "user" || !candidate.clientMessageId) continue;
+			if (candidate.sequence > item.sequence && (!next || candidate.sequence < next.sequence)) next = candidate;
+		}
+		return next?.clientMessageId ? { ...item, id: `local-switch:${next.clientMessageId}` } : item;
+	});
+}
 
 /** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(

@@ -10,7 +10,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, RefreshCw, Star, TriangleAlert, X, Zap } from "lucide-react";
+import { Brain, ChevronRight, Loader2, Star, TriangleAlert, X, Zap } from "lucide-react";
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -310,7 +310,9 @@ export function AgentModelPicker({
 	const offersAutoCompact = pending?.harness === "claude-code" && !/haiku|opus-4-5/.test(pending.model ?? "");
 
 	return (
-		<OptionMenu open={open} onOpenChange={setOpen}>
+		// Not modal: a click on the composer while this is open must reach it, so one
+		// click both closes the menu and focuses the composer.
+		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
 			<OptionMenuTrigger
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
@@ -670,23 +672,6 @@ function FavoriteStar({ starred, onToggle }: { starred: boolean; onToggle: () =>
 /** The top level some agents have past Max: Codex's "ultra", Claude Code's "ultracode". */
 function isUltraEffort(value: string | undefined): boolean {
 	return Boolean(value?.toLowerCase().startsWith("ultra"));
-}
-
-/** The strip on top of the chat box while a switch waits for the next message. */
-export function PendingAgentSwitchNotice({ pending, switching, onCancel }: { pending: PendingAgentSwitch; switching?: boolean; onCancel: () => void }) {
-	const target = [agentLabel(pending.harness), pending.modelLabel].filter(Boolean).join(" · ");
-	return (
-		<div
-			role="status"
-			className="-mb-2 flex min-w-0 items-center gap-2 rounded-t-(--radius-chat-composer) border-b border-border bg-surface px-3 py-2 text-xs text-foreground"
-		>
-			<RefreshCw aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", switching ? "animate-spin" : undefined)} />
-			<span className="shrink-0">{switching ? "Handing off to" : "Next message goes to"}</span>
-			<ProviderMark provider={pending.harness} className="-mx-0.5 size-3.5" />
-			<span className="min-w-0 truncate">{switching ? `${target}…` : `${target}. It gets a summary and this session's history.`}</span>
-			{switching ? null : <DismissButton label="Keep the current agent" onClick={onCancel} className="ml-auto" />}
-		</div>
-	);
 }
 
 export function DismissButton({ label, onClick, disabled, className }: { label: string; onClick: () => void; disabled?: boolean; className?: string }) {

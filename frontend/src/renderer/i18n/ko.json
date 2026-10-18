@@ -122,6 +122,7 @@
 	"agentSwitch.switchTerminalTo": "이 터미널을 {{target}}(으)로 전환",
 	"agentSwitch.switchToChat": "채팅 UI로 전환",
 	"agentSwitch.switched": "전환됨",
+	"agentSwitch.switching": "전환 중",
 	"agentSwitch.switchedFromTo": "{{from}}에서 {{to}}(으)로 전환됨",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",

@@ -75,6 +75,16 @@ export interface ConversationSendInput {
 	continuation?: boolean;
 	/** Switches the agent first; the new agent answers this message as its first turn. */
 	providerSwitch?: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey" | "message">;
+	/** What the transcript's "Switched" line shows while the switch runs. Never sent. */
+	switchDisplay?: ConversationSwitchDisplay;
+}
+
+/** The two sides of a switch as the transcript names them, known before the daemon answers. */
+export interface ConversationSwitchDisplay {
+	sourceHarness: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
 }
 
 /** A send whose agent switch was refused or failed, so the message never left. */
@@ -149,8 +159,27 @@ export type ConversationLocalEcho = {
 	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision"> & { conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
+	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
+	providerSwitch?: ConversationSwitchDisplay & {
+		targetHarness: string;
+		/** The newest sequence seen when it was sent; the daemon's own line comes after it. */
+		afterSequence: number;
+	};
 };
 type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
+
+function newestCachedSequence(queryClient: QueryClient, sessionId: string, hostId?: string): number {
+	const cached = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId));
+	return Math.max(0, ...(cached?.pages.map((page) => page.latestSequence) ?? []));
+}
+
+function switchEcho(
+	display: ConversationSwitchDisplay | undefined,
+	targetHarness: string | undefined,
+	afterSequence: number,
+): ConversationLocalEcho["providerSwitch"] {
+	return display && targetHarness ? { ...display, targetHarness, afterSequence } : undefined;
+}
 
 function addConversationLocalEcho(
 	queryClient: QueryClient,
@@ -541,6 +570,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				createdAt: new Date().toISOString(),
 				backgroundWake,
 				queued: turnActive && !backgroundWake,
+				providerSwitch: switchEcho(
+					variables.input.switchDisplay,
+					variables.input.providerSwitch?.targetHarness,
+					Math.max(0, ...(current?.pages.map((page) => page.latestSequence) ?? [])),
+				),
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
@@ -563,7 +597,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			clientMessageId,
 			input,
 		}: ConversationSendMutationInput) => {
-			const { providerSwitch, ...message } = input;
+			const { providerSwitch, switchDisplay: _switchDisplay, ...message } = input;
 			if (providerSwitch) {
 				// One request: the daemon switches, then sends, so the message does not
 				// wait on this renderer refetching between the two.
@@ -1068,9 +1102,16 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		localEchos: stateSessionId ? localEchosBySession[stateSessionId] ?? [] : [],
 		acknowledgeLocalEcho,
 		/** Shows a message at once while the agent switch it waits for runs. */
-		echoBeforeSend: (echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "excerpts">) => {
-			if (!stateSessionId) return;
-			addConversationLocalEcho(queryClient, stateSessionId, { ...echo, createdAt: new Date().toISOString() });
+		echoBeforeSend: (
+			echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "excerpts">,
+			providerSwitch?: { targetHarness: string; display: ConversationSwitchDisplay },
+		) => {
+			if (!stateSessionId || !sessionId) return;
+			addConversationLocalEcho(queryClient, stateSessionId, {
+				...echo,
+				createdAt: new Date().toISOString(),
+				providerSwitch: switchEcho(providerSwitch?.display, providerSwitch?.targetHarness, newestCachedSequence(queryClient, sessionId, hostId)),
+			});
 		},
 		/** Takes back a message shown before a send that never went out. */
 		dropEcho: (clientMessageId: string) => {
