@@ -287,6 +287,7 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 
 func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	d, srv := newTestDriver(t)
+	srv.replyError("initialize", -32600, "Already initialized")
 	prepareCalls := 0
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
 	if err != nil {
@@ -320,9 +321,11 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 	if prepareCalls != 0 {
 		t.Fatalf("live Codex reconnect prepared launch-only environment %d times", prepareCalls)
 	}
-	if srv.sentMethod("initialize") || srv.sentMethod("thread/resume") {
-		t.Fatalf("reconnect repeated handshake: initialize=%v resume=%v",
-			srv.sentMethod("initialize"), srv.sentMethod("thread/resume"))
+	if srv.sentMethod("thread/resume") || srv.sentMethod("initialized") {
+		t.Fatal("reconnect to an initialized app-server repeated its handshake")
+	}
+	if !conv.(*conversation).ReconnectedLive() {
+		t.Fatal("reconnect to an initialized app-server was not reported live")
 	}
 
 	lister := conv.(ports.ChatModelLister)
@@ -330,8 +333,42 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatalf("ListModels: %v", err)
 	}
 	request := srv.awaitFrame(func(f frame) bool { return f.Method == "model/list" })
-	if request.ID == nil || string(*request.ID) != "42" {
-		t.Fatalf("first request id after reconnect = %v, want 42", request.ID)
+	// 42 went to the initialize the app-server refused.
+	if request.ID == nil || string(*request.ID) != "43" {
+		t.Fatalf("first request id after reconnect = %v, want 43", request.ID)
+	}
+}
+
+// A daemon that stopped before initialize finished leaves a live host whose
+// app-server was never initialized. The reconnect initializes it and opens the
+// stored thread, instead of adopting a host that answers "Not initialized".
+func TestReconnectInitializesAHostThatNeverWas(t *testing.T) {
+	d, srv := newTestDriver(t)
+	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.persistent = true
+	d.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{
+			Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41,
+		}, nil
+	}
+
+	conv, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "ao-uninitialized", ProviderConversationID: "thread-1",
+		DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+	if !srv.sentMethod("initialize") || !srv.sentMethod("thread/resume") {
+		t.Fatalf("handshake: initialize=%v resume=%v, want both",
+			srv.sentMethod("initialize"), srv.sentMethod("thread/resume"))
+	}
+	if conv.(*conversation).ReconnectedLive() {
+		t.Fatal("an app-server initialized just now was reported as a live reconnect")
 	}
 }
 

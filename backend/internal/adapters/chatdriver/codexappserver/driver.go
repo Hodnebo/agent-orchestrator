@@ -572,7 +572,20 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
-		return conv, true, nil
+		// A live host is normally an initialized app-server, but a daemon that
+		// stopped between starting the host and finishing initialize leaves one
+		// that never was, and every later call fails "Not initialized". Initialize
+		// anyway: an initialized app-server refuses it and keeps its state.
+		fresh, err := initializeIfNeeded(ctx, conv.conn)
+		if err != nil {
+			_ = conv.Close()
+			return nil, false, err
+		}
+		if !fresh {
+			return conv, true, nil
+		}
+		proc.reconnected = false
+		return conv, false, nil
 	}
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()
@@ -583,6 +596,17 @@ func (d *Driver) connectSession(
 
 func (d *Driver) initialize(ctx context.Context, conv *conversation) error {
 	return initializeConnection(ctx, conv.conn)
+}
+
+// initializeIfNeeded initializes an app-server reached through a live host. It
+// reports whether the app-server had not been initialized before.
+func initializeIfNeeded(ctx context.Context, connection *conn) (bool, error) {
+	err := initializeConnection(ctx, connection)
+	var refused *rpcError
+	if errors.As(err, &refused) && refused.Code == -32600 && strings.EqualFold(refused.Message, "Already initialized") {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func initializeConnection(ctx context.Context, connection *conn) error {
