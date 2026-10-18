@@ -218,6 +218,8 @@ type SetupRunner struct {
 	Secrets func() []string
 	// UpdateInterval overrides liveUpdateInterval for tests.
 	UpdateInterval time.Duration
+	// FinalWait overrides scriptStepFinalWait for tests.
+	FinalWait time.Duration
 }
 
 // Run runs commands in order in dir with `sh -c`, stopping at the first one

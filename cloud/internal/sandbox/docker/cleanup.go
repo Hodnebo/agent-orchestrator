@@ -54,25 +54,26 @@ func (c *Client) cleanupFinished(ctx context.Context, view containerView) bool {
 	// Detached from the reconcile pass's cancellation, but keeping its stage
 	// observer and session event recorder.
 	runCtx := context.WithoutCancel(ctx)
-	run := cleanupRuns.Start(key, wait+cleanuphook.Margin, func() {
+	attrs := map[string]string{"provider_id": key}
+	run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), wait+cleanuphook.Margin, func() {
 		slog.InfoContext(ctx, "docker: running project cleanup before deleting the worker",
 			"provider_id", key, "budget", wait)
-		c.runCleanup(runCtx, sandbox.ID(key), wait, plan)
-	})
+		c.runCleanup(runCtx, sandbox.ID(key), wait, plan, attrs)
+	}, cleanuphook.Skipper(runCtx, attrs, plan.Steps))
 	return run.Await(ctx, c.cleanupInline, "provider_id", key)
 }
 
 // runCleanup runs the worker-installed Cleanup hook in the container as the
 // container's user (the worker's), reports the outcome as cleanuphook.Stage,
 // and appends the run's steps to the session's events.
-func (c *Client) runCleanup(ctx context.Context, id sandbox.ID, wait time.Duration, plan cleanuphook.Plan) {
+func (c *Client) runCleanup(ctx context.Context, id sandbox.ID, wait time.Duration, plan cleanuphook.Plan, attrs map[string]string) {
 	finish := sandbox.BeginStage(ctx, cleanuphook.Stage)
-	attrs := map[string]string{"provider_id": string(id)}
 	steps := plan.Steps
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanuphook.Margin)
 	defer cancel()
-	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.AsLoginUser)
+	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override,
+		cleanuphook.Options{Runner: cleanuphook.AsLoginUser, Stop: cleanuphook.StopOwnerProcesses})
 	printed, status, err := c.execCleanupHook(runCtx, id, command)
 	cleanuphook.Report(ctx, finish, attrs, steps, printed, status, err, "docker")
 }

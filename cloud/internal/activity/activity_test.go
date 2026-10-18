@@ -49,6 +49,14 @@ func TestRedactMasksCredentials(t *testing.T) {
 	}
 }
 
+// Masking twice keeps the text after a masked value.
+func TestRedactTwiceKeepsWhatFollowsAMaskedValue(t *testing.T) {
+	once := Redact(`{"password": "x"} and token=abc, done`)
+	if twice := Redact(once); twice != once || once != `{"password": [REDACTED]} and token=[REDACTED], done` {
+		t.Fatalf("once %q, twice %q", once, twice)
+	}
+}
+
 func TestRedactKeepsOrdinaryDiagnostics(t *testing.T) {
 	input := "coder: worker bootstrap failed: AO worker did not start; /home/coder/.ao/worker/worker.log exited 1 (lifecycle start_error)"
 	if got := Redact(input); got != input {

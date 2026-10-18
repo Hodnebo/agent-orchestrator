@@ -19,8 +19,10 @@ var redactions = []redaction{
 	{regexp.MustCompile(`(?i)\b((?:proxy-)?authorization|cookie|set-cookie)(\s*[:=]\s*)[^\n]*`), "${1}${2}" + redactedMarker},
 	// Bearer and basic credentials anywhere in text.
 	{regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}`), "${1} " + redactedMarker},
-	// key=value and "key": "value" pairs whose key names a secret.
-	{regexp.MustCompile(`(?i)("?(?:[a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|session[_-]?key|credential)[a-z0-9_-]*)"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)`), "${1}" + redactedMarker},
+	// key=value and "key": "value" pairs whose key names a secret. A value
+	// already masked is matched exactly, so masking twice keeps what follows
+	// it ("password": [REDACTED]}).
+	{regexp.MustCompile(`(?i)("?(?:[a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|session[_-]?key|credential)[a-z0-9_-]*)"?\s*[:=]\s*)(\[REDACTED\]|"[^"]*"|'[^']*'|[^\s,;&"']+)`), "${1}" + redactedMarker},
 	// URL userinfo: scheme://user:password@host.
 	{regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`), "${1}" + redactedMarker + "@"},
 	// Well-known token shapes.

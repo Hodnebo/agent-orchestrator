@@ -62,9 +62,10 @@ const (
 	scriptStepAttempts = 3
 	// scriptStepSendTimeout bounds one send.
 	scriptStepSendTimeout = 10 * time.Second
-	// scriptStepFlushWait is how long a finished run waits for its events to
-	// be sent before the worker goes on; the rest are sent in the background.
-	scriptStepFlushWait = 2 * time.Second
+	// scriptStepFinalWait bounds how long the steps' final events still
+	// queued are sent once the run is over or the worker is stopping, and
+	// how long a finished run waits for them.
+	scriptStepFinalWait = 10 * time.Second
 )
 
 // ErrScriptStepsUnsupported is what a publish function returns when the
@@ -165,7 +166,83 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 
 // secretNamePattern matches the names of environment variables whose values
 // are masked in a step's output.
-var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|AUTH)`)
+var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|AUTH|PRIVATE)`)
+
+// secretPairPattern matches a NAME=value or NAME: value pair, or a JSON
+// "name": "value" member (also escaped inside a JSON string, as in
+// \"password\":\"x\" or an AWS Secrets Manager SecretString), whose name
+// looks like a secret's. Its groups are the opening quote, the name, the
+// closing quote, the separator and the value: a JSON-escaped string, a quoted
+// string, or a bare word.
+var secretPairPattern = regexp.MustCompile(`(?i)(\\?["']?)([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)(\\?["']?)(\s*[:=]\s*)(\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;&"'\\]+)`)
+
+var (
+	// secretNameFragment is what makes a pair's name look like a secret's.
+	secretNameFragment = regexp.MustCompile(`(?i)token|secret|key|pass|auth|credential|private`)
+	// benignNameWords are common words that contain a fragment but name no
+	// secret (GIT_AUTHOR_NAME, "tests passed: 3"); they are ignored when the
+	// name is checked.
+	benignNameWords = regexp.MustCompile(`(?i)author|passed|passes|passing|bypass|keyboard|monkey`)
+	// publicNameSuffix marks a name whose value is a socket, path, directory,
+	// file or URL (SSH_AUTH_SOCK, KEY_PATH); credentials in a URL are masked
+	// on their own.
+	publicNameSuffix = regexp.MustCompile(`(?i)[_.-](?:sock|path|dir|file|url)$`)
+)
+
+// isSecretName reports whether a pair's value is masked: its name contains a
+// secretNameFragment outside benignNameWords and has no publicNameSuffix.
+func isSecretName(name string) bool {
+	return !publicNameSuffix.MatchString(name) &&
+		secretNameFragment.MatchString(benignNameWords.ReplaceAllString(name, ""))
+}
+
+// secretShapes are token shapes masked on top of activity.Redact's: npm,
+// Google API and SendGrid keys, and the body of a private key whose BEGIN
+// line is no longer in the output (only its END line is).
+var secretShapes = []*regexp.Regexp{
+	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{20,}\b`),
+	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`),
+	regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}`),
+	regexp.MustCompile(`(?m)(?:^[A-Za-z0-9+/=]{16,}\r?\n)+-----END [A-Z ]*PRIVATE KEY-----`),
+}
+
+// RedactScriptOutput masks credentials in a Setup or Cleanup run's output
+// with the patterns every step event gets (no known secret values): the
+// control plane's redaction of what a worker or a Cleanup hook printed.
+func RedactScriptOutput(text string) string {
+	return scriptRedactor{}.redact(text)
+}
+
+// redactSecretPairs masks the value of each secretPairPattern pair with a
+// secret's name (isSecretName), keeping its quotes.
+func redactSecretPairs(text string) string {
+	matches := secretPairPattern.FindAllStringSubmatchIndex(text, -1)
+	if matches == nil {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		name, value := text[match[4]:match[5]], text[match[10]:match[11]]
+		if bare := strings.Trim(value, `\"'`); !isSecretName(name) || strings.HasPrefix(bare, "[REDACTED") {
+			continue
+		}
+		masked := "[REDACTED]"
+		switch {
+		case strings.HasPrefix(value, `\"`):
+			masked = `\"[REDACTED]\"`
+		case strings.HasPrefix(value, `"`):
+			masked = `"[REDACTED]"`
+		case strings.HasPrefix(value, "'"):
+			masked = "'[REDACTED]'"
+		}
+		out.WriteString(text[last:match[10]])
+		out.WriteString(masked)
+		last = match[11]
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
 
 // workerTokenPattern matches an AO worker token (see TokenManager.Issue).
 var workerTokenPattern = regexp.MustCompile(`\b` + tokenPrefix + `\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
@@ -177,7 +254,9 @@ const minSecretValueLength = 6
 // scriptRedactor masks credentials in a step's output and command before they
 // leave the sandbox: the values of secret-named environment variables and any
 // extra secrets (the worker's own token) verbatim, then activity.Redact's
-// patterns and AO worker tokens.
+// patterns, the values of secret-named pairs, secretShapes and AO worker
+// tokens. The control plane redacts what it receives and a Cleanup hook's
+// output with the same patterns (scriptRedactor{}, without values).
 type scriptRedactor struct {
 	values []string
 }
@@ -209,15 +288,23 @@ func (r scriptRedactor) redact(text string) string {
 	for _, value := range r.values {
 		text = strings.ReplaceAll(text, value, "[REDACTED]")
 	}
-	return workerTokenPattern.ReplaceAllString(activity.Redact(text), "[REDACTED]")
+	// Pairs first: activity.Redact masks a quoted value up to its first
+	// quote, which would cut an escaped JSON string (a SecretString) short.
+	text = activity.Redact(redactSecretPairs(text))
+	for _, shape := range secretShapes {
+		text = shape.ReplaceAllString(text, "[REDACTED]")
+	}
+	return workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
 }
 
-// scriptStepOutput turns a step's raw output tail into what an event carries:
-// carriage-return overwrites (progress bars) collapsed to their last state,
-// terminal escapes and control characters removed, credentials masked, and
-// the tail of at most ScriptStepOutputLimit bytes. headDropped says the raw
-// output already lost its beginning; its partial first line is dropped, so a
-// secret cut in half there is never published.
+// scriptStepOutput turns a finished step's raw output tail into what an event
+// carries: carriage-return overwrites (progress bars) collapsed to their last
+// state, terminal escapes and control characters removed, credentials masked,
+// and the tail of at most ScriptStepOutputLimit bytes. headDropped says the
+// raw output already lost its beginning; its partial first line is dropped, so
+// a secret cut in half there is never published. An unfinished last line (the
+// step ended mid-line) is published, but its end is masked when it may be the
+// start of a credential (maskTrailingFragment).
 func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, bool) {
 	if headDropped {
 		if index := strings.IndexByte(raw, '\n'); index >= 0 {
@@ -227,7 +314,44 @@ func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, 
 	text := collapseCarriageReturns(raw)
 	// Excerpt with no limit strips escapes and control characters and redacts.
 	text = r.redact(activity.Excerpt(text, 0))
+	if raw != "" && !strings.HasSuffix(raw, "\n") {
+		text = r.maskTrailingFragment(text)
+	}
 	return scriptOutputTail(text, headDropped)
+}
+
+// liveStepOutput is scriptStepOutput for a step still running: only its
+// finished lines are published. The line being written may be a credential
+// printed part way ("DB_PASSWORD=supersecr"), which no pattern recognizes
+// until it is whole, so it waits for its newline or the step's final event.
+func (r scriptRedactor) liveStepOutput(raw string, headDropped bool) (string, bool) {
+	return r.scriptStepOutput(raw[:strings.LastIndexByte(raw, '\n')+1], headDropped)
+}
+
+// minSecretFragmentLength is the shortest end of an output that is masked as
+// the start of a known secret value.
+const minSecretFragmentLength = 4
+
+// tokenFragmentPattern matches the start of a well-known token shape at the
+// end of an output, however short: what a step printed before it ended mid-way
+// through a token the full patterns would mask.
+var tokenFragmentPattern = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]?-?|AKIA|eyJ|npm_|AIza|glpat-|SG\.)[A-Za-z0-9_.-]*$`)
+
+// maskTrailingFragment masks the end of an output that may be a credential
+// cut short: the beginning of a known secret value (at least
+// minSecretFragmentLength bytes of it), or of a well-known token shape.
+func (r scriptRedactor) maskTrailingFragment(text string) string {
+	for _, value := range r.values {
+		for length := min(len(value)-1, len(text)); length >= minSecretFragmentLength; length-- {
+			if strings.HasSuffix(text, value[:length]) {
+				return text[:len(text)-length] + "[REDACTED]"
+			}
+		}
+	}
+	if location := tokenFragmentPattern.FindStringIndex(text); location != nil {
+		return text[:location[0]] + "[REDACTED]"
+	}
+	return text
 }
 
 // scriptOutputTail keeps the last ScriptStepOutputLimit bytes of already
@@ -341,29 +465,37 @@ func (t *liveTail) snapshot() (string, bool, uint64) {
 // scriptStepPublisher sends one run's step events, in order, from its own
 // goroutine, so a step never waits on the network. Live updates coalesce:
 // only the newest waits to be sent, and one that fails is dropped. A step's
-// final event is sent up to scriptStepAttempts times. Once the control plane
-// refuses the event type, the run sends nothing more.
+// final event is sent up to scriptStepAttempts times, each on a context
+// detached from the worker's, so a worker that is stopping still reports how
+// its steps ended: once the run is closed or the worker's context ends, live
+// updates are dropped and the queued final events are sent for up to
+// finalWait more. Once the control plane refuses the event type, the run
+// sends nothing more.
 type scriptStepPublisher struct {
 	ctx        context.Context
 	publish    func(context.Context, ScriptStepEvent) error
 	retryDelay time.Duration
+	finalWait  time.Duration
 
 	mu          sync.Mutex
 	live        *ScriptStepEvent
 	finals      []ScriptStepEvent
 	closed      bool
 	unsupported bool
-	wake        chan struct{}
-	done        chan struct{}
+	// flushBy is when the run stopped (closed, or the worker's context
+	// ended) plus finalWait: no final event is sent after it.
+	flushBy time.Time
+	wake    chan struct{}
+	done    chan struct{}
 }
 
 func newScriptStepPublisher(
 	ctx context.Context,
 	publish func(context.Context, ScriptStepEvent) error,
-	retryDelay time.Duration,
+	retryDelay, finalWait time.Duration,
 ) *scriptStepPublisher {
 	publisher := &scriptStepPublisher{
-		ctx: ctx, publish: publish, retryDelay: retryDelay,
+		ctx: ctx, publish: publish, retryDelay: retryDelay, finalWait: finalWait,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}
 	go publisher.run()
@@ -396,14 +528,16 @@ func (p *scriptStepPublisher) final(event ScriptStepEvent) {
 	p.signal()
 }
 
-// close stops taking events and waits up to wait for the queued ones to be
-// sent; any left are still sent in the background.
-func (p *scriptStepPublisher) close(wait time.Duration) {
+// close stops taking events and waits for the queued final events to be
+// sent, up to finalWait.
+func (p *scriptStepPublisher) close() {
 	p.mu.Lock()
 	p.closed = true
+	p.stoppingLocked()
 	p.mu.Unlock()
 	p.signal()
-	timer := time.NewTimer(wait)
+	// A send in flight ends by flushBy too; a moment more lets it return.
+	timer := time.NewTimer(p.finalWait + 100*time.Millisecond)
 	defer timer.Stop()
 	select {
 	case <-p.done:
@@ -418,11 +552,28 @@ func (p *scriptStepPublisher) signal() {
 	}
 }
 
+// stoppingLocked reports whether the run is closed or the worker's context
+// ended, and when it is, the time final events are sent until. p.mu is held.
+func (p *scriptStepPublisher) stoppingLocked() (time.Time, bool) {
+	if !p.closed && p.ctx.Err() == nil {
+		return time.Time{}, false
+	}
+	if p.flushBy.IsZero() {
+		p.flushBy = time.Now().Add(p.finalWait)
+	}
+	return p.flushBy, true
+}
+
 func (p *scriptStepPublisher) run() {
 	defer close(p.done)
 	for {
 		p.mu.Lock()
-		if p.unsupported || p.ctx.Err() != nil {
+		flushBy, stopping := p.stoppingLocked()
+		if stopping {
+			// Live updates no longer matter; final events do, until flushBy.
+			p.live = nil
+		}
+		if p.unsupported || (stopping && !time.Now().Before(flushBy)) {
 			p.live, p.finals = nil, nil
 			p.mu.Unlock()
 			return
@@ -433,17 +584,17 @@ func (p *scriptStepPublisher) run() {
 			event := p.finals[0]
 			p.finals = p.finals[1:]
 			p.mu.Unlock()
-			p.send(event, scriptStepAttempts)
+			p.send(event, true)
 			continue
 		}
 		if p.live != nil {
 			event := *p.live
 			p.live = nil
 			p.mu.Unlock()
-			p.send(event, 1)
+			p.send(event, false)
 			continue
 		}
-		if p.closed {
+		if stopping {
 			p.mu.Unlock()
 			return
 		}
@@ -455,9 +606,29 @@ func (p *scriptStepPublisher) run() {
 	}
 }
 
-func (p *scriptStepPublisher) send(event ScriptStepEvent, attempts int) {
+// send sends a live update once, on the worker's context, or a final event
+// up to scriptStepAttempts times, on a context detached from the worker's and
+// bounded by flushBy once the run is stopping.
+func (p *scriptStepPublisher) send(event ScriptStepEvent, final bool) {
+	attempts := 1
+	if final {
+		attempts = scriptStepAttempts
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		ctx, cancel := context.WithTimeout(p.ctx, scriptStepSendTimeout)
+		parent, timeout := p.ctx, scriptStepSendTimeout
+		if final {
+			parent = context.WithoutCancel(p.ctx)
+			p.mu.Lock()
+			flushBy, stopping := p.stoppingLocked()
+			p.mu.Unlock()
+			if stopping {
+				timeout = min(timeout, time.Until(flushBy))
+				if timeout <= 0 {
+					return
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
 		err := p.publish(ctx, event)
 		cancel()
 		if err == nil {
@@ -469,28 +640,36 @@ func (p *scriptStepPublisher) send(event ScriptStepEvent, attempts int) {
 			p.mu.Unlock()
 			return
 		}
-		if attempt < attempts {
-			select {
-			case <-p.ctx.Done():
-				return
-			case <-time.After(p.retryDelay * time.Duration(attempt)):
-			}
+		if attempt == attempts {
+			return
 		}
+		delay := p.retryDelay * time.Duration(attempt)
+		if !final {
+			return
+		}
+		p.mu.Lock()
+		flushBy, stopping := p.stoppingLocked()
+		p.mu.Unlock()
+		if stopping && time.Until(flushBy) < delay {
+			return
+		}
+		time.Sleep(delay)
 	}
 }
 
-// liveUpdateInterval paces a running step's updates: about every second, and
+// liveUpdateInterval paces a running step's updates: every two seconds, and
 // every five seconds once the step has run two minutes, so a long, chatty
-// step does not fill the session's event stream.
+// step does not fill the session's event stream (the control plane also
+// drops a step's live updates once its final event arrives).
 func liveUpdateInterval(elapsed time.Duration) time.Duration {
 	if elapsed >= 2*time.Minute {
 		return 5 * time.Second
 	}
-	return time.Second
+	return 2 * time.Second
 }
 
-// watchStepOutput sends a live update whenever the step's output changed,
-// paced by interval, until the returned stop is called.
+// watchStepOutput sends a live update whenever the step finished another line
+// of output, paced by interval, until the returned stop is called.
 func watchStepOutput(
 	tail *liveTail,
 	interval func(elapsed time.Duration) time.Duration,
@@ -502,6 +681,7 @@ func watchStepOutput(
 	go func() {
 		defer close(finished)
 		var sent uint64
+		lastOutput, lastTruncated := "", false
 		for {
 			timer := time.NewTimer(interval(time.Since(started)))
 			select {
@@ -515,7 +695,12 @@ func watchStepOutput(
 				continue
 			}
 			sent = version
-			output, truncated := redactor.scriptStepOutput(raw, dropped)
+			output, truncated := redactor.liveStepOutput(raw, dropped)
+			if output == "" || (output == lastOutput && truncated == lastTruncated) {
+				// Nothing new is finished: the step is still writing a line.
+				continue
+			}
+			lastOutput, lastTruncated = output, truncated
 			emit(output, truncated)
 		}
 	}()
@@ -557,8 +742,12 @@ func (r SetupRunner) startStepEvents(ctx context.Context, total int) *setupStepE
 	if r.UpdateInterval > 0 {
 		interval = func(time.Duration) time.Duration { return r.UpdateInterval }
 	}
+	finalWait := scriptStepFinalWait
+	if r.FinalWait > 0 {
+		finalWait = r.FinalWait
+	}
 	return &setupStepEvents{
-		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second),
+		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second, finalWait),
 		redactor:  newScriptRedactor(os.Environ(), secrets),
 		interval:  interval,
 		runID:     uuid.NewString(),
@@ -635,7 +824,7 @@ func (s *setupStepEvents) close() {
 		return
 	}
 	s.stopWatching()
-	s.publisher.close(scriptStepFlushWait)
+	s.publisher.close()
 }
 
 func (s *setupStepEvents) stopWatching() {

@@ -2213,6 +2213,8 @@ export interface components {
             logPath?: string;
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
+            /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
+            outputHidden?: boolean;
         };
         WorkerSetupEventInput: {
             /**
@@ -2250,10 +2252,12 @@ export interface components {
             startedAt?: string;
             /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
             durationMs?: number;
-            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step. */
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden. */
             output: string;
             /** @description True when the output's beginning was dropped. */
             outputTruncated: boolean;
+            /** @description Set by the control plane, true on an event served to someone outside the session's organization (a share-grant holder): output is empty and logPath, user, groups, dir and hint are absent. Only the organization's members see a run's output. */
+            outputHidden?: boolean;
             /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
             logPath?: string;
             /** @description The Linux user a failed or timed-out step ran as. */
@@ -2265,14 +2269,17 @@ export interface components {
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
         };
-        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself. */
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
         WorkerScriptStepEventInput: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             type: "workspace.script.step";
-            payload: components["schemas"]["ScriptStepPayload"];
+            payload: components["schemas"]["ScriptStepPayload"] & {
+                /** @enum {string} */
+                phase?: "setup";
+            };
         };
         /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
         WorkerWorkspaceStartupPayload: {
@@ -2979,7 +2986,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. */
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. A step's live updates (status running) are deleted once its final event is stored, so a replay shows only the final event and sequences may skip. */
         ScriptStepEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -3217,6 +3224,8 @@ export interface components {
         EventLimit: number;
         /** @description Return events with a sequence strictly greater than this value. */
         After: number;
+        /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+        EventTypes: string[];
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -4489,6 +4498,8 @@ export interface operations {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
                 limit?: components["parameters"]["EventLimit"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -4516,6 +4527,8 @@ export interface operations {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {

@@ -1102,8 +1102,9 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The setup payload is invalid.")
 			return
 		}
-		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
-		outcome.Command = activitylog.Truncate(activitylog.Redact(outcome.Command), 512)
+		// The same redaction as each step's events (worker.RedactScriptOutput).
+		outcome.Output = activitylog.Excerpt(worker.RedactScriptOutput(outcome.Output), 2048)
+		outcome.Command = activitylog.Truncate(worker.RedactScriptOutput(outcome.Command), 512)
 		outcome.Repository = activitylog.Truncate(outcome.Repository, 256)
 		outcome.Dir = activitylog.Truncate(outcome.Dir, 1024)
 		outcome.User = activitylog.Truncate(outcome.User, 128)

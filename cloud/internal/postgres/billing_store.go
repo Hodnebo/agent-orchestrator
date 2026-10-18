@@ -1150,6 +1150,40 @@ func (s *Store) ResetWeeklyUsage(ctx context.Context, principal domain.Principal
 	})
 }
 
+// CleanupResumeAllowed reports whether a billed sandbox being deleted may be
+// resumed to run its project's Cleanup: nil, or the plan refusal (see
+// IsPlanRefusal) of an organization over its plan's usage, whose billed
+// sandboxes the usage enforcer pauses (PauseOverLimit), so a paused one stays
+// paused. An unbilled sandbox, an organization not billed self-serve and
+// billing that is off always allow it.
+func (s *Store) CleanupResumeAllowed(ctx context.Context, orgID, sessionID string) error {
+	if !s.billing.enforced {
+		return nil
+	}
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var billed bool
+		err := tx.QueryRow(ctx,
+			`SELECT `+billedSandboxSQL+` FROM ao_sandboxes sb WHERE sb.org_id = $1 AND sb.session_id = $2`,
+			orgID, sessionID).Scan(&billed)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && !billed) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		billing, err := orgBillingTx(ctx, tx, orgID)
+		if err != nil {
+			return err
+		}
+		// As PauseOverLimit: an organization whose billing no member's
+		// request recorded yet is left alone.
+		if billing.BillingMode == "" || s.billing.mode(billing) != domain.BillingModeSelfServe {
+			return nil
+		}
+		return s.billing.checkPlanTx(ctx, tx, billing, "", admitUsage, time.Now())
+	})
+}
+
 // WakeAllowed reports whether a paused session may be woken under the plan,
 // for anyone who may open the session (share grantees included). It is an
 // early answer that takes no lock: the transaction that wakes the session

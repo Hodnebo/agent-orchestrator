@@ -984,6 +984,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/After"
         - $ref: "#/components/parameters/EventLimit"
+        - $ref: "#/components/parameters/EventTypes"
       responses:
         "200":
           description: Client-visible events after the supplied sequence.
@@ -1002,6 +1003,7 @@ paths:
       tags: [Events]
       parameters:
         - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/EventTypes"
       responses:
         "200":
           description: |
@@ -2367,6 +2369,24 @@ components:
         minimum: 0
         maximum: 9007199254740991
         default: 0
+    EventTypes:
+      name: types
+      in: query
+      required: false
+      description: >-
+        Only events of these client event types, comma separated (for example
+        types=workspace.setup,workspace.script.step); the parameter may also
+        repeat. At most 32 types. A type the control plane does not serve to
+        clients matches nothing. Omitted or empty, every client event type is
+        served. nextAfter and hasMore follow the filtered events.
+      style: form
+      explode: false
+      schema:
+        type: array
+        maxItems: 32
+        items:
+          type: string
+          maxLength: 64
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -3975,6 +3995,12 @@ components:
         hint:
           type: string
           description: What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH).
+        outputHidden:
+          type: boolean
+          description: >-
+            Set by the control plane, true on the event served to someone
+            outside the session's organization (a share-grant holder): output,
+            logPath, user, groups, dir and hint are absent.
     WorkerSetupEventInput:
       type: object
       additionalProperties: false
@@ -4035,10 +4061,17 @@ components:
           description: Set once the step finished, except on a Cleanup step whose start the output no longer shows.
         output:
           type: string
-          description: Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step.
+          description: Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden.
         outputTruncated:
           type: boolean
           description: True when the output's beginning was dropped.
+        outputHidden:
+          type: boolean
+          description: >-
+            Set by the control plane, true on an event served to someone
+            outside the session's organization (a share-grant holder): output
+            is empty and logPath, user, groups, dir and hint are absent. Only
+            the organization's members see a run's output.
         logPath:
           type: string
           description: The file in the sandbox with the full output (for Cleanup, the whole run's).
@@ -4060,13 +4093,19 @@ components:
       type: object
       additionalProperties: false
       required: [type, payload]
-      description: A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself.
+      description: A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's.
       properties:
         type:
           type: string
           const: workspace.script.step
         payload:
-          $ref: "#/components/schemas/ScriptStepPayload"
+          allOf:
+            - $ref: "#/components/schemas/ScriptStepPayload"
+            - type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [setup]
     WorkerWorkspaceStartupPayload:
       type: object
       additionalProperties: false
@@ -5625,7 +5664,9 @@ components:
         One step of a project's Setup (reported by the worker, live) or
         Cleanup (reported by the control plane after the run, before the
         workspace is deleted) run. Group by payload.runId; the newest event
-        per (runId, step) wins.
+        per (runId, step) wins. A step's live updates (status running) are
+        deleted once its final event is stored, so a replay shows only the
+        final event and sequences may skip.
       properties:
         sessionId:
           type: string

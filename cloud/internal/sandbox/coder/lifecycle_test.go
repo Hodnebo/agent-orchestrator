@@ -317,7 +317,7 @@ func TestDeleteProceedsWhenCleanupNeverReports(t *testing.T) {
 	// A run whose limit is long past: it never reports.
 	wedged := make(chan struct{})
 	defer close(wedged)
-	cleanupRuns.Start(key, -time.Hour, func() { <-wedged })
+	cleanupRuns.Start(key, "", -time.Hour, func() { <-wedged }, func(string) {})
 	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -394,6 +394,11 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	}
 	if command := cleanupHookCommand("/srv/ao", time.Second, ""); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
 		t.Fatalf("absolute root command = %q", command)
+	}
+	// The login user may run the Coder agent carrying the command: Coder's
+	// Cleanup stops none of its processes.
+	if command := cleanupHookCommand("/srv/ao", time.Second, ""); strings.Contains(command, "ao_stop") {
+		t.Fatalf("coder command stops processes: %q", command)
 	}
 }
 

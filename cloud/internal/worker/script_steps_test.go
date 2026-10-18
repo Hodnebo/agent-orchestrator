@@ -203,7 +203,7 @@ func TestSetupStepEventsNeverWaitOnPublishing(t *testing.T) {
 		return nil
 	}
 	started := time.Now()
-	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: slow, UpdateInterval: 10 * time.Millisecond},
+	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: slow, UpdateInterval: 10 * time.Millisecond, FinalWait: time.Second},
 		[]string{"for i in 1 2 3 4 5; do echo $i; sleep 0.05; done", "echo two", "echo three"})
 	elapsed := time.Since(started)
 	mu.Lock()
@@ -213,7 +213,7 @@ func TestSetupStepEventsNeverWaitOnPublishing(t *testing.T) {
 	if summary.Status != SetupSucceeded {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if elapsed > scriptStepFlushWait+2*time.Second {
+	if elapsed > time.Second+2*time.Second {
 		t.Fatalf("setup took %s with a stalled control plane", elapsed)
 	}
 	if stalledCalls != 1 {
@@ -244,7 +244,7 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 		sent = append(sent, event.Output)
 		return nil
 	}
-	publisher := newScriptStepPublisher(context.Background(), publish, time.Millisecond)
+	publisher := newScriptStepPublisher(context.Background(), publish, time.Millisecond, time.Second)
 	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1a"})
 	time.Sleep(20 * time.Millisecond)
 	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1b"})
@@ -255,7 +255,7 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 	close(gate)
 	time.Sleep(50 * time.Millisecond)
 	publisher.final(ScriptStepEvent{Step: 2, Output: "final-2"})
-	publisher.close(time.Second)
+	publisher.close()
 	mu.Lock()
 	got := strings.Join(sent, " ")
 	mu.Unlock()
@@ -268,12 +268,12 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 	refused := newScriptStepPublisher(context.Background(), func(context.Context, ScriptStepEvent) error {
 		calls++
 		return ErrScriptStepsUnsupported
-	}, time.Millisecond)
+	}, time.Millisecond, time.Second)
 	refused.update(ScriptStepEvent{Step: 1})
 	time.Sleep(20 * time.Millisecond)
 	refused.final(ScriptStepEvent{Step: 1})
 	refused.final(ScriptStepEvent{Step: 2, Status: ScriptStepSkipped})
-	refused.close(time.Second)
+	refused.close()
 	if calls != 1 {
 		t.Fatalf("calls after the control plane refused the event type = %d, want 1", calls)
 	}
@@ -433,5 +433,201 @@ func TestValidScriptStepEvent(t *testing.T) {
 		if ValidScriptStepEvent(event) {
 			t.Fatalf("%s: %+v accepted", name, event)
 		}
+	}
+}
+
+// A running step's unfinished last line is never published: a credential
+// printed part way is not yet whole for any pattern to recognize. The
+// finished step's last line is published with a credential's start masked.
+func TestScriptStepOutputHoldsBackAnUnfinishedLine(t *testing.T) {
+	t.Parallel()
+	redactor := newScriptRedactor([]string{"DB_PASSWORD=supersecret-value"}, nil)
+	for _, raw := range []string{
+		"DB_PASSWORD=supersecr",
+		"ghp_abcdefghijklmno",
+		"export TOKEN\nready\nDB_PASSWORD=supersecr",
+		"ready\nghp_abcdefghijklmno",
+	} {
+		live, _ := redactor.liveStepOutput(raw, false)
+		if strings.Contains(live, "supersecr") || strings.Contains(live, "ghp_") {
+			t.Fatalf("live output of %q = %q; the unfinished line leaked", raw, live)
+		}
+		if strings.Contains(raw, "ready\n") && !strings.Contains(live, "ready") {
+			t.Fatalf("live output of %q = %q; the finished lines are missing", raw, live)
+		}
+		final, _ := redactor.scriptStepOutput(raw, false)
+		if strings.Contains(final, "supersecr") || strings.Contains(final, "ghp_") || !strings.HasSuffix(final, "[REDACTED]") {
+			t.Fatalf("final output of %q = %q; the fragment must be masked", raw, final)
+		}
+	}
+	// A value's start printed on its own, with nothing naming it a secret.
+	if final, _ := redactor.scriptStepOutput("value: supersec", false); final != "value: [REDACTED]" {
+		t.Fatalf("final output = %q", final)
+	}
+	// Ordinary unfinished lines are kept whole.
+	for _, raw := range []string{"done", "50% complete", "risk-free"} {
+		if final, _ := redactor.scriptStepOutput(raw, false); final != raw {
+			t.Fatalf("final output of %q = %q", raw, final)
+		}
+	}
+}
+
+// End to end: a step that prints a credential part way and pauses never has
+// the part published live, and its final event masks what it printed.
+func TestSetupStepEventsNeverPublishAPartialSecret(t *testing.T) {
+	t.Setenv("DB_PASSWORD", "supersecret-value")
+	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond}, []string{
+		"echo started; printf 'DB_PASSWORD=supersecr'; sleep 0.3; printf 'et-value\\n'; echo done",
+		"echo started; printf 'ghp_abcdefghijklmno'; sleep 0.3",
+	})
+	sawStarted := false
+	for _, event := range events {
+		if strings.Contains(event.Output, "supersecr") || strings.Contains(event.Output, "ghp_") {
+			t.Fatalf("event %+v published a partial secret", event)
+		}
+		if event.Status == ScriptStepRunning && strings.Contains(event.Output, "started") {
+			sawStarted = true
+		}
+	}
+	if !sawStarted {
+		t.Fatalf("events %+v: the finished lines must still be published live", events)
+	}
+	last := finals(events)
+	if last[1].Output != "started\nDB_PASSWORD=[REDACTED]\ndone" || last[2].Output != "started\n[REDACTED]" {
+		t.Fatalf("final outputs = %q, %q", last[1].Output, last[2].Output)
+	}
+}
+
+// The redaction every Setup and Cleanup step gets, on the worker and the
+// control plane alike: secret-named pairs in every common form, token shapes,
+// and private key bodies, without masking values that are not secrets.
+func TestScriptRedactionPatterns(t *testing.T) {
+	t.Parallel()
+	privateKeyBody := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nVJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n"
+	cases := []struct {
+		name, text, want string
+	}{
+		{"env assignment", "DB_PASSWORD=hunter2", "DB_PASSWORD=[REDACTED]"},
+		{"export", "export MY_SERVICE_TOKEN='abc def'", "export MY_SERVICE_TOKEN=[REDACTED]"},
+		{"colon", "Api-Key: abc123", "Api-Key: [REDACTED]"},
+		{"yaml", "  client_secret: s3cr3t", "  client_secret: [REDACTED]"},
+		{"aws secret key", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", "AWS_SECRET_ACCESS_KEY=[REDACTED]"},
+		{"short pass", "MYSQL_PASS=pw", "MYSQL_PASS=[REDACTED]"},
+		{"auth", "NPM_AUTH=dXNlcjpwYXNz", "NPM_AUTH=[REDACTED]"},
+		{"credential", "GOOGLE_CREDENTIALS={x}", "GOOGLE_CREDENTIALS=[REDACTED]"},
+		{"private", "PRIVATE_THING=abc", "PRIVATE_THING=[REDACTED]"},
+		{"json", `{"user": "admin", "password": "hunter2"}`, `{"user": "admin", "password": [REDACTED]}`},
+		{"json escaped", `"{\"user\":\"admin\",\"password\":\"hunter2\"}"`, `"{\"user\":\"admin\",\"password\":\"[REDACTED]\"}"`},
+		{"secrets manager", `"SecretString": "{\"username\":\"admin\",\"password\":\"p4ss\"}",`, `"SecretString": [REDACTED],`},
+		{"secrets manager text", `{"username":"admin","password":"p4ss"}`, `{"username":"admin","password":[REDACTED]}`},
+		{"npm token", "npm_" + strings.Repeat("a1B2", 9), "[REDACTED]"},
+		{"google key", "key AIza" + strings.Repeat("Sy0_", 9), "key [REDACTED]"},
+		{"sendgrid", "SG." + strings.Repeat("ab_cd", 5) + "." + strings.Repeat("Ef-gh", 9), "[REDACTED]"},
+		{"slack bot", "xoxb-" + strings.Repeat("1234-", 3) + "abcdef", "[REDACTED]"},
+		{"slack user", "xoxp-" + strings.Repeat("1234-", 3) + "abcdef", "[REDACTED]"},
+		{"gitlab", "glpat-" + strings.Repeat("x1Y2", 6), "[REDACTED]"},
+		{"github oauth", "gho_" + strings.Repeat("a1B2", 9), "[REDACTED]"},
+		{"private key", "-----BEGIN RSA PRIVATE KEY-----\n" + privateKeyBody + "-----END RSA PRIVATE KEY-----\nnext", "[REDACTED]\nnext"},
+		{"private key end only", "...\n" + privateKeyBody + "-----END PRIVATE KEY-----\nnext", "...\n[REDACTED]\nnext"},
+		// Not secrets.
+		{"ssh agent socket", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1"},
+		{"key path", "KEY_PATH=/etc/ssl/key.pem", "KEY_PATH=/etc/ssl/key.pem"},
+		{"pass file", "PASS_FILE=/run/pass.txt", "PASS_FILE=/run/pass.txt"},
+		{"auth dir", "AUTH_DIR=/var/lib/auth", "AUTH_DIR=/var/lib/auth"},
+		{"auth url", "AUTH_URL=https://auth.example.com", "AUTH_URL=https://auth.example.com"},
+		{"git author", "GIT_AUTHOR_NAME=Jane", "GIT_AUTHOR_NAME=Jane"},
+		{"tests passed", "Tests passed: 42", "Tests passed: 42"},
+		{"plain", "HOME=/root ready", "HOME=/root ready"},
+	}
+	for _, test := range cases {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("%s: RedactScriptOutput(%q) = %q, want %q", test.name, test.text, got, test.want)
+		}
+	}
+}
+
+// The control plane applies the same redaction to a worker's step event and
+// to a Cleanup hook's output, which reach it without the sandbox's values.
+func TestControlPlaneRedactsLikeTheWorker(t *testing.T) {
+	t.Parallel()
+	text := `DB_PASSWORD=hunter2 {\"api_token\":\"abc\"} npm_` + strings.Repeat("a1B2", 9)
+	sanitized := SanitizeScriptStepEvent(ScriptStepEvent{Output: text, Command: "echo DB_PASSWORD=hunter2"})
+	if strings.Contains(sanitized.Output, "hunter2") || strings.Contains(sanitized.Output, `abc\"`) ||
+		strings.Contains(sanitized.Output, "a1B2") || strings.Contains(sanitized.Command, "hunter2") {
+		t.Fatalf("sanitized = %+v", sanitized)
+	}
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript([]string{`echo "DB_PASSWORD=hunter2"; echo '{"password": "x"}'`}, nonce), t.TempDir())
+	events := CleanupStepEvents(output, CleanupRun{RunID: "cleanup-1", Nonce: nonce, ExitCode: code, StartedAt: time.Now()})
+	if len(events) != 1 || events[0].Output != "DB_PASSWORD=[REDACTED]\n{\"password\": [REDACTED]}" {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
+// Live updates go every two seconds, and every five once a step has run two
+// minutes.
+func TestLiveUpdateInterval(t *testing.T) {
+	t.Parallel()
+	for elapsed, want := range map[time.Duration]time.Duration{
+		0: 2 * time.Second, 119 * time.Second: 2 * time.Second, 2 * time.Minute: 5 * time.Second, time.Hour: 5 * time.Second,
+	} {
+		if got := liveUpdateInterval(elapsed); got != want {
+			t.Fatalf("liveUpdateInterval(%s) = %s, want %s", elapsed, got, want)
+		}
+	}
+}
+
+// A worker that is stopping still reports how its steps ended: its queued
+// final events are sent on a context that is not cancelled with the worker's,
+// live updates are dropped, and close waits for the finals, but no longer
+// than the final wait.
+func TestScriptStepPublisherSendsFinalsAfterTheWorkerStops(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	var sent []string
+	publish := func(ctx context.Context, event ScriptStepEvent) error {
+		if event.Output == "live-1" {
+			<-gate
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, event.Output)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	publisher := newScriptStepPublisher(ctx, publish, time.Millisecond, 5*time.Second)
+	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1"})
+	time.Sleep(20 * time.Millisecond)
+	publisher.final(ScriptStepEvent{Step: 1, Output: "final-1"})
+	publisher.update(ScriptStepEvent{Step: 2, Output: "live-2"})
+	publisher.final(ScriptStepEvent{Step: 2, Output: "final-2"})
+	publisher.final(ScriptStepEvent{Step: 3, Status: ScriptStepSkipped, Output: "skipped-3"})
+	cancel()
+	close(gate)
+	publisher.close()
+	mu.Lock()
+	got := strings.Join(sent, " ")
+	mu.Unlock()
+	// live-1 was in flight on the worker's context and ended with it; live-2
+	// was dropped.
+	if got != "final-1 final-2 skipped-3" {
+		t.Fatalf("sent %q after the worker stopped; want every final event and no live update", got)
+	}
+
+	// A control plane that never answers holds close only for the final wait.
+	stuck := newScriptStepPublisher(context.Background(), func(ctx context.Context, _ ScriptStepEvent) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, time.Millisecond, 200*time.Millisecond)
+	stuck.final(ScriptStepEvent{Step: 1})
+	stuck.final(ScriptStepEvent{Step: 2})
+	started := time.Now()
+	stuck.close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("close waited %s for a control plane that never answers", elapsed)
 	}
 }

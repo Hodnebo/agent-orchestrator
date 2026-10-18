@@ -93,6 +93,57 @@ const (
 	AsRoot
 )
 
+// Stop says whether the hook command first stops the hook owner's processes.
+type Stop int
+
+const (
+	// KeepOwnerProcesses runs the hook beside whatever the owner runs
+	// (Coder: the login user may also run the Coder agent that carries the
+	// hook command, so nothing is stopped there).
+	KeepOwnerProcesses Stop = iota
+	// StopOwnerProcesses ends every process of the hook's owner (the AO
+	// worker, its agent and whatever they started) before the hook runs as
+	// a fresh process, so neither acts during Cleanup: a Freestyle VM
+	// resumed for its Cleanup resumes them too, and a Docker container runs
+	// them until it is removed. Each gets SIGTERM, up to OwnerStopWait to
+	// exit, then SIGKILL. PID 1 is spared: in a Docker container it is the
+	// worker itself, and ending it would stop the container and the Cleanup
+	// with it (with its agent gone and its session deleted it has nothing to
+	// act on); in a VM it is root's init. Containers the Cleanup stops are
+	// root's (dockerd), so they are untouched; a dev server the agent started
+	// is stopped, which is what a Cleanup that stops it wants.
+	StopOwnerProcesses
+)
+
+// OwnerStopWait is how long the owner's processes have to exit after SIGTERM.
+const OwnerStopWait = 5 * time.Second
+
+// stopOwnerScript defines ao_stop USER SIGNAL, which signals every process of
+// USER but PID 1 and this shell and reports whether any was signalled. It
+// reads /proc rather than using pkill, which slim images lack; signalling 0
+// only checks a process is still there.
+const stopOwnerScript = "ao_stop() {\n" +
+	"  ao_uid=$(id -u \"$1\" 2>/dev/null) || return 1\n" +
+	"  ao_found=1\n" +
+	"  for ao_pid in /proc/[0-9]*; do\n" +
+	"    ao_pid=${ao_pid#/proc/}\n" +
+	"    case \"$ao_pid\" in 1|\"$$\") continue ;; esac\n" +
+	"    [ \"$(stat -c %u \"/proc/$ao_pid\" 2>/dev/null)\" = \"$ao_uid\" ] || continue\n" +
+	"    kill -\"$2\" \"$ao_pid\" 2>/dev/null && ao_found=0\n" +
+	"  done\n" +
+	"  return $ao_found\n" +
+	"}\n"
+
+// Options says how Command reaches the hook's owner.
+type Options struct {
+	Runner Runner
+	Stop   Stop
+	// Owner, with AsRoot, is the account the hook runs as: the user the
+	// worker was provisioned to run as. Without it the hook's file owner is
+	// used (never root).
+	Owner string
+}
+
 // Command is the shell command that runs the worker-installed Cleanup hook
 // (hook is a shell word naming it) as the user that owns it, under timeout(1)
 // when the image has it, then prints the tail of its output and, after
@@ -100,15 +151,25 @@ const (
 // first replaces the commands script beside the hook with the project's
 // current Cleanup, as that user, so the hook keeps its working directory,
 // session environment and run-once lock; if that fails the installed
-// commands run.
-func Command(hook string, budget time.Duration, override string, runner Runner) string {
+// commands run. With StopOwnerProcesses it ends the owner's processes first.
+func Command(hook string, budget time.Duration, override string, options Options) string {
 	seconds := strconv.Itoa(max(1, int(budget/time.Second)))
 	command := "ao_hook=" + hook + "\n" +
 		"ao_skip() { printf '\\n%s:%s\\n' " + Marker + " " + Skipped + "; exit 0; }\n" +
 		"ao_owner=\n"
 	asOwner := `sudo -n -H -u "$ao_owner"`
-	switch runner {
-	case AsRoot:
+	switch {
+	case options.Runner == AsRoot && options.Owner != "":
+		// The hook runs as the account the worker was provisioned with,
+		// whoever owns the file: an agent that swaps the hook for a link to
+		// another account's program cannot borrow that account.
+		asOwner = `runuser -u "$ao_owner" --`
+		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ] && id -u " + shellQuote(options.Owner) + " >/dev/null 2>&1; then\n" +
+			"  ao_owner=" + shellQuote(options.Owner) + "\n" +
+			"  case \"$ao_owner\" in root|\"$(id -un)\") ao_skip ;; esac\n" +
+			"  set -- " + asOwner + " \"$ao_hook\"\n" +
+			"else ao_skip; fi\n"
+	case options.Runner == AsRoot:
 		asOwner = `runuser -u "$ao_owner" --`
 		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ]; then\n" +
 			"  ao_owner=$(stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip\n" +
@@ -136,6 +197,17 @@ func Command(hook string, budget time.Duration, override string, runner Runner) 
 			"else\n" +
 			"  printf %s \"$ao_payload\" | base64 -d | gzip -dc | sh -c " + write + " _ \"$ao_commands\"\n" +
 			"fi || echo \"AO: could not install the project's current Cleanup; running the commands from the session's start\" >&2\n"
+	}
+	if options.Stop == StopOwnerProcesses {
+		polls := strconv.Itoa(int(OwnerStopWait / (500 * time.Millisecond)))
+		command += stopOwnerScript +
+			// A hook the login user owns runs as that user (ao_owner unset).
+			"ao_who=${ao_owner:-$(id -un)}\n" +
+			"if ao_stop \"$ao_who\" TERM; then\n" +
+			"  ao_wait=0\n" +
+			"  while [ \"$ao_wait\" -lt " + polls + " ] && ao_stop \"$ao_who\" 0; do sleep 0.5; ao_wait=$((ao_wait + 1)); done\n" +
+			"  ao_stop \"$ao_who\" KILL\n" +
+			"fi\n"
 	}
 	return command +
 		"if command -v timeout >/dev/null 2>&1; then\n" +
@@ -195,6 +267,7 @@ func NewPlan(ctx context.Context, logArgs ...any) (Plan, bool) {
 		nonce := worker.NewScriptMarkerNonce()
 		if payload, fits := CommandsPayload(current, nonce); fits {
 			plan.Override, plan.Steps.Nonce, plan.Steps.Commands = payload, nonce, current
+			plan.Steps.RunID = worker.CleanupRunID(nonce)
 		} else {
 			slog.WarnContext(ctx, "the project's current Cleanup is too large to pass to the sandbox; running the commands from the session's start",
 				append(logArgs, "limit_bytes", PayloadLimit)...)
@@ -228,8 +301,11 @@ func ExitCode(status string) int {
 // after Marker, and err why no status arrived. It appends the run's step
 // events to the session (sandbox.RecordSessionEvent) and finishes the stage
 // with attrs: a failed run with its output excerpt and hint, a run with no
-// hook as skipped, and a run that never reported as an error. Nothing it
-// reports fails the deletion. name prefixes the stage's error.
+// hook as skipped, and a run that never reported as an error. A run that
+// never reported still appends its steps: those its partial output shows, or
+// else each current step as skipped with the provider's error
+// (ExecFailedReason), so the session shows why Cleanup did not run. Nothing
+// it reports fails the deletion. name prefixes the stage's error.
 func Report(
 	ctx context.Context,
 	finish func(error, map[string]string),
@@ -240,11 +316,22 @@ func Report(
 	name string,
 ) {
 	exitCode := ExitCode(status)
-	if err == nil && status != Skipped {
+	switch {
+	case err == nil && status != Skipped:
 		steps.ExitCode, steps.Duration = exitCode, time.Since(steps.StartedAt)
 		for _, event := range worker.CleanupStepEvents(printed, steps) {
 			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
 		}
+	case err != nil && strings.Contains(printed, "@@ao-step-"):
+		// The hook's output came back in part: its steps up to there.
+		steps.ExitCode, steps.Duration = -1, time.Since(steps.StartedAt)
+		for _, event := range worker.CleanupStepEvents(printed, steps) {
+			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
+		}
+	case err != nil:
+		// The provider could not run the hook: each step says why, so the
+		// session shows its Cleanup did not run.
+		recordSkippedSteps(ctx, steps, ExecFailedReason(err))
 	}
 	switch {
 	case err != nil:
@@ -278,6 +365,21 @@ func ReportNotRun(
 	reason string,
 	err error,
 ) {
+	recordSkippedSteps(ctx, steps, reason)
+	attrs["result"] = Skipped
+	finish(err, attrs)
+}
+
+// ExecFailedReason is what each step of a Cleanup the provider could not run
+// says: the provider's error, redacted and short.
+func ExecFailedReason(err error) string {
+	detail := strings.Join(strings.Fields(worker.RedactScriptOutput(err.Error())), " ")
+	return "AO could not run this Cleanup step in the sandbox before deleting it: " + activity.Truncate(detail, 300)
+}
+
+// recordSkippedSteps appends each of the run's current Cleanup steps as
+// skipped, with reason as its hint; nothing when the run does not carry them.
+func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason string) {
 	total := len(steps.Commands)
 	for index, stored := range steps.Commands {
 		repository, command, _ := domain.ParseRepoScriptCommand(stored)
@@ -286,14 +388,13 @@ func ReportNotRun(
 			Command: command, Repository: repository, Status: worker.ScriptStepSkipped, Hint: reason,
 		}))
 	}
-	attrs["result"] = Skipped
-	finish(err, attrs)
 }
 
-// boundedOutput is the hook's output for the stage: redacted, without
-// carriage returns or control characters, at most stageOutputLimit bytes.
+// boundedOutput is the hook's output for the stage: redacted as its step
+// events are (worker.RedactScriptOutput), without carriage returns or control
+// characters, at most stageOutputLimit bytes.
 func boundedOutput(output string) string {
-	output = activity.Redact(strings.ReplaceAll(output, "\r", ""))
+	output = worker.RedactScriptOutput(strings.ReplaceAll(output, "\r", ""))
 	output = strings.Map(func(character rune) rune {
 		if character == '\n' || character == '\t' || character >= ' ' {
 			return character
@@ -322,9 +423,41 @@ type Run struct {
 // other sandbox in the pass for up to Budget; a later tick's Delete waits for
 // the same run. The hook itself runs the commands at most once per sandbox,
 // so a run another replica starts only waits for and reports the first one.
+//
+// At most MaxRuns runs go at once for the provider, and MaxOrgRuns for one
+// organization; the rest wait for a slot, up to QueueWait, and are then
+// reported as not run, so a burst of deletions cannot flood the provider (or
+// one organization take every slot) and a deletion is never held for long.
 type Tracker struct {
 	runs sync.Map // key -> *Run
+
+	// MaxRuns, MaxOrgRuns and QueueWait override DefaultMaxRuns,
+	// DefaultMaxOrgRuns and DefaultQueueWait when positive (tests).
+	MaxRuns    int
+	MaxOrgRuns int
+	QueueWait  time.Duration
+
+	mu      sync.Mutex
+	running int
+	byOrg   map[string]int
+	freed   chan struct{} // closed and replaced when a slot frees
 }
+
+const (
+	// DefaultMaxRuns bounds one provider's concurrent Cleanup runs in a
+	// control-plane process.
+	DefaultMaxRuns = 4
+	// DefaultMaxOrgRuns bounds one organization's.
+	DefaultMaxOrgRuns = 2
+	// DefaultQueueWait is how long a run waits for a slot. With a run's own
+	// limit (up to Budget, Margin and a resume) and StaleAfter it keeps a
+	// deletion within the reconciler's deletion deadline (15 minutes).
+	DefaultQueueWait = 2 * time.Minute
+)
+
+// QueueFullReason is what a Cleanup that waited too long for a slot reports
+// on each of its steps.
+const QueueFullReason = "AO was running too many Cleanups at once, so this Cleanup step did not run before the sandbox was deleted."
 
 // Lookup returns the run recorded for key.
 func (t *Tracker) Lookup(key string) (*Run, bool) {
@@ -335,20 +468,94 @@ func (t *Tracker) Lookup(key string) (*Run, bool) {
 	return run.(*Run), true
 }
 
-// Start runs fn in the background as key's run, which Delete waits for up to
-// limit (plus StaleAfter), unless a run is already recorded for key; it
-// returns the run recorded for key.
-func (t *Tracker) Start(key string, limit time.Duration, fn func()) *Run {
-	run := &Run{done: make(chan struct{}), started: time.Now(), limit: limit}
+// Start runs fn in the background as key's run, once a slot is free for the
+// provider and orgID ("" counts only against the provider), unless a run is
+// already recorded for key; it returns the run recorded for key. A run that
+// waits QueueWait without a slot calls skip with QueueFullReason instead.
+// Delete waits for the run up to the queue wait, limit and StaleAfter.
+func (t *Tracker) Start(key, orgID string, limit time.Duration, fn func(), skip func(reason string)) *Run {
+	queueWait := t.QueueWait
+	if queueWait <= 0 {
+		queueWait = DefaultQueueWait
+	}
+	run := &Run{done: make(chan struct{}), started: time.Now(), limit: queueWait + limit}
 	if existing, loaded := t.runs.LoadOrStore(key, run); loaded {
 		return existing.(*Run)
 	}
 	t.prune()
 	go func() {
 		defer close(run.done)
+		if !t.acquire(orgID, queueWait) {
+			slog.Warn("project cleanup waited too long for a slot; deleting the sandbox without it",
+				"key", key, "org_id", orgID, "queue_wait", queueWait)
+			skip(QueueFullReason)
+			return
+		}
+		defer t.release(orgID)
 		fn()
 	}()
 	return run
+}
+
+// acquire takes a provider slot and one of orgID's, waiting up to wait.
+func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
+	maxRuns, maxOrgRuns := t.MaxRuns, t.MaxOrgRuns
+	if maxRuns <= 0 {
+		maxRuns = DefaultMaxRuns
+	}
+	if maxOrgRuns <= 0 {
+		maxOrgRuns = DefaultMaxOrgRuns
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		t.mu.Lock()
+		if t.byOrg == nil {
+			t.byOrg = map[string]int{}
+		}
+		if t.freed == nil {
+			t.freed = make(chan struct{})
+		}
+		if t.running < maxRuns && (orgID == "" || t.byOrg[orgID] < maxOrgRuns) {
+			t.running++
+			if orgID != "" {
+				t.byOrg[orgID]++
+			}
+			t.mu.Unlock()
+			return true
+		}
+		freed := t.freed
+		t.mu.Unlock()
+		select {
+		case <-freed:
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func (t *Tracker) release(orgID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.running--
+	if orgID != "" {
+		if t.byOrg[orgID]--; t.byOrg[orgID] <= 0 {
+			delete(t.byOrg, orgID)
+		}
+	}
+	if t.freed != nil {
+		close(t.freed)
+	}
+	t.freed = make(chan struct{})
+}
+
+// Skipper returns a Start skip function that reports the run as not run
+// (ReportNotRun) under ctx's stage observer and session event recorder.
+func Skipper(ctx context.Context, attrs map[string]string, steps worker.CleanupRun) func(reason string) {
+	return func(reason string) {
+		ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), attrs, steps, reason,
+			fmt.Errorf("project cleanup did not run: %s", reason))
+	}
 }
 
 func (t *Tracker) prune() {
