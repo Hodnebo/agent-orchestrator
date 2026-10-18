@@ -425,9 +425,13 @@ func (c *Controller) owner() domain.ConversationOwner {
 // Send start a second root turn on the same native conversation.
 func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) string {
 	var latest *domain.ConversationTurn
+	scope, scoped := c.conv.(ports.ChatLiveTurnScope)
 	for i := range turns {
 		turn := &turns[i]
 		if turn.State != domain.TurnStateRunning || turn.ProviderTurnID == "" || turn.RolledBackAt != nil {
+			continue
+		}
+		if scoped && scope.IsChildProviderTurn(turn.ProviderTurnID) {
 			continue
 		}
 		if latest == nil || turn.RequestedAt.After(latest.RequestedAt) {
@@ -2846,12 +2850,16 @@ func (c *Controller) project() {
 		// A terminal receipt compacts the entire prompt, so it cannot pass a
 		// failed earlier projection. Retry transient store errors in order; if
 		// still failing, detach and leave the journal for a replacement controller.
-		for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
+		for attempt := 0; err != nil && persistent && !errors.Is(err, domain.ErrChatControllerFenced) && attempt < 3; attempt++ {
 			time.Sleep(20 * time.Millisecond)
 			projected, primaryTurn, err = c.projectEvent(ctx, event)
 		}
-		if err == nil && persistent && event.ProviderEventID != "" {
-			err = acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID)
+		receiptID := event.ProviderReceiptID
+		if receiptID == "" {
+			receiptID = event.ProviderEventID
+		}
+		if err == nil && persistent && receiptID != "" {
+			err = acknowledger.AcknowledgeProviderEvent(ctx, receiptID)
 		}
 		if err != nil && persistent {
 			c.log.Error("persistent chat projection stopped; provider retained for replay",
@@ -2930,6 +2938,7 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	record := map[string]any{
 		"kind":                   event.Kind,
 		"providerEventId":        event.ProviderEventID,
+		"providerReceiptId":      event.ProviderReceiptID,
 		"providerTurnId":         event.ProviderTurnID,
 		"providerConversationId": event.ProviderConversationID,
 		"providerItemId":         event.ProviderItemID,
@@ -3044,6 +3053,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
 
 	switch event.Kind {
+	case ports.ChatEventDeliveryReceipt:
+		return nil
+
 	case ports.ChatEventTurnStarted:
 		c.mu.Lock()
 		dispatchingTurnID := c.dispatchingTurnID

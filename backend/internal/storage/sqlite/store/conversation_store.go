@@ -2910,7 +2910,8 @@ func (s *Store) FailPendingInputs(ctx context.Context, conversationID string, no
 
 // ProjectProviderEvent commits a raw provider event and the durable projection
 // derived from it together. A real provider event identity deduplicates the
-// entire unit; an empty identity is deliberately never deduplicated.
+// entire unit; an empty identity is deliberately never deduplicated. A replaced
+// controller returns ErrChatControllerFenced, distinct from a committed duplicate.
 func (s *Store) ProjectProviderEvent(
 	ctx context.Context,
 	conversationID string,
@@ -2986,7 +2987,7 @@ func projectProviderEventTx(
 			return false, fmt.Errorf("read reviewer controller generation for %s: %w", reviewID, err)
 		}
 		if owner.ControllerGeneration != generation || owner.InterfaceMode != "chat" || owner.SessionID != session {
-			return false, nil
+			return false, domain.ErrChatControllerFenced
 		}
 	} else {
 		owner, err := q.GetSession(ctx, session)
@@ -2994,7 +2995,7 @@ func projectProviderEventTx(
 			return false, fmt.Errorf("read controller generation for %s: %w", session, err)
 		}
 		if owner.ControllerGeneration != generation {
-			return false, nil
+			return false, domain.ErrChatControllerFenced
 		}
 	}
 	inserted, err := q.InsertConversationProviderEvent(ctx, gen.InsertConversationProviderEventParams{

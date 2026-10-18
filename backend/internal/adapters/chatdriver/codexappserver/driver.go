@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,8 +57,10 @@ type process struct {
 	// reconnected means the provider process and initialized protocol connection
 	// survived a prior daemon. The replacement must not initialize/resume it a
 	// second time.
-	reconnected   bool
-	nextRequestID int64
+	reconnected    bool
+	reliableReplay bool
+	liveState      *persistenthost.CodexState
+	nextRequestID  int64
 	// stop releases the process. It must be safe to call more than once.
 	stop func() error
 	// terminate destroys a persistent host for explicit session shutdown.
@@ -531,7 +534,11 @@ func (d *Driver) connectSession(
 		Workdir:       workdir,
 		Env:           envSlice(env),
 		Argv:          []string{bin, "app-server"},
+		Protocol:      persistenthost.ProtocolCodex,
 	}
+	// Ownership survives app upgrades and mutable model/permission choices.
+	owner, _ := json.Marshal([]string{filepath.Clean(workdir), string(domain.HarnessCodex), providerScopeID})
+	hostConfig.OwnershipFingerprint = fmt.Sprintf("%x", sha256.Sum256(owner))
 	if prepareEnv != nil {
 		hostConfig.Prepare = func(prepareCtx context.Context) (persistenthost.PreparedProvider, error) {
 			preparedEnv, prepareErr := prepareEnv(prepareCtx)
@@ -557,11 +564,13 @@ func (d *Driver) connectSession(
 		return nil, false, fmt.Errorf("%w: persistent host: %w", ports.ErrChatDriverUnavailable, err)
 	}
 	proc := &process{
-		stdin:         transport.Stdin,
-		stdout:        transport.Stdout,
-		reconnected:   transport.Reconnected,
-		nextRequestID: transport.NextRequestID,
-		stop:          transport.Stdin.Close,
+		stdin:          transport.Stdin,
+		stdout:         transport.Stdout,
+		reconnected:    transport.Reconnected,
+		reliableReplay: transport.CodexReplay,
+		liveState:      transport.CodexState,
+		nextRequestID:  transport.NextRequestID,
+		stop:           transport.Stdin.Close,
 		terminate: func() error {
 			_ = transport.Stdin.Close()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -572,6 +581,14 @@ func (d *Driver) connectSession(
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
 		return conv, true, nil
+	}
+	if transport.CodexReplay {
+		// There is no old controller to restore on a fresh host. Open delivery
+		// before initialize, whose notifications may precede its response.
+		if err := conv.conn.notify(persistenthost.CodexReplayMethod, nil); err != nil {
+			_ = conv.Terminate()
+			return nil, false, fmt.Errorf("open persistent Codex delivery: %w", err)
+		}
 	}
 	if err := d.initialize(ctx, conv); err != nil {
 		_ = conv.Terminate()

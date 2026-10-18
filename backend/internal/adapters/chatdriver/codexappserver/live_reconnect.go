@@ -5,20 +5,77 @@ import (
 	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
+var _ ports.ChatLiveTurnScope = (*conversation)(nil)
 
 type liveTurnRecovery struct {
 	turnID string
 	events []ports.ChatEvent
 }
 
+// IsChildProviderTurn excludes only a proven child from the root busy gate.
+// A bound root's turn/start response can precede its first notification, so an
+// unknown native identity must preserve AO's durable busy state.
+func (c *conversation) IsChildProviderTurn(providerTurnID string) bool {
+	if !c.proc.reliableReplay {
+		return false
+	}
+	state := c.proc.liveState
+	nativeTurnID := c.nativeID(providerTurnID)
+	if state == nil || c.threadID == "" || nativeTurnID == "" {
+		return false
+	}
+	if state.ActiveTurns[c.threadID] == nativeTurnID {
+		return false
+	}
+	for _, retained := range state.RetainedTurns[c.threadID] {
+		if retained == nativeTurnID {
+			return false
+		}
+	}
+	for thread, active := range state.ActiveTurns {
+		if thread != c.threadID && active == nativeTurnID {
+			return true
+		}
+	}
+	for thread, turns := range state.RetainedTurns {
+		if thread != c.threadID {
+			for _, retained := range turns {
+				if retained == nativeTurnID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // ActivateLiveReconnect repairs a terminal notification delivered to the old
 // daemon's socket but lost before its projection committed. Active or unknown
 // native work remains owned by the restored busy controller.
 func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID string, reconcile func([]ports.ChatEvent) []ports.ChatEvent) error {
+	if c.proc.reliableReplay {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		nativePending := c.nativeID(providerTurnID)
+		if c.proc.liveState != nil {
+			active := c.proc.liveState.ActiveTurns[c.threadID]
+			if active != "" && active != nativePending {
+				return fmt.Errorf("%w: persistent Codex has active turn %q, AO owns %q", ports.ErrChatRecoveryInconclusive, active, nativePending)
+			}
+		}
+		c.mu.Lock()
+		c.activeTurn = nativePending
+		c.mu.Unlock()
+		// Host replay is admitted only after the service restored durable turn
+		// ownership. Opening its writer returns before a large replay projects.
+		return c.conn.notify(persistenthost.CodexReplayMethod, nil)
+	}
 	if !c.ReconnectedLive() || providerTurnID == "" {
 		return nil
 	}

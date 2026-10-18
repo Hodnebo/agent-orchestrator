@@ -927,6 +927,9 @@ type ChatEventKind string
 const (
 	ChatEventTurnStarted   ChatEventKind = "turn.started"
 	ChatEventTurnCompleted ChatEventKind = "turn.completed"
+	// ChatEventDeliveryReceipt checkpoints a provider frame that produced no
+	// timeline events. It participates in ordered persistence before receipt ACK.
+	ChatEventDeliveryReceipt ChatEventKind = "delivery.receipt"
 	// ChatEventUserMessageCompleted is a settled user message recovered from the
 	// provider's native history. Live sends are already durable before dispatch and
 	// therefore never emit this event; history readers use it to reconstruct turns
@@ -1058,6 +1061,9 @@ type ChatEvent struct {
 	// provider supplies one. It is deliberately distinct from ProviderItemID:
 	// start, delta and completion events commonly share one item id.
 	ProviderEventID string
+	// ProviderReceiptID identifies the source frame to acknowledge after this
+	// event commits. A frame that produces several events sets it only on the last.
+	ProviderReceiptID string
 
 	// ProviderTurnID is set on every event that belongs to a turn.
 	ProviderTurnID string
@@ -1207,6 +1213,12 @@ type ChatProviderHibernator interface {
 // process, as distinct from native resume in a replacement process.
 type ChatLiveReconnector interface {
 	ReconnectedLive() bool
+}
+
+// ChatLiveTurnScope identifies proven child turns on a surviving connection.
+// Unknown turns retain ownership until the provider supplies stronger evidence.
+type ChatLiveTurnScope interface {
+	IsChildProviderTurn(providerTurnID string) bool
 }
 
 // ChatLiveReconnectActivator releases provider replay only after the service
