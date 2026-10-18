@@ -29,6 +29,7 @@ import (
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -160,7 +161,14 @@ func Run() error {
 		log.Warn("install using-ao skill", "err", err)
 	}
 
-	telemetrySink := newTelemetrySink(cfg, store, log)
+	// The app owns the user's "Share error events" choice and writes it to the
+	// policy file; the daemon's events and Sentry capture both follow it.
+	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
+	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
+	sentryobs.SetPolicyEnabled(eventsAllowed)
+	telemetryCfg := cfg
+	telemetryCfg.Telemetry.Events = eventsAllowed
+	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -189,6 +197,7 @@ func Run() error {
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go telemetryPolicy.Watch(ctx, time.Second, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit, eventsAllowed, sentryobs.SetPolicyEnabled)
 	cdcPipe, err := startCDC(ctx, store, log)
 	if err != nil {
 		return err
