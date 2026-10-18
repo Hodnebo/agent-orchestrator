@@ -1031,6 +1031,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		[queryClient, sessionId, stateSessionId],
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
+	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
+	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) ? send.error : undefined;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
 	const retryTargetsCurrentSession = retryTurn.variables?.targetSessionId === sessionId;
 	const editTargetsCurrentSession = editMessage.variables?.targetSessionId === sessionId;
@@ -1219,12 +1221,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			resolveInput.isPending ||
 			(interrupt.isPending && interruptTargetsCurrentSession),
 		error:
-			(sendTargetsCurrentSession && send.error) ||
+			sendError ||
 			resolve.error ||
 			(interruptTargetsCurrentSession && interrupt.error) ||
 			chooseSettings.error
 				? apiErrorMessage(
-							(sendTargetsCurrentSession ? send.error : undefined) ??
+							sendError ??
 							resolve.error ??
 							(interruptTargetsCurrentSession ? interrupt.error : undefined) ??
 							chooseSettings.error,

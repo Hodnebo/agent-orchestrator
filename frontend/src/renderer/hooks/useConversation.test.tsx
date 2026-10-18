@@ -868,6 +868,8 @@ describe("conversation branching commands", () => {
 			await expect(result.current.send({ text: "again", clientMessageId: "m2", providerSwitch })).rejects
 				.toBeInstanceOf(ProviderSwitchFailed);
 		});
+		// The switch notice reports it; the composer does not show it twice.
+		expect(result.current.error).toBeUndefined();
 		// Switched, then the send failed: an ordinary send failure.
 		await act(async () => {
 			const failure = await result.current.send({ text: "later", clientMessageId: "m3", providerSwitch }).catch((error) => error);
