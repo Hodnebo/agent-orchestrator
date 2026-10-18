@@ -146,7 +146,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // session. Shape:
 //
 //	claude [--session-id <uuid>] \
-//	       [--permission-mode <mode>] \
+//	       [--permission-mode <mode> --settings <defaultMode: mode>] \
 //	       [--append-system-prompt-file <path> | --append-system-prompt <text>] \
 //	       [-- <prompt>]
 //
@@ -159,7 +159,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 //
 // <mode> is acceptEdits, auto, or bypassPermissions. AO's "default"
 // mode emits no --permission-mode flag, so Claude's TUI resolves the starting
-// mode from ~/.claude/settings.json exactly as a normal launch.
+// mode from ~/.claude/settings.json exactly as a normal launch. An explicit
+// mode is repeated as the flag-settings defaultMode only to keep Claude's
+// auto-mode default dialog out of the session (see autoDefaultNudgeGuardArgs).
 //
 // The prompt is passed after `--` so a prompt beginning with "-" is not
 // mistaken for a flag.
@@ -199,6 +201,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Permission:       agentruntime.PermissionPolicy(permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
+		ProviderArgs:     autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(permissions)),
 	})
 }
 
@@ -232,7 +235,10 @@ func (p *Plugin) freshLaunchNativeSessionID(ctx context.Context, cfg ports.Launc
 // An AO worktree is derived from the repo the user is already running
 // AO in, so it is inherently trusted. PreLaunch records that trust in
 // ~/.claude.json before launch, additively and atomically, so it cannot
-// clobber a concurrently-running Claude instance's config.
+// clobber a concurrently-running Claude instance's config. For a launch in
+// AO's default permission mode it also marks the auto-mode default dialog seen
+// there, only when the user's settings would make Claude offer it (see
+// autoDefaultNudgeGuardArgs); explicit modes are covered per session instead.
 func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -244,7 +250,66 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err != nil {
 		return err
 	}
-	return ensureWorkspaceTrusted(cfgPath, cfg.WorkspacePath)
+	permissions := cfg.Permissions
+	if permissions == "" {
+		permissions = cfg.Config.Permissions
+	}
+	markNudgeSeen := len(autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(permissions))) == 0 &&
+		userSettingsOfferAutoDefaultNudge(filepath.Join(claudeConfigDir(), "settings.json"))
+	return ensureClaudeLaunchConfigForOS(cfgPath, cfg.WorkspacePath, markNudgeSeen, runtime.GOOS)
+}
+
+// Claude Code (verified in 2.1.287 through 2.1.302; the gate that enables it
+// defaults on from about 2.1.285) shows a one-time "Make auto mode your default
+// permission mode?" dialog once the session is idle, when the global config has
+// completed onboarding without hasSeenAutoDefaultNudge, user settings set a
+// permissions.defaultMode other than "auto", and no project, local, flag, or
+// policy settings set a defaultMode. The dialog takes the keyboard: text AO
+// pastes into the pane is swallowed and its Enter picks the focused "Yes",
+// which switches the running session to auto mode and rewrites the user's
+// settings.json defaultMode to "auto".
+//
+// autoDefaultNudgeGuardArgs suppresses it per session for an explicit AO
+// permission mode by also passing that mode as the flag-settings defaultMode.
+// The --permission-mode flag still decides the starting mode (it outranks every
+// settings defaultMode), so the session's mode and the user's files are
+// unchanged. AO's default mode passes no flag and returns nil here: mirroring
+// the user's defaultMode would change the mode whenever the project environment
+// points Claude at another CLAUDE_CONFIG_DIR, so PreLaunch marks the dialog
+// seen in the global config instead.
+func autoDefaultNudgeGuardArgs(policy agentruntime.PermissionPolicy) []string {
+	flag := agentruntime.ClaudePermissionArgs(policy)
+	if len(flag) != 2 {
+		return nil
+	}
+	settings, err := json.Marshal(map[string]any{
+		"permissions": map[string]any{"defaultMode": flag[1]},
+	})
+	if err != nil {
+		return nil
+	}
+	return []string{"--settings", string(settings)}
+}
+
+// userSettingsOfferAutoDefaultNudge reports whether the user's own Claude
+// settings carry the defaultMode that makes Claude offer the auto-mode default
+// dialog. Unreadable or unparsable settings report false: AO then leaves the
+// global config alone.
+func userSettingsOfferAutoDefaultNudge(settingsPath string) bool {
+	data, err := os.ReadFile(settingsPath) //nolint:gosec // the user's own Claude settings path
+	if err != nil {
+		return false
+	}
+	var settings struct {
+		Permissions struct {
+			DefaultMode string `json:"defaultMode"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return false
+	}
+	mode := strings.TrimSpace(settings.Permissions.DefaultMode)
+	return mode != "" && mode != "auto"
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing Claude Code
@@ -286,6 +351,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
 		AllowedTools:     cfg.AllowedTools,
 		DisallowedTools:  cfg.DisallowedTools,
+		ProviderArgs:     autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(cfg.Permissions)),
 	})
 }
 
@@ -501,6 +567,15 @@ func ensureWorkspaceTrusted(configPath, workspacePath string) error {
 }
 
 func ensureWorkspaceTrustedForOS(configPath, workspacePath, goos string) error {
+	return ensureClaudeLaunchConfigForOS(configPath, workspacePath, false, goos)
+}
+
+// ensureClaudeLaunchConfigForOS records workspace trust and, when
+// markAutoDefaultNudgeSeen is set, hasSeenAutoDefaultNudge (see
+// autoDefaultNudgeGuardArgs) in one additive, atomic config write. The nudge
+// flag only records that the dialog was dealt with; it never touches the
+// user's permission mode.
+func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDefaultNudgeSeen bool, goos string) error {
 	claudeTrustMu.Lock()
 	defer claudeTrustMu.Unlock()
 	if goos == "windows" {
@@ -540,11 +615,19 @@ func ensureWorkspaceTrustedForOS(configPath, workspacePath, goos string) error {
 		projects[workspacePath] = entry
 	}
 
-	if trusted, ok := entry["hasTrustDialogAccepted"].(bool); ok && trusted {
-		// Already trusted — no write needed, so no race window at all.
+	changed := false
+	if trusted, ok := entry["hasTrustDialogAccepted"].(bool); !ok || !trusted {
+		entry["hasTrustDialogAccepted"] = true
+		changed = true
+	}
+	if seen, _ := root["hasSeenAutoDefaultNudge"].(bool); markAutoDefaultNudgeSeen && !seen {
+		root["hasSeenAutoDefaultNudge"] = true
+		changed = true
+	}
+	if !changed {
+		// Already prepared — no write needed, so no race window at all.
 		return nil
 	}
-	entry["hasTrustDialogAccepted"] = true
 
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
