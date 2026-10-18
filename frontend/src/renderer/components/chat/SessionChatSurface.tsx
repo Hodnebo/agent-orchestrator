@@ -43,7 +43,7 @@ import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
-import { ComposerErrorNotice, PendingAgentSwitchNotice, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { ComposerErrorNotice, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { apiErrorMessage } from "../../lib/api-client";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -226,7 +226,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// next message, so the handoff note is written when it is needed.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
-	const [switchSending, setSwitchSending] = useState(false);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -634,6 +633,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// variant model id already carries its effort.
 					const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
 					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow };
+					// The transcript draws the "Switched" line from this while the daemon works.
+					const switchDisplay = currentHarness
+						? { sourceHarness: currentHarness, sourceModel: snapshot?.settings?.model, targetModel: model, targetEffort: effort }
+						: undefined;
 					// Nothing was sent if the switch fails, so the draft must stay editable
 					// instead of being held as a delivery that might have gone through.
 					const switchFailed = (error: unknown) => Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
@@ -645,7 +648,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					if (attachments?.length) {
 						// Attachments upload on their own route, so this send follows the switch.
 						// The message shows at once; the switch can take seconds.
-						if (clientMessageId) commands.echoBeforeSend({ clientMessageId, text, excerpts });
+						if (clientMessageId) {
+							commands.echoBeforeSend(
+								{ clientMessageId, text, excerpts },
+								switchDisplay ? { targetHarness, display: switchDisplay } : undefined,
+							);
+						}
 						await providerSwitch.mutateAsync(switchRequest).catch((error) => {
 							if (clientMessageId) commands.dropEcho(clientMessageId);
 							throw switchFailed(error);
@@ -655,9 +663,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					}
 					// The daemon switches and sends in one request; the message shows at once.
 					setSendSwitchError(undefined);
-					setSwitchSending(true);
 					try {
-						const sent = await commands.send({ ...message, providerSwitch: switchRequest });
+						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
 						return sent;
 					} catch (error) {
@@ -669,8 +676,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						// retries the message as an ordinary send.
 						switched();
 						throw error;
-					} finally {
-						setSwitchSending(false);
 					}
 				}}
 				commandError={commands.error}
@@ -684,12 +689,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							providerSwitch.reset();
 							setSendSwitchError(undefined);
 						}}
-					/>
-				) : pendingSwitch ? (
-					<PendingAgentSwitchNotice
-						pending={pendingSwitch}
-						switching={providerSwitch.isPending || switchSending}
-						onCancel={() => setChosenSwitch(undefined)}
 					/>
 				) : undefined)}
 				onDecide={commands.resolve}

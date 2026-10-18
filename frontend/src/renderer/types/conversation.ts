@@ -451,6 +451,8 @@ export interface SystemEventDetail {
 	targetEffort?: string;
 	/** The Claude Code compaction window the target started with, such as "200k". */
 	targetAutoCompactWindow?: string;
+	/** provider_switch: drawn before the daemon has switched, so the line shows it is still in progress. Never stored. */
+	switching?: boolean;
 	/** render */
 	render?: RenderRef;
 	/** artifact */

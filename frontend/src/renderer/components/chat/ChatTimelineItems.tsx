@@ -27,7 +27,6 @@ import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
-	ArrowLeftRight,
 	ArrowRight,
 	Brain,
 	ChevronDown,
@@ -372,21 +371,49 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
 	const detail = activity.detail;
-	const label = detail?.sourceHarness && detail.targetHarness
-		? t("agentSwitch.switchedFromTo", { from: agentLabel(detail.sourceHarness), to: agentLabel(detail.targetHarness) })
-		: t("agentSwitch.switched");
+	const switching = Boolean(detail?.switching);
+	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
+	// A row that first appears already switched and only seconds old is the switch the
+	// user just made, so it opens from closed; older ones, as in a reloaded history, start open.
+	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
+	useEffect(() => {
+		if (switching || open) return;
+		let inner = 0;
+		const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setOpen(true)); });
+		return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+	}, [switching, open]);
+	const revealed = !switching && open;
+	const label = switching
+		? t("agentSwitch.switching")
+		: named
+			? t("agentSwitch.switchedFromTo", { from: agentLabel(detail?.sourceHarness ?? ""), to: agentLabel(detail?.targetHarness ?? "") })
+			: t("agentSwitch.switched");
 	return (
-		<div role="separator" aria-label={label} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+		<div role="separator" aria-label={label} aria-busy={switching || undefined} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
 			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
-			<ArrowLeftRight aria-hidden="true" className="size-3 shrink-0" />
-			<span className="shrink-0">{t("agentSwitch.switched")}</span>
-			{detail?.sourceHarness && detail.targetHarness ? (
-				<>
-					<HandoffSide harness={detail.sourceHarness} model={detail.sourceModel} />
-					<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
-					<HandoffSide harness={detail.targetHarness} model={detail.targetModel} effort={detail.targetEffort} compactWindow={detail.targetAutoCompactWindow} bright />
-				</>
-			) : null}
+			<div className="flex min-w-0 items-center">
+				<span className={cn("inline-block shrink-0", switching ? "chat-working-shimmer" : undefined)}>
+					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
+				</span>
+				{named ? (
+					// Closed while the switch runs, then its width grows from 0 to its own. Nothing
+					// else animates. A marker that mounts already switched starts open.
+					<div
+						className={cn(
+							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
+							revealed ? "grid-cols-[1fr]" : "grid-cols-[0fr]",
+						)}
+					>
+						<div className="min-w-0 overflow-hidden">
+							<span className="flex w-max shrink-0 items-center gap-3 whitespace-nowrap pl-3">
+								<HandoffSide harness={detail?.sourceHarness ?? ""} model={detail?.sourceModel} />
+								<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+								<HandoffSide harness={detail?.targetHarness ?? ""} model={detail?.targetModel} effort={detail?.targetEffort} compactWindow={detail?.targetAutoCompactWindow} bright />
+							</span>
+						</div>
+					</div>
+				) : null}
+			</div>
 			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
 		</div>
 	);
