@@ -4093,13 +4093,19 @@ components:
       type: object
       additionalProperties: false
       required: [type, payload]
-      description: A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself.
+      description: A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's.
       properties:
         type:
           type: string
           const: workspace.script.step
         payload:
-          $ref: "#/components/schemas/ScriptStepPayload"
+          allOf:
+            - $ref: "#/components/schemas/ScriptStepPayload"
+            - type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [setup]
     WorkerWorkspaceStartupPayload:
       type: object
       additionalProperties: false

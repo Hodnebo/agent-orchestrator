@@ -2269,14 +2269,17 @@ export interface components {
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
         };
-        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself. */
+        /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
         WorkerScriptStepEventInput: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             type: "workspace.script.step";
-            payload: components["schemas"]["ScriptStepPayload"];
+            payload: components["schemas"]["ScriptStepPayload"] & {
+                /** @enum {string} */
+                phase?: "setup";
+            };
         };
         /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
         WorkerWorkspaceStartupPayload: {
