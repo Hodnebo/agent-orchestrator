@@ -124,6 +124,7 @@
 	"agentSwitch.switched": "Gewechselt",
 	"agentSwitch.switching": "Wechsle",
 	"agentSwitch.switchedFromTo": "Von {{from}} zu {{to}} gewechselt",
+	"agentSwitch.modelsUnavailable": "Modelle von {{agent}} konnten nicht geladen werden: {{error}}",
 	"session.statusChecking": "Wird geprüft…",
 	"session.statusUnavailable": "Status nicht überprüfbar",
 	"artifactLink.unavailable": "Artefakt nicht verfügbar",

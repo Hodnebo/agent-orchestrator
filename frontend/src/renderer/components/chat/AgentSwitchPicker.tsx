@@ -259,6 +259,11 @@ export function AgentModelPicker({
 	const shownHarness = pending?.harness ?? currentHarness;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
+	// A catalog that could not be read says why, instead of an empty model list.
+	const shownCatalog = useQuery({ ...agentModelsQueryOptions(shownHarness, projectId, hostId), enabled: open && settable }).data;
+	const modelsProblem = !settable || source.models.some((model) => model.id)
+		? undefined
+		: catalogProblem(shownCatalog);
 	const shownModel = pending ? pending.modelLabel ?? agentLabel(pending.harness) : currentSource.modelLabel;
 	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort;
 	const shownEffort = pending
@@ -417,6 +422,14 @@ export function AgentModelPicker({
 										</OptionMenuSubContent>
 									</OptionMenuSub>
 								) : null}
+								{modelsProblem ? (
+									<OptionMenuItem disabled className="items-start gap-2 text-xs text-muted-foreground">
+										<TriangleAlert aria-hidden="true" className="mt-0.5 size-3 shrink-0 text-destructive" />
+										<span className="min-w-0 max-w-72 whitespace-normal break-words">
+											{t("agentSwitch.modelsUnavailable", { agent: agentLabel(shownHarness), error: modelsProblem })}
+										</span>
+									</OptionMenuItem>
+								) : null}
 								{loading && !pending ? (
 									<OptionMenuItem disabled className="gap-2 text-xs text-muted-foreground">
 										<Loader2 aria-hidden="true" className="size-3 animate-spin" />
@@ -485,6 +498,13 @@ export function ToggleRow({ label, checked, onChange }: { label: string; checked
 			<Switch aria-label={label} checked={checked} tabIndex={-1} />
 		</OptionMenuItem>
 	);
+}
+
+/** Why a catalog has no models, from its refresh error or warning: the first line, kept short. */
+export function catalogProblem(catalog: Pick<AgentModelCatalog, "refreshError" | "warning"> | undefined): string | undefined {
+	const text = (catalog?.refreshError || catalog?.warning)?.trim().split("\n")[0]?.trim();
+	if (!text) return undefined;
+	return text.length > 200 ? `${text.slice(0, 199)}…` : text;
 }
 
 /** Another agent's models and settings. Nothing changes until the switch runs; each pick is held as pending. */

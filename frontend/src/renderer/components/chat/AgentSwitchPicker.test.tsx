@@ -11,7 +11,10 @@ vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: (
 vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agent: string) => ({
 		queryKey: ["agent-models", agent],
-		queryFn: async () => ({
+		queryFn: async () => agent === "droid" ? {
+			models: [], refreshState: "error",
+			refreshError: "droid failed to start: Cannot find module 'tree-sitter'\n    at Module._resolveFilename",
+		} : ({
 			models: agent === "codex"
 				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
 				: agent === "cursor"
@@ -146,6 +149,13 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(await screen.findByRole("menuitem", { name: /Model.*GPT X/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /Effort.*High/ })).toBeInTheDocument();
+	});
+
+	it("says why the pending agent has no models", async () => {
+		const user = userEvent.setup();
+		open({ harness: "droid" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(await screen.findByText("Couldn't load Droid's models: droid failed to start: Cannot find module 'tree-sitter'")).toBeInTheDocument();
 	});
 
 	it("offers Cursor's thinking when a terminal switches to it", async () => {

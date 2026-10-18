@@ -124,6 +124,7 @@
 	"agentSwitch.switched": "Switched",
 	"agentSwitch.switching": "Switching",
 	"agentSwitch.switchedFromTo": "Switched from {{from}} to {{to}}",
+	"agentSwitch.modelsUnavailable": "Couldn't load {{agent}}'s models: {{error}}",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
 	"artifactLink.unavailable": "Artifact unavailable",
