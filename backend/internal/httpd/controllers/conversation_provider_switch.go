@@ -41,7 +41,13 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		}
 	}
 	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
-	err := c.Svc.SwitchProvider(r.Context(), sessionID, domain.ProviderSwitchRequest{
+	// A switch the user asked for, and the message that goes with it, finish
+	// even if the client goes away meanwhile (a restarted app), within the
+	// request's own time limit. The client's retry of the same message id is
+	// then a duplicate.
+	ctx, cancel := withoutClientCancel(r.Context())
+	defer cancel()
+	err := c.Svc.SwitchProvider(ctx, sessionID, domain.ProviderSwitchRequest{
 		TargetHarness: domain.AgentHarness(req.TargetHarness), IdempotencyKey: req.IdempotencyKey,
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
@@ -62,12 +68,10 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	} else if req.Message == nil {
 		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok"})
 	} else {
-		// The new agent answers the message as its first turn. It is sent even if
-		// the client went away during the switch (a restarted app): the switch
-		// is done, and the client's retry of the same message id is then a
-		// duplicate. A send that fails now is a send failure, not a switch
-		// failure: the header tells the client the switch went through.
-		turn, sendErr := c.Svc.Send(context.WithoutCancel(r.Context()), sessionID, message)
+		// The new agent answers the message as its first turn. A send that fails
+		// now is a send failure, not a switch failure: the header tells the
+		// client the switch went through.
+		turn, sendErr := c.Svc.Send(ctx, sessionID, message)
 		if sendErr != nil {
 			w.Header().Set(providerSwitchedHeader, "1")
 			writeConversationError(w, r, sendErr)
@@ -103,4 +107,14 @@ func (c *ConversationsController) sessionHistory(w http.ResponseWriter, r *http.
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, SessionHistoryResponse{Turns: turns, Total: total, Offset: offset})
+}
+
+// withoutClientCancel keeps the request's deadline but not its cancellation
+// when the client disconnects.
+func withoutClientCancel(parent context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(parent)
+	if deadline, ok := parent.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return context.WithCancel(detached)
 }

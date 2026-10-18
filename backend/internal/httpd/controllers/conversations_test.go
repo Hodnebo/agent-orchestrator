@@ -49,6 +49,7 @@ type fakeConversationService struct {
 	snapshot          chatsvc.Snapshot
 	sendErr           error
 	sendCtxErr        error
+	switchCtxErr      error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -250,8 +251,9 @@ func (f *fakeConversationService) ReloadMCPServers(
 	return f.mcpServers, f.reloadErr
 }
 
-func (f *fakeConversationService) SwitchProvider(_ context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
 	f.switchRequest = request
+	f.switchCtxErr = ctx.Err()
 	return f.switchErr
 }
 

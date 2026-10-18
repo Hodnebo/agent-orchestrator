@@ -135,7 +135,7 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
 	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(withMessage)).WithContext(gone))
-	if svc.sent.ClientMessageID != "m1" || svc.sendCtxErr != nil {
+	if svc.switchRequest.TargetHarness != domain.HarnessCodex || svc.sent.ClientMessageID != "m1" || svc.sendCtxErr != nil || svc.switchCtxErr != nil {
 		t.Fatalf("after the client left: sent %+v with context error %v, want it sent", svc.sent, svc.sendCtxErr)
 	}
 
