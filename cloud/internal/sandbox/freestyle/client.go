@@ -75,6 +75,9 @@ type Client struct {
 	cleanupWait       time.Duration
 	cleanupInline     time.Duration
 	cleanupResumeWait time.Duration
+	// backgroundPoll overrides how often a backgrounded exec is polled
+	// (tests only).
+	backgroundPoll time.Duration
 }
 
 var (

@@ -332,3 +332,70 @@ func TestDeleteKeepsAVMPausedForBillingPaused(t *testing.T) {
 		t.Fatalf("calls = %v; a running VM must still run its Cleanup", running.calls())
 	}
 }
+
+// Freestyle answers an exec-await inline for at most 300000 ms. The full
+// Cleanup budget goes as a backgrounded request, polled until the exec's own
+// response arrives; every exec stays within the inline cap otherwise.
+func TestDeleteRunsALongCleanupAsABackgroundedExec(t *testing.T) {
+	t.Parallel()
+	api, client, id := cleanupVM(t, "running")
+	client.backgroundPoll = time.Millisecond
+	api.backgroundPending = 3
+	var nonce string
+	api.execFunc = func(command string) (string, int) {
+		_, nonce = cleanuphooktest.Script(t, command)
+		return stepOutput(nonce), 0
+	}
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := recorder.Context(sandbox.WithCleanupCommands(context.Background(), []string{"make down", "docker compose down"}))
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	exec := api.last(http.MethodPost, "/exec-await")
+	if exec.background == "" || exec.body["timeoutMs"] != float64((cleanuphook.Budget+cleanuphook.Margin)/time.Millisecond) {
+		t.Fatalf("exec = %+v; want the whole budget, backgrounded", exec)
+	}
+	if polls := strings.Count(strings.Join(api.calls(), ","), "GET /v5/background-requests/bgr-1"); polls != 3 {
+		t.Fatalf("calls = %v; want the request polled until it finished", api.calls())
+	}
+	if stage := recorder.WaitStage(t); stage.Err != nil || stage.Attrs["exec"] != "background" {
+		t.Fatalf("stage = %+v", stage)
+	}
+	if events := recorder.Events(t); len(events) != 2 || events[1].Status != worker.SetupSucceeded || api.exists(id) {
+		t.Fatalf("events = %+v, VM exists %v", events, api.exists(id))
+	}
+}
+
+// A VM whose agent cannot run a backgrounded exec past the inline cap refuses
+// its timeout (400) before running anything: the Cleanup runs inline instead,
+// within the cap, with a shorter budget.
+func TestDeleteRunsCleanupInlineWhenBackgroundIsRefused(t *testing.T) {
+	t.Parallel()
+	api, client, id := cleanupVM(t, "running")
+	api.refuseBackground = true
+	api.execFunc = func(command string) (string, int) {
+		_, nonce := cleanuphooktest.Script(t, command)
+		return stepOutput(nonce), 0
+	}
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := recorder.Context(sandbox.WithCleanupCommands(context.Background(), []string{"make down", "docker compose down"}))
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if api.execs() != 2 {
+		t.Fatalf("calls = %v; want the refused backgrounded exec, then an inline one", api.calls())
+	}
+	inline := api.last(http.MethodPost, "/exec-await")
+	timeoutMs, _ := inline.body["timeoutMs"].(float64)
+	if inline.background != "" || timeoutMs > 300000 ||
+		!strings.Contains(stringValue(inline.body["command"]), "timeout -k 5 270 ") {
+		t.Fatalf("inline exec = %+v", inline)
+	}
+	stage := recorder.WaitStage(t)
+	if stage.Err != nil || stage.Attrs["exec"] != "inline" || stage.Attrs["budget_seconds"] != "270" {
+		t.Fatalf("stage = %+v", stage)
+	}
+	if events := recorder.Events(t); len(events) != 2 || events[0].Status != worker.SetupSucceeded {
+		t.Fatalf("events = %+v", events)
+	}
+}

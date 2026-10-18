@@ -1,10 +1,16 @@
 package freestyle
 
 import (
+	"bytes"
+	"cmp"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +19,22 @@ import (
 )
 
 const (
+	// inlineExecLimit is the longest exec-await Freestyle answers inline: a
+	// longer timeoutMs is refused (400) unless the request is backgrounded.
+	inlineExecLimit = 300 * time.Second
+	// inlineCleanupBudget is the Cleanup budget when the exec must run
+	// inline: with cleanuphook.Margin and the owner's processes' stop it
+	// stays within inlineExecLimit. Coder's (and a backgrounded Freestyle
+	// exec's) is cleanuphook.Budget.
+	inlineCleanupBudget = inlineExecLimit - cleanuphook.Margin - 10*time.Second
+	// backgroundHeader backgrounds a Freestyle API request: one still
+	// running after that many seconds answers 202 with a request id to poll
+	// (/v5/background-requests/{id}); the work goes on server side. A
+	// backgrounded exec may run past inlineExecLimit.
+	backgroundHeader       = "x-freestyle-background-after-secs"
+	backgroundAfterSeconds = 20
+	backgroundPoll         = 2 * time.Second
+
 	// cleanupResumeWait bounds how long a Cleanup run waits for a paused or
 	// stopped VM to run again before it deletes the VM without Cleanup. A
 	// paused VM restores its memory in about a second.
@@ -44,6 +66,11 @@ var cleanupRuns cleanuphook.Tracker
 // deleted with its Cleanup reported as skipped. A VM of an organization over
 // its plan (sandbox.WithoutCleanupResume) is not resumed: its Cleanup is
 // reported as skipped with the reason.
+//
+// Freestyle answers an exec-await inline for at most five minutes, so the
+// hook runs as a backgrounded exec, with the same budget as Coder's
+// (cleanuphook.Budget). On a VM whose agent cannot run one, the hook runs
+// inline with a budget of inlineCleanupBudget (4.5 minutes) instead.
 func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if sandbox.CleanupSkipped(ctx) {
 		return true
@@ -126,10 +153,29 @@ func (c *Client) runCleanup(
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanuphook.Margin)
 	defer cancel()
-	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.Options{
-		Runner: cleanuphook.AsRoot, Stop: cleanuphook.StopOwnerProcesses, Owner: workerUser,
-	})
-	printed, status, err := c.execCleanupHook(runCtx, id, command, wait+cleanuphook.Margin)
+	command := func(budget time.Duration) string {
+		return cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), budget, plan.Override, cleanuphook.Options{
+			Runner: cleanuphook.AsRoot, Stop: cleanuphook.StopOwnerProcesses, Owner: workerUser,
+		})
+	}
+	// Past inlineExecLimit the exec is backgrounded, so it may take the
+	// whole budget. A VM whose agent cannot run it so refuses the timeout
+	// (400) before running anything; the hook then runs inline, within
+	// inlineCleanupBudget.
+	background := wait+cleanuphook.Margin > inlineExecLimit
+	attrs["exec"] = "inline"
+	if background {
+		attrs["exec"] = "background"
+	}
+	printed, status, err := c.execCleanupHook(runCtx, id, command(wait), wait+cleanuphook.Margin, background)
+	var refused *HTTPError
+	if background && errors.As(err, &refused) && refused.StatusCode == http.StatusBadRequest {
+		c.log.WarnContext(ctx, "freestyle: backgrounded cleanup exec refused; running it inline with a shorter budget",
+			"provider_id", string(id), "budget", inlineCleanupBudget, "error", err)
+		attrs["exec"] = "inline"
+		attrs["budget_seconds"] = strconv.Itoa(int(inlineCleanupBudget / time.Second))
+		printed, status, err = c.execCleanupHook(runCtx, id, command(inlineCleanupBudget), inlineCleanupBudget+cleanuphook.Margin, false)
+	}
 	cleanuphook.Report(ctx, finish, attrs, steps, printed, status, err, "freestyle")
 }
 
@@ -162,16 +208,25 @@ func (c *Client) resumeForCleanup(ctx context.Context, id sandbox.ID, wait time.
 // execCleanupHook runs the hook command as root in one exec (the command runs
 // the hook as its owner) and returns what the hook printed and its status.
 // The exec waits for the whole run, so it is bounded by ctx and timeout
-// rather than the client's per-call timeout.
-func (c *Client) execCleanupHook(ctx context.Context, id sandbox.ID, command string, timeout time.Duration) (string, string, error) {
-	long := *c.http
-	long.Timeout = 0
-	var result execResult
-	if err := c.doWith(ctx, &long, http.MethodPost, "/v5/vms/"+url.PathEscape(string(id))+"/exec-await", execRequest{
+// rather than the client's per-call timeout. Backgrounded, a run past
+// backgroundAfterSeconds is polled for (execInBackground); inline, timeout
+// must stay within inlineExecLimit.
+func (c *Client) execCleanupHook(ctx context.Context, id sandbox.ID, command string, timeout time.Duration, background bool) (string, string, error) {
+	request := execRequest{
 		Command:   command,
 		LinuxUser: "root",
 		TimeoutMs: int(timeout / time.Millisecond),
-	}, &result); err != nil {
+	}
+	var result execResult
+	var err error
+	if background {
+		result, err = c.execInBackground(ctx, id, request)
+	} else {
+		long := *c.http
+		long.Timeout = 0
+		err = c.doWith(ctx, &long, http.MethodPost, "/v5/vms/"+url.PathEscape(string(id))+"/exec-await", request, &result)
+	}
+	if err != nil {
 		return "", "", err
 	}
 	printed, status, ok := cleanuphook.Split(result.Stdout)
@@ -184,4 +239,82 @@ func (c *Client) execCleanupHook(ctx context.Context, id sandbox.ID, command str
 			exit, truncate(strings.TrimSpace(result.Stderr), 512))
 	}
 	return printed, status, nil
+}
+
+// execInBackground runs an exec-await as a backgrounded request: it answers
+// inline when it ends within backgroundAfterSeconds, else with 202 and a
+// request id, polled every backgroundPoll until the exec's own response
+// arrives or ctx ends.
+func (c *Client) execInBackground(ctx context.Context, id sandbox.ID, request execRequest) (execResult, error) {
+	status, body, err := c.send(ctx, http.MethodPost, "/v5/vms/"+url.PathEscape(string(id))+"/exec-await", request,
+		map[string]string{backgroundHeader: strconv.Itoa(backgroundAfterSeconds)})
+	requestID := ""
+	for {
+		if err != nil {
+			return execResult{}, err
+		}
+		switch {
+		case status == http.StatusAccepted:
+			var pending struct {
+				RequestID string `json:"requestId"`
+			}
+			if json.Unmarshal(body, &pending) == nil && pending.RequestID != "" {
+				requestID = pending.RequestID
+			}
+			if requestID == "" {
+				return execResult{}, errors.New("freestyle: backgrounded exec answered 202 without a request id")
+			}
+			select {
+			case <-ctx.Done():
+				return execResult{}, ctx.Err()
+			case <-time.After(cmp.Or(c.backgroundPoll, backgroundPoll)):
+			}
+			status, body, err = c.send(ctx, http.MethodGet, "/v5/background-requests/"+url.PathEscape(requestID), nil, nil)
+		case status == http.StatusNotFound:
+			return execResult{}, fmt.Errorf("freestyle: backgrounded exec %s: %w", requestID, sandbox.ErrNotFound)
+		case status < 200 || status > 299:
+			return execResult{}, &HTTPError{StatusCode: status, Body: truncate(strings.TrimSpace(string(body)), 512)}
+		default:
+			var result execResult
+			if err := json.Unmarshal(body, &result); err != nil {
+				return execResult{}, fmt.Errorf("freestyle: decode exec response: %w", err)
+			}
+			return result, nil
+		}
+	}
+}
+
+// send makes one API request with extra headers and returns its status and
+// bounded body, whatever the status.
+func (c *Client) send(ctx context.Context, method, path string, body any, headers map[string]string) (int, []byte, error) {
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return 0, nil, fmt.Errorf("freestyle: encode %s request: %w", path, err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("freestyle: %s %s: %w", method, path, err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBody))
+	if err != nil {
+		return 0, nil, fmt.Errorf("freestyle: read %s response: %w", path, err)
+	}
+	return response.StatusCode, raw, nil
 }
