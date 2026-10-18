@@ -314,13 +314,10 @@ func TestDeleteProceedsWhenCleanupNeverReports(t *testing.T) {
 	fake, client := newCleanupCoder(t, "running", "0", "")
 	defer close(fake.release)
 	key := string(testWorkspaceID) + "/" + fake.view.LatestBuild.ID
-	limit := time.Minute
-	cleanupRuns.Store(key, &cleanupRun{
-		done:    make(chan struct{}),
-		started: time.Now().Add(-(limit + cleanupStaleAfter + time.Second)),
-		limit:   limit,
-	})
-	t.Cleanup(func() { cleanupRuns.Delete(key) })
+	// A run whose limit is long past: it never reports.
+	wedged := make(chan struct{})
+	defer close(wedged)
+	cleanupRuns.Start(key, -time.Hour, func() { <-wedged })
 	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}

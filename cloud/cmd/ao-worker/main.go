@@ -215,7 +215,7 @@ func run(logger *slog.Logger) error {
 		ProjectName:   bootstrap.Launch.ProjectName,
 	}
 	// The project's Cleanup commands run before the workspace is deleted; the
-	// provider runs this hook (Coder today) since the worker is gone by then.
+	// provider runs this hook (cleanuphook) since the worker is gone by then.
 	if err := worker.WriteCleanupHook(dataDir, bootstrap.Launch.PreRemove, workspace, scriptEnvironment); err != nil {
 		logger.Warn("install project cleanup hook", "error", err)
 	}

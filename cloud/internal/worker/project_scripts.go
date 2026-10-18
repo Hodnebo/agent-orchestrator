@@ -39,7 +39,7 @@ const (
 	// agent blocked) instead of treating the session as already set up.
 	setupAttemptedFile = "setup.attempted"
 	// CleanupHookFile and CleanupCommandsFile, in the worker data directory,
-	// are what the control plane runs before it deletes a Coder workspace: the
+	// are what the control plane runs before it deletes the session's sandbox: the
 	// hook enters the session's workspace with the session environment and
 	// runs the Cleanup commands script beside it. The control plane rewrites
 	// that script with the project's current Cleanup before running the hook,
