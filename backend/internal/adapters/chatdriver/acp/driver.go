@@ -126,6 +126,10 @@ type Config struct {
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
+	// HistoryUserChunkIsMessage marks an agent that replays each user message as
+	// one whole chunk with no message id (pi-acp). Each id-less chunk is then its
+	// own prompt, even when no reply was replayed between two of them.
+	HistoryUserChunkIsMessage bool
 	// QuickStop marks a provider whose stop gains nothing from waiting: it
 	// keeps its session saved after every turn, or never reacts to stdin
 	// closing. It gets a short session/close wait and is signalled after
@@ -683,6 +687,7 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState

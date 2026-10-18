@@ -57,6 +57,9 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			ports.ChatCapabilityUsage:     true,
 			ports.ChatCapabilityDiffs:     true,
 		},
+		// pi-acp replays a user message as one chunk with no id, and a reply that
+		// failed as nothing, so two prompts in a row must not merge into one.
+		HistoryUserChunkIsMessage: true,
 		InstallCheck: func(ctx context.Context) error {
 			if _, err := resolve(ctx); err != nil {
 				return fmt.Errorf("pi-acp is not installed; install it with npm i -g %s", distributionName)

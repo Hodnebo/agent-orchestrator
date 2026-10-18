@@ -146,6 +146,8 @@ type conversation struct {
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice         func(string) bool
+	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
+	historyUserChunkIsMessage bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
