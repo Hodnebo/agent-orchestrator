@@ -101,14 +101,18 @@ func pushReliable(t *testing.T, server *scriptedServer, receipt string, replayed
 func collectReliable(t *testing.T, c *conversation, receipts int) []ports.ChatEvent {
 	t.Helper()
 	var events []ports.ChatEvent
+	deadline := time.After(3 * time.Second)
 	for receipts > 0 {
 		select {
-		case ev := <-c.Events():
+		case ev, ok := <-c.Events():
+			if !ok {
+				t.Fatal("hosted event stream closed before its projection receipt")
+			}
 			events = append(events, ev)
 			if ev.ProviderReceiptID != "" {
 				receipts--
 			}
-		case <-time.After(3 * time.Second):
+		case <-deadline:
 			t.Fatal("host frame did not reach its projection receipt")
 		}
 	}
