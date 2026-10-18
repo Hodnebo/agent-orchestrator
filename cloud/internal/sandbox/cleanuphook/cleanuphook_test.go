@@ -230,7 +230,7 @@ func TestReportAppendsStepsAndFinishesTheStage(t *testing.T) {
 		t.Fatalf("events = %+v", failed.events)
 	}
 	for _, event := range failed.events {
-		if event.Phase != worker.ScriptPhaseCleanup || event.RunID != "run-1" || !worker.ValidScriptStepEvent(event) {
+		if event.Phase != worker.ScriptPhaseCleanup || event.RunID != worker.CleanupRunID("00000000000000aa") || !worker.ValidScriptStepEvent(event) {
 			t.Fatalf("event = %+v", event)
 		}
 	}

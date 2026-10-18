@@ -41,8 +41,19 @@ func NewScriptMarkerNonce() string {
 	return hex.EncodeToString(random[:])
 }
 
+// CleanupRunID is the run id of a Cleanup whose commands script marks its
+// steps with nonce. The hook runs its commands once and prints that run's
+// output again when it is run again (a control plane that restarted while
+// deleting the sandbox), so the same run keeps its id rather than appearing
+// twice.
+func CleanupRunID(nonce string) string {
+	return "cleanup-" + nonce
+}
+
 // CleanupRun describes one run of the Cleanup hook for CleanupStepEvents.
 type CleanupRun struct {
+	// RunID names a run whose output has no markers; one with markers is
+	// named by their nonce (CleanupRunID).
 	RunID string
 	// Nonce is the marker nonce of the commands script the control plane
 	// installed for this run, and Commands that script's commands; both are
@@ -253,7 +264,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		if event.Command == "" && own && len(run.Commands) == total {
 			event.Command, event.Repository = scriptStepCommand(run.Commands[number-1], redactor)
 		}
-		event.Phase, event.RunID, event.Total = ScriptPhaseCleanup, run.RunID, total
+		event.Phase, event.RunID, event.Total = ScriptPhaseCleanup, CleanupRunID(nonce), total
 		if event.Status != ScriptStepSkipped && (sawLog || logPath != "") {
 			event.LogPath = logPath
 		}

@@ -247,6 +247,7 @@ func NewPlan(ctx context.Context, logArgs ...any) (Plan, bool) {
 		nonce := worker.NewScriptMarkerNonce()
 		if payload, fits := CommandsPayload(current, nonce); fits {
 			plan.Override, plan.Steps.Nonce, plan.Steps.Commands = payload, nonce, current
+			plan.Steps.RunID = worker.CleanupRunID(nonce)
 		} else {
 			slog.WarnContext(ctx, "the project's current Cleanup is too large to pass to the sandbox; running the commands from the session's start",
 				append(logArgs, "limit_bytes", PayloadLimit)...)

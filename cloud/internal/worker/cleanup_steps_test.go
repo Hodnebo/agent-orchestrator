@@ -68,7 +68,7 @@ func TestCleanupMarkersSplitTheRunIntoSteps(t *testing.T) {
 		t.Fatalf("events = %+v, want 4 steps", events)
 	}
 	for index, event := range events {
-		if !ValidScriptStepEvent(event) || event.Phase != ScriptPhaseCleanup || event.RunID != "cleanup-1" ||
+		if !ValidScriptStepEvent(event) || event.Phase != ScriptPhaseCleanup || event.RunID != CleanupRunID(nonce) ||
 			event.Step != index+1 || event.Total != 4 {
 			t.Fatalf("event %d = %+v", index, event)
 		}
@@ -255,5 +255,20 @@ func TestCleanupStepMasksAnUnfinishedToken(t *testing.T) {
 	events := CleanupStepEvents(output, CleanupRun{RunID: "cleanup-1", Nonce: nonce, ExitCode: code, StartedAt: time.Now()})
 	if len(events) != 2 || events[0].Output != "stopping\n[REDACTED]" || events[1].Output != "DB_PASSWORD=[REDACTED]" {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+// The hook runs its commands once and prints that run's output again when run
+// again (a control plane that restarted mid-deletion plans a new run with a
+// new nonce): the steps keep the first run's id, so the session shows one run.
+func TestCleanupRunKeepsItsIDWhenTheHookIsRunAgain(t *testing.T) {
+	t.Parallel()
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript([]string{"echo stopping"}, nonce), t.TempDir())
+	first := CleanupStepEvents(output, CleanupRun{RunID: CleanupRunID(nonce), Nonce: nonce, ExitCode: code, StartedAt: time.Now()})
+	retried := NewScriptMarkerNonce()
+	again := CleanupStepEvents(output, CleanupRun{RunID: CleanupRunID(retried), Nonce: retried, ExitCode: code, StartedAt: time.Now()})
+	if len(first) != 1 || len(again) != 1 || first[0].RunID != CleanupRunID(nonce) || again[0].RunID != first[0].RunID {
+		t.Fatalf("first %+v, again %+v", first, again)
 	}
 }
