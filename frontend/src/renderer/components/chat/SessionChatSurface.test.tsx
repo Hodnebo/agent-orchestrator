@@ -327,8 +327,8 @@ describe("SessionChatSurface pending switch effort", () => {
 			sent = (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
 				"Recall the code word.", [{ mimeType: "image/png", data: "AA==" }], "switch-message");
 		});
-		expect(conversationCommandState.echoBeforeSend).toHaveBeenCalledWith(
-			expect.objectContaining({ clientMessageId: "switch-message", text: "Recall the code word." }),
+		expect(conversationCommandState.echoBeforeSend.mock.calls[0]?.[0]).toMatchObject(
+			{ clientMessageId: "switch-message", text: "Recall the code word." },
 		);
 		expect(conversationCommandState.dropEcho).not.toHaveBeenCalled();
 		await act(async () => {
