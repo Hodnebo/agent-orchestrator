@@ -18781,6 +18781,8 @@ components:
           type: string
         sessionId:
           type: string
+        shortened:
+          type: boolean
         suggested:
           type: boolean
         title:
