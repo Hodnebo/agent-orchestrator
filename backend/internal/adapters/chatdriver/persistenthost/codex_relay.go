@@ -1,7 +1,6 @@
 package persistenthost
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -24,7 +22,7 @@ type codexRelay struct {
 	limit      int64
 	entries    []*codexEntry
 	byID       map[string]*codexEntry
-	turns      map[string]*codexTurn
+	turns      map[codexTurnKey]*codexTurn
 	active     map[string]string
 	attachment *codexAttachment
 	stopped    bool
@@ -35,11 +33,13 @@ type codexTurn struct {
 	terminalAcknowledged bool
 }
 
+type codexTurnKey struct{ threadID, turnID string }
+
 type codexEntry struct {
 	sequence   uint64
 	id         string
 	span       journalSpan
-	turn       string
+	turn       codexTurnKey
 	terminal   bool
 	acked      bool
 	request    string
@@ -83,7 +83,7 @@ func newCodexRelay(ctx context.Context, path string) (*codexRelay, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &codexRelay{identity: identity, journal: journal, limit: maxJournalBytes, byID: make(map[string]*codexEntry), turns: make(map[string]*codexTurn), active: make(map[string]string)}, nil
+	return &codexRelay{identity: identity, journal: journal, limit: maxJournalBytes, byID: make(map[string]*codexEntry), turns: make(map[codexTurnKey]*codexTurn), active: make(map[string]string)}, nil
 }
 
 func (r *codexRelay) snapshot() *CodexState {
@@ -92,13 +92,7 @@ func (r *codexRelay) snapshot() *CodexState {
 		snapshot.ActiveTurns[thread] = turn
 	}
 	for key := range r.turns {
-		length, identity, ok := strings.Cut(key, ":")
-		threadLength, err := strconv.Atoi(length)
-		if !ok || err != nil || threadLength <= 0 || threadLength >= len(identity) {
-			continue
-		}
-		thread, turn := identity[:threadLength], identity[threadLength:]
-		snapshot.RetainedTurns[thread] = append(snapshot.RetainedTurns[thread], turn)
+		snapshot.RetainedTurns[key.threadID] = append(snapshot.RetainedTurns[key.threadID], key.turnID)
 	}
 	for _, turns := range snapshot.RetainedTurns {
 		sort.Strings(turns)
@@ -113,7 +107,7 @@ func codexConversationNotification(method string) bool {
 		strings.HasPrefix(method, "thread/") || method == "error" || method == "serverRequest/resolved" || method == "model/rerouted"
 }
 
-func (r *codexRelay) scope(method string, params json.RawMessage) (string, bool) {
+func (r *codexRelay) scope(method string, params json.RawMessage) (codexTurnKey, bool) {
 	var scope struct {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
@@ -137,14 +131,14 @@ func (r *codexRelay) scope(method string, params json.RawMessage) (string, bool)
 		delete(r.active, scope.ThreadID)
 	}
 	if scope.ThreadID == "" || turn == "" {
-		return "", terminal
+		return codexTurnKey{}, terminal
 	}
-	key := fmt.Sprintf("%d:%s%s", len(scope.ThreadID), scope.ThreadID, turn)
+	key := codexTurnKey{threadID: scope.ThreadID, turnID: turn}
 	// Native Codex starts a turn before its items. Once the terminal receipt
 	// reclaimed that prefix, late output must not create a new prefix which can
 	// never receive another terminal. Its individual receipt can reclaim it.
 	if method != "turn/started" && !terminal && r.active[scope.ThreadID] != turn && r.turns[key] == nil {
-		return "", false
+		return codexTurnKey{}, false
 	}
 	return key, terminal
 }
@@ -199,7 +193,7 @@ func (r *codexRelay) acknowledge(ctx context.Context, id string) error {
 		return nil
 	}
 	entry.acked = true
-	if entry.turn != "" {
+	if entry.turn.threadID != "" {
 		turn := r.turns[entry.turn]
 		turn.pending--
 		turn.terminalAcknowledged = turn.terminalAcknowledged || entry.terminal
@@ -212,7 +206,7 @@ func (r *codexRelay) acknowledge(ctx context.Context, id string) error {
 	kept := r.entries[:0]
 	removed := false
 	for _, candidate := range r.entries {
-		if candidate.request == "" && candidate.acked && ((entry.turn == "" && candidate.id == id) || (entry.turn != "" && candidate.turn == entry.turn)) {
+		if candidate.request == "" && candidate.acked && ((entry.turn.threadID == "" && candidate.id == id) || (entry.turn.threadID != "" && candidate.turn == entry.turn)) {
 			delete(r.byID, candidate.id)
 			removed = true
 			continue
@@ -228,84 +222,6 @@ func (r *codexRelay) acknowledge(ctx context.Context, id string) error {
 		return r.compact(ctx)
 	}
 	return nil
-}
-
-func (h *host) handleCodex(conn net.Conn, reader *bufio.Reader) {
-	h.mu.Lock()
-	if h.client != nil || h.codex.stopped {
-		h.mu.Unlock()
-		_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrAttached.Error()})
-		_ = conn.Close()
-		return
-	}
-	h.client = conn
-	h.clientGeneration++
-	attachment := &codexAttachment{conn: conn, cutoff: h.codex.next}
-	h.codex.attachment = attachment
-	response := helloResponse{OK: true, NextRequestID: h.maxRequestID, CodexReplay: true, CodexState: h.codex.snapshot()}
-	h.mu.Unlock()
-	// The reader and the sole ordered writer are independent; a large replay
-	// cannot prevent acknowledgments from reclaiming the journal.
-	if err := json.NewEncoder(conn).Encode(response); err != nil {
-		h.detach(conn)
-		return
-	}
-	go h.writeCodex(attachment)
-	defer h.detach(conn)
-	for {
-		frame, err := reader.ReadBytes('\n')
-		if len(frame) > 0 {
-			var control struct {
-				Method string `json:"method"`
-				Params struct {
-					EventID string `json:"eventId"`
-				} `json:"params"`
-			}
-			_ = json.Unmarshal(frame, &control)
-			h.mu.Lock()
-			if h.codex.attachment != attachment {
-				h.mu.Unlock()
-				return
-			}
-			switch control.Method {
-			case CodexReplayMethod:
-				if !attachment.open {
-					attachment.open = true
-					for _, entry := range h.codex.entries {
-						if entry.request != "" {
-							if pending := h.pendingRequests[entry.request]; pending != nil {
-								attachment.queue = append(attachment.queue, codexOutbound{frame: pending.frame})
-								attachment.directBytes += len(pending.frame)
-							}
-						} else {
-							attachment.queue = append(attachment.queue, codexOutbound{entry: entry, replayed: entry.sequence <= attachment.cutoff})
-						}
-					}
-					h.cond.Broadcast()
-				}
-			case CodexAckMethod:
-				if err := h.codex.acknowledge(h.ctx, control.Params.EventID); err != nil {
-					h.mu.Unlock()
-					return
-				}
-				h.cond.Broadcast()
-			default:
-				h.mu.Unlock()
-				if _, err := h.stdin.Write(frame); err != nil {
-					return
-				}
-				h.observeClientFrame(frame)
-				if err != nil {
-					return
-				}
-				continue
-			}
-			h.mu.Unlock()
-		}
-		if err != nil {
-			return
-		}
-	}
 }
 
 func (h *host) writeCodex(attachment *codexAttachment) {
@@ -405,7 +321,7 @@ func (h *host) codexProviderFrameLocked(frame []byte) error {
 	h.codex.next++
 	turn, terminal := h.codex.scope(envelope.Method, envelope.Params)
 	entry := &codexEntry{sequence: h.codex.next, id: fmt.Sprintf("codex-host:%s:%d", h.codex.identity, h.codex.next), span: span, turn: turn, terminal: terminal, observedAt: time.Now().UTC()}
-	if turn != "" {
+	if turn.threadID != "" {
 		state := h.codex.turns[turn]
 		if state == nil {
 			state = &codexTurn{}

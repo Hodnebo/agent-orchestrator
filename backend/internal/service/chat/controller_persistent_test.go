@@ -70,22 +70,13 @@ func (s *flakyReceiptStore) ProjectProviderEvent(
 
 func TestPersistentProjectionNeverAcknowledgesPastFailedOutput(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		failures      int32
-		sourceReceipt bool
+		name     string
+		failures int32
 	}{
-		{"legacy transient failure", 1, false},
-		{"legacy permanent failure", -1, false},
-		{"source receipt transient failure", 1, true},
-		{"source receipt permanent failure", -1, true},
+		{"transient failure", 1},
+		{"permanent failure", -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			outputReceipt, completionReceipt := "", ""
-			wantOutput, wantCompletion := "output", "completion"
-			if tc.sourceReceipt {
-				outputReceipt, completionReceipt = "output-frame", "completion-frame"
-				wantOutput, wantCompletion = outputReceipt, completionReceipt
-			}
 			acknowledged := make(chan string, 4)
 			conv := &receiptConversation{
 				terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
@@ -103,11 +94,11 @@ func TestPersistentProjectionNeverAcknowledgesPastFailedOutput(t *testing.T) {
 			}
 			conv.emit(
 				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.ProviderTurnID},
-				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "output", ProviderReceiptID: outputReceipt, Delta: "retained answer"},
-				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderEventID: "completion", ProviderReceiptID: completionReceipt, TurnState: domain.TurnStateCompleted},
+				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "output", Delta: "retained answer"},
+				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderEventID: "completion", TurnState: domain.TurnStateCompleted},
 			)
 			if tc.failures > 0 {
-				for _, want := range []string{wantOutput, wantCompletion} {
+				for _, want := range []string{"output", "completion"} {
 					select {
 					case got := <-acknowledged:
 						if got != want {
@@ -283,8 +274,8 @@ func TestPersistentSourceReceiptFollowsAllDerivedProjections(t *testing.T) {
 	conv := &receiptConversation{
 		terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
 		ack: func(id string) error {
-			if id != "source-frame" && id != "ignored-frame" {
-				return nil // The provider recognizes source-frame receipts, not derived event IDs.
+			if id != "source-frame:1" && id != "ignored-frame:0" {
+				return nil // Only the final derived event can release its source frame.
 			}
 			snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
 			if err != nil {
@@ -305,23 +296,23 @@ func TestPersistentSourceReceiptFollowsAllDerivedProjections(t *testing.T) {
 	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.ProviderTurnID})
 	frame := []ports.ChatEvent{
 		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "source-frame:0", Delta: "one "},
-		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "source-frame:1", ProviderReceiptID: "source-frame", Delta: "two"},
+		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "source-frame:1", Delta: "two"},
 	}
 	for range 2 { // The second delivery models a commit followed by loss of the ACK.
 		conv.emit(frame...)
 		select {
 		case id := <-receipts:
-			if id != "source-frame" {
-				t.Fatalf("receipt = %q, want source-frame", id)
+			if id != "source-frame:1" {
+				t.Fatalf("receipt = %q, want source-frame:1", id)
 			}
 		case <-time.After(3 * time.Second):
 			t.Fatal("source frame was not acknowledged after all derived events committed")
 		}
 	}
-	conv.emit(ports.ChatEvent{Kind: ports.ChatEventDeliveryReceipt, ProviderEventID: "ignored-frame:0", ProviderReceiptID: "ignored-frame", Delta: "must not appear"})
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventDeliveryReceipt, ProviderEventID: "ignored-frame:0", Delta: "must not appear"})
 	select {
 	case id := <-receipts:
-		if id != "ignored-frame" {
+		if id != "ignored-frame:0" {
 			t.Fatalf("ignored frame receipt = %q", id)
 		}
 	case <-time.After(3 * time.Second):
@@ -332,10 +323,10 @@ func TestPersistentSourceReceiptFollowsAllDerivedProjections(t *testing.T) {
 		t.Fatalf("replayed frame archives = %+v, %v; want start, two output events and one receipt", archived, err)
 	}
 	var record struct {
-		ProviderReceiptID string `json:"providerReceiptId"`
+		ProviderEventID string `json:"providerEventId"`
 	}
-	if err := json.Unmarshal([]byte(archived[2].PayloadJson), &record); err != nil || record.ProviderReceiptID != "source-frame" {
-		t.Fatalf("archived source receipt = %q, %v", record.ProviderReceiptID, err)
+	if err := json.Unmarshal([]byte(archived[2].PayloadJson), &record); err != nil || record.ProviderEventID != "source-frame:1" {
+		t.Fatalf("archived final event = %q, %v", record.ProviderEventID, err)
 	}
 }
 
@@ -365,7 +356,7 @@ func TestFencedPersistentProjectionNeverAcknowledgesOrPromotesQueue(t *testing.T
 			if err != nil || queued.State != domain.TurnStateQueued {
 				t.Fatalf("queue: %+v, %v", queued, err)
 			}
-			event := ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "output", ProviderReceiptID: "output-frame", Delta: "saved answer"}
+			event := ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turn.ProviderTurnID, ProviderItemID: "answer", ProviderEventID: "output", Delta: "saved answer"}
 			conv.emit(event)
 			select {
 			case <-receipts:
@@ -376,7 +367,7 @@ func TestFencedPersistentProjectionNeverAcknowledgesOrPromotesQueue(t *testing.T
 				t.Fatal(err)
 			}
 			if !duplicate {
-				event = ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderEventID: "completion", ProviderReceiptID: "completion-frame", TurnState: domain.TurnStateCompleted}
+				event = ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID, ProviderEventID: "completion", TurnState: domain.TurnStateCompleted}
 			}
 			conv.emit(event)
 			done := make(chan struct{})
@@ -513,7 +504,7 @@ func TestAwakeReconnectRequiresACKTransportFailureProof(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			provider.emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "answer", ProviderEventID: "output", ProviderReceiptID: "output-frame", Delta: "answer"})
+			provider.emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "answer", ProviderEventID: "output", Delta: "answer"})
 			if tc.explicitClose {
 				select {
 				case <-ackStarted:

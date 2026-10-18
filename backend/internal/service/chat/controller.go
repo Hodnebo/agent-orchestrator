@@ -2862,12 +2862,8 @@ func (c *Controller) project() {
 			time.Sleep(20 * time.Millisecond)
 			projected, primaryTurn, err = c.projectEvent(ctx, event)
 		}
-		receiptID := event.ProviderReceiptID
-		if receiptID == "" {
-			receiptID = event.ProviderEventID
-		}
-		if err == nil && persistent && receiptID != "" {
-			err = acknowledger.AcknowledgeProviderEvent(ctx, receiptID)
+		if err == nil && persistent && event.ProviderEventID != "" {
+			err = acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID)
 			if errors.Is(err, ports.ErrChatRecoveryInconclusive) {
 				c.mu.Lock()
 				preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
@@ -2952,7 +2948,6 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	record := map[string]any{
 		"kind":                   event.Kind,
 		"providerEventId":        event.ProviderEventID,
-		"providerReceiptId":      event.ProviderReceiptID,
 		"providerTurnId":         event.ProviderTurnID,
 		"providerConversationId": event.ProviderConversationID,
 		"providerItemId":         event.ProviderItemID,

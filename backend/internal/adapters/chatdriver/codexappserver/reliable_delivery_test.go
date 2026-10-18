@@ -100,22 +100,19 @@ func pushReliable(t *testing.T, server *scriptedServer, receipt string, replayed
 	server.push(string(delivery))
 }
 
-func collectReliable(t *testing.T, c *conversation, receipts int) []ports.ChatEvent {
+func collectReliable(t *testing.T, c *conversation, count int) []ports.ChatEvent {
 	t.Helper()
 	var events []ports.ChatEvent
 	deadline := time.After(3 * time.Second)
-	for receipts > 0 {
+	for len(events) < count {
 		select {
 		case ev, ok := <-c.Events():
 			if !ok {
-				t.Fatal("hosted event stream closed before its projection receipt")
+				t.Fatal("hosted event stream closed before its normalized events")
 			}
 			events = append(events, ev)
-			if ev.ProviderReceiptID != "" {
-				receipts--
-			}
 		case <-deadline:
-			t.Fatal("host frame did not reach its projection receipt")
+			t.Fatal("host frame did not produce its normalized events")
 		}
 	}
 	return events
@@ -129,12 +126,21 @@ func TestReliableDeliveryRetainsStableDerivedEventsAndReceiptOrder(t *testing.T)
 		pushReliable(t, server, "host:2", replayed, `{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"answer","delta":"Recovered"}}`)
 		pushReliable(t, server, "host:3", replayed, `{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
 		pushReliable(t, server, "host:4", replayed, `{"method":"hook/started","params":{"threadId":"thread-1","turnId":"turn-1"}}`)
-		events := collectReliable(t, c, 4)
+		events := collectReliable(t, c, 5)
 		if len(events) != 5 || events[1].Kind != ports.ChatEventActivityCompleted || events[2].Kind != ports.ChatEventMessageDelta {
 			t.Fatalf("normalized frame expansion = %#v", events)
 		}
-		if events[1].ProviderReceiptID != "" || events[2].ProviderReceiptID != "host:2" || events[4].Kind != ports.ChatEventDeliveryReceipt {
+		if events[4].Kind != ports.ChatEventDeliveryReceipt {
 			t.Fatalf("receipt moved ahead of the last derived event: %#v", events)
+		}
+		for _, id := range []string{events[1].ProviderEventID, "host:2", c.scopedID("history-event")} {
+			require.NoError(t, c.AcknowledgeProviderEvent(context.Background(), id))
+		}
+		// The barrier proves earlier event/source/history IDs sent no ACK.
+		require.NoError(t, c.conn.notify("test/receiptBarrier", nil))
+		server.awaitFrame(func(f frame) bool { return f.Method == "test/receiptBarrier" })
+		if server.sentMethod(persistenthost.CodexAckMethod) {
+			t.Fatal("source frame acknowledged before its final derived event")
 		}
 		seen := map[string]bool{}
 		for _, event := range events {
@@ -145,11 +151,6 @@ func TestReliableDeliveryRetainsStableDerivedEventsAndReceiptOrder(t *testing.T)
 			seen[event.ProviderEventID] = true
 			if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
 				t.Fatal(err)
-			}
-			if event.ProviderReceiptID != "" {
-				if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderReceiptID); err != nil {
-					t.Fatal(err)
-				}
 			}
 		}
 		server.awaitFrame(func(f frame) bool {
@@ -181,15 +182,17 @@ func TestReliableAcknowledgmentIdentifiesActualTransportLoss(t *testing.T) {
 	if err := c.conn.closeWrite(); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
-		t.Fatalf("derived event identity attempted a transport acknowledgment: %v", err)
+	for _, id := range []string{"host:1", c.scopedID("history-event")} {
+		if err := c.AcknowledgeProviderEvent(context.Background(), id); err != nil {
+			t.Fatalf("unregistered identity attempted a transport acknowledgment: %v", err)
+		}
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := c.AcknowledgeProviderEvent(cancelled, event.ProviderReceiptID); !errors.Is(err, context.Canceled) || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+	if err := c.AcknowledgeProviderEvent(cancelled, event.ProviderEventID); !errors.Is(err, context.Canceled) || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
 		t.Fatalf("caller cancellation classified as a disconnected host: %v", err)
 	}
-	if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderReceiptID); !errors.Is(err, ports.ErrChatRecoveryInconclusive) || !errors.Is(err, io.ErrClosedPipe) {
+	if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); !errors.Is(err, ports.ErrChatRecoveryInconclusive) || !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("actual acknowledgment write failure lost transport proof: %v", err)
 	}
 }

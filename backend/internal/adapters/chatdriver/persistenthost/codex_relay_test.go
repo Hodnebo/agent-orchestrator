@@ -235,7 +235,7 @@ func TestCodexLateOutputAfterTerminalReceiptDoesNotRetainAnotherPrefix(t *testin
 	}
 	for i := 0; i < 50; i++ {
 		late := codexTestFrame(t, h, fmt.Sprintf(`{"method":"item/commandExecution/outputDelta","params":{"threadId":"root","turnId":"old-%d","delta":"late"}}`, i))
-		if late.turn != "" {
+		if late.turn.threadID != "" {
 			t.Fatalf("late output created an unterminated prefix: %+v", late)
 		}
 		if err := r.acknowledge(h.ctx, late.id); err != nil {
@@ -247,7 +247,7 @@ func TestCodexLateOutputAfterTerminalReceiptDoesNotRetainAnotherPrefix(t *testin
 	}
 	// Also exercise the exact formerly retained turn after its terminal ACK.
 	late := codexTestFrame(t, h, `{"method":"item/agentMessage/delta","params":{"threadId":"root","turnId":"old","delta":"late"}}`)
-	if late.turn != "" {
+	if late.turn.threadID != "" {
 		t.Fatal("settled turn reopened its host journal")
 	}
 	if err := r.acknowledge(h.ctx, late.id); err != nil {

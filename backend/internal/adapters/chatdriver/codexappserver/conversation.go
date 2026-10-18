@@ -73,9 +73,8 @@ type conversation struct {
 	// activeTurn is the most recent provider turn id, used when a caller asks to
 	// interrupt without naming one.
 	activeTurn string
-	// receipts contains only genuine host frame identities. Semantic history
-	// IDs and derived event IDs must never acknowledge host replay state.
-	receipts map[string]struct{}
+	// Only the final derived event can acknowledge its retained source frame.
+	receipts map[string]string
 
 	// contextTokens is the conversation's latest position in the model's context,
 	// and contextWindow the size of that context. Both come from the provider's
@@ -133,7 +132,7 @@ func newConversation(proc *process, log *slog.Logger, providerScopeID string) *c
 		pumpDone:        make(chan struct{}),
 		liveRecovery:    make(chan liveTurnRecovery),
 		providerScopeID: providerScopeID,
-		receipts:        make(map[string]struct{}),
+		receipts:        make(map[string]string),
 		deliveryDone:    make(chan struct{}),
 	}
 	c.conn = newConnAt(proc.stdin, proc.stdout, log, c.handleServerRequest, proc.nextRequestID)
@@ -314,9 +313,8 @@ notifications:
 					Kind: ports.ChatEventDeliveryReceipt, ProviderEventID: receiptID + ":receipt",
 				})
 			}
-			delivery[len(delivery)-1].ProviderReceiptID = receiptID
 			c.mu.Lock()
-			c.receipts[receiptID] = struct{}{}
+			c.receipts[c.scopedID(delivery[len(delivery)-1].ProviderEventID)] = receiptID
 			c.mu.Unlock()
 		}
 		for _, event := range delivery {
@@ -1047,18 +1045,17 @@ func (c *conversation) stopDelivery() {
 	})
 }
 
-// AcknowledgeProviderEvent discards only an exact host frame after all of its
-// normalized events committed. The service may also present semantic/history
-// event IDs; they are deliberately unrelated to this receipt namespace.
-func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, receiptID string) error {
-	if !c.proc.reliableReplay || receiptID == "" {
+// AcknowledgeProviderEvent translates a committed final event into its source
+// receipt; earlier derived events and native history cannot release host output.
+func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, eventID string) error {
+	if !c.proc.reliableReplay || eventID == "" {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	c.mu.Lock()
-	_, genuine := c.receipts[receiptID]
+	receiptID, genuine := c.receipts[eventID]
 	c.mu.Unlock()
 	if !genuine {
 		return nil
@@ -1067,7 +1064,7 @@ func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, receiptID s
 		return fmt.Errorf("%w: acknowledge persistent Codex event: %w", ports.ErrChatRecoveryInconclusive, err)
 	}
 	c.mu.Lock()
-	delete(c.receipts, receiptID)
+	delete(c.receipts, eventID)
 	c.mu.Unlock()
 	return nil
 }

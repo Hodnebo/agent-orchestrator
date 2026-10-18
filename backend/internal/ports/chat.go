@@ -1061,9 +1061,6 @@ type ChatEvent struct {
 	// provider supplies one. It is deliberately distinct from ProviderItemID:
 	// start, delta and completion events commonly share one item id.
 	ProviderEventID string
-	// ProviderReceiptID identifies the source frame to acknowledge after this
-	// event commits. A frame that produces several events sets it only on the last.
-	ProviderReceiptID string
 
 	// ProviderTurnID is set on every event that belongs to a turn.
 	ProviderTurnID string
