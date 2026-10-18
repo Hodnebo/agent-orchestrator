@@ -52,6 +52,9 @@ type Service struct {
 	mu       sync.Mutex
 	readings map[string]*reading
 	logins   map[string]*login
+	// removing holds accounts being removed. No launch resolves to one, so an
+	// agent cannot start on a login AO is about to delete.
+	removing map[string]bool
 }
 
 // reading is the last identity and limits read for one account.
@@ -61,6 +64,13 @@ type reading struct {
 	limits      *domain.AgentAccountLimits
 	limitsErr   string
 	at          time.Time
+}
+
+// knownUnusable reports a reading that shows the folder cannot run as its
+// account: signed out, or signed in as another login. A failed probe shows
+// nothing, and no reading yet is not known.
+func (r *reading) knownUnusable() bool {
+	return r != nil && !r.identity.SignedIn && (r.identityErr == "" || r.identity.Email != "")
 }
 
 type login struct {
@@ -84,7 +94,7 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{},
+		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{},
 	}
 }
 
@@ -238,12 +248,36 @@ func (s *Service) defaultID(ctx context.Context, p domain.AgentAccountProvider) 
 		return domain.DeviceAgentAccountID(p), err
 	}
 	switch _, err := s.find(ctx, id); {
-	case errors.Is(err, ports.ErrAgentAccountUnknown):
+	case errors.Is(err, ports.ErrAgentAccountUnknown) || s.beingRemoved(id):
 		return domain.DeviceAgentAccountID(p), nil // the picked default was removed
 	case err != nil:
 		return "", err
 	}
 	return id, nil
+}
+
+func (s *Service) beingRemoved(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.removing[id]
+}
+
+// RunsOnComputerLogin reports whether a new session of harness asking for
+// accountID ("" for the default) would launch on the computer's own login.
+// Harnesses without accounts always do.
+func (s *Service) RunsOnComputerLogin(ctx context.Context, harness domain.AgentHarness, accountID string) bool {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return true
+	}
+	if accountID == "" {
+		def, err := s.defaultID(ctx, p)
+		if err != nil {
+			return true
+		}
+		accountID = def
+	}
+	return accountID == domain.DeviceAgentAccountID(p)
 }
 
 // SetDefault makes accountID the account new sessions of its provider start on.
@@ -361,6 +395,12 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	if err != nil {
 		return "", nil, err
 	}
+	// Claim the sign-in before acting on it. A cancel, or a second check, that
+	// ran during the CLI calls above has already ended it, and saving now would
+	// keep an account whose folder is gone.
+	if !s.claimLogin(op) {
+		return "", nil, ports.ErrAgentAccountLoginUnknown
+	}
 	for _, view := range views {
 		if op.account != nil && view.Account.ID == op.account.ID {
 			continue
@@ -375,6 +415,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	}
 	account := domain.AgentAccount{ID: op.id, Provider: op.provider, Home: op.home, Email: identity.Email, Plan: identity.Plan, CreatedAt: s.now()}
 	if err := s.store.CreateAgentAccount(ctx, account); err != nil {
+		s.releaseLogin(op) // still pending: a later check can save it
 		return "", nil, err
 	}
 	if err := provider.Prepare(op.home); err != nil {
@@ -392,6 +433,25 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		}
 	}
 	return LoginComplete, nil, nil
+}
+
+// claimLogin takes op out of the pending sign-ins if it is still there, so
+// exactly one caller goes on to save, refuse or cancel it.
+func (s *Service) claimLogin(op *login) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logins[op.id] != op {
+		return false
+	}
+	delete(s.logins, op.id)
+	return true
+}
+
+// releaseLogin puts a claimed sign-in back after a failure that left it intact.
+func (s *Service) releaseLogin(op *login) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logins[op.id] = op
 }
 
 // finishSignInAgain keeps a saved account's folder signed in only as the login
@@ -427,7 +487,7 @@ func (s *Service) CancelLogin(ctx context.Context, operationID string) error {
 	s.mu.Lock()
 	op := s.logins[operationID]
 	s.mu.Unlock()
-	if op == nil {
+	if op == nil || !s.claimLogin(op) {
 		return ports.ErrAgentAccountLoginUnknown
 	}
 	s.endLogin(ctx, op, op.account == nil)
@@ -481,11 +541,18 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	if account.Device() {
 		return ports.ErrAgentAccountDeviceFixed
 	}
-	// Its agents stop first, so none runs on a login AO deletes. An agent that
-	// cannot be stopped keeps the account.
+	// From here no launch resolves to the account; then its agents stop, so
+	// none runs on a login AO deletes. An agent that cannot be stopped keeps the
+	// account, usable again.
 	s.mu.Lock()
+	s.removing[accountID] = true
 	stop := s.stopAgents
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.removing, accountID)
+		s.mu.Unlock()
+	}()
 	if stop != nil {
 		if err := stop(ctx, accountID); err != nil {
 			return fmt.Errorf("%w: %w", ports.ErrAgentAccountInUse, err)
@@ -540,6 +607,15 @@ func (s *Service) BindSession(ctx context.Context, id domain.SessionID, harness 
 		if err != nil {
 			return err
 		}
+		// The task would start on the wrong login, or none. Refuse rather than
+		// run it there or quietly on another account, which bills someone else.
+		// The cached reading decides, so a new task costs no CLI call.
+		s.mu.Lock()
+		r := s.readings[account.ID]
+		s.mu.Unlock()
+		if r.knownUnusable() {
+			return ports.ErrAgentAccountDefaultUnusable
+		}
 		if err := s.prepare(s.providers[p], account.Home); err != nil {
 			return err
 		}
@@ -587,6 +663,9 @@ func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, account
 	account, err := s.find(ctx, accountID)
 	if err != nil {
 		return domain.AgentAccount{}, err
+	}
+	if s.beingRemoved(account.ID) {
+		return domain.AgentAccount{}, ports.ErrAgentAccountUnknown
 	}
 	if account.Provider != p {
 		return domain.AgentAccount{}, ports.ErrAgentAccountProviderMismatch
@@ -690,6 +769,9 @@ func (s *Service) SessionLaunchEnvWith(ctx context.Context, id domain.SessionID,
 	if err != nil {
 		return nil, err
 	}
+	if s.beingRemoved(account.ID) {
+		return nil, ports.ErrAgentAccountUnknown
+	}
 	return s.launchEnv(ctx, id, account)
 }
 
@@ -706,6 +788,14 @@ func (s *Service) launchEnv(ctx context.Context, id domain.SessionID, override d
 			var bound bool
 			var err error
 			account, bound, err = s.SessionAccount(ctx, id, p)
+			if err == nil && bound && s.beingRemoved(account.ID) {
+				// Its account is going away: start on the default, and say so.
+				var def string
+				if def, err = s.defaultID(ctx, p); err == nil {
+					account, err = s.find(ctx, def)
+					bound = false
+				}
+			}
 			if err != nil {
 				errs = append(errs, err)
 				continue

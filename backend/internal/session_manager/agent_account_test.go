@@ -459,3 +459,30 @@ func TestAccountTransitionThatStopsTheTurnMarksTheSwitchInChat(t *testing.T) {
 		})
 	}
 }
+
+// A terminal move keeps its mode, so the reaper probes the session all through
+// it and finds the old terminal dead while the new one starts. The move must
+// fence it, or the session is ended (and its containers reaped) mid-move.
+func TestAccountTransitionFencesTheReaperWhileTheTargetStarts(t *testing.T) {
+	manager, store, runtime, _, _, _ := newAccountTransitionManager(t, domain.SessionModeTUI)
+	fenced := false
+	runtime.onCreate = func() { fenced = manager.SessionMutationInProgress("session-1") }
+
+	transition, err := manager.StartAccountTransition(context.Background(), "session-1", "acct-b", domain.SessionInterfaceTransitionDrain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled := awaitTransition(t, store, transition.ID); settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %s %s", settled.Phase, settled.ErrorDetail)
+	}
+	if !fenced {
+		t.Fatal("the reaper was not fenced while the target terminal started")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for manager.SessionMutationInProgress("session-1") {
+		if time.Now().After(deadline) {
+			t.Fatal("the fence outlived the move")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

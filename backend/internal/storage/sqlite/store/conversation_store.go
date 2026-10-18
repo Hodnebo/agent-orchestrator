@@ -1106,6 +1106,19 @@ func (s *Store) LatestConversationTurn(ctx context.Context, conversationID strin
 	return turnToDomain(row), nil
 }
 
+// LatestDispatchedConversationTurn is LatestConversationTurn among the turns
+// that reached the provider, skipping queued messages a stop swept away.
+func (s *Store) LatestDispatchedConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectLatestDispatchedConversationTurn(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("select latest dispatched conversation turn: %w", err)
+	}
+	return turnToDomain(row), nil
+}
+
 // LatestVisibleUserTurnSettled checks the current branch's latest user prompt
 // without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {

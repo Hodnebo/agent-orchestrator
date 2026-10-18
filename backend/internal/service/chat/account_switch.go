@@ -14,13 +14,15 @@ import (
 // the conversation continues on.
 const AccountSwitchedEvent = "account.switched"
 
-// MarkAccountSwitch records that the session's latest turn stopped for an
-// account move that began at since, rather than failing. Stopping the old
+// MarkAccountSwitch records that the session's latest turn that ran stopped for
+// an account move that began at since, rather than failing. Stopping the old
 // agent races its reply to the cancel, so the turn may have settled as failed;
 // it settles as interrupted, and a notice names the account the next message
 // continues on. A turn that finished before the move is left alone.
 func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string, since time.Time) error {
-	reader, ok := s.store.(promptSuggestionTurnReader)
+	reader, ok := s.store.(interface {
+		LatestDispatchedConversationTurn(context.Context, string) (domain.ConversationTurn, error)
+	})
 	if !ok {
 		return nil
 	}
@@ -31,7 +33,8 @@ func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, ac
 	if err != nil {
 		return err
 	}
-	turn, err := reader.LatestConversationTurn(ctx, conversation.ID)
+	// Queued messages the stop swept away are later rows that never ran.
+	turn, err := reader.LatestDispatchedConversationTurn(ctx, conversation.ID)
 	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return nil
 	}

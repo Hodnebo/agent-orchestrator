@@ -53,10 +53,15 @@ func (m *memStore) AgentAccountUsageSince(context.Context, time.Time) ([]domain.
 type fakeClaude struct {
 	signedInAs map[string]string
 	unshared   bool
+	onIdentity func(home string) // runs as a folder's identity is read
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	if hook := f.onIdentity; hook != nil {
+		f.onIdentity = nil
+		hook(home)
+	}
 	email, ok := f.signedInAs[home]
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, Email: email}, nil
 }
@@ -290,5 +295,164 @@ func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
 	}
 	if _, signedIn := claude.signedInAs[b]; signedIn {
 		t.Fatal("the removed account stayed signed in")
+	}
+}
+
+// A sign-in cancelled while it is being checked is not saved: the cancel has
+// already signed the folder out and removed it.
+func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	claude.onIdentity = func(string) {
+		if err := svc.CancelLogin(ctx, start.OperationID); err != nil {
+			t.Errorf("cancel: %v", err)
+		}
+		claude.signedInAs[b] = "b@example.com" // the CLI's answer was already on its way
+	}
+
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); !errors.Is(err, ports.ErrAgentAccountLoginUnknown) {
+		t.Fatalf("verify of a cancelled sign-in: %v, want ErrAgentAccountLoginUnknown", err)
+	}
+	if len(store.accounts) != 0 {
+		t.Fatalf("cancelled sign-in saved: %+v", store.accounts)
+	}
+}
+
+// While an account is being removed no launch resolves to it: a session that
+// starts in that window runs on the default, and a pick is refused. The
+// sessions still on it stay visible, so its agents can be found and stopped.
+func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+		t.Fatalf("sign-in = %q, %v", status, err)
+	}
+	accountID := start.OperationID
+	store.bindings["running"] = accountID
+	store.bindings["launching"] = accountID
+	if err := svc.SetDefault(ctx, accountID); err != nil {
+		t.Fatal(err)
+	}
+
+	refuse := errors.New("an agent would not stop")
+	svc.SetAgentStopper(func(ctx context.Context, id string) error {
+		if got, _ := svc.SessionAccountID(ctx, "running", domain.HarnessClaudeCode); got != accountID {
+			t.Errorf("session on the account reads as %q while it is removed", got)
+		}
+		env, _ := svc.SessionLaunchEnv(ctx, "launching")
+		if env["CLAUDE_CONFIG_DIR"] != "" || store.bindings["launching"] != "device-claude" {
+			t.Errorf("a launch during removal got %v bound to %q, want this computer", env, store.bindings["launching"])
+		}
+		if err := svc.BindSession(ctx, "new", domain.HarnessClaudeCode, ""); err != nil || store.bindings["new"] != "device-claude" {
+			t.Errorf("a new session during removal bound to %q (%v), want this computer", store.bindings["new"], err)
+		}
+		if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, accountID); !errors.Is(err, ports.ErrAgentAccountUnknown) {
+			t.Errorf("picking the account during removal: %v", err)
+		}
+		return refuse
+	})
+	if err := svc.Remove(ctx, accountID); !errors.Is(err, ports.ErrAgentAccountInUse) {
+		t.Fatalf("remove: %v", err)
+	}
+	// The refused removal leaves the account usable.
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, accountID); err != nil {
+		t.Fatalf("account after a refused removal: %v", err)
+	}
+}
+
+// A new task on a default account that is known to be signed out, or now holds
+// another login, is refused rather than started there or quietly elsewhere.
+// Not knowing (no reading yet) is not a reason to refuse.
+func TestNewTaskOnAKnownBadDefaultIsRefused(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+		t.Fatalf("sign-in = %q, %v", status, err)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "ok", domain.HarnessClaudeCode, ""); err != nil || store.bindings["ok"] != start.OperationID {
+		t.Fatalf("bind on a good default: %q %v", store.bindings["ok"], err)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		login string // "" signs the folder out
+	}{{"signed out", ""}, {"another login", "c@example.com"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			delete(claude.signedInAs, b)
+			if tc.login != "" {
+				claude.signedInAs[b] = tc.login
+			}
+			if _, err := svc.List(ctx, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.BindSession(ctx, domain.SessionID("bad-"+tc.name), domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+				t.Fatalf("bind on a bad default: %v", err)
+			}
+		})
+	}
+	// The computer's own login as the default follows the same rule.
+	if err := svc.SetDefault(ctx, "device-claude"); err != nil {
+		t.Fatal(err)
+	}
+	delete(claude.signedInAs, "")
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "device-out", domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+		t.Fatalf("bind on a signed-out CLI login default: %v", err)
+	}
+}
+
+func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	b := start.OperationID
+	check := func(accountID string, want bool) {
+		t.Helper()
+		if got := svc.RunsOnComputerLogin(ctx, domain.HarnessClaudeCode, accountID); got != want {
+			t.Fatalf("RunsOnComputerLogin(%q) = %v, want %v", accountID, got, want)
+		}
+	}
+	check("", true)
+	check(b, false)
+	if err := svc.SetDefault(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	check("", false)
+	check("device-claude", true)
+	if !svc.RunsOnComputerLogin(ctx, domain.HarnessGemini, "") {
+		t.Fatal("a harness without accounts runs on the computer's login")
 	}
 }

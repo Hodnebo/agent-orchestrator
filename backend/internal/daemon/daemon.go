@@ -620,6 +620,7 @@ func Run() error {
 	}); ok {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
+	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {

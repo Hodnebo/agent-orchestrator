@@ -243,6 +243,15 @@ type Service struct {
 	// artifactDeleter deletes a session's artifact files and version rows. Nil
 	// makes DeleteArtifacts fail rather than delete outside the capture lock.
 	artifactDeleter artifactDeleter
+	// runsOnComputerLogin reports whether a new session would launch on the
+	// computer's own CLI login rather than a saved account. Nil means always.
+	runsOnComputerLogin func(context.Context, domain.AgentHarness, string) bool
+}
+
+// SetComputerLoginCheck late-binds the account check the launch gate needs: the
+// computer's login state matters only to a session that will run on it.
+func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
+	s.runsOnComputerLogin = check
 }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
@@ -382,7 +391,8 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		if cfg.Harness == domain.HarnessCodex &&
 			readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
-			readiness.Authentication.Freshness == domain.AgentReadinessFresh {
+			readiness.Authentication.Freshness == domain.AgentReadinessFresh &&
+			(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, cfg.Harness, cfg.AgentAccountID)) {
 			return domain.Session{}, 0, 0, apierr.Conflict("CODEX_ACCOUNT_AUTH_UNVERIFIED", "Add or sign in to a Codex account in Settings before starting a Codex session", nil)
 		}
 	}
@@ -1401,6 +1411,8 @@ func mapSessionError(err error) error {
 		return apierr.NotFound("AGENT_ACCOUNT_NOT_FOUND", "Unknown agent account")
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
+	case errors.Is(err, ports.ErrAgentAccountDefaultUnusable):
+		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login. Sign it in again, or make another account the default.", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignedOut):
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
