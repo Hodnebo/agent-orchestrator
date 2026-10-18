@@ -4371,8 +4371,12 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 	if err != nil {
 		return fmt.Errorf("rebind branch %s provider: %w", branchID, err)
 	}
-	if rows, err := res.RowsAffected(); err != nil || rows != 1 {
-		return fmt.Errorf("rebind branch %s provider: %d rows, %v", branchID, rows, err)
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rebind branch %s provider: %w", branchID, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("rebind branch %s provider: %d rows", branchID, rows)
 	}
 	return nil
 }

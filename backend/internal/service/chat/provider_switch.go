@@ -253,7 +253,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 // chat's current one, else the one its agent was launched with, else Auto.
 func (s *Service) switchPermissions(source *Controller) ports.PermissionMode {
 	if mode := source.Settings().ApprovalMode; mode != "" {
-		return ports.NormalizePermissionMode(ports.PermissionMode(mode))
+		return ports.NormalizePermissionMode(mode)
 	}
 	s.mu.RLock()
 	launched := s.startConfigs[source.owner()].Permissions

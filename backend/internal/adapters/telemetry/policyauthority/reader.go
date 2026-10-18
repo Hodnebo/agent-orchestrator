@@ -118,7 +118,7 @@ func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool)
 
 // Watch re-reads the policy every interval and reports each change, so an
 // opt-out in the app closes the daemon's capture without a restart.
-func (r *Reader) Watch(ctx context.Context, interval time.Duration, envEvents, envExplicit bool, current bool, onChange func(bool)) {
+func (r *Reader) Watch(ctx context.Context, interval time.Duration, envEvents, envExplicit, current bool, onChange func(bool)) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
