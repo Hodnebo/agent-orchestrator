@@ -253,7 +253,10 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 			// answer 502); one the agent has not used yet answers that it is not
 			// running. A CP this cannot reach gets none either.
 			const sessionKey = `${base.href}\n${orgId}\n${sessionId}`;
-			if ((notConnectedUntil.get(sessionKey) ?? 0) > Date.now()) return "";
+			const now = Date.now();
+			// Forget sessions whose wait is over, so closed ones do not pile up.
+			for (const [key, until] of notConnectedUntil) if (until <= now) notConnectedUntil.delete(key);
+			if (notConnectedUntil.has(sessionKey)) return "";
 			const token = await bearer();
 			if (!token) return "";
 			const probe = await fetch(cpUrl(target, "stats"), { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8_000) })

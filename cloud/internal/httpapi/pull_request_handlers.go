@@ -444,11 +444,14 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 			opener, loaded := openers[pr.SessionID]
 			if !loaded {
 				resolved, err := s.store.SessionPullRequestOpener(r.Context(), principalFrom(r), orgID, pr.SessionID)
-				if errors.Is(err, postgres.ErrForbidden) {
+				switch {
+				case errors.Is(err, postgres.ErrForbidden):
 					openersHidden = true
-				} else if err != nil {
+				case errors.Is(err, postgres.ErrNotFound):
+					// No creator on record: expected, and asked on every poll.
+				case err != nil:
 					s.logger.Warn("resolve pull request opener", "error", err, "request_id", requestID(r))
-				} else if resolved.Name != "" || resolved.GitHubLogin != "" {
+				case resolved.Name != "" || resolved.GitHubLogin != "":
 					opener = &pullRequestOpenerResponse{
 						Name: resolved.Name, GitHubLogin: resolved.GitHubLogin, AvatarURL: resolved.AvatarURL,
 					}
