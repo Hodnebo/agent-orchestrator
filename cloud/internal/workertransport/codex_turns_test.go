@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,11 @@ const (
 	codexTurnFailed = `{"timestamp":"2026-10-18T06:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","last_agent_message":null,"error":{"message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.","codex_error_info":"unauthorized"}}}` + "\n"
 	codexTurnDone   = `{"timestamp":"2026-10-18T06:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","last_agent_message":"done"}}` + "\n"
 )
+
+// codexTurnFailedAt is codexTurnFailed stamped at a given time.
+func codexTurnFailedAt(at time.Time) string {
+	return strings.Replace(codexTurnFailed, "2026-10-18T06:00:02Z", at.UTC().Format(time.RFC3339Nano), 1)
+}
 
 func writeRollout(t *testing.T, codexHome, name, content string) string {
 	t.Helper()
@@ -50,8 +56,17 @@ func appendRollout(t *testing.T, path, content string) {
 }
 
 func TestCodexTurnFailedRecord(t *testing.T) {
-	if message, failed := codexTurnFailedRecord([]byte(codexTurnFailed)); !failed || message == "" {
-		t.Fatalf("failed turn = %q/%v, want reported with its message", message, failed)
+	failure, failed := codexTurnFailedRecord([]byte(codexTurnFailed))
+	if !failed || failure.message == "" {
+		t.Fatalf("failed turn = %+v/%v, want reported with its message", failure, failed)
+	}
+	if want := time.Date(2026, 10, 18, 6, 0, 2, 0, time.UTC); !failure.at.Equal(want) {
+		t.Fatalf("failed turn ended at %v, want its record's timestamp %v", failure.at, want)
+	}
+	before := time.Now()
+	failure, failed = codexTurnFailedRecord([]byte(strings.Replace(codexTurnFailed, `"timestamp":"2026-10-18T06:00:02Z",`, "", 1)))
+	if !failed || failure.at.Before(before) {
+		t.Fatalf("failed turn without a timestamp = %+v/%v, want it ended now", failure, failed)
 	}
 	for _, line := range []string{
 		codexTurnDone,
@@ -177,7 +192,7 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 		t.Fatal("terminal reported idle before the turn ended")
 	}
 	time.Sleep(10 * time.Millisecond)
-	writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted+codexTurnFailed)
+	writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted+codexTurnFailedAt(time.Now()))
 	select {
 	case <-control.got:
 	case <-time.After(5 * time.Second):
@@ -195,5 +210,38 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 	}
 	if idle, unverified := supervisor.tuiSourceIdle(); !idle || unverified {
 		t.Fatalf("terminal idle = %v (unverified %v), want verified idle after the failed turn", idle, unverified)
+	}
+}
+
+// The poll sees a failed turn up to two seconds after it ended. A prompt the
+// user sent in between is newer than the failure, so the stop proof (stamped
+// when the turn ended) must not mark that new turn idle.
+func TestCodexTurnFailureDoesNotOverrideALaterPrompt(t *testing.T) {
+	dataDir := t.TempDir()
+	terminalID := "00000000-0000-0000-0000-000000000062"
+	control := &codexActivityControl{got: make(chan struct{}, 1)}
+	failedAt := time.Now().Add(-time.Second)
+	supervisor := &Supervisor{
+		Control: control, DataDir: dataDir, Harness: "codex", AgentTerminalID: terminalID,
+		terminals:    map[string]*terminalProcess{terminalID: {}},
+		tuiStartedAt: failedAt.Add(-time.Minute),
+	}
+	supervisor.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	supervisor.lastTUIInputAt = failedAt.Add(500 * time.Millisecond)
+	supervisor.reportCodexTurnFailure(context.Background(), codexTurnFailure{message: "usage limit", at: failedAt})
+	if idle, _ := supervisor.tuiSourceIdle(); idle {
+		t.Fatal("a failure from before the latest prompt marked the terminal idle")
+	}
+	if len(control.activity) != 0 {
+		t.Fatalf("published %+v for a failure older than the latest prompt", control.activity)
+	}
+
+	supervisor.lastTUIInputAt = failedAt.Add(-500 * time.Millisecond)
+	supervisor.reportCodexTurnFailure(context.Background(), codexTurnFailure{message: "usage limit", at: failedAt})
+	if idle, unverified := supervisor.tuiSourceIdle(); !idle || unverified {
+		t.Fatalf("terminal idle = %v (unverified %v), want verified idle after the failed turn", idle, unverified)
+	}
+	if len(control.activity) != 1 {
+		t.Fatalf("activity = %+v, want the idle report", control.activity)
 	}
 }

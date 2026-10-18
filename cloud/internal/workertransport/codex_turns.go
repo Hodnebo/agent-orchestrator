@@ -84,9 +84,14 @@ func newCodexRolloutTail(codexHome string, started time.Time) *codexRolloutTail 
 	return t
 }
 
-// poll returns the error message of each turn that ended unsuccessfully since
-// the previous poll.
-func (t *codexRolloutTail) poll() []string {
+// codexTurnFailure is a turn that ended on an error, and when it ended.
+type codexTurnFailure struct {
+	message string
+	at      time.Time
+}
+
+// poll returns each turn that ended unsuccessfully since the previous poll.
+func (t *codexRolloutTail) poll() []codexTurnFailure {
 	if t.path == "" || t.scans%codexRolloutScanEvery == 0 {
 		t.follow(t.newestInteractiveRollout())
 	}
@@ -127,12 +132,12 @@ func (t *codexRolloutTail) poll() []string {
 		t.partial = append([]byte(nil), data[last+1:]...)
 		data = data[:last+1]
 	}
-	var failures []string
+	var failures []codexTurnFailure
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 64<<10), maxCodexRolloutReadSize)
 	for scanner.Scan() {
-		if message, failed := codexTurnFailedRecord(scanner.Bytes()); failed {
-			failures = append(failures, message)
+		if failure, failed := codexTurnFailedRecord(scanner.Bytes()); failed {
+			failures = append(failures, failure)
 		}
 	}
 	return failures
@@ -204,28 +209,35 @@ func codexInteractiveRollout(path string) bool {
 
 // codexTurnFailedRecord reports a rollout record for a turn that ended on an
 // error. A successful turn end is skipped: its Stop hook already reported it.
-func codexTurnFailedRecord(line []byte) (string, bool) {
+// The turn ended at the record's own timestamp, not when the watcher read it
+// up to a poll later; a record without one is taken to have just ended.
+func codexTurnFailedRecord(line []byte) (codexTurnFailure, bool) {
 	var record struct {
-		Type    string `json:"type"`
-		Payload struct {
+		Timestamp string `json:"timestamp"`
+		Type      string `json:"type"`
+		Payload   struct {
 			Type  string           `json:"type"`
 			Error *json.RawMessage `json:"error"`
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" {
-		return "", false
+		return codexTurnFailure{}, false
 	}
 	if record.Payload.Type != "task_complete" && record.Payload.Type != "turn_complete" {
-		return "", false
+		return codexTurnFailure{}, false
 	}
 	if record.Payload.Error == nil || bytes.Equal(bytes.TrimSpace(*record.Payload.Error), []byte("null")) {
-		return "", false
+		return codexTurnFailure{}, false
 	}
 	var failure struct {
 		Message string `json:"message"`
 	}
 	_ = json.Unmarshal(*record.Payload.Error, &failure)
-	return failure.Message, true
+	at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+	if err != nil {
+		at = time.Now()
+	}
+	return codexTurnFailure{message: failure.Message, at: at}, true
 }
 
 // watchCodexTurnFailures runs for the life of the terminal agent's process.
@@ -246,13 +258,23 @@ func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, tail *codexRoll
 	}
 }
 
-func (s *Supervisor) reportCodexTurnFailure(ctx context.Context, message string) {
+func (s *Supervisor) reportCodexTurnFailure(ctx context.Context, failure codexTurnFailure) {
 	if s.DataDir != "" {
-		if err := worker.RecordTUIStop(s.DataDir, time.Now()); err != nil {
+		// Stamped when the turn ended: a prompt typed after that, before this
+		// poll saw it, is newer than the proof and keeps the agent working.
+		if err := worker.RecordTUIStop(s.DataDir, failure.at); err != nil {
 			s.Logger.Warn("record Codex turn failure as terminal stop", "error", err)
 		}
 	}
-	s.Logger.Info("Codex turn ended on an error; marking the terminal agent idle", "error_message", message)
+	s.mu.Lock()
+	inputAt := s.lastTUIInputAt
+	s.mu.Unlock()
+	if inputAt.After(failure.at) {
+		s.Logger.Info("Codex turn ended on an error before the latest terminal input; leaving the agent working",
+			"error_message", failure.message)
+		return
+	}
+	s.Logger.Info("Codex turn ended on an error; marking the terminal agent idle", "error_message", failure.message)
 	publisher, ok := s.Control.(activityPublisher)
 	if !ok {
 		return
