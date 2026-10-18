@@ -429,8 +429,10 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 	}
 	items := make([]pullRequestSummaryResponse, 0, len(pullRequests))
 	// An orchestrator lists every pull request in its project, so each one is
-	// named by the session that raised it, resolved once per request.
+	// named by the session that raised it, resolved once per request. Only
+	// organization members see who that is, not a project share grantee.
 	openers := make(map[string]*pullRequestOpenerResponse)
+	openersHidden := false
 	for _, pr := range pullRequests {
 		snapshot, err := s.store.PullRequestSnapshot(r.Context(), orgID, pr.ID)
 		if err != nil {
@@ -438,11 +440,13 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		item := toPullRequestSummaryResponse(pr, snapshot)
-		if s.openedByAO(item.Author) && pr.SessionID != "" {
+		if !openersHidden && s.openedByAO(item.Author) && pr.SessionID != "" {
 			opener, loaded := openers[pr.SessionID]
 			if !loaded {
-				resolved, err := s.store.SessionPullRequestOpener(r.Context(), orgID, pr.SessionID)
-				if err != nil {
+				resolved, err := s.store.SessionPullRequestOpener(r.Context(), principalFrom(r), orgID, pr.SessionID)
+				if errors.Is(err, postgres.ErrForbidden) {
+					openersHidden = true
+				} else if err != nil {
 					s.logger.Warn("resolve pull request opener", "error", err, "request_id", requestID(r))
 				} else if resolved.Name != "" || resolved.GitHubLogin != "" {
 					opener = &pullRequestOpenerResponse{

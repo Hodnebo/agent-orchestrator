@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -20,6 +21,8 @@ const (
 type openerPRStore struct {
 	Store
 	openerCalls map[string]int
+	// grantee makes the caller a project share grantee, not a member.
+	grantee bool
 }
 
 // An orchestrator's list holds its own pull requests and those of every other
@@ -39,16 +42,30 @@ func (openerPRStore) PullRequestSnapshot(context.Context, string, string) (domai
 	return domain.PullRequestSnapshot{}, nil
 }
 
-func (s *openerPRStore) SessionPullRequestOpener(_ context.Context, _, sessionID string) (domain.PullRequestOpener, error) {
+func (s *openerPRStore) SessionPullRequestOpener(_ context.Context, _ domain.Principal, _, sessionID string) (domain.PullRequestOpener, error) {
 	s.openerCalls[sessionID]++
+	if s.grantee {
+		return domain.PullRequestOpener{}, postgres.ErrForbidden
+	}
 	if sessionID == openerTeammateSession {
 		return domain.PullRequestOpener{Name: "Grace Hopper", GitHubLogin: "grace"}, nil
 	}
 	return domain.PullRequestOpener{Name: "Ada Lovelace", GitHubLogin: "ada", AvatarURL: "https://avatars.example/ada"}, nil
 }
 
-func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *testing.T) {
-	store := &openerPRStore{openerCalls: make(map[string]int)}
+type openerPullRequests struct {
+	PullRequests []struct {
+		Author   string `json:"author"`
+		OpenedBy *struct {
+			Name        string `json:"name"`
+			GitHubLogin string `json:"githubLogin"`
+			AvatarURL   string `json:"avatarUrl"`
+		} `json:"openedBy"`
+	} `json:"pullRequests"`
+}
+
+func listOpenerPullRequests(t *testing.T, store *openerPRStore) openerPullRequests {
+	t.Helper()
 	server := New(Options{Store: store})
 	// The App's slug is ao-test (REST "ao-test[bot]", GraphQL "ao-test").
 	githubServer, _ := newGitHubCallbackTestServer(t)
@@ -63,19 +80,16 @@ func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *tes
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	var result struct {
-		PullRequests []struct {
-			Author   string `json:"author"`
-			OpenedBy *struct {
-				Name        string `json:"name"`
-				GitHubLogin string `json:"githubLogin"`
-				AvatarURL   string `json:"avatarUrl"`
-			} `json:"openedBy"`
-		} `json:"pullRequests"`
-	}
+	var result openerPullRequests
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
+	return result
+}
+
+func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *testing.T) {
+	store := &openerPRStore{openerCalls: make(map[string]int)}
+	result := listOpenerPullRequests(t, store)
 	if len(result.PullRequests) != 6 {
 		t.Fatalf("pull requests = %+v", result.PullRequests)
 	}
@@ -103,5 +117,27 @@ func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *tes
 	}
 	if store.openerCalls[openerOrchestratorSession] != 1 || store.openerCalls[openerTeammateSession] != 1 {
 		t.Fatalf("opener lookups = %v, want once per session per request", store.openerCalls)
+	}
+}
+
+// A project share grantee is not an organization member and does not see who
+// started a session.
+func TestListSessionPullRequestsHidesThePersonFromShareGrantees(t *testing.T) {
+	store := &openerPRStore{openerCalls: make(map[string]int), grantee: true}
+	result := listOpenerPullRequests(t, store)
+	for index, pr := range result.PullRequests {
+		if pr.OpenedBy != nil {
+			t.Fatalf("pull request %d openedBy = %+v for a share grantee", index, pr.OpenedBy)
+		}
+		if pr.Author == "" {
+			t.Fatalf("pull request %d lost its GitHub author", index)
+		}
+	}
+	total := 0
+	for _, calls := range store.openerCalls {
+		total += calls
+	}
+	if total != 1 {
+		t.Fatalf("opener lookups = %v, want one refused lookup", store.openerCalls)
 	}
 }

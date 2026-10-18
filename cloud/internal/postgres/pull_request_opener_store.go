@@ -12,11 +12,16 @@ import (
 
 // SessionPullRequestOpener names the person who started a session, for pull
 // requests the AO GitHub App opened on their behalf: their AO display name
-// (or the name part of their email) and, when they connected GitHub to AO,
-// their GitHub login and avatar.
-func (s *Store) SessionPullRequestOpener(ctx context.Context, orgID, sessionID string) (domain.PullRequestOpener, error) {
+// and, when they connected GitHub to AO, their GitHub login and avatar. Only
+// the organization's members see who that is; a project share grantee gets
+// ErrForbidden.
+func (s *Store) SessionPullRequestOpener(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+) (domain.PullRequestOpener, error) {
 	var opener domain.PullRequestOpener
-	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+	err := s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		var userID *string
 		err := tx.QueryRow(ctx,
 			`SELECT created_by_user_id::text FROM ao_sessions WHERE org_id = $1 AND id = $2`,
@@ -28,11 +33,11 @@ func (s *Store) SessionPullRequestOpener(ctx context.Context, orgID, sessionID s
 		if err != nil {
 			return fmt.Errorf("resolve session creator: %w", err)
 		}
-		var displayName, email, avatarURL string
+		var displayName, avatarURL string
 		err = tx.QueryRow(ctx,
-			`SELECT display_name, email, avatar_url FROM ao_users WHERE id = $1`,
+			`SELECT display_name, avatar_url FROM ao_users WHERE id = $1`,
 			*userID,
-		).Scan(&displayName, &email, &avatarURL)
+		).Scan(&displayName, &avatarURL)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -40,9 +45,6 @@ func (s *Store) SessionPullRequestOpener(ctx context.Context, orgID, sessionID s
 			return fmt.Errorf("resolve session creator: %w", err)
 		}
 		opener.Name = strings.TrimSpace(displayName)
-		if opener.Name == "" {
-			opener.Name, _, _ = strings.Cut(strings.TrimSpace(email), "@")
-		}
 		opener.AvatarURL = strings.TrimSpace(avatarURL)
 		if _, err := tx.Exec(ctx, `SELECT set_config('ao.user_id', $1, true)`, *userID); err != nil {
 			return err

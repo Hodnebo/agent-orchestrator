@@ -2,7 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/google/uuid"
 )
 
 func TestSessionPullRequestOpenerNamesTheSessionsPerson(t *testing.T) {
@@ -17,12 +21,14 @@ func TestSessionPullRequestOpenerNamesTheSessionsPerson(t *testing.T) {
 	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET created_by_user_id = $1 WHERE id = $2`, fixture.userID, fixture.sessionID); err != nil {
 		t.Fatal(err)
 	}
-	opener, err := store.SessionPullRequestOpener(ctx, fixture.orgID, fixture.sessionID)
+	member := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	opener, err := store.SessionPullRequestOpener(ctx, member, fixture.orgID, fixture.sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opener.Name != "ada" || opener.GitHubLogin != "" || opener.AvatarURL != "https://ao.example/ada.png" {
-		t.Fatalf("opener without GitHub = %+v", opener)
+	// No display name and no GitHub login: nothing names them, not even their email.
+	if opener.Name != "" || opener.GitHubLogin != "" {
+		t.Fatalf("opener without a name or GitHub = %+v, want neither", opener)
 	}
 
 	if _, err := admin.Exec(ctx, `UPDATE ao_users SET display_name = 'Ada Lovelace' WHERE id = $1`, fixture.userID); err != nil {
@@ -36,11 +42,23 @@ func TestSessionPullRequestOpenerNamesTheSessionsPerson(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	opener, err = store.SessionPullRequestOpener(ctx, fixture.orgID, fixture.sessionID)
+	opener, err = store.SessionPullRequestOpener(ctx, member, fixture.orgID, fixture.sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if opener.Name != "Ada Lovelace" || opener.GitHubLogin != "ada-gh" || opener.AvatarURL != "https://avatars.example/ada" {
 		t.Fatalf("opener with GitHub = %+v", opener)
+	}
+
+	// Someone outside the organization (a project share grantee) is refused.
+	outsider := uuid.NewString()
+	if _, err := admin.Exec(ctx, `INSERT INTO ao_users (
+		id, auth_provider, external_user_id, email, display_name, password_hash
+	) VALUES ($1::uuid, 'local', $1::uuid::text, $1::uuid::text || '@example.test', 'Outsider', 'hash')`, outsider); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SessionPullRequestOpener(ctx, domain.Principal{UserID: outsider, Provider: "local"}, fixture.orgID, fixture.sessionID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("outsider error = %v, want ErrForbidden", err)
 	}
 }
