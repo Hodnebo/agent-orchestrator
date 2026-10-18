@@ -3,6 +3,7 @@ package openinterpreter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -416,5 +417,41 @@ func TestRootHookRejectsNestedAndMalformedIdentities(t *testing.T) {
 		if IsRootHook([]byte(payload)) {
 			t.Fatalf("accepted child/malformed hook %s", payload)
 		}
+	}
+}
+
+func TestChatNativeRestoreFailsClosedWithoutChangingTUIFallback(t *testing.T) {
+	const id = "019f706d-1234-7123-8123-123456789abc"
+	workspace := t.TempDir()
+	home := writeNativeHistory(t, id, workspace)
+	p := New()
+	for _, tt := range []struct {
+		name, home, workspace, id string
+		ok                        bool
+	}{
+		{"same history and workspace", home, workspace, id, true},
+		{"missing history", t.TempDir(), workspace, id, false},
+		{"foreign workspace", home, t.TempDir(), id, false},
+		{"invalid identity", home, workspace, "latest", false},
+		{"missing workspace", home, filepath.Join(t.TempDir(), "missing"), id, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.ValidateNativeRestore(context.Background(), map[string]string{"INTERPRETER_HOME": tt.home}, tt.workspace, tt.id)
+			if (err == nil) != tt.ok {
+				t.Fatalf("native restore guard = %v", err)
+			}
+		})
+	}
+	path := filepath.Join(home, "sessions", "rollout-now-"+id+".jsonl")
+	if err := os.WriteFile(path, []byte("corrupt history"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ValidateNativeRestore(context.Background(), map[string]string{"INTERPRETER_HOME": home}, workspace, id); err == nil {
+		t.Fatal("accepted damaged history")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := p.ValidateNativeRestore(ctx, map[string]string{"INTERPRETER_HOME": home}, workspace, id); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled guard = %v", err)
 	}
 }

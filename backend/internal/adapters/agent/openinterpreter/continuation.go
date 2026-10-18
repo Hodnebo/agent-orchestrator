@@ -260,3 +260,27 @@ func findTranscript(ctx context.Context, root, value string) (string, sessionMet
 	}
 	return found, foundMetadata, found != "", err
 }
+
+// ValidateNativeRestore is the strict Chat admission boundary. Unlike the TUI's
+// existing recovery path, it never permits a fresh launch for missing or damaged
+// history. Native ACP supplies cwd to thread/resume and thereby bypasses the
+// provider's historical-workspace check, so AO must check before session/load.
+func (p *Plugin) ValidateNativeRestore(ctx context.Context, env map[string]string, workspace, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id, err := nativeID(value)
+	if err != nil {
+		return err
+	}
+	available, err := p.validateRestoreWorkspace(ctx, ports.RestoreConfig{
+		Env: env, Session: ports.SessionRef{WorkspacePath: workspace},
+	}, id)
+	if err != nil {
+		return err
+	}
+	if !available {
+		return fmt.Errorf("open-interpreter: exact native history is missing, empty, or unreadable")
+	}
+	return nil
+}
