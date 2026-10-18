@@ -19,7 +19,6 @@ import {
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ThinkingOrb as Orb } from "thinking-orbs";
 import {
 	AlertTriangle,
 	Brain,
@@ -73,6 +72,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { BreathingOrb } from "./BreathingOrb";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
@@ -635,15 +635,13 @@ export function ResponseSpinner() {
 }
 
 /**
- * The live turn's thinking mark: the dotted "breathing" orb from thinking-orbs (a
- * ring slowly morphing), at its 20px inline preset. It is decorative here, since
- * "Working for" beside it says the same thing in words, and it follows AO's
- * `data-theme`, honours reduced motion, and pauses when scrolled offscreen.
+ * The live turn's thinking mark: a dotted ring that breathes (see BreathingOrb).
+ * Decorative here, since the label and timer beside it carry the meaning.
  */
 export function ThinkingOrb() {
 	return (
 		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center">
-			<Orb state="breathing" size={20} aria-hidden="true" />
+			<BreathingOrb size={20} className="text-muted-foreground" />
 		</span>
 	);
 }
