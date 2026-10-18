@@ -1140,6 +1140,10 @@ function ChatWorkspaceContent({
 		() =>
 			new Set(
 				snapshot.items.flatMap((item) => {
+					// A sent message's own row proves it arrived, as a steer's activity does.
+					if (item.kind === "message") {
+						return item.role === "user" && item.origin === "human" && item.clientMessageId ? [item.clientMessageId] : [];
+					}
 					if (
 						item.kind !== "activity" ||
 						item.detail?.event !== "steer" ||

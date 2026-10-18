@@ -1024,10 +1024,10 @@ export const ChatComposer = memo(function ChatComposer({
 			setDurableDelivery(delivery);
 			return;
 		}
-		const observedSteer =
-			delivery.kind === "steer" &&
-			acceptedClientMessageIds?.has(delivery.clientMessageId);
-		if (delivery.state !== "accepted" && !observedSteer) return;
+		// The chat already holds this message (or steer), so it arrived even though
+		// its answer was lost, for instance when the app restarted mid-send.
+		const observed = acceptedClientMessageIds?.has(delivery.clientMessageId);
+		if (delivery.state !== "accepted" && !observed) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
 		automaticDeliveryRecoveryAttempted.current = delivery.clientMessageId;
 		acceptAndClearDurableDelivery(delivery);
