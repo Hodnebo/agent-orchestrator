@@ -192,3 +192,22 @@ func TestPiACPFeatureMapping(t *testing.T) {
 		t.Fatalf("session options = %#v, want %#v", got, want)
 	}
 }
+
+func TestPromptResponseFailureReportsATurnWithoutAModelCall(t *testing.T) {
+	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
+	if err := promptResponseFailure(empty); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
+		t.Fatalf("zero-token end_turn = %v, want a reported failure", err)
+	}
+	answered := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}}
+	if err := promptResponseFailure(answered); err != nil {
+		t.Fatalf("answered turn = %v, want no failure", err)
+	}
+	for _, response := range []acpsdk.PromptResponse{
+		{StopReason: acpsdk.StopReasonEndTurn},
+		{StopReason: acpsdk.StopReasonCancelled, Usage: &acpsdk.Usage{}},
+	} {
+		if err := promptResponseFailure(response); err != nil {
+			t.Fatalf("%+v = %v, want no failure without zero usage on end_turn", response, err)
+		}
+	}
+}

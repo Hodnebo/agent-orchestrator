@@ -94,10 +94,28 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			}
 			return acpdriver.Launch{Command: binary, Env: env}, nil
 		},
-		ValidateInitialize: validateInitialize,
-		SessionMeta:        sessionMeta,
-		SessionOptions:     sessionOptions,
+		ValidateInitialize:    validateInitialize,
+		SessionMeta:           sessionMeta,
+		SessionOptions:        sessionOptions,
+		PromptResponseFailure: promptResponseFailure,
+		// pi-acp can exit during its first handshake while its background
+		// daemon starts; the next start finds the daemon up.
+		RetryStartupExit: true,
 	}
+}
+
+// promptResponseFailure reports a turn Pi ended without reaching its model.
+// When Pi's sign-in has expired, pi-acp answers the prompt with end_turn, no
+// message and zero tokens, so the chat would show the turn as done with
+// nothing in it.
+func promptResponseFailure(response acpsdk.PromptResponse) error {
+	usage := response.Usage
+	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil ||
+		usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 {
+		return nil
+	}
+	return ports.NewChatProviderFailure("Pi did not reach its model",
+		"Pi ended the turn without calling its model, usually because its sign-in has expired. Run pi in a terminal and log in again.", nil)
 }
 
 func cloneEnv(in map[string]string) map[string]string {
