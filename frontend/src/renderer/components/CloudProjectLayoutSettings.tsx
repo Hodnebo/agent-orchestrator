@@ -28,7 +28,7 @@ import { CloudAdditionalReposEditor } from "./CloudAdditionalReposEditor";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { Button } from "./ui/button";
+import { SettingsSaveFooter as SaveFooter } from "./settings/SettingsSaveFooter";
 import { Input } from "./ui/input";
 
 type LoadedProps = { project: CloudCpProject; readOnly: boolean; onSaveState?: (state: ProjectSettingsSaveState) => void };
@@ -85,19 +85,6 @@ function useSettingsPageSave(project: CloudCpProject, dirty: boolean, unsaveable
 		});
 	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
 	return { mutation, edited: () => setSavedAt(false) };
-}
-
-function SaveFooter({ dirty, disabled, error }: { dirty: boolean; disabled: boolean; error?: string }) {
-	const { t } = useTranslation();
-	return <>
-		{/* Pinned to the bottom of the scrolling page so Save stays in view however long the page is. */}
-		<div className="sticky -bottom-(--size-modal-padding) z-[1] -mx-(--size-modal-padding) -mb-(--size-modal-padding) border-t border-border bg-card px-(--size-modal-padding) py-4">
-			{error ? <p role="alert" className="mb-3 text-sm text-error">{error}</p> : null}
-			<div className="flex items-center justify-end gap-3">
-				<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
-			</div>
-		</div>
-	</>;
 }
 
 function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: string; hint?: ReactNode; children: ReactNode }) {

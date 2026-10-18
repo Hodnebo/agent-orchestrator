@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import { CloudProjectScriptsSettings } from "./ProjectScriptsSettings";
 
 const mocks = vi.hoisted(() => ({
@@ -94,6 +95,26 @@ it("reports unsaved edits as dirty without the autosave Saving state, and lists 
 	expect(screen.getByText("$AO_SESSION_ID")).toBeInTheDocument();
 	expect(screen.getByText(/a unique ID for the session/)).toBeInTheDocument();
 	expect(screen.queryByText(/AO_SOURCE_TREE_PATH/)).toBeNull();
+	// The app is unselectable by default; the names are meant to be copied.
+	expect(screen.getByText("$AO_SESSION_ID").closest("dl")).toHaveClass("select-text");
+	expect(screen.getByRole("button", { name: "Copy $AO_SESSION_ID" })).toBeInTheDocument();
+	// A single-repository project has no folder of repositories to name.
+	expect(screen.queryByText("$AO_REPOS_ROOT")).toBeNull();
+	// Save stays pinned in view however many steps the page lists.
+	expect(screen.getByRole("button", { name: "Save changes" }).closest("[data-settings-save-footer]")).toHaveClass("sticky");
+});
+
+it("copies a variable and names the folder of every repository for a multi-repository project", async () => {
+	const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+	mocks.get.mockResolvedValue({ project: project({ ...stored, repos: [{ url: "https://github.com/acme/11x" }] }) });
+	renderScripts();
+	await screen.findByLabelText("Step 1");
+	await userEvent.click(screen.getByText("Variables you can use"));
+	expect(screen.getByText("$AO_REPOS_ROOT")).toBeInTheDocument();
+	expect(screen.getByText(/the folder that holds every repository's folder/)).toBeInTheDocument();
+	await userEvent.click(screen.getByRole("button", { name: "Copy $AO_REPOS_ROOT" }));
+	expect(writeText).toHaveBeenCalledWith("$AO_REPOS_ROOT");
+	writeText.mockRestore();
 });
 
 // Setup and Cleanup run in every member's later sessions, so a member sees
