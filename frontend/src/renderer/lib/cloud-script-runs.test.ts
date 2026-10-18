@@ -47,7 +47,7 @@ describe("groupScriptRuns", () => {
 		expect(run.runningStep).toBe(1);
 		expect(run.steps.map((entry) => entry.status)).toEqual(["running", "pending", "pending"]);
 		expect(run.steps[0].output).toBe("added 10\nadded 20");
-		expect(run.eventCount).toBe(3);
+		expect(run.lastSequence).toBe(3);
 	});
 
 	it("is order independent: a late older event does not overwrite a newer one", () => {
@@ -130,12 +130,27 @@ describe("groupScriptRuns", () => {
 describe("mergeScriptStepEvents", () => {
 	it("keeps only step events, sorted, without duplicates, and returns the same list when nothing is new", () => {
 		sequence = 0;
-		const a = step({ step: 1, status: "running" });
-		const b = step({ step: 1, status: "succeeded" });
+		const a = step({ step: 1, status: "succeeded" });
+		const b = step({ step: 2, status: "running" });
 		const other: CloudCpClientEvent = { sessionId: "s1", sequence: 99, type: "agent.ready", payload: {}, createdAt: "2026-10-18T10:00:00Z" };
 		const merged = mergeScriptStepEvents([b], [a, other, b]);
 		expect(merged.map((event) => event.sequence)).toEqual([a.sequence, b.sequence]);
 		expect(mergeScriptStepEvents(merged, [a])).toBe(merged);
+	});
+
+	it("keeps only the newest event per run and step, so live snapshots do not pile up", () => {
+		sequence = 0;
+		const snapshots = [1, 2, 3].map((index) => step({ step: 1, status: "running", output: `line ${index}` }));
+		const other = step({ runId: "run-2", step: 1, status: "running" });
+		let cache: CloudCpClientEvent[] = [];
+		for (const event of [...snapshots, other]) cache = mergeScriptStepEvents(cache, [event]);
+		expect(cache.map((event) => event.sequence)).toEqual([snapshots[2].sequence, other.sequence]);
+		// A late, older snapshot never replaces the newer one.
+		expect(mergeScriptStepEvents(cache, [snapshots[0]])).toBe(cache);
+		const final = step({ step: 1, status: "succeeded", output: "done" });
+		cache = mergeScriptStepEvents(cache, [final]);
+		expect(cache.map((event) => event.sequence)).toEqual([other.sequence, final.sequence]);
+		expect(groupScriptRuns(cache)[1].steps[0]).toMatchObject({ status: "succeeded", output: "done" });
 	});
 });
 

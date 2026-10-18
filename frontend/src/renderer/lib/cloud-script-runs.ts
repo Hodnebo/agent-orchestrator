@@ -82,8 +82,6 @@ export interface ScriptRun {
 	firstSequence: number;
 	/** Sequence of its newest event: changes whenever the run does. */
 	lastSequence: number;
-	/** Number of events folded into the run; a cheap revision for memoized rows. */
-	eventCount: number;
 }
 
 const statuses = new Set<ScriptStepStatus>(["running", "succeeded", "failed", "timed_out", "skipped"]);
@@ -152,7 +150,6 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload }>;
 		firstSequence: number;
 		lastSequence: number;
-		eventCount: number;
 		firstCreatedAt: string;
 	}>();
 	for (const event of events) {
@@ -161,13 +158,12 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 		if (!payload) continue;
 		let run = runs.get(payload.runId);
 		if (!run) {
-			run = { phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence, eventCount: 0, firstCreatedAt: event.createdAt };
+			run = { phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence, firstCreatedAt: event.createdAt };
 			runs.set(payload.runId, run);
 		}
 		run.total = Math.max(run.total, payload.total);
 		run.firstSequence = Math.min(run.firstSequence, event.sequence);
 		run.lastSequence = Math.max(run.lastSequence, event.sequence);
-		run.eventCount++;
 		const previous = run.latest.get(payload.step);
 		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload });
 	}
@@ -225,7 +221,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 		}
 		return {
 			runId, phase: run.phase, total: run.total, steps, status, failedStep, runningStep, startedAt, durationMs,
-			firstSequence: run.firstSequence, lastSequence: run.lastSequence, eventCount: run.eventCount,
+			firstSequence: run.firstSequence, lastSequence: run.lastSequence,
 		};
 	});
 }
@@ -243,20 +239,38 @@ export function scriptStepEvents(events: readonly CloudCpClientEvent[]): CloudCp
 	return events.filter((event) => event.type === SCRIPT_STEP_EVENT);
 }
 
-/** Merges events into a sequence-ordered list without duplicates. */
+function stepKey(event: CloudCpClientEvent): string | undefined {
+	const payload = parseScriptStepPayload(event.payload);
+	return payload ? `${payload.runId}\u0000${payload.step}` : undefined;
+}
+
+/**
+ * Merges events into a sequence-ordered list that keeps only the newest event
+ * per (runId, step): every event carries the step's latest output tail, so
+ * older live snapshots of a step are never read again and are dropped rather
+ * than held for the session's lifetime. Returns `existing` unchanged when
+ * nothing newer arrived.
+ */
 export function mergeScriptStepEvents(existing: readonly CloudCpClientEvent[], incoming: readonly CloudCpClientEvent[]): CloudCpClientEvent[] {
 	const fresh = scriptStepEvents(incoming);
 	if (fresh.length === 0) return existing as CloudCpClientEvent[];
-	const bySequence = new Map<number, CloudCpClientEvent>();
-	for (const event of existing) bySequence.set(event.sequence, event);
-	let changed = false;
+	const latest = new Map<string, CloudCpClientEvent>();
+	for (const event of existing) {
+		const key = stepKey(event);
+		const current = key ? latest.get(key) : undefined;
+		if (key && (!current || event.sequence > current.sequence)) latest.set(key, event);
+	}
+	let changed = latest.size !== existing.length;
 	for (const event of fresh) {
-		if (bySequence.has(event.sequence)) continue;
-		bySequence.set(event.sequence, event);
+		const key = stepKey(event);
+		if (!key) continue;
+		const current = latest.get(key);
+		if (current && current.sequence >= event.sequence) continue;
+		latest.set(key, event);
 		changed = true;
 	}
 	if (!changed) return existing as CloudCpClientEvent[];
-	return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+	return [...latest.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
 /** m:ss, or h:mm:ss past an hour, as GitHub Actions shows step times. */

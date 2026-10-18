@@ -169,11 +169,12 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 
 /**
  * One Setup or Cleanup run as a system row, placed where its first step event
- * arrived. Its revision moves with every event so the row redraws live.
+ * arrived. Its revision is the run's newest event, so the row redraws live
+ * even where only the newest event per step is kept.
  */
 function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActivity {
 	return {
-		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.eventCount,
+		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.lastSequence,
 		activityKind: "system", status: run.status === "running" ? "running" : run.status === "failed" ? "failed" : "completed",
 		summary: `${run.phase === "setup" ? "Setup" : "Cleanup"} ${run.status}`,
 		detail: { event: "workspace.script.run", scriptRun: run },
