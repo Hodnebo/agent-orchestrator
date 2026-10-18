@@ -79,7 +79,10 @@ describe("CloudSessionChatSurface", () => {
 		expect(toSnapshot(session, events).items[0]).toMatchObject({
 			detail: {
 				setupHint: "No Docker.",
-				setupContext: "Step 2: docker compose up -d\nRan as ao-worker (groups: ao-worker users) in /w/lib\nFull output: /d/setup-logs/step-2.log",
+				setupFailure: {
+					command: "docker compose up -d", user: "ao-worker", groups: ["ao-worker", "users"],
+					dir: "/w/lib", logPath: "/d/setup-logs/step-2.log",
+				},
 			},
 		});
 	});

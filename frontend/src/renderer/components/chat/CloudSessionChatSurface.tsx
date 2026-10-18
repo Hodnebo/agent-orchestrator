@@ -4,7 +4,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
-import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
+import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -130,21 +130,16 @@ function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
 
 /**
  * A failed Setup step's command, who and where it ran, and its full log in the
- * sandbox, one fact per line (as the worker words them for the startup error).
+ * sandbox; the timeline row words them.
  */
-function projectSetupContext(payload: EventPayload, step: number | undefined): string | undefined {
-	const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
-	const lines: string[] = [];
-	if (text(payload.command)) lines.push(`Step ${step ?? 1}: ${text(payload.command)}`);
-	if (text(payload.user)) {
-		const groups = Array.isArray(payload.groups) ? payload.groups.filter((group): group is string => typeof group === "string") : [];
-		let ran = `Ran as ${text(payload.user)}`;
-		if (groups.length > 0) ran += ` (groups: ${groups.join(" ")})`;
-		if (text(payload.dir)) ran += ` in ${text(payload.dir)}`;
-		lines.push(ran);
-	}
-	if (text(payload.logPath)) lines.push(`Full output: ${text(payload.logPath)}`);
-	return lines.length > 0 ? lines.join("\n") : undefined;
+function projectSetupFailure(payload: EventPayload): SystemEventDetail["setupFailure"] {
+	const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value.trim() : undefined);
+	const groups = Array.isArray(payload.groups) ? payload.groups.filter((group): group is string => typeof group === "string") : [];
+	const failure = {
+		command: text(payload.command), user: text(payload.user), groups: groups.length > 0 ? groups : undefined,
+		dir: text(payload.dir), logPath: text(payload.logPath),
+	};
+	return Object.values(failure).some((value) => value !== undefined) ? failure : undefined;
 }
 
 /**
@@ -165,7 +160,7 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
 		detail: {
 			event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output,
-			setupContext: projectSetupContext(payload, step), setupHint: hint,
+			setupFailure: projectSetupFailure(payload), setupHint: hint,
 		},
 		createdAt: event.createdAt,
 	};

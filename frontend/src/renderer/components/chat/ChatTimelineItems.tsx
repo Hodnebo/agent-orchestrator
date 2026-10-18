@@ -2364,7 +2364,19 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 				: t("chat.projectSetup.failed", { step });
 	const failed = status !== "succeeded";
 	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
-	const context = failed ? detail?.setupContext?.trim() : undefined;
+	// The failed step's command, who and where it ran, and its full log, one
+	// fact per line above its output.
+	const setupFailure = failed ? detail?.setupFailure : undefined;
+	const contextLines: string[] = [];
+	if (setupFailure?.command) contextLines.push(t("chat.projectSetup.stepCommand", { step, command: setupFailure.command }));
+	if (setupFailure?.user) {
+		contextLines.push(setupFailure.groups?.length
+			? t("chat.projectSetup.ranAsWithGroups", { user: setupFailure.user, groups: setupFailure.groups.join(" ") })
+			: t("chat.projectSetup.ranAs", { user: setupFailure.user }));
+	}
+	if (setupFailure?.dir) contextLines.push(t("chat.projectSetup.ranIn", { dir: setupFailure.dir }));
+	if (setupFailure?.logPath) contextLines.push(t("chat.projectSetup.fullOutput", { path: setupFailure.logPath }));
+	const context = contextLines.join("\n");
 	const output = context ? (stepOutput ? `${context}\n\n${stepOutput}` : context) : stepOutput;
 	const hint = failed ? detail?.setupHint?.trim() : undefined;
 	const Icon = failed ? CircleAlert : SquareTerminal;

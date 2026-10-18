@@ -377,14 +377,20 @@ describe("ActivityRow", () => {
 				detail: {
 					event: "workspace.setup", setupStatus: "failed", setupStep: 1, exitCode: 1, output: "permission denied: docker.sock",
 					setupHint: "This step ran as ao-worker, which cannot use Docker.",
-					setupContext: "Step 1: docker compose up -d\nRan as ao-worker (groups: ao-worker) in /home/coder/app\nFull output: /x/setup-logs/step-1.log",
+					setupFailure: {
+						command: "docker compose up -d", user: "ao-worker", groups: ["ao-worker"],
+						dir: "/home/coder/app", logPath: "/x/setup-logs/step-1.log",
+					},
 				},
 			}} />,
 		);
 		expect(screen.getByText("This step ran as ao-worker, which cannot use Docker.")).toBeInTheDocument();
 		act(() => screen.getByRole("button", { name: "Show output" }).click());
-		expect(screen.getByText(/Ran as ao-worker \(groups: ao-worker\)/)).toHaveTextContent("permission denied: docker.sock");
-		expect(screen.getByText(/Full output: \/x\/setup-logs\/step-1.log/)).toBeInTheDocument();
+		const output = screen.getByText(/Ran as ao-worker \(groups: ao-worker\)/);
+		expect(output).toHaveTextContent("Step 1: docker compose up -d");
+		expect(output).toHaveTextContent("Ran in /home/coder/app");
+		expect(output).toHaveTextContent("Full output: /x/setup-logs/step-1.log");
+		expect(output).toHaveTextContent("permission denied: docker.sock");
 	});
 
 	it("does not present a recovered historical activity as failed", () => {
