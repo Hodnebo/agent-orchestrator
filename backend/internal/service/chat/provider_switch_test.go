@@ -182,3 +182,23 @@ func (s failingProviderSwitchStore) CommitProviderSwitch(context.Context, domain
 }
 
 var errProviderSwitchTarget = ports.ErrChatDriverUnavailable
+
+func TestProviderSwitchStartsTheTargetUnderTheChatsPermissionMode(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
+		ApprovalMode: domain.PermissionModeBypassPermissions,
+	}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	driver.mu.Lock()
+	target := driver.startConfigs[len(driver.startConfigs)-1]
+	driver.mu.Unlock()
+	if target.Permissions != ports.PermissionModeBypassPermissions {
+		t.Fatalf("target permissions = %q, want the chat's bypass mode", target.Permissions)
+	}
+}

@@ -70,14 +70,6 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	if !s.SupportsChat(request.TargetHarness) {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s does not support Chat", request.TargetHarness)}
 	}
-	if err := s.PreflightChat(ctx, request.TargetHarness, ports.PermissionModeAuto); err != nil {
-		kind := domain.ProviderSwitchRefusalUnavailable
-		if errors.Is(err, ports.ErrChatUnsupported) {
-			kind = domain.ProviderSwitchRefusalUnsupported
-		}
-		return &domain.ProviderSwitchError{Kind: kind, Detail: err.Error(), Cause: err}
-	}
-
 	owner := domain.SessionConversationOwner(id)
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
@@ -94,6 +86,16 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	}
 	if source.busy() {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "the provider is still working"}
+	}
+	// The target runs under the chat's own permission mode, so an agent that only
+	// runs with permissions bypassed (Pi) can take over a chat that has them.
+	permissions := s.switchPermissions(source)
+	if err := s.PreflightChat(ctx, request.TargetHarness, permissions); err != nil {
+		kind := domain.ProviderSwitchRefusalUnavailable
+		if errors.Is(err, ports.ErrChatUnsupported) {
+			kind = domain.ProviderSwitchRefusalUnsupported
+		}
+		return &domain.ProviderSwitchError{Kind: kind, Detail: err.Error(), Cause: err}
 	}
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if err != nil {
@@ -174,7 +176,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		targetCfg.ProviderSwitch.AutoCompactWindow = request.AutoCompactWindow
 	}
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
-	targetCfg.Permissions = ports.PermissionModeAuto
+	targetCfg.Permissions = permissions
 	targetCfg.ControllerReady = func(started StartResult) (ControllerCommit, error) {
 		targetRecord := record
 		targetRecord.Harness = request.TargetHarness
@@ -240,4 +242,19 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		}
 	}
 	return nil
+}
+
+// switchPermissions is the permission mode a switch target starts with: the
+// chat's current one, else the one its agent was launched with, else Auto.
+func (s *Service) switchPermissions(source *Controller) ports.PermissionMode {
+	if mode := source.Settings().ApprovalMode; mode != "" {
+		return ports.NormalizePermissionMode(ports.PermissionMode(mode))
+	}
+	s.mu.RLock()
+	launched := s.startConfigs[source.owner()].Permissions
+	s.mu.RUnlock()
+	if launched != "" {
+		return ports.NormalizePermissionMode(launched)
+	}
+	return ports.PermissionModeAuto
 }
