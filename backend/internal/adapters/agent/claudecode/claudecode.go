@@ -233,11 +233,12 @@ func (p *Plugin) freshLaunchNativeSessionID(ctx context.Context, cfg ports.Launc
 // agent would hang at that prompt with no one to answer it.
 //
 // An AO worktree is derived from the repo the user is already running
-// AO in, so it is inherently trusted. PreLaunch records that trust in
-// ~/.claude.json before launch, additively and atomically, so it cannot
-// clobber a concurrently-running Claude instance's config. For a launch in
-// AO's default permission mode it also marks the auto-mode default dialog seen
-// there, only when the user's settings would make Claude offer it (see
+// AO in, so it is inherently trusted. PreLaunch records that trust in the
+// global config the launched Claude reads (~/.claude.json by default, see
+// claudeLaunchConfigPaths) before launch, additively and atomically, so it
+// cannot clobber a concurrently-running Claude instance's config. For a launch
+// in AO's default permission mode it also marks the auto-mode default dialog
+// seen there, only when the user's settings would make Claude offer it (see
 // autoDefaultNudgeGuardArgs); explicit modes are covered per session instead.
 func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if err := ctx.Err(); err != nil {
@@ -246,7 +247,7 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 	if cfg.WorkspacePath == "" {
 		return nil
 	}
-	cfgPath, err := claudeConfigPath()
+	settingsPath, cfgPath, err := claudeLaunchConfigPaths(cfg.Env)
 	if err != nil {
 		return err
 	}
@@ -255,8 +256,43 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 		permissions = cfg.Config.Permissions
 	}
 	markNudgeSeen := len(autoDefaultNudgeGuardArgs(agentruntime.PermissionPolicy(permissions))) == 0 &&
-		userSettingsOfferAutoDefaultNudge(filepath.Join(claudeConfigDir(), "settings.json"))
+		userSettingsOfferAutoDefaultNudge(settingsPath)
 	return ensureClaudeLaunchConfigForOS(cfgPath, cfg.WorkspacePath, markNudgeSeen, runtime.GOOS)
+}
+
+// claudeLaunchConfigPaths returns the user settings file and the global config
+// file a Claude launched with env reads, both resolved from the same
+// directory. A CLAUDE_CONFIG_DIR the launch environment sets (the session's
+// project env) wins over the daemon's own, as in NativeSessionConfigDir. With
+// one set, settings live in that directory and the global config is its
+// .claude.json; without, they are ~/.claude/settings.json and ~/.claude.json.
+// Claude prefers a non-empty legacy .config.json in the config directory over
+// either global config path, so that file is used when present.
+func claudeLaunchConfigPaths(env map[string]string) (settingsPath, globalConfigPath string, err error) {
+	configDir, ok := env[claudeConfigDirEnv]
+	if !ok {
+		configDir = os.Getenv(claudeConfigDirEnv)
+	}
+	configDir = strings.TrimSpace(configDir)
+	var globalDir string
+	if configDir != "" {
+		configDir = filepath.Clean(configDir)
+		globalDir = configDir
+	} else {
+		home := strings.TrimSpace(env["HOME"])
+		if home == "" {
+			if home, err = os.UserHomeDir(); err != nil {
+				return "", "", fmt.Errorf("claude-code: resolve home directory: %w", err)
+			}
+		}
+		configDir, globalDir = filepath.Join(home, ".claude"), home
+	}
+	globalConfigPath = filepath.Join(globalDir, ".claude.json")
+	legacy := filepath.Join(configDir, ".config.json")
+	if info, statErr := os.Stat(legacy); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		globalConfigPath = legacy
+	}
+	return filepath.Join(configDir, "settings.json"), globalConfigPath, nil
 }
 
 // Claude Code (verified in 2.1.287 through 2.1.302; the gate that enables it
@@ -636,8 +672,12 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 
 	// Atomic write: temp file in the same directory, then rename. Matches
 	// how Claude Code itself updates this file, so concurrent updates are
-	// last-writer-wins rather than corrupting.
+	// last-writer-wins rather than corrupting. A CLAUDE_CONFIG_DIR Claude has
+	// not used yet may not exist; Claude creates it the same way.
 	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("claude-code: create config directory: %w", err)
+	}
 	tmp, err := os.CreateTemp(dir, ".claude.json.tmp-*")
 	if err != nil {
 		return fmt.Errorf("claude-code: create temp config: %w", err)

@@ -1527,3 +1527,151 @@ func TestPreLaunchMarksAutoDefaultNudgeSeenForTrustedWorkspace(t *testing.T) {
 		t.Fatal("config rewritten although nothing changed")
 	}
 }
+
+// Claude reads its settings and its global config from one directory: a
+// CLAUDE_CONFIG_DIR the launch environment sets, else the daemon's, else the
+// home directory (with settings in ~/.claude). A non-empty legacy .config.json
+// in the config directory is preferred over the global config path.
+func TestClaudeLaunchConfigPathsFollowTheLaunchConfigDir(t *testing.T) {
+	home := t.TempDir()
+	daemonDir := filepath.Join(t.TempDir(), "daemon-claude")
+	projectDir := filepath.Join(t.TempDir(), "project-claude")
+	legacyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacyDir, ".config.json"), []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	emptyLegacyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(emptyLegacyDir, ".config.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name         string
+		daemon       string
+		env          map[string]string
+		wantSettings string
+		wantGlobal   string
+	}{
+		{"home", "", nil, filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")},
+		{"daemon config dir", daemonDir, nil, filepath.Join(daemonDir, "settings.json"), filepath.Join(daemonDir, ".claude.json")},
+		{"launch config dir wins", daemonDir, map[string]string{"CLAUDE_CONFIG_DIR": projectDir},
+			filepath.Join(projectDir, "settings.json"), filepath.Join(projectDir, ".claude.json")},
+		{"launch clears the config dir", daemonDir, map[string]string{"CLAUDE_CONFIG_DIR": " "},
+			filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")},
+		{"launch home", "", map[string]string{"HOME": projectDir},
+			filepath.Join(projectDir, ".claude", "settings.json"), filepath.Join(projectDir, ".claude.json")},
+		{"legacy config", "", map[string]string{"CLAUDE_CONFIG_DIR": legacyDir},
+			filepath.Join(legacyDir, "settings.json"), filepath.Join(legacyDir, ".config.json")},
+		{"empty legacy config", "", map[string]string{"CLAUDE_CONFIG_DIR": emptyLegacyDir},
+			filepath.Join(emptyLegacyDir, "settings.json"), filepath.Join(emptyLegacyDir, ".claude.json")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", tt.daemon)
+			settings, global, err := claudeLaunchConfigPaths(tt.env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings != tt.wantSettings || global != tt.wantGlobal {
+				t.Fatalf("paths = %q, %q; want %q, %q", settings, global, tt.wantSettings, tt.wantGlobal)
+			}
+		})
+	}
+}
+
+// With a project CLAUDE_CONFIG_DIR, PreLaunch reads that directory's settings
+// and records trust and the nudge flag in its .claude.json, creating the
+// directory when Claude has not used it yet. The home and daemon configs are
+// left alone.
+func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	daemonDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", daemonDir)
+	homeSeed := `{"userID":"home"}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(homeSeed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(daemonDir, "settings.json"), []byte(`{"permissions":{"defaultMode":"auto"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(home, "worktree")
+	readConfig := func(t *testing.T, path string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(data, &root); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+
+	projectDir := filepath.Join(t.TempDir(), "claude-profile")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "settings.json"), []byte(`{"permissions":{"defaultMode":"acceptEdits"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".claude.json"), []byte(`{"userID":"project"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+		Env:           map[string]string{"CLAUDE_CONFIG_DIR": projectDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := readConfig(t, filepath.Join(projectDir, ".claude.json"))
+	if root["hasSeenAutoDefaultNudge"] != true || root["userID"] != "project" {
+		t.Fatalf("project config = %v, want the nudge flag beside the existing keys", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the project config: %v", root)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || string(data) != homeSeed {
+		t.Fatalf("home config changed: %s, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(daemonDir, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("daemon config dir written: %v", err)
+	}
+
+	// A profile Claude has not used yet is created, trusted, and, since its
+	// settings do not exist, left without the nudge flag.
+	fresh := filepath.Join(t.TempDir(), "new-profile")
+	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+		Env:           map[string]string{"CLAUDE_CONFIG_DIR": fresh},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root = readConfig(t, filepath.Join(fresh, ".claude.json"))
+	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
+		t.Fatalf("fresh profile got the nudge flag: %v", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the fresh profile: %v", root)
+	}
+
+	// Without a launch override the daemon's CLAUDE_CONFIG_DIR is used: its
+	// settings already default to auto, so only trust is recorded.
+	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root = readConfig(t, filepath.Join(daemonDir, ".claude.json"))
+	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
+		t.Fatalf("daemon config got the nudge flag although settings default to auto: %v", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the daemon config: %v", root)
+	}
+}

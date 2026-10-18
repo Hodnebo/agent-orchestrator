@@ -6221,6 +6221,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 			WorkspacePath: workspacePath,
 			Config:        agentConfig,
 			Permissions:   agentConfig.Permissions,
+			Env:           env,
 		}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)

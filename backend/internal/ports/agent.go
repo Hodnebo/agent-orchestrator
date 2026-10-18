@@ -726,6 +726,11 @@ type LaunchConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Env is the environment the runtime layers over the daemon's own for this
+	// launch (the project env plus AO's variables). The session manager sets it
+	// for PreLaunch, so an adapter prepares the provider config the launched
+	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	Env map[string]string
 }
 
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
