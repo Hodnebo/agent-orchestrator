@@ -778,7 +778,7 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 	}
 	return c.armErr
 }
-func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string, _ time.Time) error {
+func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
 	c.switchMarks = append(c.switchMarks, accountID)
 	return nil
 }

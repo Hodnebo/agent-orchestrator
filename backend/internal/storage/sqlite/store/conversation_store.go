@@ -1106,15 +1106,17 @@ func (s *Store) LatestConversationTurn(ctx context.Context, conversationID strin
 	return turnToDomain(row), nil
 }
 
-// LatestDispatchedConversationTurn is LatestConversationTurn among the turns
-// that reached the provider, skipping queued messages a stop swept away.
-func (s *Store) LatestDispatchedConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
-	row, err := s.qr.SelectLatestDispatchedConversationTurn(ctx, conversationID)
+// TurnByProviderID is the conversation's turn the provider knows as
+// providerTurnID.
+func (s *Store) TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+		ConversationID: conversationID, ProviderTurnID: providerTurnID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
 	}
 	if err != nil {
-		return domain.ConversationTurn{}, fmt.Errorf("select latest dispatched conversation turn: %w", err)
+		return domain.ConversationTurn{}, fmt.Errorf("select turn by provider id %s: %w", providerTurnID, err)
 	}
 	return turnToDomain(row), nil
 }

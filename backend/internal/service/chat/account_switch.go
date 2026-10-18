@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -14,14 +13,23 @@ import (
 // the conversation continues on.
 const AccountSwitchedEvent = "account.switched"
 
-// MarkAccountSwitch records that the session's latest turn that ran stopped for
-// an account move that began at since, rather than failing. Stopping the old
-// agent races its reply to the cancel, so the turn may have settled as failed;
-// it settles as interrupted, and a notice names the account the next message
-// continues on. A turn that finished before the move is left alone.
-func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string, since time.Time) error {
+// MarkAccountSwitch records that the turn the session's account move stopped
+// ended for the move, rather than failing. It is the exact turn the handoff's
+// interrupt stopped: later rows (a swept queued message, a Codex subagent's own
+// turn) are not it. Stopping the old agent races its reply to the cancel, so
+// the turn may have settled as failed; it settles as interrupted, and a notice
+// names the account the next message continues on. A turn whose completion won
+// the race is left alone, and so is a move that stopped no turn.
+func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string) error {
+	s.mu.Lock()
+	providerTurnID := s.handoffInterrupted[id]
+	delete(s.handoffInterrupted, id)
+	s.mu.Unlock()
+	if providerTurnID == "" {
+		return nil
+	}
 	reader, ok := s.store.(interface {
-		LatestDispatchedConversationTurn(context.Context, string) (domain.ConversationTurn, error)
+		TurnByProviderID(context.Context, string, string) (domain.ConversationTurn, error)
 	})
 	if !ok {
 		return nil
@@ -33,16 +41,14 @@ func (s *Service) MarkAccountSwitch(ctx context.Context, id domain.SessionID, ac
 	if err != nil {
 		return err
 	}
-	// Queued messages the stop swept away are later rows that never ran.
-	turn, err := reader.LatestDispatchedConversationTurn(ctx, conversation.ID)
+	turn, err := reader.TurnByProviderID(ctx, conversation.ID, providerTurnID)
 	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if turn.ProviderTurnID == "" || turn.CompletedAt == nil || turn.CompletedAt.Before(since) ||
-		(turn.State != domain.TurnStateFailed && turn.State != domain.TurnStateInterrupted) {
+	if turn.State != domain.TurnStateFailed && turn.State != domain.TurnStateInterrupted {
 		return nil
 	}
 	now := s.now()

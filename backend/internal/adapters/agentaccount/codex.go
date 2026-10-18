@@ -100,6 +100,7 @@ func (c *Codex) Identity(ctx context.Context, home string) (domain.AgentAccountI
 	}
 	out := domain.AgentAccountIdentityCheck{
 		SignedIn: account.Authentication == domain.AgentAuthenticationAuthorized && account.Method == domain.CodexAuthMethodChatGPT,
+		LoggedIn: account.Authentication == domain.AgentAuthenticationAuthorized,
 	}
 	if account.Email != nil {
 		out.Email = *account.Email

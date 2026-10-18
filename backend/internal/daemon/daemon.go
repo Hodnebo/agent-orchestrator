@@ -621,6 +621,18 @@ func Run() error {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	if agentSvc != nil {
+		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
+		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
+			harness := map[domain.AgentAccountProvider]domain.AgentHarness{
+				domain.AgentAccountProviderClaude: domain.HarnessClaudeCode,
+				domain.AgentAccountProviderCodex:  domain.HarnessCodex,
+			}[p]
+			if harness != "" {
+				agentSvc.InvalidateAgentAuthentication(string(harness))
+			}
+		})
+	}
 	if runner, ok := sessMgr.(interface {
 		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
 	}); ok {

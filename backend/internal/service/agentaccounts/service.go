@@ -54,23 +54,27 @@ type Service struct {
 	logins   map[string]*login
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
-	removing map[string]bool
+	removing       map[string]bool
+	defaultChanged func(domain.AgentAccountProvider)
 }
 
 // reading is the last identity and limits read for one account.
 type reading struct {
 	identity    domain.AgentAccountIdentityCheck
 	identityErr string
-	limits      *domain.AgentAccountLimits
-	limitsErr   string
-	at          time.Time
+	// mismatch: the folder is signed in, but as another login than its own.
+	mismatch  bool
+	limits    *domain.AgentAccountLimits
+	limitsErr string
+	at        time.Time
 }
 
-// knownUnusable reports a reading that shows the folder cannot run as its
-// account: signed out, or signed in as another login. A failed probe shows
-// nothing, and no reading yet is not known.
+// knownUnusable reports a reading that shows the folder cannot launch as its
+// account: logged in by no method at all, or signed in as another login. An
+// API key is not a subscription, but the CLI launches with it, so it passes. A
+// failed probe shows nothing, and no reading yet is not known.
 func (r *reading) knownUnusable() bool {
-	return r != nil && !r.identity.SignedIn && (r.identityErr == "" || r.identity.Email != "")
+	return r != nil && (r.mismatch || (r.identityErr == "" && !r.identity.LoggedIn))
 }
 
 type login struct {
@@ -187,6 +191,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
 	case !account.Device() && account.Email != "" && !strings.EqualFold(identity.Email, account.Email):
 		// The right-account check: the folder must still hold the login it was added with.
 		r.identity.SignedIn = false
+		r.mismatch = true
 		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
@@ -262,6 +267,55 @@ func (s *Service) beingRemoved(id string) bool {
 	return s.removing[id]
 }
 
+// DefaultSignIn reports whether the saved account new sessions of harness start
+// on is signed in; handled is false when they start on the computer's own
+// login, whose readiness the CLI reports itself. A reading older than the cache
+// window is read again, so readiness polling costs one CLI call per window.
+func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness) (signedIn, handled bool) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return false, false
+	}
+	def, err := s.defaultID(ctx, p)
+	if err != nil || def == domain.DeviceAgentAccountID(p) {
+		return false, false
+	}
+	account, err := s.find(ctx, def)
+	if err != nil {
+		return false, false
+	}
+	s.mu.Lock()
+	r := s.readings[account.ID]
+	s.mu.Unlock()
+	if r == nil || s.now().Sub(r.at) > freshFor {
+		s.read(ctx, account)
+		s.mu.Lock()
+		r = s.readings[account.ID]
+		s.mu.Unlock()
+	}
+	if r == nil || (r.identityErr != "" && !r.mismatch) {
+		return false, false // not known: leave it to the CLI's own readiness
+	}
+	return r.identity.SignedIn, true
+}
+
+// SetDefaultChanged late-binds what must hear that the account new sessions of
+// a provider start on, or its sign-in, may have changed (agent readiness).
+func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultChanged = changed
+}
+
+func (s *Service) notifyDefaultChanged(p domain.AgentAccountProvider) {
+	s.mu.Lock()
+	changed := s.defaultChanged
+	s.mu.Unlock()
+	if changed != nil {
+		changed(p)
+	}
+}
+
 // RunsOnComputerLogin reports whether a new session of harness asking for
 // accountID ("" for the default) would launch on the computer's own login.
 // Harnesses without accounts always do.
@@ -287,7 +341,11 @@ func (s *Service) SetDefault(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	return s.store.SetAgentAccountDefault(ctx, account.Provider, account.ID)
+	if err := s.store.SetAgentAccountDefault(ctx, account.Provider, account.ID); err != nil {
+		return err
+	}
+	s.notifyDefaultChanged(account.Provider)
+	return nil
 }
 
 // LoginStart is a sign-in running in an embedded terminal.
@@ -423,6 +481,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 	}
 	s.endLogin(ctx, op, false)
 	s.read(ctx, account)
+	s.notifyDefaultChanged(account.Provider)
 	views, err = s.List(ctx, false)
 	if err != nil {
 		return "", nil, err
@@ -469,6 +528,7 @@ func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity dom
 	}
 	s.endLogin(ctx, op, false)
 	s.read(ctx, *op.account)
+	s.notifyDefaultChanged(op.account.Provider)
 	views, err := s.List(ctx, false)
 	if err != nil {
 		return "", nil, err
@@ -568,6 +628,7 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	s.mu.Lock()
 	delete(s.readings, accountID)
 	s.mu.Unlock()
+	s.notifyDefaultChanged(account.Provider)
 	return nil
 }
 

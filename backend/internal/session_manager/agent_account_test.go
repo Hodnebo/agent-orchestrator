@@ -486,3 +486,30 @@ func TestAccountTransitionFencesTheReaperWhileTheTargetStarts(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A resume already underway read the account's folder while the session still
+// reads as exited. Removing the account then refuses instead of deleting the
+// folder under it.
+func TestExitAgentsOnAccountRefusesWhileAResumeIsStarting(t *testing.T) {
+	m, st, _, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "tmux-mer-1", RuntimeLaunchID: "launch-1"},
+	}
+	var log []string
+	accounts := newTransitionAccounts(&log)
+	accounts.bound = map[domain.SessionID]string{"mer-1": "acct-b"}
+	m.SetAgentAccounts(accounts)
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ExitAgentsOnAccount(ctx, "acct-b"); err == nil {
+		t.Fatal("removal went ahead while a resume on the account was starting")
+	}
+	m.endAgentResume("mer-1")
+	if err := m.ExitAgentsOnAccount(ctx, "acct-b"); err != nil {
+		t.Fatalf("an exited session with nothing starting: %v", err)
+	}
+}

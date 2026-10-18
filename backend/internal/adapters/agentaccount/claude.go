@@ -111,6 +111,7 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 	subscription := report.AuthMethod == "claude.ai" || report.AuthMethod == "oauth_token"
 	return domain.AgentAccountIdentityCheck{
 		SignedIn: report.LoggedIn && subscription,
+		LoggedIn: report.LoggedIn,
 		Email:    report.Email,
 		Plan:     report.SubscriptionType,
 	}, nil

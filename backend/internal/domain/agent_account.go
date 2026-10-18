@@ -106,7 +106,10 @@ type AgentAccountUsage struct {
 // AgentAccountIdentityCheck is who a config folder is signed in to, as the
 // provider's CLI reports it.
 type AgentAccountIdentityCheck struct {
+	// SignedIn is a subscription sign-in, the only kind an account can be.
 	SignedIn bool
+	// LoggedIn is any sign-in the CLI can launch with, an API key included.
+	LoggedIn bool
 	Email    string
 	Plan     string
 }

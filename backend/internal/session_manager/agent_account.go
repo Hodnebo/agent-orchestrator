@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -153,12 +152,12 @@ func (m *Manager) markAccountSwitch(ctx context.Context, rec domain.SessionRecor
 		return
 	}
 	marker, ok := m.chat.(interface {
-		MarkAccountSwitch(context.Context, domain.SessionID, string, time.Time) error
+		MarkAccountSwitch(context.Context, domain.SessionID, string) error
 	})
 	if !ok {
 		return
 	}
-	if err := marker.MarkAccountSwitch(ctx, rec.ID, transition.TargetAccountID, transition.CreatedAt); err != nil {
+	if err := marker.MarkAccountSwitch(ctx, rec.ID, transition.TargetAccountID); err != nil {
 		m.logger.Warn("account transition: stopped turn not marked as switched", "sessionID", rec.ID, "transition", transition.ID, "error", err)
 	}
 }
@@ -185,7 +184,7 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 	}
 	var errs []error
 	for _, rec := range recs {
-		if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		if rec.IsTerminated {
 			continue
 		}
 		bound, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
@@ -196,11 +195,34 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 		if bound != accountID {
 			continue
 		}
+		// A launch already underway (a resume, a spawn, a move) may have read the
+		// account's folder before the removal began; the session still reads as
+		// exited until its agent reports. Refuse rather than delete the folder
+		// under it: a retry after it settles stops it like any running agent.
+		if m.launchInFlight(rec.ID) {
+			errs = append(errs, fmt.Errorf("session %s is starting its agent on the account", rec.ID))
+			continue
+		}
+		if rec.Activity.State == domain.ActivityExited {
+			continue
+		}
 		if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// launchInFlight reports an agent operation, a transition or an asynchronous
+// chat spawn that may still be starting an agent for the session.
+func (m *Manager) launchInFlight(id domain.SessionID) bool {
+	if m.SessionMutationInProgress(id) {
+		return true
+	}
+	m.asyncChatSpawnsMu.Lock()
+	defer m.asyncChatSpawnsMu.Unlock()
+	_, starting := m.asyncChatSpawns[id]
+	return starting
 }
 
 // The account override makes the session's launches use accountID instead of

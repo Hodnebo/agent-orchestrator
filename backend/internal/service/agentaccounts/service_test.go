@@ -54,6 +54,7 @@ type fakeClaude struct {
 	signedInAs map[string]string
 	unshared   bool
 	onIdentity func(home string) // runs as a folder's identity is read
+	apiKey     map[string]bool   // folders logged in with an API key
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -63,7 +64,10 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 		hook(home)
 	}
 	email, ok := f.signedInAs[home]
-	return domain.AgentAccountIdentityCheck{SignedIn: ok, Email: email}, nil
+	if f.apiKey[home] {
+		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
+	}
+	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
 }
 func (*fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
 	return domain.AgentAccountLimits{}, nil
@@ -454,5 +458,59 @@ func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
 	check("device-claude", true)
 	if !svc.RunsOnComputerLogin(ctx, domain.HarnessGemini, "") {
 		t.Fatal("a harness without accounts runs on the computer's login")
+	}
+}
+
+// A CLI login that uses an API key is not a subscription, so it cannot be an
+// account to switch to, but the CLI launches with it: as the default it must
+// not refuse new tasks.
+func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{}, apiKey: map[string]bool{"": true}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s1"] != "device-claude" {
+		t.Fatalf("new task on an API-key CLI login: %q %v", store.bindings["s1"], err)
+	}
+}
+
+// Agent readiness asks whether the saved account new sessions start on is
+// signed in. It has no say while they start on the computer's own login, and
+// the default changing tells readiness to look again.
+func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	var changed []domain.AgentAccountProvider
+	svc.SetDefaultChanged(func(p domain.AgentAccountProvider) { changed = append(changed, p) })
+	if _, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); handled {
+		t.Fatal("answered for the computer's own login")
+	}
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetDefault(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	if signedIn, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !signedIn {
+		t.Fatalf("saved default signed in = %v handled %v", signedIn, handled)
+	}
+	delete(claude.signedInAs, b)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if signedIn, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || signedIn {
+		t.Fatalf("saved default signed out = %v handled %v", signedIn, handled)
+	}
+	if len(changed) < 2 {
+		t.Fatalf("readiness was told %v, want at least the sign-in and the new default", changed)
 	}
 }
