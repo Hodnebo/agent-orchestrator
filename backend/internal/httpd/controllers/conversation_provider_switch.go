@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -61,10 +62,12 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	} else if req.Message == nil {
 		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok"})
 	} else {
-		// The new agent answers the message as its first turn. A send that fails
-		// now is a send failure, not a switch failure: the header tells the
-		// client the switch went through, so it retries the message on its own.
-		turn, sendErr := c.Svc.Send(r.Context(), sessionID, message)
+		// The new agent answers the message as its first turn. It is sent even if
+		// the client went away during the switch (a restarted app): the switch
+		// is done, and the client's retry of the same message id is then a
+		// duplicate. A send that fails now is a send failure, not a switch
+		// failure: the header tells the client the switch went through.
+		turn, sendErr := c.Svc.Send(context.WithoutCancel(r.Context()), sessionID, message)
 		if sendErr != nil {
 			w.Header().Set(providerSwitchedHeader, "1")
 			writeConversationError(w, r, sendErr)

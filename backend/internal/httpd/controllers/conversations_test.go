@@ -48,6 +48,7 @@ type fakeConversationService struct {
 	viewCalls         int
 	snapshot          chatsvc.Snapshot
 	sendErr           error
+	sendCtxErr        error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -152,8 +153,9 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) Send(ctx context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
+	f.sendCtxErr = ctx.Err()
 	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 

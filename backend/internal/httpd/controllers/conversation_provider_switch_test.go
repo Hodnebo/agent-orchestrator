@@ -128,6 +128,17 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 		t.Fatalf("failed send = %d header %q, want 404 marked switched", rec.Code, rec.Header().Get("X-AO-Provider-Switched"))
 	}
 
+	// A client that went away during the switch still gets its message sent.
+	svc = &fakeConversationService{}
+	r := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(r)
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(withMessage)).WithContext(gone))
+	if svc.sent.ClientMessageID != "m1" || svc.sendCtxErr != nil {
+		t.Fatalf("after the client left: sent %+v with context error %v, want it sent", svc.sent, svc.sendCtxErr)
+	}
+
 	// A refused switch sends nothing and is not marked.
 	svc = &fakeConversationService{switchErr: &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "busy"}}
 	if rec = route(svc, withMessage); rec.Code != http.StatusConflict || rec.Header().Get("X-AO-Provider-Switched") != "" || svc.sent.Text != "" {
