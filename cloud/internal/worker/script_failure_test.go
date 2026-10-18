@@ -80,11 +80,31 @@ func TestScriptFailureHint(t *testing.T) {
 		{output: "sh: 1: pnpm: not found", runAs: "ao-worker", want: "not installed in the sandbox", code: 127},
 		{output: "cleanup step 1 failed: exit status 1\nran as ao-worker (groups: ao-worker) in /w\nmkdir: Permission denied", want: "ran as ao-worker, which was refused", code: 1},
 		{output: "tests failed", runAs: "ao-worker", want: "", code: 1},
+		// ssh refusing a key is not a file permission.
+		{output: "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", runAs: "ao-worker", want: "could not sign in with an SSH key", code: 128},
 	} {
 		got := ScriptFailureHint(tc.output, tc.code, tc.runAs)
 		if tc.want == "" && got != "" || !strings.Contains(strings.ToLower(got), strings.ToLower(tc.want)) {
 			t.Errorf("ScriptFailureHint(%q) = %q, want it to contain %q", tc.output, got, tc.want)
 		}
+		if strings.Contains(tc.output, "publickey") && strings.Contains(got, "file or directory") {
+			t.Errorf("ScriptFailureHint(%q) = %q, gave the file permission hint", tc.output, got)
+		}
+	}
+}
+
+// A secret that straddles the length limit is redacted whole, not cut into a
+// fragment redaction no longer recognizes.
+func TestScriptCommandSummaryRedactsBeforeItCuts(t *testing.T) {
+	t.Parallel()
+	token := "ghp_" + strings.Repeat("A", 36)
+	command := strings.Repeat("x", scriptCommandLimit-10) + " " + token + " && make"
+	summary, _ := scriptCommandSummary(command)
+	if strings.Contains(summary, "ghp_") || strings.Contains(summary, "AAAA") {
+		t.Fatalf("summary leaks part of the token: %q", summary)
+	}
+	if !strings.Contains(summary, "[REDACTED]") && !strings.HasSuffix(summary, "...") {
+		t.Fatalf("summary = %q, want the token redacted", summary)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
@@ -78,6 +79,10 @@ func ScriptFailureHint(output string, exitCode int, runAs string) string {
 	denied := strings.Contains(lower, "permission denied") || strings.Contains(lower, "eacces") ||
 		strings.Contains(lower, "operation not permitted")
 	switch {
+	case strings.Contains(lower, "permission denied (publickey"):
+		// Not a file permission: ssh had no key the host accepts.
+		return "A git or ssh command in this step could not sign in with an SSH key: the sandbox has none for that host. " +
+			"Use the repository's https:// URL, which AO's GitHub access covers, or add a key to the workspace image."
 	case strings.Contains(lower, "docker.sock") && denied,
 		strings.Contains(lower, "cannot connect to the docker daemon") && denied:
 		return "This step ran as " + who + ", which cannot use Docker: add " + who +
@@ -97,11 +102,13 @@ func ScriptFailureHint(output string, exitCode int, runAs string) string {
 }
 
 // scriptCommandSummary is a step's command as the person wrote it (a
-// repository step without the cd AO wraps it in), on one line and bounded,
-// and the repository folder it ran in ("" for the main repository).
+// repository step without the cd AO wraps it in), on one line, redacted and
+// bounded, and the repository folder it ran in ("" for the main repository).
+// It is redacted before it is cut, so a cut cannot leave part of a secret
+// that redaction no longer recognizes.
 func scriptCommandSummary(stored string) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	command = strings.Join(strings.Fields(command), " ")
+	command = activity.Redact(strings.Join(strings.Fields(command), " "))
 	if len(command) > scriptCommandLimit {
 		command = strings.ToValidUTF8(command[:scriptCommandLimit], "") + "..."
 	}
