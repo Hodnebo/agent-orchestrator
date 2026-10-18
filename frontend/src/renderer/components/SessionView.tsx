@@ -70,6 +70,8 @@ import {
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "../lib/cloud-lifecycle";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { latestScriptRun } from "../lib/cloud-script-runs";
+import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
 import { useSessionHandoffMenu } from "../hooks/useSessionHandoffMenu";
 import { clearSwitchAgentState } from "../hooks/useSwitchAgent";
@@ -228,6 +230,11 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
 	const { baseUrl, client } = useCloudCp();
+	const queryClient = useQueryClient();
+	// The project's Setup log, fed by this loader's own stream and poll below.
+	const scriptRuns = useCloudScriptRuns(orgId || undefined, sessionId, { fetch: false });
+	const latestSetup = terminalOnly ? undefined : latestScriptRun(scriptRuns, "setup");
+	const setupRun = latestSetup?.status === "running" || latestSetup?.status === "failed" ? latestSetup : undefined;
 	const factIndex = cloudStartupStage(observedState, workerConnected, terminalOnly);
 	const [factProgress, setFactProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
@@ -246,6 +253,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			after: 0,
 			signal: controller.signal,
 			onEvent: (event) => {
+				if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
 				const occurredAt = Date.parse(event.createdAt);
 				if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 				// sandbox.provisioning only marks the start of workspace creation;
@@ -257,7 +265,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			},
 		});
 		return () => controller.abort();
-	}, [baseUrl, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		setFactProgress((current) => current.index === factIndex ? current : { index: factIndex, since: new Date().toISOString() });
 	}, [factIndex]);
@@ -295,6 +303,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				for (;;) {
 					const page = await client.listChatEvents(orgId, sessionId, { after, limit: 500 }, { signal: controller.signal });
 					if (controller.signal.aborted) return;
+					recordCloudScriptStepEvents(queryClient, orgId, sessionId, page.events);
 					for (const event of page.events) {
 						// Complete the replay before painting a stage. Old epochs can
 						// contain agent.ready long before this workspace restart.
@@ -320,10 +329,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [client, orgId, queryClient, sessionId, terminalOnly]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {

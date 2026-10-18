@@ -3,10 +3,14 @@ import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "luci
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CloudCpError } from "../lib/cloud-cp";
 import { isWorkspaceStartupError, type CloudStartupProblem } from "../lib/cloud-lifecycle";
+import { latestScriptRun } from "../lib/cloud-script-runs";
+import { cn } from "../lib/utils";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
+import { ScriptRunPanel } from "./ScriptRunPanel";
 import { Button } from "./ui/button";
 
 /**
@@ -70,9 +74,15 @@ export function CloudSessionStartupError({
 				: problem.phase === "failed" && problem.code === "working_directory_unusable"
 					? t("cloud.startupError.workingDirectoryUnusableTitle")
 					: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
+	// The failed Setup run as a step log. After Retry the worker runs Setup
+	// again; listening on the session's stream shows that run live here.
+	const scriptRuns = useCloudScriptRuns(orgId, sessionId, { live: rerunning });
+	const latestSetup = projectSetupFailed || rerunning ? latestScriptRun(scriptRuns, "setup") : undefined;
+	const setupRun = latestSetup && (latestSetup.status === "failed" || (rerunning && latestSetup.status === "running")) ? latestSetup : undefined;
 	// A failed Setup step's output is what the user needs to fix the script, so
-	// it starts expanded.
-	const [showDetail, setShowDetail] = useState(projectSetupFailed);
+	// it starts expanded, unless the step log below already shows it.
+	const [detailToggled, setShowDetail] = useState<boolean>();
+	const showDetail = detailToggled ?? (projectSetupFailed && !setupRun);
 	const [copied, setCopied] = useState(false);
 	const copyDetail = () => {
 		if (problem.phase !== "failed") return;
@@ -88,60 +98,64 @@ export function CloudSessionStartupError({
 		: undefined;
 	return (
 		<div
-			className="absolute inset-0 z-chrome grid place-items-center bg-background p-4"
+			className={cn("absolute inset-0 z-chrome grid place-items-center bg-background p-4", setupRun && "overflow-y-auto")}
 			data-testid="cloud-session-startup-error"
 		>
-			<div className="flex w-96 max-w-full flex-col items-center gap-3 text-center" role="alert">
-				<h2 className="text-heading-sm font-semibold text-foreground">
-					{title}
-				</h2>
-				<p className="text-sm leading-relaxed text-muted-foreground">
-					{rerunning ? t("cloud.startupError.workspaceRerunning") : problem.message ?? t("cloud.startupError.unavailableDescription")}
-				</p>
-				{failed ? (
-					<Button
-						type="button"
-						variant="outline"
-						className="mt-1"
-						disabled={retry.isPending || rerunning}
-						onClick={() => retry.mutate()}
-					>
-						{retry.isPending || rerunning
-							? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-							: <RotateCcw aria-hidden="true" className="size-3.5" />}
-						{retry.isPending || rerunning ? t("cloud.startupError.retrying") : t("cloud.startupError.retry")}
-					</Button>
-				) : null}
-				{retryError ? <p className="text-xs text-error">{retryError}</p> : null}
-				{detail || coderWorkspaceUrl ? (
-					<div className="flex w-full flex-col items-center gap-2">
-						<div className="flex items-center gap-1">
-							{detail ? (
-								<>
-									<Button type="button" variant="ghost" size="sm" onClick={() => setShowDetail((open) => !open)}>
-										{showDetail
-											? <ChevronDown aria-hidden="true" className="size-3.5" />
-											: <ChevronRight aria-hidden="true" className="size-3.5" />}
-										{showDetail ? t("cloud.startupError.hideDetails") : t("cloud.startupError.showDetails")}
-									</Button>
-									<Button type="button" variant="ghost" size="sm" onClick={copyDetail}>
-										{copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
-										{copied ? t("cloud.startupError.copied") : t("cloud.startupError.copyDetails")}
-									</Button>
-								</>
+			<div className={cn("flex max-w-full flex-col items-center gap-4", setupRun ? "w-[36rem]" : "w-96")}>
+				<div className="flex w-full flex-col items-center gap-3 text-center" role="alert">
+					<h2 className="text-heading-sm font-semibold text-foreground">
+						{title}
+					</h2>
+					<p className="text-sm leading-relaxed text-muted-foreground">
+						{rerunning ? t("cloud.startupError.workspaceRerunning") : problem.message ?? t("cloud.startupError.unavailableDescription")}
+					</p>
+					{failed ? (
+						<Button
+							type="button"
+							variant="outline"
+							className="mt-1"
+							disabled={retry.isPending || rerunning}
+							onClick={() => retry.mutate()}
+						>
+							{retry.isPending || rerunning
+								? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+								: <RotateCcw aria-hidden="true" className="size-3.5" />}
+							{retry.isPending || rerunning ? t("cloud.startupError.retrying") : t("cloud.startupError.retry")}
+						</Button>
+					) : null}
+					{retryError ? <p className="text-xs text-error">{retryError}</p> : null}
+					{detail || coderWorkspaceUrl ? (
+						<div className="flex w-full flex-col items-center gap-2">
+							<div className="flex items-center gap-1">
+								{detail ? (
+									<>
+										<Button type="button" variant="ghost" size="sm" onClick={() => setShowDetail(!showDetail)}>
+											{showDetail
+												? <ChevronDown aria-hidden="true" className="size-3.5" />
+												: <ChevronRight aria-hidden="true" className="size-3.5" />}
+											{showDetail ? t("cloud.startupError.hideDetails") : t("cloud.startupError.showDetails")}
+										</Button>
+										<Button type="button" variant="ghost" size="sm" onClick={copyDetail}>
+											{copied ? <Check aria-hidden="true" className="size-3.5" /> : <Copy aria-hidden="true" className="size-3.5" />}
+											{copied ? t("cloud.startupError.copied") : t("cloud.startupError.copyDetails")}
+										</Button>
+									</>
+								) : null}
+								<CoderWorkspaceLinkButton url={coderWorkspaceUrl} />
+							</div>
+							{detail && showDetail ? (
+								<pre
+									className="max-h-48 w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-left font-mono text-xs text-muted-foreground select-text"
+									data-testid="cloud-session-startup-detail"
+								>
+									{detail}
+								</pre>
 							) : null}
-							<CoderWorkspaceLinkButton url={coderWorkspaceUrl} />
 						</div>
-						{detail && showDetail ? (
-							<pre
-								className="max-h-48 w-full overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-left font-mono text-xs text-muted-foreground select-text"
-								data-testid="cloud-session-startup-detail"
-							>
-								{detail}
-							</pre>
-						) : null}
-					</div>
-				) : null}
+					) : null}
+				</div>
+				{/* Outside the alert, so live Setup output is not announced as an alert. */}
+				{setupRun ? <ScriptRunPanel className="w-full" run={setupRun} /> : null}
 			</div>
 		</div>
 	);

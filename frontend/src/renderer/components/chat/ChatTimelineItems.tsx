@@ -68,6 +68,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
@@ -1052,6 +1053,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
@@ -2341,7 +2343,8 @@ function setupDuration(durationMs: number): { minutes: number; seconds: number }
  * How the project's Setup commands (Project settings > Scripts) ended, before
  * the agent started. Compact like the other system rows; the failed step's
  * output (the tail the worker kept, already redacted) opens below it in
- * monospace.
+ * monospace. Workers that publish workspace.script.step events get the
+ * ScriptRunPanel instead; this row stays for workers that predate them.
  */
 function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
