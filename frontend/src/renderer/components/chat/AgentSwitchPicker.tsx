@@ -8,10 +8,10 @@
  * terminal), so browsing the lists never restarts anything.
  */
 
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, RefreshCw, Star, TriangleAlert, X, Zap } from "lucide-react";
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -227,6 +227,12 @@ export function AgentModelPicker({
 	// The other agents' model lists load once the menu is open: the picked
 	// agent's for its rows, the rest so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
+	const queryClient = useQueryClient();
+	// Warmed as the pointer or focus reaches the trigger, so the first keystrokes
+	// already search every agent instead of waiting for the menu to open.
+	const warmCatalogs = () => {
+		for (const agent of others) void queryClient.prefetchQuery(agentModelsQueryOptions(agent.id, projectId, hostId));
+	};
 	const catalogs = useQueries({
 		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
 	});
@@ -277,6 +283,10 @@ export function AgentModelPicker({
 			id: `${agent.id} ${model.id}`, label: `${model.label} ${agentLabel(agent.id)}`, harness: agent.id, model,
 		}));
 	});
+	// Rows are memoized, so a keystroke only renders the ones that appear or change.
+	const pickRef = useRef<(event: Event, harness: string, id: string) => void>(() => {});
+	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
+	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const modelValue = pending
 		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? "Default"
 		: source.modelLabel;
@@ -288,6 +298,8 @@ export function AgentModelPicker({
 			<OptionMenuTrigger
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
+				onPointerEnter={warmCatalogs}
+				onFocus={warmCatalogs}
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
 				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
@@ -322,20 +334,15 @@ export function AgentModelPicker({
 			>
 				<ModelMenuChoices models={searchRows} searchable searchPlaceholder="Search agents and models">
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
-						<OptionMenuItem
+						<SearchRow
 							key={row.id}
-							id={optionID?.(row.id)}
+							row={row}
+							optionId={optionID?.(row.id)}
 							active={row.harness === shownHarness && row.model.id === source.modelId}
 							searchActive={row.id === searchActiveID}
-							radio
 							disabled={!pickable(row.harness)}
-							onSelect={(event) => { stayOpen(event); pickModel(row.harness, row.model.id); }}
-							className="text-xs text-foreground"
-						>
-							<ProviderMark provider={row.harness} className="mr-2 size-3.5" />
-							<span className="min-w-0 truncate">{row.model.label}</span>
-							<span className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(row.harness)}</span>
-						</OptionMenuItem>
+							onPick={pickFromSearch}
+						/>
 					)) : (
 						<>
 							{setups.map((favorite) => (
@@ -539,6 +546,31 @@ function claudeOrder<T extends { id: string; label: string }>(models: T[]): T[] 
 	const { current, other } = splitClaudeModels(models);
 	return [...current, ...other];
 }
+
+const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive, disabled, onPick }: {
+	row: { id: string; harness: string; model: PickerModel };
+	optionId?: string;
+	active: boolean;
+	searchActive: boolean;
+	disabled: boolean;
+	onPick: (event: Event, harness: string, id: string) => void;
+}) {
+	return (
+		<OptionMenuItem
+			id={optionId}
+			active={active}
+			searchActive={searchActive}
+			radio
+			disabled={disabled}
+			onSelect={(event) => onPick(event, row.harness, row.model.id)}
+			className="text-xs text-foreground"
+		>
+			<ProviderMark provider={row.harness} className="mr-2 size-3.5" />
+			<span className="min-w-0 truncate">{row.model.label}</span>
+			<span className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(row.harness)}</span>
+		</OptionMenuItem>
+	);
+});
 
 /** One agent's model list, with search on a long one and a star on each row. */
 function ModelRows({ source, harness }: { source: PickerSource; harness: string }) {

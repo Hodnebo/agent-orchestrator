@@ -1,7 +1,9 @@
 import { Search } from "lucide-react";
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+
+const MAX_SEARCH_RESULTS = 50;
 
 /** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
@@ -22,10 +24,17 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
-	const matches = useMemo(() => {
+	// A query matches rows across every agent's catalog, which can run to
+	// hundreds. Rendering them all per keystroke is what made search lag.
+	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
+	const allMatches = useMemo(() => {
 		if (!normalizedQuery) return models;
-		return models.filter((model) => model.label.toLocaleLowerCase().includes(normalizedQuery));
-	}, [models, normalizedQuery]);
+		return models.filter((_, index) => lowered[index].includes(normalizedQuery));
+	}, [models, lowered, normalizedQuery]);
+	const matches = useMemo(
+		() => (normalizedQuery ? allMatches.slice(0, MAX_SEARCH_RESULTS) : allMatches),
+		[allMatches, normalizedQuery],
+	);
 	const [searchFocused, setSearchFocused] = useState(false);
 	const searchActiveID = normalizedQuery && searchFocused ? matches[0]?.id : undefined;
 	const optionIDPrefix = useId();
@@ -43,15 +52,17 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// A new search starts at the top. A refreshed list, such as a running chat's
 	// settings polled again, keeps the scroll where it is.
 	useLayoutEffect(() => {
-		if (scrollRef.current) scrollRef.current.scrollTop = 0;
+		if (scrollRef.current && scrollRef.current.scrollTop !== 0) scrollRef.current.scrollTop = 0;
 	}, [normalizedQuery]);
-	useLayoutEffect(() => {
-		updateScrollCue();
+	// Measured after paint: reading scrollHeight in a layout effect forces a
+	// reflow of every row before each keystroke can show.
+	useEffect(() => {
+		const frame = requestAnimationFrame(updateScrollCue);
 		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
+		if (!element || typeof ResizeObserver === "undefined") return () => cancelAnimationFrame(frame);
 		const observer = new ResizeObserver(updateScrollCue);
 		observer.observe(element);
-		return () => observer.disconnect();
+		return () => { cancelAnimationFrame(frame); observer.disconnect(); };
 	}, [matches, updateScrollCue]);
 
 	return (
@@ -104,7 +115,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
 							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
-							className="menu-search-input h-control-form! rounded-[10px] pl-8!"
+							className="menu-search-input h-auto! rounded-[10px] py-[7px]! pl-8! text-xs!"
 						/>
 					</div>
 					{normalizedQuery ? (
