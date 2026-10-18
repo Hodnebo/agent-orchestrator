@@ -1896,11 +1896,12 @@ SELECT COALESCE((
 // here when a burned field profile can skip it, or the session list can regress
 // to the 500s this exists to prevent.
 var schemaRepairs = []struct {
-	version int64
-	table   string
-	column  string
-	addDDL  string
-	postAdd []string
+	version         int64
+	table           string
+	column          string
+	addDDL          string
+	postAdd         []string
+	skipAbsentTable bool
 }{
 	// 0040_add_session_diff_base.sql
 	{version: 40, table: "sessions", column: "diff_base_sha",
@@ -2019,7 +2020,8 @@ BEGIN
 	// before main assigned 0199 to message continuation. Repair those local
 	// profiles when goose skips main's migration as already applied.
 	{version: 199, table: "conversation_messages", column: "continuation",
-		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
+		addDDL:          `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`,
+		skipAbsentTable: true},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
@@ -2030,6 +2032,17 @@ BEGIN
 // on the first session list.
 func reconcileSchema(db *sql.DB) error {
 	for _, rc := range schemaRepairs {
+		// Partial pre-chat schemas used by the older repair tests have no
+		// conversation_messages table yet; migration 0199 cannot have run there.
+		if rc.skipAbsentTable {
+			var tableCount int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, rc.table).Scan(&tableCount); err != nil {
+				return fmt.Errorf("schema verification: inspect %s: %w", rc.table, err)
+			}
+			if tableCount == 0 {
+				continue
+			}
+		}
 		var count int
 		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, rc.table, rc.column,
