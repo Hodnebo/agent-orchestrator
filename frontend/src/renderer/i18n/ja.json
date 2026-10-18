@@ -38,6 +38,7 @@
 	"chat.projectSetup.fullOutput": "完全な出力: {{path}}",
 	"scriptRun.setup": "セットアップ",
 	"scriptRun.cleanup": "クリーンアップ",
+	"scriptRun.activitySummary": "{{phase}}: {{status}}",
 	"scriptRun.running": "ステップ {{step}}/{{total}} を実行中",
 	"scriptRun.succeeded": "成功",
 	"scriptRun.failedAt": "ステップ {{step}} で失敗",

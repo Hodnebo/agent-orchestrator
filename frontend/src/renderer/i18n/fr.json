@@ -38,6 +38,7 @@
 	"chat.projectSetup.fullOutput": "Sortie complète : {{path}}",
 	"scriptRun.setup": "Configuration",
 	"scriptRun.cleanup": "Nettoyage",
+	"scriptRun.activitySummary": "{{phase}} : {{status}}",
 	"scriptRun.running": "Étape {{step}} sur {{total}} en cours",
 	"scriptRun.succeeded": "Réussi",
 	"scriptRun.failedAt": "Échec à l'étape {{step}}",

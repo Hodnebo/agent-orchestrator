@@ -1,5 +1,6 @@
 import { Check, ChevronRight, Circle, Loader2, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { stripAnsi } from "../lib/ansi";
 import { formatScriptDuration, type ScriptRun, type ScriptRunStep } from "../lib/cloud-script-runs";
@@ -212,6 +213,24 @@ function StepRow({
 	);
 }
 
+/** "Setup" or "Cleanup", in the reader's language. */
+export function scriptRunTitle(run: ScriptRun, t: TFunction): string {
+	return run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
+}
+
+/** The run's state as the panel header says it ("Running step 2 of 3", "Failed at step 2"). */
+export function scriptRunStatusText(run: ScriptRun, t: TFunction): string {
+	return run.status === "running"
+		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
+		: run.status === "succeeded"
+			? t("scriptRun.succeeded")
+			: run.status === "failed"
+				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
+				: run.status === "unknown"
+					? t("scriptRun.unknown")
+					: t("scriptRun.interrupted");
+}
+
 /**
  * One Setup or Cleanup run, drawn like a CI job's step log: a header with the
  * run's state and elapsed time, then one row per step that opens onto its
@@ -245,17 +264,9 @@ export function ScriptRunPanel({
 		setListToggled(undefined);
 	}
 	const listOpen = !collapsible || (listToggled ?? run.status !== "succeeded");
-	const title = run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
+	const title = scriptRunTitle(run, t);
 	const announcement = useStepAnnouncement(run, title);
-	const summary = run.status === "running"
-		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
-		: run.status === "succeeded"
-			? t("scriptRun.succeeded")
-			: run.status === "failed"
-				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
-				: run.status === "unknown"
-					? t("scriptRun.unknown")
-					: t("scriptRun.interrupted");
+	const summary = scriptRunStatusText(run, t);
 	const elapsed = live ? elapsedSince(run.startedAt, now) : run.durationMs;
 	const headerIcon = run.status === "running" ? "running" : run.status === "succeeded" ? "succeeded" : run.status === "failed" ? "failed" : "stopped";
 	const header = (

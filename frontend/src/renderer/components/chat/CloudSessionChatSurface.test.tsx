@@ -79,6 +79,7 @@ describe("CloudSessionChatSurface", () => {
 		const [live] = toSnapshot(session, running).items;
 		expect(live).toMatchObject({
 			kind: "activity", id: "cloud-script-run-run-1", activityKind: "system", status: "running", revision: 2,
+			summary: "Setup: Running step 1 of 2",
 			detail: { event: "workspace.script.run", scriptRun: { runId: "run-1", status: "running", runningStep: 1 } },
 		});
 		const finished = [
@@ -94,8 +95,8 @@ describe("CloudSessionChatSurface", () => {
 		expect(items.map((item) => item.kind === "activity" ? item.detail?.event : item.kind)).toEqual([
 			"workspace.setup", "workspace.script.run", "workspace.script.run",
 		]);
-		expect(items[1]).toMatchObject({ status: "completed", detail: { scriptRun: { status: "succeeded" } } });
-		expect(items[2]).toMatchObject({ detail: { scriptRun: { phase: "cleanup" } } });
+		expect(items[1]).toMatchObject({ status: "completed", summary: "Setup: Succeeded", detail: { scriptRun: { status: "succeeded" } } });
+		expect(items[2]).toMatchObject({ summary: "Cleanup: Succeeded", detail: { scriptRun: { phase: "cleanup" } } });
 	});
 	it("carries a failed setup step's command, user, directory, log and hint", () => {
 		const events: CloudCpClientEvent[] = [{

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -8,6 +9,7 @@ import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation"
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
+import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
@@ -176,7 +178,7 @@ function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActiv
 	return {
 		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.lastSequence,
 		activityKind: "system", status: run.status === "running" ? "running" : run.status === "failed" ? "failed" : "completed",
-		summary: `${run.phase === "setup" ? "Setup" : "Cleanup"} ${run.status}`,
+		summary: appI18n.t("scriptRun.activitySummary", { phase: scriptRunTitle(run, appI18n.t), status: scriptRunStatusText(run, appI18n.t) }),
 		detail: { event: "workspace.script.run", scriptRun: run },
 		createdAt,
 	};

@@ -38,6 +38,7 @@
 	"chat.projectSetup.fullOutput": "전체 출력: {{path}}",
 	"scriptRun.setup": "설정",
 	"scriptRun.cleanup": "정리",
+	"scriptRun.activitySummary": "{{phase}}: {{status}}",
 	"scriptRun.running": "{{total}}단계 중 {{step}}단계 실행 중",
 	"scriptRun.succeeded": "성공",
 	"scriptRun.failedAt": "{{step}}단계에서 실패",

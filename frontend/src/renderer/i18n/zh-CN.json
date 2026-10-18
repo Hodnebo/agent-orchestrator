@@ -38,6 +38,7 @@
 	"chat.projectSetup.fullOutput": "完整输出：{{path}}",
 	"scriptRun.setup": "设置",
 	"scriptRun.cleanup": "清理",
+	"scriptRun.activitySummary": "{{phase}}：{{status}}",
 	"scriptRun.running": "正在运行第 {{step}} 步，共 {{total}} 步",
 	"scriptRun.succeeded": "成功",
 	"scriptRun.failedAt": "在第 {{step}} 步失败",
