@@ -3413,6 +3413,8 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		}
 		m.refreshImportArchive(ctx, rec)
 		requireNativeHistory = true
+	} else if adoptedOwnedElsewhere(ctx, rec) {
+		return RestoreResult{}, ErrSessionOpenElsewhere
 	}
 
 	meta := rec.Metadata
