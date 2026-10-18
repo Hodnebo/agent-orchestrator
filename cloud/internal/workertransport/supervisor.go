@@ -734,6 +734,13 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		cancel()
 		return err
 	}
+	var codexTurns *codexRolloutTail
+	if input.Kind == "agent" && !input.Review && s.Harness == "codex" {
+		// Before the PTY starts, so only what this agent writes is new.
+		if home := codexHomeFromEnvironment(command.Env); home != "" {
+			codexTurns = newCodexRolloutTail(home, time.Now())
+		}
+	}
 	s.mu.Lock()
 	if _, exists := s.terminals[input.TerminalID]; exists {
 		s.mu.Unlock()
@@ -787,8 +794,8 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
-	if input.Kind == "agent" && !input.Review && s.Harness == "codex" {
-		go s.watchCodexTurnFailures(processCtx, codexHomeFromEnvironment(command.Env), time.Now())
+	if codexTurns != nil {
+		go s.watchCodexTurnFailures(processCtx, codexTurns)
 	}
 	go func() {
 		_ = command.Wait()

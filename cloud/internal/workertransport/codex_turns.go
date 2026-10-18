@@ -51,18 +51,37 @@ func codexHomeFromEnvironment(environment []string) string {
 // codexRolloutTail follows the newest interactive Codex rollout under a
 // CODEX_HOME and reports turns that ended on an error. Only bytes written
 // after the watcher started count: history from an earlier process (a resumed
-// conversation) must not mark the new turn idle.
+// conversation, or an adopted Codex that outlived its worker) must not mark
+// the new turn idle.
 type codexRolloutTail struct {
 	root    string
 	started time.Time
 	path    string
-	offset  int64
+	// offsets is how far each rollout has been read. It starts at every
+	// rollout's size when the watcher started, so a resumed conversation is
+	// read from where it was, and one created later from its start.
+	offsets map[string]int64
 	partial []byte
 	scans   int
 }
 
+// newCodexRolloutTail records where every existing rollout ends. Call it
+// before the agent starts, so nothing it writes counts as history.
 func newCodexRolloutTail(codexHome string, started time.Time) *codexRolloutTail {
-	return &codexRolloutTail{root: filepath.Join(codexHome, "sessions"), started: started}
+	t := &codexRolloutTail{
+		root: filepath.Join(codexHome, "sessions"), started: started,
+		offsets: make(map[string]int64),
+	}
+	_ = filepath.WalkDir(t.root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil {
+			t.offsets[path] = info.Size()
+		}
+		return nil
+	})
+	return t
 }
 
 // poll returns the error message of each turn that ended unsuccessfully since
@@ -84,22 +103,23 @@ func (t *codexRolloutTail) poll() []string {
 	if err != nil {
 		return nil
 	}
-	if info.Size() < t.offset {
+	offset := t.offsets[t.path]
+	if info.Size() < offset {
 		// Truncated or replaced: start over from its current end.
-		t.offset, t.partial = info.Size(), nil
+		t.offsets[t.path], t.partial = info.Size(), nil
 		return nil
 	}
-	if info.Size() == t.offset {
+	if info.Size() == offset {
 		return nil
 	}
-	if _, err := file.Seek(t.offset, io.SeekStart); err != nil {
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return nil
 	}
 	chunk, err := io.ReadAll(io.LimitReader(file, maxCodexRolloutReadSize))
 	if err != nil {
 		return nil
 	}
-	t.offset += int64(len(chunk))
+	t.offsets[t.path] = offset + int64(len(chunk))
 	data := append(t.partial, chunk...)
 	t.partial = nil
 	if last := bytes.LastIndexByte(data, '\n'); last < len(data)-1 {
@@ -118,21 +138,14 @@ func (t *codexRolloutTail) poll() []string {
 	return failures
 }
 
-// follow switches to path. A rollout already written before the watcher
-// started is followed from its end; a new one from its start.
+// follow switches to path, read from where the watcher left it: a rollout
+// that existed when the watcher started from its size then, a new one from
+// its start.
 func (t *codexRolloutTail) follow(path string) {
 	if path == "" || path == t.path {
 		return
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return
-	}
 	t.path, t.partial = path, nil
-	t.offset = 0
-	if info.ModTime().Before(t.started) {
-		t.offset = info.Size()
-	}
 }
 
 // newestInteractiveRollout is the most recently written rollout of an
@@ -216,11 +229,7 @@ func codexTurnFailedRecord(line []byte) (string, bool) {
 }
 
 // watchCodexTurnFailures runs for the life of the terminal agent's process.
-func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, codexHome string, started time.Time) {
-	if codexHome == "" {
-		return
-	}
-	tail := newCodexRolloutTail(codexHome, started)
+func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, tail *codexRolloutTail) {
 	ticker := time.NewTicker(codexTurnPollInterval)
 	defer ticker.Stop()
 	for {

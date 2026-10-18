@@ -93,6 +93,24 @@ func TestCodexRolloutTailReportsOnlyNewFailedTurns(t *testing.T) {
 	}
 }
 
+// A resumed conversation (codex resume, or a Codex adopted across a worker
+// restart) appends to the rollout that already holds its earlier turns. Its
+// old failure is history even though the file changes after the watcher
+// starts.
+func TestCodexRolloutTailSkipsAResumedRolloutsHistory(t *testing.T) {
+	home := t.TempDir()
+	path := writeRollout(t, home, "rollout-a.jsonl", codexCLIMeta+codexTurnStarted+codexTurnFailed)
+	tail := newCodexRolloutTail(home, time.Now().Add(-time.Second))
+	appendRollout(t, path, codexTurnStarted)
+	if failures := tail.poll(); len(failures) != 0 {
+		t.Fatalf("a resumed rollout's old failure was reported mid-turn: %v", failures)
+	}
+	appendRollout(t, path, codexTurnFailed)
+	if failures := tail.poll(); len(failures) != 1 {
+		t.Fatalf("failures = %v, want the resumed turn's failure", failures)
+	}
+}
+
 func TestCodexRolloutTailIgnoresChatRollouts(t *testing.T) {
 	home := t.TempDir()
 	tail := newCodexRolloutTail(home, time.Now().Add(-time.Second))
