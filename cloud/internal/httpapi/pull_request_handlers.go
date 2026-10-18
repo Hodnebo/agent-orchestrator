@@ -431,10 +431,9 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items := make([]pullRequestSummaryResponse, 0, len(pullRequests))
-	var (
-		opener       *pullRequestOpenerResponse
-		openerLoaded bool
-	)
+	// An orchestrator lists every pull request in its project, so each one is
+	// named by the session that raised it, resolved once per request.
+	openers := make(map[string]*pullRequestOpenerResponse)
 	for _, pr := range pullRequests {
 		snapshot, err := s.store.PullRequestSnapshot(r.Context(), orgID, pr.ID)
 		if err != nil {
@@ -442,10 +441,10 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		item := toPullRequestSummaryResponse(pr, snapshot)
-		if s.openedByAO(item.Author) {
-			if !openerLoaded {
-				openerLoaded = true
-				resolved, err := s.store.SessionPullRequestOpener(r.Context(), orgID, sessionID)
+		if s.openedByAO(item.Author) && pr.SessionID != "" {
+			opener, loaded := openers[pr.SessionID]
+			if !loaded {
+				resolved, err := s.store.SessionPullRequestOpener(r.Context(), orgID, pr.SessionID)
 				if err != nil {
 					s.logger.Warn("resolve pull request opener", "error", err, "request_id", requestID(r))
 				} else if resolved.Name != "" || resolved.GitHubLogin != "" {
@@ -453,6 +452,7 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 						Name: resolved.Name, GitHubLogin: resolved.GitHubLogin, AvatarURL: resolved.AvatarURL,
 					}
 				}
+				openers[pr.SessionID] = opener
 			}
 			item.OpenedBy = opener
 		}
