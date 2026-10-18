@@ -1,8 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
-import { Trans, useTranslation } from "react-i18next";
-import { Archive, CalendarClock, ChevronRight, Clock3, History, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Archive, CalendarClock, ChevronRight, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
@@ -17,7 +16,8 @@ import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DreamingPanel } from "./DreamingPanel";
+import { DreamingRow } from "./DreamingPanel";
+import { AutomationRunHistory, displayTime } from "./AutomationRunHistory";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
@@ -44,7 +44,6 @@ import {
 	type WeekdayCode,
 } from "../lib/automation-schedule";
 import {
-	useAutomationRuns,
 	useAutomations,
 	useCreateAutomation,
 	useDeleteAutomation,
@@ -64,11 +63,6 @@ import { automationPromptLengthBucket, captureRendererEvent } from "../lib/telem
 import { cn } from "../lib/utils";
 import { hidesShellTopbar } from "../lib/platform";
 
-function displayTime(value?: string, locale?: string) {
-	if (!value) return "—";
-	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
-
 export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
@@ -83,11 +77,17 @@ export function AutomationsView() {
 	const remove = useDeleteAutomation();
 	const [createOpen, setCreateOpen] = useState(false);
 	const [editTarget, setEditTarget] = useState<Automation | null>(null);
+	const [dreamingEditOpen, setDreamingEditOpen] = useState(false);
 	const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [filter, setFilter] = useState<"all" | "enabled" | "paused">("all");
-	const automations = query.data ?? [];
+	const allAutomations = query.data ?? [];
+	// Dreaming is built in: one row below the user's own automations stands for
+	// every project's dreaming automation.
+	const dreaming = allAutomations.filter((item) => item.purpose === "dreaming");
+	const automations = allAutomations.filter((item) => item.purpose !== "dreaming");
+	const projects = workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }));
 	const sessionTitles = new Map(allWorkspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
 	const visibleAutomations = automations.filter((item) => filter === "all" || (filter === "enabled" ? item.enabled : !item.enabled));
 
@@ -106,7 +106,6 @@ export function AutomationsView() {
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
 				<div className="p-4">
-				<DreamingPanel automations={automations} projects={workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name }))} />
 				{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 				{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 				{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
@@ -127,6 +126,12 @@ export function AutomationsView() {
 						{visibleAutomations.length === 0 ? <p className="px-4 py-10 text-center text-xs text-muted-foreground">{t("automations.filter.empty")}</p> : null}
 					</div>
 				</> : null}
+				{!query.isLoading && !query.error ? <section aria-labelledby="automations-built-in" className="mt-6">
+					<h2 id="automations-built-in" className="mb-2 px-1 text-[11px] font-medium text-muted-foreground">{t("automations.builtIn")}</h2>
+					<div className="overflow-hidden rounded-lg border border-border bg-background">
+						<DreamingRow automations={dreaming} projects={projects} expanded={expanded === "dreaming"} onExpand={() => setExpanded(expanded === "dreaming" ? null : "dreaming")} onEdit={() => setDreamingEditOpen(true)} />
+					</div>
+				</section> : null}
 				</div>
 				</ScrollArea.Viewport>
 				<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
@@ -136,6 +141,7 @@ export function AutomationsView() {
 			</ScrollArea.Root>
 			<AutomationFormDialog open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
+			<AutomationFormDialog open={dreamingEditOpen} dreaming automation={dreaming[0]} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={setDreamingEditOpen} onSubmit={async (input) => { await Promise.all(dreaming.map((item) => update.mutateAsync({ id: item.id, body: { displayName: input.displayName, prompt: input.prompt } }))); setDreamingEditOpen(false); }} />
 			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending} error={remove.error?.message ?? null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} onConfirm={() => { if (!deleteTarget) return; remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }} />
 		</div>
 	);
@@ -147,8 +153,6 @@ function EmptyAutomations({ onCreate }: { onCreate: () => void }) {
 }
 
 function AutomationCard({ item, projectName, sessionTitles, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; sessionTitles: Map<string, string>; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
-	const runs = useAutomationRuns(expanded ? item.id : null);
-	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
 	const reduceMotion = useReducedMotion();
 	// The daemon serializes DTSTART + RRULE, while the form intentionally
@@ -189,8 +193,7 @@ function AutomationCard({ item, projectName, sessionTitles, busy, expanded, onEx
 				<div className="border-t border-border bg-muted/10 px-4 py-4 pl-10">
 					<div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">{sessionEnded ? null : <span>{t("automations.timezone", { timezone: item.timezone })}</span>}<span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")} · {item.kind}</span></span><span>{t("automations.latestState")}: <span className="capitalize">{item.latestRun?.status ?? t("automations.neverRun")}</span></span></div>
 					<p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("automations.field.prompt")}</p><p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
-					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
-					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.triggerSessionId ? <p className="mt-1 text-[11px] text-muted-foreground"><Trans i18nKey="automations.runs.trigger" values={{ session: sessionTitles.get(run.triggerSessionId) || run.triggerSessionId }} components={{ session: <button type="button" className="rounded-sm text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.triggerSessionId! } })} /> }} /></p> : null}{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
+					<AutomationRunHistory automationId={item.id} sessionTitles={sessionTitles} />
 				</div>
 			</motion.div> : null}
 		</AnimatePresence>
@@ -212,6 +215,8 @@ type AutomationTrigger = Automation["trigger"];
 type AutomationFormDialogProps = {
 	open: boolean;
 	automation?: Automation;
+	/** Edits every project's dreaming automation: it always runs after a session ends, on that session's agent. */
+	dreaming?: boolean;
 	workspaces: WorkspaceOption[];
 	harnesses: AgentReadinessSnapshot[];
 	busy: boolean;
@@ -236,6 +241,7 @@ const AUTOMATION_FIELD_IDS: Record<AutomationField, string> = {
 function AutomationFormDialog({
 	open,
 	automation,
+	dreaming = false,
 	workspaces,
 	harnesses,
 	busy,
@@ -416,7 +422,7 @@ function AutomationFormDialog({
 								<span>{t("automations.validation.summary")}</span>
 							</div>
 						) : null}
-						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
+						{dreaming ? null : <Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
 								label={t("automations.field.project")}
@@ -429,7 +435,7 @@ function AutomationFormDialog({
 								onValueChange={(value) => { setProjectId(value); clearValidationError("projectId"); }}
 								options={projectOptions}
 							/>
-						</Field>
+						</Field>}
 						<Field label={t("automations.field.name")} id={AUTOMATION_FIELD_IDS.name} error={validationErrors.name}>
 							<Input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }} />
 						</Field>
@@ -447,7 +453,7 @@ function AutomationFormDialog({
 							/>
 						</Field>
 						{/* Agent/Schedule/Time share one labeled grid and Select/Input chrome. */}
-						<div className="grid grid-cols-2 gap-3">
+						{dreaming ? null : <div className="grid grid-cols-2 gap-3">
 							<RequiredAgentField
 								id="automation-agent"
 								label={t("automations.agent")}
@@ -519,7 +525,7 @@ function AutomationFormDialog({
 									/>
 								</Field>
 							) : null}
-						</div>
+						</div>}
 						{!sessionEnded && schedule.preset === "custom" ? (
 							<div className="grid grid-cols-2 gap-3">
 								<Field label={t("automations.field.frequency")}>
@@ -612,7 +618,7 @@ function AutomationFormDialog({
 								</Field>
 							</div>
 						) : null}
-						<p className={onboardingFieldHintClass}>{sessionEnded ? t("automations.sessionEnded.hint") : t("automations.timezone", { timezone })}</p>
+						<p className={onboardingFieldHintClass}>{dreaming ? t("automations.dreaming.hint") : sessionEnded ? t("automations.sessionEnded.hint") : t("automations.timezone", { timezone })}</p>
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
 					{/* Match onboarding/new-task action row: no footer hairline. */}

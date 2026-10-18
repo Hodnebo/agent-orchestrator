@@ -501,7 +501,8 @@ describe("AutomationsView", () => {
 		mocks.runs = [{ id: "run-1", automationId: "review", status: "running", scheduledFor: "2026-08-27T09:00:00Z", sessionId: "ao-8", triggerSessionId: "ao-7" }];
 		renderView();
 
-		expect(screen.getByText("After a session ends")).toBeInTheDocument();
+		// The review's row and the built-in Dreaming row both run after a session ends.
+		expect(screen.getAllByText("After a session ends")).toHaveLength(2);
 		expect(screen.getByText("Waiting")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: /show run history/i }));
 		expect(screen.queryByText("Timezone: UTC")).not.toBeInTheDocument();
@@ -531,5 +532,30 @@ describe("AutomationsView", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update.mock.calls[0][0].body).toEqual(expect.objectContaining({ trigger: "session_ended" }));
 		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("rrule");
+	});
+
+	// Dreaming is built in, not one of the user's automations: the page keeps
+	// its usual empty state, and Dreaming always runs after a session ends on
+	// that session's agent, so its dialog asks for neither.
+	it("keeps dreaming out of the user's automations and edits every project's dream at once", async () => {
+		const user = userEvent.setup();
+		const dream = (projectId: string) => ({ id: `dream-${projectId}`, projectId, purpose: "dreaming", displayName: "Dreaming", prompt: "Learn.", kind: "worker", trigger: "session_ended", rrule: "", timezone: "UTC", enabled: true });
+		mocks.automations = [dream("demo"), dream("web")];
+		renderView();
+		expect(screen.getByText("No automations yet")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Built-in" })).toBeInTheDocument();
+		expect(screen.getAllByRole("heading", { name: "Dreaming" })).toHaveLength(1);
+		await user.click(screen.getByRole("button", { name: "Edit Dreaming" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		expect(within(dialog).queryByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
+		expect(within(dialog).queryByRole("combobox", { name: "Runs" })).not.toBeInTheDocument();
+		expect(within(dialog).queryByText("Agent")).not.toBeInTheDocument();
+		expect(within(dialog).getByText(/on that worker's agent/)).toBeInTheDocument();
+		await user.clear(within(dialog).getByLabelText("Prompt"));
+		await user.type(within(dialog).getByLabelText("Prompt"), "Learn more.");
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledTimes(2);
+		expect(mocks.update).toHaveBeenCalledWith({ id: "dream-demo", body: { displayName: "Dreaming", prompt: "Learn more." } });
+		expect(mocks.update).toHaveBeenCalledWith({ id: "dream-web", body: { displayName: "Dreaming", prompt: "Learn more." } });
 	});
 });

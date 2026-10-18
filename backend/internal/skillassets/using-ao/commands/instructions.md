@@ -19,4 +19,4 @@ Inside an AO session you can read the instructions but not change them: only dre
 - dreaming will learn it from what they typed once this session ends;
 - or they can add it themselves on the Automations page.
 
-The desktop app shows and edits both sets of instructions at the top of the Automations page. A dreaming automation updates them after each session ends; see [automation.md](automation.md).
+The desktop app shows and edits both sets of instructions in the built-in Dreaming automation on the Automations page. A dreaming automation updates them after each session ends; see [automation.md](automation.md).

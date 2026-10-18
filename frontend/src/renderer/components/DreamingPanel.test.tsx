@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DreamingPanel } from "./DreamingPanel";
+import { DreamingRow } from "./DreamingPanel";
 
 type Instructions = {
 	projectId?: string;
@@ -33,6 +33,10 @@ vi.mock("../hooks/useAutomations", () => ({
 }));
 
 const projects = [{ id: "notes", name: "Notes" }, { id: "web", name: "Web" }];
+const noop = () => {};
+function DreamingPanel({ automations, projects: list, expanded = true }: { automations: unknown[]; projects: typeof projects; expanded?: boolean }) {
+	return <DreamingRow automations={automations as never} projects={list} expanded={expanded} onExpand={noop} onEdit={noop} />;
+}
 const empty = (projectId?: string): Instructions => ({ projectId, body: "", revision: 0, protectedLines: [], removedLines: [] });
 const dreaming = (projectId: string, enabled: boolean) => ({
 	id: `dream-${projectId}`, projectId, purpose: "dreaming", enabled, displayName: "Dreaming", prompt: "Learn.",
@@ -40,7 +44,7 @@ const dreaming = (projectId: string, enabled: boolean) => ({
 	createdAt: "2026-10-17T09:00:00Z", updatedAt: "2026-10-17T09:00:00Z",
 });
 
-describe("DreamingPanel", () => {
+describe("DreamingRow", () => {
 	beforeEach(() => {
 		mocks.instructions = { "": empty(), notes: empty("notes"), web: empty("web") };
 		mocks.save.mockReset();
@@ -116,5 +120,18 @@ describe("DreamingPanel", () => {
 		expect(mocks.create).toHaveBeenCalledTimes(1);
 		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ projectId: "notes", purpose: "dreaming" }));
 		expect(mocks.update).not.toHaveBeenCalled();
+	});
+
+	it("is one built-in row that opens to the instructions and has no delete action", () => {
+		const view = render(<DreamingPanel automations={[dreaming("notes", true), dreaming("web", true)]} projects={projects} expanded={false} />);
+		expect(screen.getByRole("heading", { name: "Dreaming" })).toBeInTheDocument();
+		expect(screen.getByText("Every project")).toBeInTheDocument();
+		expect(screen.getByText("After a session ends")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open Dreaming" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+		view.rerender(<DreamingPanel automations={[dreaming("notes", true), dreaming("web", true)]} projects={projects} />);
+		expect(screen.getByRole("textbox", { name: "Instructions for You (every project)" })).toBeInTheDocument();
+		expect(screen.queryByText(/Run history/)).not.toBeInTheDocument();
 	});
 });

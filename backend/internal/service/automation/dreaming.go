@@ -91,21 +91,26 @@ func followUps(texts []string) []string {
 
 // dreamSpawn builds a dreaming run's launch. The dream runs as a standalone
 // session: it needs no checkout, and skipping the worktree also skips the
-// project's setup scripts. It runs the automation's agent, else the project's
-// worker agent, in whichever mode that agent supports.
+// project's setup scripts. It runs on the agent of the session that ended, so
+// dreaming never brings in an agent the user didn't pick; the project's worker
+// agent covers an ended session AO can no longer read. The mode is whichever
+// that agent supports.
 func (s *Service) dreamSpawn(ctx context.Context, store schedulerStore, transcripts transcriptLocator, definition domain.Automation, run domain.AutomationRun) (ports.SpawnConfig, error) {
 	project, _, err := s.store.GetProject(ctx, string(definition.ProjectID))
 	if err != nil {
 		return ports.SpawnConfig{}, err
 	}
-	harness := definition.Harness
+	ended := *run.TriggerSessionID
+	var harness domain.AgentHarness
+	if session, ok, err := store.GetSession(ctx, ended); err == nil && ok {
+		harness = session.Harness
+	}
 	if harness == "" {
 		harness = project.Config.Worker.Harness
 	}
 	if harness == "" {
 		return ports.SpawnConfig{}, errNoDreamingAgent
 	}
-	ended := *run.TriggerSessionID
 	prompt, displayName := sessionEndedLaunch(ctx, store, transcripts, definition, ended)
 	var b strings.Builder
 	b.WriteString(prompt)
@@ -162,7 +167,7 @@ func (s *Service) finishedBackgroundRun(ctx context.Context, store schedulerStor
 }
 
 // errNoDreamingAgent is permanent: retrying cannot pick an agent.
-var errNoDreamingAgent = fmt.Errorf("dreaming needs an agent: pick one for this automation or set the project's worker agent")
+var errNoDreamingAgent = fmt.Errorf("dreaming needs an agent: the ended session has none recorded, so set the project's worker agent")
 
 // dreamMessages quotes what the user typed after the ended session's opening
 // task, newest messages first to fit the budget, then printed oldest first.

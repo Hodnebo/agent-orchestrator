@@ -156,13 +156,13 @@ func TestDreamCommandsListEachCommandOnceWithItsLatestResult(t *testing.T) {
 	}
 }
 
-// A dream runs without a checkout, with the project's worker agent, sees only
+// A dream runs without a checkout, on the ended session's agent, sees only
 // what the user typed, gets the exact commands to save instructions, and
 // waits for the previous dream so two never edit at once.
 func TestTickLaunchesOneDreamAtATimeAsAStandaloneSession(t *testing.T) {
 	now := time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC)
 	store := newDreamingStore()
-	store.sessions["worker-1"] = domain.SessionRecord{ID: "worker-1", ProjectID: "app", Kind: domain.KindWorker, DisplayName: "Fix note ordering"}
+	store.sessions["worker-1"] = domain.SessionRecord{ID: "worker-1", ProjectID: "app", Kind: domain.KindWorker, Harness: domain.HarnessCodex, DisplayName: "Fix note ordering"}
 	store.sessions["worker-2"] = domain.SessionRecord{ID: "worker-2", ProjectID: "app", Kind: domain.KindWorker}
 	store.typed["worker-1"] = []string{"Fix the note ordering bug.", "No, run python3 -m unittest\ninstead of make test.", "Keep replies short."}
 	store.commands["worker-1"] = []domain.SessionCommand{{Command: "python3 -m unittest"}, {Command: "make test", Failed: true}}
@@ -179,9 +179,10 @@ func TestTickLaunchesOneDreamAtATimeAsAStandaloneSession(t *testing.T) {
 		t.Fatalf("spawns = %d, want one dream at a time", len(spawner.calls))
 	}
 	spawn := spawner.calls[0]
-	// The mode is left to AO, so a terminal-only agent can dream too.
-	if spawn.ProjectID != "" || spawn.Kind != domain.KindWorker || spawn.Harness != domain.HarnessClaudeCode || spawn.DisplayName != "Dreaming: Fix note ordering" || !spawn.Background || spawn.RequestedMode != "" {
-		t.Fatalf("dream spawn = %#v, want a standalone background worker on the project's agent", spawn)
+	// The dream runs on the ended session's agent, not the project's default,
+	// and the mode is left to AO, so a terminal-only agent can dream too.
+	if spawn.ProjectID != "" || spawn.Kind != domain.KindWorker || spawn.Harness != domain.HarnessCodex || spawn.DisplayName != "Dreaming: Fix note ordering" || !spawn.Background || spawn.RequestedMode != "" {
+		t.Fatalf("dream spawn = %#v, want a standalone background worker on the ended session's agent", spawn)
 	}
 	for _, want := range []string{
 		"You are AO's dreaming agent.",

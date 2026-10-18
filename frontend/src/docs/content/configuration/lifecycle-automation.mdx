@@ -44,13 +44,13 @@ A worker started this way runs in the background, so the session you ended doesn
 
 ### Dreaming and instructions
 
-**Instructions** are standing directions that Orchestrator adds to new sessions. There are two kinds, and both are edited at the top of the **Automations** page:
+**Instructions** are standing directions that Orchestrator adds to new sessions. There are two kinds, and both are edited in **Dreaming**, under **Built-in** on the **Automations** page:
 - Your own apply to every new worker and orchestrator in every project.
 - A project's apply to new sessions in that project.
 
 Each set is plain text, up to 8 KB. A session keeps the instructions it started with.
 
-**Dreaming** keeps instructions up to date. Turn it on with the **Dreaming** switch, which adds one dreaming automation to each project. After each worker in that project ends, a dreaming agent reads what you typed after the opening task, and which commands the agent ran and whether they passed:
+**Dreaming** keeps instructions up to date. It is a built-in automation: turn it on with its switch on the **Automations** page, which adds one dreaming automation to each project. Open its row to see and edit the instructions. After each worker in that project ends, a dreaming agent reads what you typed after the opening task, and which commands the agent ran and whether they passed:
 - What holds in any project, such as how you like answers or when to commit, goes into your instructions.
 - Facts about the repository, such as its test command, go into the project's.
 
@@ -62,7 +62,7 @@ Each dream treats the instructions as everything learned so far and keeps them t
 
 Under the box you can see when dreaming last changed the text. **View session** opens the dream that made the change, and **Undo** restores the text from before it. If you save while a dream is running, your text wins and the dream retries on top of it.
 
-Each dream runs as a standalone session, so it needs no worktree and runs no setup scripts. It also runs in the background: it doesn't appear on the board, in the sidebar or in Archive, so the session you ended stays archived. Open a dream from **View session** under the box, or from the run history of the **Dreaming** automation. A dream appears in the sidebar only if it needs you, for example when it stops or waits for an answer. With a chat agent, AO closes the dream when its turn ends; a terminal agent ends the session itself. If the dream's last step fails, the **Dreaming** automation shows the error. Within a project, dreams run one at a time. Every ended worker starts a dream, including workers an orchestrator started and you never talked to; from those, a dream learns only project facts. To change what dreaming looks for, or which agent runs it, edit the **Dreaming** automation in the list. Agents can read the instructions with `ao instructions show`, but only you and dreaming can change them. That way a hostile file or web page can't plant instructions in every later session.
+Each dream runs as a standalone session, so it needs no worktree and runs no setup scripts. It also runs in the background: it doesn't appear on the board, in the sidebar or in Archive, so the session you ended stays archived. Open the latest dream from **View session** under the box. A dream appears in the sidebar only if it needs you, for example when it stops or waits for an answer. With a chat agent, AO closes the dream when its turn ends; a terminal agent ends the session itself. If the dream's last step fails, the **Dreaming** automation shows the error. Within a project, dreams run one at a time. Every ended worker starts a dream, including workers an orchestrator started and you never talked to; from those, a dream learns only project facts. A dream runs on the same agent as the session that ended. To change what dreaming looks for, edit the **Dreaming** row. Agents can read the instructions with `ao instructions show`, but only you and dreaming can change them. That way a hostile file or web page can't plant instructions in every later session.
 
 To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
 

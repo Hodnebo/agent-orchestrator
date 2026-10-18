@@ -1,11 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Trans, useTranslation } from "react-i18next";
+import { Archive, ChevronRight, Pencil } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Button } from "./ui/button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { useCreateAutomation, useUpdateAutomation, type Automation } from "../hooks/useAutomations";
 import { useInstructions, useSaveInstructions } from "../hooks/useInstructions";
+import { cn } from "../lib/utils";
 
 // Radix Select reserves the empty string, so the user's own scope needs a key.
 const USER_SCOPE = "user";
@@ -29,41 +32,18 @@ function TextButton({ onClick, children }: { onClick: () => void; children?: Rea
 }
 
 /**
- * The instructions AO adds to new sessions, and the switch for dreaming, which
- * keeps them up to date from what the user types. Each project has its own
- * dreaming automation; the switch turns all of them on or off.
+ * Dreaming's state across projects. Each project has its own dreaming
+ * automation; turning dreaming on creates the missing ones and enables the rest.
  */
-export function DreamingPanel({ automations, projects }: { automations: Automation[]; projects: Project[] }) {
-	const { t, i18n } = useTranslation();
-	const navigate = useNavigate();
-	const [scope, setScope] = useState(USER_SCOPE);
-	const projectId = scope === USER_SCOPE ? null : scope;
-	const instructions = useInstructions(projectId);
-	const save = useSaveInstructions(projectId);
+function useDreaming(automations: Automation[], projects: Project[]) {
+	const { t } = useTranslation();
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
-	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
 	const [switching, setSwitching] = useState(false);
 	const [switchError, setSwitchError] = useState<string | null>(null);
-
-	const server = instructions.data;
-	const draft = drafts[scope];
-	const text = draft?.text ?? server?.body ?? "";
-	const dirty = draft !== undefined && server !== undefined && draft.text !== server.body;
-	// The draft started from an older revision: a dream (or another edit)
-	// landed while the user typed. Saving still keeps the user's text.
-	const changedUnderneath = dirty && draft.revision !== server.revision;
-	const tooLong = new TextEncoder().encode(text.trim()).length > MAX_INSTRUCTIONS_BYTES;
-
 	const dreaming = automations.filter((item) => item.purpose === "dreaming");
 	const enabledIn = new Set(dreaming.filter((item) => item.enabled).map((item) => item.projectId));
 	const onCount = projects.filter((project) => enabledIn.has(project.id)).length;
-	const everywhere = projects.length > 0 && onCount === projects.length;
-	const offForProject = projectId !== null && !enabledIn.has(projectId);
-
-	function clearDraft(key = scope) {
-		setDrafts(({ [key]: _discarded, ...rest }) => rest);
-	}
 
 	async function setDreaming(on: boolean, only?: string) {
 		setSwitchError(null);
@@ -87,6 +67,82 @@ export function DreamingPanel({ automations, projects }: { automations: Automati
 		}
 	}
 
+	return { dreaming, enabledIn, onCount, everywhere: projects.length > 0 && onCount === projects.length, switching, switchError, setDreaming };
+}
+
+type DreamingState = ReturnType<typeof useDreaming>;
+
+/**
+ * Dreaming as a built-in automation: one row with a switch for every project.
+ * Opening it shows the instructions AO adds to new sessions, which dreaming
+ * keeps up to date. The status line under them links the latest dream, and a
+ * failed dream shows its error on the row, so there is no run history.
+ */
+export function DreamingRow({ automations, projects, expanded, onExpand, onEdit }: {
+	automations: Automation[];
+	projects: Project[];
+	expanded: boolean;
+	onExpand: () => void;
+	onEdit: () => void;
+}) {
+	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion();
+	const dream = useDreaming(automations, projects);
+	const latest = dream.dreaming
+		.map((item) => item.latestRun)
+		.filter((run): run is NonNullable<Automation["latestRun"]> => Boolean(run))
+		.sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor))[0];
+	const name = t("automations.dreaming.name");
+	const detailsId = "automation-dreaming-details";
+	return <article className="group">
+		<div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(0,1fr)_180px_160px_132px]", expanded ? "bg-muted/30" : "hover:bg-muted/20")}>
+			<button type="button" className="flex min-w-0 items-center gap-2.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t(expanded ? "automations.dreaming.close" : "automations.dreaming.open")} aria-expanded={expanded} aria-controls={detailsId} onClick={onExpand}>
+				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
+				<div className="min-w-0"><h2 className="truncate text-[13px] font-medium leading-5 text-foreground">{name}</h2><p className="truncate text-[11px] leading-5 text-muted-foreground">{dream.onCount > 0 && !dream.everywhere ? t("automations.dreaming.partial", { on: dream.onCount, total: projects.length }) : t("automations.dreaming.everyProject")}</p></div>
+			</button>
+			<div className="col-start-1 flex items-start gap-2 pl-6 text-xs lg:col-start-auto lg:pl-0"><Archive aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><p>{t("automations.schedule.sessionEnded")}</p></div>
+			<div className="col-start-1 pl-6 text-xs lg:col-start-auto lg:pl-0"><span className={cn("tabular-nums", dream.onCount === 0 && "text-muted-foreground")}>{dream.onCount === 0 ? t("automations.dreaming.off") : t("automations.waiting")}</span>{latest ? <p className="mt-1 text-[11px] capitalize text-muted-foreground">{latest.status}</p> : null}</div>
+			<div className="col-start-2 row-start-1 row-span-3 flex items-center justify-end gap-1 lg:col-start-auto lg:row-start-auto lg:row-span-1">
+				{dream.dreaming.length > 0 ? <Button variant="ghost" size="icon-sm" className="text-muted-foreground lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.edit.aria", { name })} onClick={onEdit}><Pencil className="size-3.5" /></Button> : null}
+				<Switch checked={dream.everywhere} disabled={dream.switching || projects.length === 0} aria-label={t("automations.dreaming.toggle")} onCheckedChange={(checked) => void dream.setDreaming(checked)} />
+			</div>
+		</div>
+		{dream.switchError ? <p role="alert" className="mx-4 mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{dream.switchError}</p> : null}
+		{latest?.errorMessage ? <p role="alert" className="mx-4 mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{latest.errorMessage}</p> : null}
+		<AnimatePresence initial={false}>
+			{expanded ? <motion.div id={detailsId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
+				<div className="border-t border-border bg-muted/10 px-4 py-4 pl-10">
+					<DreamingInstructions dream={dream} projects={projects} />
+				</div>
+			</motion.div> : null}
+		</AnimatePresence>
+	</article>;
+}
+
+/** The instructions AO adds to new sessions: the user's own and each project's. */
+function DreamingInstructions({ dream, projects }: { dream: DreamingState; projects: Project[] }) {
+	const { t, i18n } = useTranslation();
+	const navigate = useNavigate();
+	const [scope, setScope] = useState(USER_SCOPE);
+	const projectId = scope === USER_SCOPE ? null : scope;
+	const instructions = useInstructions(projectId);
+	const save = useSaveInstructions(projectId);
+	const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+
+	const server = instructions.data;
+	const draft = drafts[scope];
+	const text = draft?.text ?? server?.body ?? "";
+	const dirty = draft !== undefined && server !== undefined && draft.text !== server.body;
+	// The draft started from an older revision: a dream (or another edit)
+	// landed while the user typed. Saving still keeps the user's text.
+	const changedUnderneath = dirty && draft.revision !== server.revision;
+	const tooLong = new TextEncoder().encode(text.trim()).length > MAX_INSTRUCTIONS_BYTES;
+	const offForProject = projectId !== null && !dream.enabledIn.has(projectId);
+
+	function clearDraft(key = scope) {
+		setDrafts(({ [key]: _discarded, ...rest }) => rest);
+	}
+
 	function onSave(value = text) {
 		if (save.isPending || tooLong) return;
 		const key = scope;
@@ -105,7 +161,7 @@ export function DreamingPanel({ automations, projects }: { automations: Automati
 	} else if (changedUnderneath) {
 		status = <>{t("automations.dreaming.changedWhileEditing")} <TextButton onClick={() => clearDraft()}>{t("automations.dreaming.showLatest")}</TextButton></>;
 	} else if (offForProject) {
-		status = <>{t("automations.dreaming.offForProject")} <TextButton onClick={() => void setDreaming(true, projectId)}>{t("automations.dreaming.turnOn")}</TextButton></>;
+		status = <>{t("automations.dreaming.offForProject")} <TextButton onClick={() => void dream.setDreaming(true, projectId)}>{t("automations.dreaming.turnOn")}</TextButton></>;
 	} else if (server?.updatedAt) {
 		const time = relativeTime(server.updatedAt, i18n.resolvedLanguage) ?? t("automations.dreaming.justNow");
 		const author = server.updatedBy;
@@ -124,18 +180,8 @@ export function DreamingPanel({ automations, projects }: { automations: Automati
 	}
 
 	const scopeLabel = projectId === null ? t("automations.dreaming.you") : projects.find((project) => project.id === projectId)?.name ?? projectId;
-	return <section aria-labelledby="dreaming-title" className="mb-6">
-		<div className="flex items-start justify-between gap-4">
-			<div className="min-w-0">
-				<h2 id="dreaming-title" className="text-[13px] font-medium leading-5 text-foreground">{t("automations.dreaming.title")}</h2>
-				<p className="text-xs leading-5 text-muted-foreground">{t("automations.dreaming.description")}</p>
-			</div>
-			<div className="flex shrink-0 items-center gap-2 pt-0.5">
-				{onCount > 0 && !everywhere ? <span className="text-[11px] tabular-nums text-muted-foreground">{t("automations.dreaming.partial", { on: onCount, total: projects.length })}</span> : null}
-				<Switch checked={everywhere} disabled={switching || projects.length === 0} aria-label={t("automations.dreaming.toggle")} onCheckedChange={(checked) => void setDreaming(checked)} />
-			</div>
-		</div>
-		{switchError ? <p role="alert" className="mt-2 text-xs text-destructive">{switchError}</p> : null}
+	return <section aria-label={t("automations.dreaming.title")}>
+		<p className="text-xs leading-5 text-muted-foreground">{t("automations.dreaming.description")}</p>
 		<div className="mt-3">
 			<Select value={scope} onValueChange={setScope}>
 				<SelectTrigger size="sm" className="h-7 max-w-full text-xs" aria-label={t("automations.dreaming.scope")}><SelectValue /></SelectTrigger>
