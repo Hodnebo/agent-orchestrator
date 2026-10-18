@@ -3221,6 +3221,8 @@ export interface components {
         EventLimit: number;
         /** @description Return events with a sequence strictly greater than this value. */
         After: number;
+        /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+        EventTypes: string[];
         /** @description Reusing a key with the same command returns the original result.
          *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
          *      */
@@ -4493,6 +4495,8 @@ export interface operations {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
                 limit?: components["parameters"]["EventLimit"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {
@@ -4520,6 +4524,8 @@ export interface operations {
             query?: {
                 /** @description Return events with a sequence strictly greater than this value. */
                 after?: components["parameters"]["After"];
+                /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
+                types?: components["parameters"]["EventTypes"];
             };
             header?: never;
             path: {

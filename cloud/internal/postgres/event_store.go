@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -575,6 +576,10 @@ func appendUserMessageEvent(
 	return event, nil
 }
 
+// ListClientEvents lists up to limit of the session's client events after a
+// sequence, and whether more follow. With types, only those of the client
+// event types it names. A principal outside the session's organization gets
+// Setup and Cleanup events without their output (hideScriptOutput).
 func (s *Store) ListClientEvents(
 	ctx context.Context,
 	principal domain.Principal,
@@ -582,7 +587,21 @@ func (s *Store) ListClientEvents(
 	sessionID string,
 	after int64,
 	limit int,
+	types []string,
 ) ([]domain.ClientEvent, bool, error) {
+	served := clientEventTypes
+	if len(types) > 0 {
+		served = nil
+		for _, eventType := range clientEventTypes {
+			if slices.Contains(types, eventType) {
+				served = append(served, eventType)
+			}
+		}
+		if len(served) == 0 {
+			// Only types not served to clients: nothing matches.
+			served = []string{}
+		}
+	}
 	var events []domain.ClientEvent
 	member := false
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
@@ -614,7 +633,7 @@ func (s *Store) ListClientEvents(
 			orgID,
 			sessionID,
 			after,
-			clientEventTypes,
+			served,
 			limit+1,
 		)
 		if err != nil {

@@ -65,7 +65,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
-	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
+	// ListClientEvents lists the session's client events after a sequence,
+	// only of the given types when any are given.
+	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
 	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error

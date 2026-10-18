@@ -80,7 +80,7 @@ func TestScriptStepEventsAppendToADeletedSession(t *testing.T) {
 	})
 	appendStep(2, worker.ScriptStepSkipped)
 
-	events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100)
+	events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100, nil)
 	if err != nil {
 		t.Fatalf("replay the deleted session's events: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestScriptOutputIsServedOnlyToMembers(t *testing.T) {
 
 	payloads := func(principal domain.Principal) map[string]map[string]any {
 		t.Helper()
-		events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100)
+		events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,7 +231,7 @@ func TestScriptStepFinalEventDropsItsLiveUpdates(t *testing.T) {
 	appendStep("run-a", 1, worker.SetupSucceeded, "line 1\nline 2")
 	appendStep("run-a", 2, worker.ScriptStepRunning, "")
 
-	events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100)
+	events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,8 +250,42 @@ func TestScriptStepFinalEventDropsItsLiveUpdates(t *testing.T) {
 	if got := strings.Join(kept, " "); got != "workspace.changed run-b/1/running run-a/1/succeeded run-a/2/running" {
 		t.Fatalf("events = %s", got)
 	}
-	after, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, firstLive, 100)
+	after, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, firstLive, 100, nil)
 	if err != nil || len(after) != len(events) {
 		t.Fatalf("events after a deleted update's sequence = %d (%v), want %d", len(after), err, len(events))
+	}
+}
+
+// The types filter serves only the client event types it names; a type that
+// is not served to clients matches nothing.
+func TestListClientEventsFiltersByType(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	for _, eventType := range []string{"workspace.changed", worker.SetupEventType, "chat.assistant_delta", worker.ScriptStepEventType} {
+		if _, err := store.AppendSessionEvent(ctx, fixture.orgID, fixture.sessionID, eventType, json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := func(types []string) string {
+		t.Helper()
+		events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100, types)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, event := range events {
+			names = append(names, event.Type)
+		}
+		return strings.Join(names, " ")
+	}
+	if got := listed([]string{worker.ScriptStepEventType, worker.SetupEventType}); got != "workspace.setup workspace.script.step" {
+		t.Fatalf("filtered = %q", got)
+	}
+	if got := listed([]string{"worker.secret_internal"}); got != "" {
+		t.Fatalf("a type not served to clients = %q", got)
+	}
+	if got := listed(nil); got != "workspace.changed workspace.setup chat.assistant_delta workspace.script.step" {
+		t.Fatalf("unfiltered = %q", got)
 	}
 }
