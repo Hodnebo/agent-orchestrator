@@ -2015,6 +2015,11 @@ BEGIN
 	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
+	// Draft Open Interpreter builds recorded their harness constraint as 0199
+	// before main assigned 0199 to message continuation. Repair those local
+	// profiles when goose skips main's migration as already applied.
+	{version: 199, table: "conversation_messages", column: "continuation",
+		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
