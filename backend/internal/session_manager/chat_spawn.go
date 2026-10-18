@@ -586,7 +586,11 @@ func (m *Manager) resumeChatController(
 			if metadata.ImportSource != nil {
 				adopted := *metadata.ImportSource
 				if !adopted.Adopted {
-					adopted.HistoryThrough = m.importReplayedThrough(ctx, rec.ID)
+					through, err := m.importReplayedThrough(ctx, rec.ID)
+					if err != nil {
+						return ChatControllerCommit{}, err
+					}
+					adopted.HistoryThrough = through
 				}
 				adopted.Adopted = true
 				metadata.ImportSource = &adopted
@@ -634,13 +638,13 @@ func (m *Manager) resumeChatController(
 		},
 	})
 	if err != nil {
-		// Another app can hold the native conversation after adoption too.
-		if providerRefusedImportOwnership(err) {
-			return RestoreResult{}, ErrSessionOpenElsewhere
-		}
 		if completionErr != nil {
 			m.stopChatBestEffort(ctx, rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)
+		}
+		// Another app can hold an imported conversation after adoption too.
+		if rec.Metadata.ImportSource != nil && providerRefusedImportOwnership(err) {
+			return RestoreResult{}, ErrSessionOpenElsewhere
 		}
 		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
 	}
