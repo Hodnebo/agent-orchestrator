@@ -35,7 +35,7 @@ const sandboxColumns = `sandbox.session_id, sandbox.org_id, sandbox.provider,
 	sandbox.worker_last_seen_at, sandbox.startup_started_at,
 	sandbox.startup_attempts,
 	sandbox.deletion_requested_at,
-	sandbox.last_error, sandbox.startup_error_code,
+	sandbox.last_error, sandbox.startup_error_code, sandbox.startup_error_at,
 	sandbox.provider_failure_id, sandbox.updated_at`
 
 // ClaimSandboxes leases up to limit due sandboxes for reconciliation. The
@@ -1592,6 +1592,7 @@ func scanSandbox(row rowScanner) (domain.Sandbox, error) {
 		&record.DeletionRequestedAt,
 		&record.LastError,
 		&record.StartupErrorCode,
+		&record.StartupErrorAt,
 		&record.ProviderFailureID,
 		&record.UpdatedAt,
 		&record.KeepAlive,

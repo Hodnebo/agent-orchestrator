@@ -67,8 +67,9 @@ func TestSandboxStartupErrorLifecycle(t *testing.T) {
 	for _, record := range claimed {
 		if record.SessionID == fixture.sessionID {
 			found = true
-			if record.StartupErrorCode != "workspace_not_ready" {
-				t.Fatalf("claimed startup error code = %q", record.StartupErrorCode)
+			if record.StartupErrorCode != "workspace_not_ready" ||
+				record.StartupErrorAt == nil || !record.StartupErrorAt.Equal(firstAt) {
+				t.Fatalf("claimed startup error = %q at %v, want at %s", record.StartupErrorCode, record.StartupErrorAt, firstAt)
 			}
 		}
 	}

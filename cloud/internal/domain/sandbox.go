@@ -89,6 +89,10 @@ type Sandbox struct {
 	// StartupErrorCode is the code of the latest user-facing startup error, or
 	// empty when none is recorded (see RecordSandboxStartupError).
 	StartupErrorCode string
+	// StartupErrorAt is when that error was first recorded. One recorded at or
+	// after StartupStartedAt belongs to the current startup window, which only
+	// a user retry, a resume or a restore reopens.
+	StartupErrorAt *time.Time
 	// ProviderFailureID is the failed provider build the reconciler already
 	// acted on, and how (see migration 00085).
 	ProviderFailureID string

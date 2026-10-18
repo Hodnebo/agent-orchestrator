@@ -567,8 +567,13 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 	// rather than stay parked. (A deleted-then-restored session already carries
 	// observed_state 'deleted' with no provider id and provisions below; this
 	// also covers un-terminating a session parked by the repair-storm ceiling.)
+	//
+	// A session parked by a startup failure stays parked while its intent is
+	// running, too, until a user retry or a resume reopens its startup window:
+	// any wake (opening the session, a terminal, Chat) would otherwise restart
+	// a stopped workspace or retry a create the user has not asked for.
 	if record.ObservedState == domain.SandboxObservedTerminated &&
-		record.DesiredState != domain.SandboxDesiredRunning {
+		(record.DesiredState != domain.SandboxDesiredRunning || parkedAfterStartupFailure(record)) {
 		return r.observe(ctx, record, record.ProviderEnvironmentID,
 			domain.SandboxObservedTerminated, record.LastError, 24*time.Hour)
 	}
@@ -1364,6 +1369,16 @@ func (r *Reconciler) bootstrapFailed(
 			domain.SandboxObservedProvisioning, err.Error(), notReadyRetryInterval)
 	}
 	return r.fail(ctx, record, err)
+}
+
+// parkedAfterStartupFailure reports whether a sandbox whose worker never
+// checked in recorded its startup error in the current startup window. A user
+// retry clears the error, and a resume or restore opens a new window after it,
+// so a parked session that still matches has not been asked to start again.
+// Both times come from the database clock.
+func parkedAfterStartupFailure(record domain.Sandbox) bool {
+	return record.WorkerLastSeenAt == nil && record.StartupErrorAt != nil &&
+		(record.StartupStartedAt == nil || !record.StartupErrorAt.Before(*record.StartupStartedAt))
 }
 
 // What the reconciler did about a failed provider build, stored with the

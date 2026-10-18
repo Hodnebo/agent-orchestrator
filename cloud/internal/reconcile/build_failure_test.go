@@ -382,3 +382,86 @@ func TestCapacityWaitIsBoundedByStartupBudget(t *testing.T) {
 		t.Fatalf("observations = %v, want still waiting for capacity", store.observations)
 	}
 }
+
+// parkedRecord is a session parked by a startup failure recorded after its
+// startup window opened.
+func parkedRecord(environmentID, connectionID string) domain.Sandbox {
+	startedAt := time.Now().Add(-3 * time.Minute)
+	failedAt := startedAt.Add(time.Minute)
+	return domain.Sandbox{
+		SessionID: "session-1", OrgID: "org-1", Provider: sandbox.ProviderCoder,
+		ProviderEnvironmentID: environmentID,
+		ProviderConnectionID:  connectionID,
+		DesiredState:          domain.SandboxDesiredRunning,
+		ObservedState:         domain.SandboxObservedTerminated,
+		StartupStartedAt:      &startedAt,
+		StartupErrorCode:      sandbox.StartupErrorWorkspaceBuildFailed,
+		StartupErrorAt:        &failedAt,
+		ProviderFailureID:     failedBuildID,
+		UpdatedAt:             failedAt,
+	}
+}
+
+// AO stopped a managed workspace when it parked the session. Any wake that
+// is not a retry (opening the session, a terminal, Chat) must leave it
+// stopped; a retry, or a resume or restore that opens a new startup window,
+// starts it.
+func TestParkedManagedSessionIsNotRestartedByAWake(t *testing.T) {
+	t.Parallel()
+	stopped := sandbox.Environment{ID: "workspace-1", State: sandbox.StateStopped}
+
+	store := &lifecycleStore{}
+	provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{environment: stopped}}
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), parkedRecord("workspace-1", "")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.starts != 0 || strings.Join(store.observations, ",") != domain.SandboxObservedTerminated {
+		t.Fatalf("woken parked session: starts = %d observations = %v, want still parked",
+			provider.starts, store.observations)
+	}
+
+	// A user retry clears the error and re-arms the sandbox.
+	retried := parkedRecord("workspace-1", "")
+	retried.ObservedState = domain.SandboxObservedProvisioning
+	retried.StartupErrorCode, retried.StartupErrorAt = "", nil
+	now := time.Now()
+	retried.StartupStartedAt = &now
+	store = &lifecycleStore{}
+	provider = &buildFailureProvider{lifecycleProvider: lifecycleProvider{environment: stopped}}
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), retried); err != nil {
+		t.Fatalf("reconcile after retry: %v", err)
+	}
+	if provider.starts != 1 {
+		t.Fatalf("retried session: starts = %d, want 1", provider.starts)
+	}
+
+	// A restore keeps the error and observed state but opens a new window.
+	restored := parkedRecord("workspace-1", "")
+	restored.StartupStartedAt = &now
+	store = &lifecycleStore{}
+	provider = &buildFailureProvider{lifecycleProvider: lifecycleProvider{environment: stopped}}
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), restored); err != nil {
+		t.Fatalf("reconcile after restore: %v", err)
+	}
+	if provider.starts != 1 {
+		t.Fatalf("restored session: starts = %d, want 1", provider.starts)
+	}
+}
+
+// A session parked because its compute could not be created stays parked on
+// a wake: it is not bounced back to "waiting for provider capacity", and no
+// create is attempted until the user retries.
+func TestParkedUncreatedSessionStaysParkedOnWake(t *testing.T) {
+	t.Parallel()
+	store := &lifecycleStore{}
+	provider := &buildFailureProvider{createErr: sandbox.ErrAtCapacity}
+	record := parkedRecord("", "")
+	record.Provider = sandbox.ProviderFreestyle
+	record.StartupErrorCode = sandbox.StartupErrorWorkspaceCreateFailed
+	if err := testReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if provider.creates != 0 || strings.Join(store.observations, ",") != domain.SandboxObservedTerminated {
+		t.Fatalf("creates = %d observations = %v, want still parked", provider.creates, store.observations)
+	}
+}
