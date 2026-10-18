@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "Failed at step {{step}}",
 	"scriptRun.interrupted": "Stopped before finishing",
 	"scriptRun.unknown": "Ended without reporting a result",
+	"scriptRun.notRun": "Did not run",
+	"scriptRun.cleanupNotRun": "AO could not run Cleanup before deleting the sandbox, so none of its steps ran.",
 	"scriptRun.elapsed": "Elapsed {{duration}}",
 	"scriptRun.stepNumber": "Step {{step}}",
 	"scriptRun.stepStatus.running": "Running",

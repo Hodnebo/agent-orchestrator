@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "在第 {{step}} 步失败",
 	"scriptRun.interrupted": "未完成即已停止",
 	"scriptRun.unknown": "已结束，未报告结果",
+	"scriptRun.notRun": "未运行",
+	"scriptRun.cleanupNotRun": "AO 未能在删除沙盒前运行清理，因此其所有步骤均未运行。",
 	"scriptRun.elapsed": "已用时间 {{duration}}",
 	"scriptRun.stepNumber": "第 {{step}} 步",
 	"scriptRun.stepStatus.running": "运行中",

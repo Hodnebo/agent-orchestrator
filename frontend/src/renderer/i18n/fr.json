@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "Échec à l'étape {{step}}",
 	"scriptRun.interrupted": "Arrêté avant la fin",
 	"scriptRun.unknown": "Terminé sans résultat signalé",
+	"scriptRun.notRun": "Non exécuté",
+	"scriptRun.cleanupNotRun": "AO n'a pas pu exécuter le nettoyage avant de supprimer la sandbox : aucune de ses étapes n'a été exécutée.",
 	"scriptRun.elapsed": "Durée {{duration}}",
 	"scriptRun.stepNumber": "Étape {{step}}",
 	"scriptRun.stepStatus.running": "En cours",

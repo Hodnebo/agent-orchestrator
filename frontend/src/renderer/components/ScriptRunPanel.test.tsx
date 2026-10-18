@@ -237,6 +237,19 @@ describe("ScriptRunPanel", () => {
 		expect(within(steps()[0]).getByText("Output is visible to organization members only.")).toBeInTheDocument();
 	});
 
+	it("explains a Cleanup that could not run in the reader's language", () => {
+		const run = groupScriptRuns([
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "skipped", command: "docker compose down", hint: "The sandbox was paused and did not resume." }),
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 2, status: "skipped", command: "rm -rf tmp", hint: "The sandbox was paused and did not resume." }),
+		])[0];
+		const { container } = render(<ScriptRunPanel collapsible run={run} />);
+		expect(screen.getByText("Did not run")).toBeInTheDocument();
+		expect(screen.getByText("AO could not run Cleanup before deleting the sandbox, so none of its steps ran.")).toBeInTheDocument();
+		expect(steps().map((row) => row.getAttribute("data-status"))).toEqual(["skipped", "skipped"]);
+		expect(container.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByText(/did not resume/)).toBeNull();
+	});
+
 	it("stops the spinner of a run that ended without reporting its last step", () => {
 		const run = groupScriptRuns([
 			stepEvent({ total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T10:00:00Z", output: "added 10" }),

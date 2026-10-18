@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "Falhou na etapa {{step}}",
 	"scriptRun.interrupted": "Parou antes de terminar",
 	"scriptRun.unknown": "Terminou sem informar um resultado",
+	"scriptRun.notRun": "Não foi executado",
+	"scriptRun.cleanupNotRun": "O AO não conseguiu executar a limpeza antes de excluir o sandbox, então nenhuma das etapas foi executada.",
 	"scriptRun.elapsed": "Tempo decorrido {{duration}}",
 	"scriptRun.stepNumber": "Etapa {{step}}",
 	"scriptRun.stepStatus.running": "Em execução",

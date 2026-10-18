@@ -228,7 +228,9 @@ export function scriptRunStatusText(run: ScriptRun, t: TFunction): string {
 				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
 				: run.status === "unknown"
 					? t("scriptRun.unknown")
-					: t("scriptRun.interrupted");
+					: run.status === "notRun"
+						? t("scriptRun.notRun")
+						: t("scriptRun.interrupted");
 }
 
 /**
@@ -322,6 +324,9 @@ export function ScriptRunPanel({
 						);
 					})}
 				</ol>
+			) : null}
+			{listOpen && run.status === "notRun" && run.phase === "cleanup" ? (
+				<p className="border-t border-border px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">{t("scriptRun.cleanupNotRun")}</p>
 			) : null}
 		</section>
 	);

@@ -81,8 +81,10 @@ export interface ScriptRunStep {
  * `unknown`: the run never reported its end, but the session moved past it
  * (a later Setup summary or agent start, or the session's sandbox is gone),
  * so it is no longer running and its outcome was never received.
+ * `notRun`: every step was reported skipped before any ran (a Cleanup the
+ * control plane could not run before deleting the sandbox).
  */
-export type ScriptRunStatus = "running" | "succeeded" | "failed" | "interrupted" | "unknown";
+export type ScriptRunStatus = "running" | "succeeded" | "failed" | "interrupted" | "unknown" | "notRun";
 
 export interface GroupScriptRunsOptions {
 	/** The session's sandbox is gone or AO stopped starting it: nothing runs any more. */
@@ -237,11 +239,13 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;
 		const allSucceeded = steps.length > 0 && steps.every((step) => step.status === "succeeded");
+		const noneRan = steps.length > 0 && steps.every((step) => step.status === "skipped");
 		const superseded = ordered.slice(index + 1).some(([, later]) => later.phase === run.phase);
 		// Its final event was lost: the session has moved on past the run.
 		const ended = sessionEnded || lastEndSequence > run.lastSequence;
 		const status: ScriptRunStatus = failedStep !== undefined ? "failed"
 			: allSucceeded ? "succeeded"
+			: noneRan ? "notRun"
 			: superseded ? "interrupted"
 			: ended ? "unknown"
 			: "running";

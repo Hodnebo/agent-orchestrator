@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "{{step}}단계에서 실패",
 	"scriptRun.interrupted": "완료 전에 중지됨",
 	"scriptRun.unknown": "결과를 보고하지 않고 종료됨",
+	"scriptRun.notRun": "실행되지 않음",
+	"scriptRun.cleanupNotRun": "AO가 샌드박스를 삭제하기 전에 정리를 실행하지 못해 어떤 단계도 실행되지 않았습니다.",
 	"scriptRun.elapsed": "경과 시간 {{duration}}",
 	"scriptRun.stepNumber": "{{step}}단계",
 	"scriptRun.stepStatus.running": "실행 중",

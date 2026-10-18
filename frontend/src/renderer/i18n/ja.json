@@ -44,6 +44,8 @@
 	"scriptRun.failedAt": "ステップ {{step}} で失敗",
 	"scriptRun.interrupted": "完了前に停止しました",
 	"scriptRun.unknown": "結果が報告されないまま終了しました",
+	"scriptRun.notRun": "実行されませんでした",
+	"scriptRun.cleanupNotRun": "AO はサンドボックスを削除する前にクリーンアップを実行できなかったため、どのステップも実行されませんでした。",
 	"scriptRun.elapsed": "経過時間 {{duration}}",
 	"scriptRun.stepNumber": "ステップ {{step}}",
 	"scriptRun.stepStatus.running": "実行中",

@@ -134,6 +134,15 @@ describe("groupScriptRuns", () => {
 		expect(parseScriptStepPayload({ phase: "setup", runId: "r", step: 1, status: "running" })?.outputHidden).toBe(false);
 	});
 
+	it("reports a run whose every step was skipped as not run, not as running", () => {
+		sequence = 0;
+		const [run] = groupScriptRuns([
+			step({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "skipped", hint: "The sandbox did not resume" }),
+			step({ phase: "cleanup", runId: "c", total: 2, step: 2, status: "skipped", hint: "The sandbox did not resume" }),
+		]);
+		expect(run).toMatchObject({ status: "notRun", runningStep: undefined, failedStep: undefined, durationMs: undefined });
+	});
+
 	it("handles an old hook's single cleanup event without markers", () => {
 		sequence = 0;
 		const [run] = groupScriptRuns([step({ phase: "cleanup", runId: "cleanup-1", step: 1, total: 1, status: "failed", exitCode: 1, output: "rm: busy" })]);
