@@ -94,7 +94,10 @@ type Sandbox struct {
 	// a user retry, a resume or a restore reopens.
 	StartupErrorAt *time.Time
 	// ProviderFailureID is the failed provider build the reconciler already
-	// acted on, and how (see migration 00085).
+	// acted on, and how (stored as bootstrap_context.providerFailureId): the
+	// bare build id once reported, "<id>#restarted" once it started the one
+	// new build a user retry asked for, "<id>#ignored" when a connected worker
+	// made it leave the failure alone.
 	ProviderFailureID string
 	UpdatedAt         time.Time
 }

@@ -1381,7 +1381,7 @@ func parkedAfterStartupFailure(record domain.Sandbox) bool {
 }
 
 // What the reconciler did about a failed provider build, stored with the
-// build's id in ao_sandboxes.provider_failure_id: the bare id once it reported
+// build's id as the sandbox's ProviderFailureID: the bare id once it reported
 // the failure, restartedMark once it started the one new build a user retry
 // asked for, ignoredMark when a connected worker made it leave the failure
 // alone. Each failed build is acted on once.

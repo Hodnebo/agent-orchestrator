@@ -23,7 +23,7 @@ type lifecycleStore struct {
 	failures      []string
 	startupErrors []startupErrorRecord
 	repairs       int
-	// providerFailures are the provider_failure_id values written, in order.
+	// providerFailures are the ProviderFailureID values written, in order.
 	providerFailures []string
 }
 
