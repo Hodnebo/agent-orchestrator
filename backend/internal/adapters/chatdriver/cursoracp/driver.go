@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -73,7 +74,19 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 		args = append(args, "--force")
 	}
 	args = append(args, "acp")
-	return args, nil, nil
+	var env map[string]string
+	if strings.TrimSpace(cfg.DataDir) != "" {
+		// The preload only speeds Cursor's API calls up; any problem with it
+		// launches Cursor without it.
+		if preload, err := writeNetPreload(cfg.DataDir); err == nil && preloadPathUsable(preload) {
+			existing, ok := cfg.Env["NODE_OPTIONS"]
+			if !ok {
+				existing = os.Getenv("NODE_OPTIONS")
+			}
+			env = map[string]string{"NODE_OPTIONS": nodeOptionsWithPreload(existing, preload)}
+		}
+	}
+	return args, env, nil
 }
 
 // sessionPreamble leads the first prompt with AO's standing instructions, which

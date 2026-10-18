@@ -3,6 +3,8 @@ package cursoracp
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -291,5 +293,51 @@ func TestSessionOptionsSplitAModelIDIntoCursorSettings(t *testing.T) {
 				t.Fatalf("options = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func assertNetPreload(t *testing.T, dataDir, nodeOptions string) {
+	t.Helper()
+	const prefix = `--require "`
+	start := strings.LastIndex(nodeOptions, prefix)
+	if start < 0 || !strings.HasSuffix(nodeOptions, `"`) {
+		t.Fatalf("NODE_OPTIONS = %q, want it to require the Cursor preload", nodeOptions)
+	}
+	path := filepath.FromSlash(nodeOptions[start+len(prefix) : len(nodeOptions)-1])
+	if filepath.Dir(path) != filepath.Join(dataDir, "cursor") {
+		t.Fatalf("preload path = %q, want it under %q", path, filepath.Join(dataDir, "cursor"))
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read preload: %v", err)
+	}
+	if string(body) != string(netPreload) {
+		t.Fatal("preload on disk differs from the embedded preload")
+	}
+}
+
+func TestConfigureKeepsInheritedNodeOptions(t *testing.T) {
+	t.Setenv("NODE_OPTIONS", "")
+	dataDir := t.TempDir()
+	_, env, err := configure(context.Background(), acpdriver.LaunchConfig{
+		DataDir: dataDir,
+		Env:     map[string]string{"NODE_OPTIONS": "--max-old-space-size=4096"},
+	})
+	if err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	got := env["NODE_OPTIONS"]
+	if !strings.HasPrefix(got, "--max-old-space-size=4096 --require ") {
+		t.Fatalf("NODE_OPTIONS = %q, want the inherited options kept ahead of the preload", got)
+	}
+	assertNetPreload(t, dataDir, got)
+
+	// A second launch reuses the same content-named file.
+	_, again, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatalf("configure again: %v", err)
+	}
+	if !strings.HasSuffix(got, again["NODE_OPTIONS"]) {
+		t.Fatalf("second NODE_OPTIONS = %q, want the same preload as %q", again["NODE_OPTIONS"], got)
 	}
 }
