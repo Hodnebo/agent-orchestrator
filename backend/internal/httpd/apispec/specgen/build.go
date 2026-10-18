@@ -227,6 +227,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationMCPServerPayload":              "ConversationMCPServerPayload",
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
+	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
 	"ControllersProviderSwitchRequest":                     "ProviderSwitchRequest",
 	"ControllersSessionHistoryQuery":                       "SessionHistoryQuery",
 	"DomainHandoffTurn":                                    "SessionHistoryTurn",
@@ -1697,6 +1698,15 @@ func agentOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListAgentAuthPlansResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/chat/prewarm", id: "prewarmChatAgent", tag: "conversations",
+			summary:    "Run an agent's Chat readiness check in the background so a later switch to it skips it",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.PrewarmChatAgentResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

@@ -33,6 +33,7 @@ import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { clientForSessionHost } from "../../lib/host-clients";
 import { listsModelVariants } from "../../lib/model-variants";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -226,6 +227,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	const pendingHarness = pendingSwitch?.harness;
+	// The daemon checks an agent can run as a chat the first time it starts one,
+	// which can take a second; run that check now so the send does not wait on it.
+	useEffect(() => {
+		if (!pendingHarness) return;
+		void clientForSessionHost(hostId)
+			.POST("/api/v1/agents/{agent}/chat/prewarm", { params: { path: { agent: pendingHarness } } })
+			.catch(() => undefined);
+	}, [hostId, pendingHarness]);
 	// Ultracode is asked for in each message, so it is kept here, not on the agent.
 	const [ultracodeOn, setUltracodeOn] = useState(false);
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);

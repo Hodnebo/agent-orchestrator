@@ -101,6 +101,11 @@ type AgentIDParam struct {
 	Agent string `path:"agent" description:"Agent adapter identifier."`
 }
 
+// PrewarmChatAgentResponse acknowledges a background Chat readiness check.
+type PrewarmChatAgentResponse struct {
+	Agent string `json:"agent" description:"Agent adapter identifier whose Chat check was started."`
+}
+
 // ListAgentAuthPlansResponse is the display-safe authentication catalog.
 type ListAgentAuthPlansResponse struct {
 	Plans []agentauth.Plan `json:"plans"`
