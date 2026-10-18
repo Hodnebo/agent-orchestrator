@@ -65,7 +65,12 @@ type codexRolloutTail struct {
 	// read from where it was, and one created later from its start.
 	offsets map[string]int64
 	partial []byte
-	scans   int
+	// skipping drops the rest of a record too large to read, up to its end.
+	skipping bool
+	// terminal remembers which rollouts are the terminal's, so a rescan opens
+	// each at most once.
+	terminal map[string]bool
+	scans    int
 }
 
 // newCodexRolloutTail records where every existing rollout ends. Call it
@@ -75,6 +80,7 @@ func newCodexRolloutTail(codexHome, conversationID string, started time.Time) *c
 		root: filepath.Join(codexHome, "sessions"), started: started,
 		conversationID: strings.TrimSpace(conversationID),
 		offsets:        make(map[string]int64),
+		terminal:       make(map[string]bool),
 	}
 	_ = filepath.WalkDir(t.root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
@@ -131,16 +137,27 @@ func (t *codexRolloutTail) poll() []codexTurnFailure {
 	t.offsets[t.path] = offset + int64(len(chunk))
 	data := append(t.partial, chunk...)
 	t.partial = nil
-	if last := bytes.LastIndexByte(data, '\n'); last < len(data)-1 {
+	if t.skipping {
+		end := bytes.IndexByte(data, '\n')
+		if end < 0 {
+			return nil
+		}
+		data, t.skipping = data[end+1:], false
+	}
+	last := bytes.LastIndexByte(data, '\n')
+	if rest := data[last+1:]; len(rest) > maxCodexRolloutReadSize {
+		// An oversized record (a large tool output) is never a turn end.
+		t.skipping = true
+	} else if len(rest) > 0 {
 		// Keep an unfinished record for the next poll.
-		t.partial = append([]byte(nil), data[last+1:]...)
-		data = data[:last+1]
+		t.partial = append([]byte(nil), rest...)
 	}
 	var failures []codexTurnFailure
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 64<<10), maxCodexRolloutReadSize)
-	for scanner.Scan() {
-		if failure, failed := codexTurnFailedRecord(scanner.Bytes()); failed {
+	for _, line := range bytes.Split(data[:last+1], []byte{'\n'}) {
+		if len(line) > maxCodexRolloutReadSize {
+			continue
+		}
+		if failure, failed := codexTurnFailedRecord(line); failed {
 			failures = append(failures, failure)
 		}
 	}
@@ -154,7 +171,7 @@ func (t *codexRolloutTail) follow(path string) {
 	if path == "" || path == t.path {
 		return
 	}
-	t.path, t.partial = path, nil
+	t.path, t.partial, t.skipping = path, nil, false
 }
 
 // newestTerminalRollout is the most recently written rollout of the terminal's
@@ -171,10 +188,12 @@ func (t *codexRolloutTail) newestTerminalRollout() string {
 			return nil
 		}
 		info, err := entry.Info()
-		if err != nil || info.ModTime().Before(newestMod) {
+		// A rollout untouched since the watcher started holds nothing new. The
+		// slack covers file times the kernel stamps from a coarser clock.
+		if err != nil || info.ModTime().Before(t.started.Add(-time.Second)) || info.ModTime().Before(newestMod) {
 			return nil
 		}
-		if path != t.path && !t.resumedRollout(entry.Name()) && !codexTerminalRollout(path) {
+		if path != t.path && !t.terminalRollout(path, entry.Name()) {
 			return nil
 		}
 		newest, newestMod = path, info.ModTime()
@@ -183,22 +202,42 @@ func (t *codexRolloutTail) newestTerminalRollout() string {
 	return newest
 }
 
+func (t *codexRolloutTail) terminalRollout(path, name string) bool {
+	if terminal, known := t.terminal[path]; known {
+		return terminal
+	}
+	if t.resumedRollout(name) {
+		t.terminal[path] = true
+		return true
+	}
+	terminal, known := codexTerminalRollout(path)
+	if known {
+		t.terminal[path] = terminal
+	}
+	return terminal
+}
+
 // resumedRollout reports whether a rollout file is the resumed conversation's:
 // Codex names it rollout-<time>-<conversation id>.jsonl.
 func (t *codexRolloutTail) resumedRollout(name string) bool {
 	return t.conversationID != "" && strings.HasSuffix(strings.TrimSuffix(name, ".jsonl"), "-"+t.conversationID)
 }
 
-func codexTerminalRollout(path string) bool {
+// codexTerminalRollout reads a rollout's session_meta source. known is false
+// while Codex has not finished writing that first line.
+func codexTerminalRollout(path string) (terminal, known bool) {
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer file.Close()
 	reader := bufio.NewReaderSize(file, 64<<10)
 	line, err := reader.ReadSlice('\n')
+	if err == io.EOF {
+		return false, false
+	}
 	if err != nil && len(line) == 0 {
-		return false
+		return false, false
 	}
 	var record struct {
 		Type    string `json:"type"`
@@ -209,14 +248,14 @@ func codexTerminalRollout(path string) bool {
 	if json.Unmarshal(line, &record) != nil || record.Type != "session_meta" {
 		// A meta line longer than the buffer still belongs to some rollout;
 		// only a readable non-interactive source excludes it.
-		return err == bufio.ErrBufferFull
+		return err == bufio.ErrBufferFull, true
 	}
 	var source string
 	if json.Unmarshal(record.Payload.Source, &source) == nil {
-		return source != "exec" && source != "mcp"
+		return source != "exec" && source != "mcp", true
 	}
 	// Subagent and other structured sources are not the terminal's own turn.
-	return len(record.Payload.Source) == 0
+	return len(record.Payload.Source) == 0, true
 }
 
 // codexTurnFailedRecord reports a rollout record for a turn that ended on an

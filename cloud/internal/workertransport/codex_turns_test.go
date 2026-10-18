@@ -270,3 +270,34 @@ func TestCodexTurnFailureDoesNotOverrideALaterPrompt(t *testing.T) {
 		t.Fatalf("activity = %+v, want the idle report", control.activity)
 	}
 }
+
+// A record past the read limit (a large tool output) is skipped, and the turn
+// end written after it in the same batch is still read.
+func TestCodexRolloutTailSkipsAnOversizedRecord(t *testing.T) {
+	home := t.TempDir()
+	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
+	huge := `{"type":"response_item","payload":{"output":"` + strings.Repeat("x", 2*maxCodexRolloutReadSize+1) + `"}}` + "\n"
+	writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted+huge+codexTurnFailed)
+	var failures []codexTurnFailure
+	for range 6 {
+		failures = append(failures, tail.poll()...)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("failures = %v, want the failed turn after the oversized record", failures)
+	}
+}
+
+// A rollout whose session_meta line is still being written is looked at again
+// on the next scan rather than written off.
+func TestCodexRolloutTailRechecksAnUnfinishedRollout(t *testing.T) {
+	home := t.TempDir()
+	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
+	path := writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta[:20])
+	if failures := tail.poll(); len(failures) != 0 {
+		t.Fatalf("failures = %v from an unfinished rollout", failures)
+	}
+	appendRollout(t, path, codexCLIMeta[20:]+codexTurnStarted+codexTurnFailed)
+	if failures := tail.poll(); len(failures) != 1 {
+		t.Fatalf("failures = %v, want the failed turn once the rollout is readable", failures)
+	}
+}
