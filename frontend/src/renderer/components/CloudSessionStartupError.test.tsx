@@ -9,8 +9,9 @@ import { TooltipProvider } from "./ui/tooltip";
 
 const retrySessionStartup = vi.hoisted(() => vi.fn());
 const requestWorkspaceCheckout = vi.hoisted(() => vi.fn());
+const listChatEvents = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ client: { retrySessionStartup, requestWorkspaceCheckout }, ready: true, baseUrl: "https://cloud.test" }),
+	useCloudCp: () => ({ client: { retrySessionStartup, requestWorkspaceCheckout, listChatEvents }, ready: true, baseUrl: "https://cloud.test" }),
 }));
 
 function mount(problem: Parameters<typeof CloudSessionStartupError>[0]["problem"], coderWorkspaceUrl?: string) {
@@ -31,6 +32,32 @@ describe("CloudSessionStartupError", () => {
 	beforeEach(() => {
 		retrySessionStartup.mockReset();
 		requestWorkspaceCheckout.mockReset();
+		listChatEvents.mockReset();
+		listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+	});
+
+	it("adds the failed Setup run's step log and keeps the server detail one click away", async () => {
+		const step = (sequence: number, payload: Record<string, unknown>) => ({
+			sessionId: "sess-1", sequence, type: "workspace.script.step", createdAt: "2026-10-14T10:00:00Z",
+			payload: { phase: "setup", runId: "run-1", total: 2, repository: "", ...payload },
+		});
+		listChatEvents.mockResolvedValue({
+			events: [
+				{ sessionId: "sess-1", sequence: 1, type: "worker.ready", payload: {}, createdAt: "2026-10-14T10:00:00Z" },
+				step(2, { step: 1, status: "failed", command: "./bin/bootstrap", exitCode: 3, durationMs: 1200, output: "missing secret", hint: "Add the secret in Project settings." }),
+				step(3, { step: 2, status: "skipped", command: "npm test" }),
+			],
+			hasMore: false, nextAfter: 3,
+		});
+		mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret" });
+		const panel = await screen.findByTestId("script-run-panel");
+		expect(listChatEvents).toHaveBeenCalledWith("org-1", "sess-1", { after: 0, limit: 500 }, expect.anything());
+		expect(panel).toHaveTextContent("Failed at step 1");
+		expect(panel).toHaveTextContent("Add the secret in Project settings.");
+		expect(screen.getByRole("alert")).not.toContainElement(panel);
+		expect(screen.queryByTestId("cloud-session-startup-detail")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("missing secret");
 	});
 
 	it("shows a failed project Setup step with its output and retries it through the worker", async () => {
