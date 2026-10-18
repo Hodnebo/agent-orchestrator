@@ -2213,6 +2213,8 @@ export interface components {
             logPath?: string;
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
+            /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
+            outputHidden?: boolean;
         };
         WorkerSetupEventInput: {
             /**
@@ -2250,10 +2252,12 @@ export interface components {
             startedAt?: string;
             /** @description Set once the step finished, except on a Cleanup step whose start the output no longer shows. */
             durationMs?: number;
-            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step. */
+            /** @description Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden. */
             output: string;
             /** @description True when the output's beginning was dropped. */
             outputTruncated: boolean;
+            /** @description Set by the control plane, true on an event served to someone outside the session's organization (a share-grant holder): output is empty and logPath, user, groups, dir and hint are absent. Only the organization's members see a run's output. */
+            outputHidden?: boolean;
             /** @description The file in the sandbox with the full output (for Cleanup, the whole run's). */
             logPath?: string;
             /** @description The Linux user a failed or timed-out step ran as. */

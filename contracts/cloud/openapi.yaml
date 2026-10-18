@@ -3975,6 +3975,12 @@ components:
         hint:
           type: string
           description: What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH).
+        outputHidden:
+          type: boolean
+          description: >-
+            Set by the control plane, true on the event served to someone
+            outside the session's organization (a share-grant holder): output,
+            logPath, user, groups, dir and hint are absent.
     WorkerSetupEventInput:
       type: object
       additionalProperties: false
@@ -4035,10 +4041,17 @@ components:
           description: Set once the step finished, except on a Cleanup step whose start the output no longer shows.
         output:
           type: string
-          description: Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step.
+          description: Redacted tail of the step's combined output, at most 16 KiB, without terminal escape sequences. Empty on the running event that starts a step, and when outputHidden.
         outputTruncated:
           type: boolean
           description: True when the output's beginning was dropped.
+        outputHidden:
+          type: boolean
+          description: >-
+            Set by the control plane, true on an event served to someone
+            outside the session's organization (a share-grant holder): output
+            is empty and logPath, user, groups, dir and hint are absent. Only
+            the organization's members see a run's output.
         logPath:
           type: string
           description: The file in the sandbox with the full output (for Cleanup, the whole run's).

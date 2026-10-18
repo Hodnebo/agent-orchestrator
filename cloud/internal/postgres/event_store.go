@@ -581,7 +581,9 @@ func (s *Store) ListClientEvents(
 	limit int,
 ) ([]domain.ClientEvent, bool, error) {
 	var events []domain.ClientEvent
-	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	member := false
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		member = access.Role == "member"
 		var exists bool
 		if err := tx.QueryRow(
 			ctx,
@@ -632,7 +634,46 @@ func (s *Store) ListClientEvents(
 	if hasMore {
 		events = events[:limit]
 	}
+	if !member {
+		for index := range events {
+			hideScriptOutput(&events[index])
+		}
+	}
 	return events, hasMore, nil
+}
+
+// scriptOutputFields are what a Setup or Cleanup event (workspace.setup,
+// workspace.script.step) tells of the sandbox beyond the step itself: the
+// commands' output, and the user, groups, directory and log file it ran with
+// (and the hint, which names the user). Only the organization's members see
+// them; output is redacted, but a project's scripts can print anything.
+var scriptOutputFields = []string{"output", "user", "groups", "dir", "logPath", "hint"}
+
+// hideScriptOutput strips scriptOutputFields from a Setup or Cleanup event
+// served to someone outside the organization (a share-grant holder) and marks
+// it outputHidden. A workspace.script.step event keeps an empty output, which
+// its contract requires. An event that cannot be read is served without its
+// payload.
+func hideScriptOutput(event *domain.ClientEvent) {
+	if event.Type != worker.ScriptStepEventType && event.Type != worker.SetupEventType {
+		return
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		event.Payload = json.RawMessage(`{"outputHidden":true}`)
+		return
+	}
+	for _, field := range scriptOutputFields {
+		delete(payload, field)
+	}
+	if event.Type == worker.ScriptStepEventType {
+		payload["output"] = json.RawMessage(`""`)
+		payload["outputTruncated"] = json.RawMessage(`false`)
+	}
+	payload["outputHidden"] = json.RawMessage(`true`)
+	if encoded, err := json.Marshal(payload); err == nil {
+		event.Payload = encoded
+	}
 }
 
 func scanClientEvent(row scanner, event *domain.ClientEvent) error {
