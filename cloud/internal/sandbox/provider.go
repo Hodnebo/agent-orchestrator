@@ -70,6 +70,21 @@ type Environment struct {
 	Resource  domain.ResourceProfile
 	Deadline  *time.Time
 	StopCause string
+	// Failure explains a StateFailed environment whose failed operation was
+	// bringing compute up. It is nil for every other state, and for a failed
+	// operation that was stopping or deleting compute.
+	Failure *Failure
+}
+
+// Failure is a provider operation that failed and will not converge on its
+// own, such as a Coder workspace build that failed or was canceled.
+type Failure struct {
+	// Err is the user-facing reason, code StartupErrorWorkspaceBuildFailed.
+	Err *StartupError
+	// At is when the failed operation finished, by the provider's clock. A
+	// failure that finished before the sandbox's current startup window opened
+	// (a user retry, a resume) belongs to an earlier attempt.
+	At time.Time
 }
 
 // DeadlineExtender is an optional provider capability. The reconciler uses it
@@ -99,6 +114,13 @@ const (
 	// connection's workspace ready check never passed within its timeout: the
 	// template's own setup did not finish, so AO did not start its worker.
 	StartupErrorWorkspaceSetupNotReady = "workspace_setup_not_ready"
+	// StartupErrorWorkspaceBuildFailed means the provider could not build the
+	// session's compute (a Coder workspace build failed or was canceled, for
+	// example on a cloud quota). It does not recover until a new build runs.
+	StartupErrorWorkspaceBuildFailed = "workspace_build_failed"
+	// StartupErrorWorkspaceCreateFailed means AO could not create the
+	// session's compute at the provider within the startup budget.
+	StartupErrorWorkspaceCreateFailed = "workspace_create_failed"
 )
 
 // StartupError attaches a stable code and a human message to a provider
@@ -198,8 +220,12 @@ const (
 	StateRunning      = "running"
 	StateStopped      = "stopped"
 	StatePaused       = "paused"
-	StateDeleting     = "deleting"
-	StateDeleted      = "deleted"
+	// StateFailed is compute whose last provider operation failed or was
+	// canceled and will not converge on its own (a failed Coder workspace
+	// build). Only a new operation recovers it.
+	StateFailed   = "failed"
+	StateDeleting = "deleting"
+	StateDeleted  = "deleted"
 )
 
 // Provider-neutral stop causes. An empty cause is deliberately ambiguous and

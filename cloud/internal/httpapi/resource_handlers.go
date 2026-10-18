@@ -802,8 +802,10 @@ type sessionStartupRetryStore interface {
 }
 
 // retrySessionStartup lets a user retry a session whose sandbox never started
-// (the startup ceiling parked it, or a bootstrap failed) without deleting it:
-// the reconciler re-runs the worker bootstrap against the existing compute.
+// (the startup ceiling parked it, a bootstrap failed, or its workspace build
+// failed) without deleting it: the reconciler re-runs the worker bootstrap
+// against the existing compute, starts a new build of a failed workspace, or
+// creates the compute that could not be created.
 func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -824,6 +826,10 @@ func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeStoreError(w, r, err)
 		return
+	}
+	// The sandbox is re-armed; act on it now rather than at the next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
 	}
 	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
 	if err != nil {

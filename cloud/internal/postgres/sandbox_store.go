@@ -312,6 +312,16 @@ func (s *Store) RecordSandboxFailure(
 			SET provider_environment_id = NULLIF($3, ''),
 				observed_state = 'failed',
 				last_error = $4,
+				-- A failure opens the startup window of a session whose worker
+				-- never checked in, so a sandbox whose compute keeps failing to
+				-- be created is bounded by the startup budget like one that was
+				-- created and never became ready (updated_at, the fallback,
+				-- moves on every failure and would never elapse).
+				startup_started_at = CASE
+					WHEN desired_state = 'running' AND worker_last_seen_at IS NULL
+						THEN COALESCE(startup_started_at, now())
+					ELSE startup_started_at
+				END,
 				consecutive_failures = consecutive_failures + 1,
 				reconcile_after = now() + make_interval(secs =>
 					LEAST($5::float8 * power(2, LEAST(consecutive_failures, $6::int)), $7::float8)
@@ -1485,6 +1495,8 @@ func (s *Store) RecordSandboxStartupError(
 // the startup window, repair count, failure backoff and startup error, and
 // puts a parked (terminated) or failed sandbox back into provisioning so the
 // reconciler re-runs the worker bootstrap against the existing environment.
+// The new startup window is also what tells the reconciler that a failed
+// workspace build predates the retry, so it starts a new build.
 // It is a no-op returning ErrConflict when the worker has already checked in or
 // the session is not meant to be running, so it cannot disturb a live session.
 func (s *Store) RetrySessionStartup(
