@@ -192,6 +192,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
 		{domain.HarnessOpenInterpreter, "open-interpreter"},
+		{domain.HarnessMemcode, "memcode"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {

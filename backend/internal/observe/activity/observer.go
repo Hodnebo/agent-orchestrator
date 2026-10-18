@@ -118,6 +118,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if !ok {
 		return
 	}
+	var options ports.TerminalActivityOptions
+	if provider, ok := agent.(ports.TerminalActivityOptionsProvider); ok {
+		options = provider.TerminalActivityOptions()
+	}
+	nativeDecisionCards := options.SupportsBlocked
 	continuous, ok := agent.(ports.ContinuousTerminalActivityDetector)
 	if !ok || !continuous.ContinuouslyDetectTerminalActivity() {
 		if session.Activity.State == domain.ActivityWaitingInput {
@@ -131,20 +136,21 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		}
 	} else if session.Activity.State != domain.ActivityActive &&
 		session.Activity.State != domain.ActivityIdle &&
-		session.Activity.State != domain.ActivityWaitingInput {
+		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
 	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
 	var output string
 	var err error
 	usedStyled := false
-	if _, inspectsSurface := agent.(ports.TerminalSurfaceInspector); inspectsSurface {
+	_, inspectsSurface := agent.(ports.TerminalSurfaceInspector)
+	if inspectsSurface || options.PreferStyledOutput {
 		if styled, supported := o.runtime.(ports.StyledTerminalOutputReader); supported {
 			output, err = styled.GetStyledOutput(ctx, handle, o.outputLines)
 			// Older detached hosts may lack rendered-screen support. Only that
 			// capability miss permits fallback; errors and partial screens must
 			// not turn stale output into an idle observation.
-			usedStyled = !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable)
+			usedStyled = options.PreferStyledOutput || !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable)
 		}
 	}
 	if !usedStyled {
@@ -156,10 +162,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	state, ok := detector.DetectTerminalActivity(output)
 	if !ok || state == session.Activity.State ||
-		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput) {
+		(state != domain.ActivityActive && state != domain.ActivityIdle && state != domain.ActivityWaitingInput && (!nativeDecisionCards || state != domain.ActivityBlocked)) {
 		return
 	}
 	event := "terminal-" + string(state)
+	if nativeDecisionCards && session.Activity.State == domain.ActivityBlocked && (state == domain.ActivityActive || state == domain.ActivityIdle) {
+		event = "permission-resolved"
+	}
 	if state == domain.ActivityWaitingInput {
 		event = "terminal-waiting-input"
 	}

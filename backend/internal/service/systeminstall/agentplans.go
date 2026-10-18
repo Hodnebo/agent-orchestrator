@@ -51,6 +51,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:       "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode:     "https://commandcode.ai/docs/quickstart",
 	TargetOpenInterpreter: "https://www.openinterpreter.com/docs/terminal/install",
+	TargetMemcode:         "https://github.com/memcode-ai/memcode/releases",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -275,6 +276,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plan.Script.Env = []string{"OPEN_INTERPRETER_RELEASE=" + openInterpreterInstallRelease}
 		}
 		plans = []Plan{plan}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:

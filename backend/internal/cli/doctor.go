@@ -97,6 +97,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// is the built-in shell; the full name resolves on every platform.
 	"command-code":     {BinaryName: "command-code", VersionArg: "--version"},
 	"open-interpreter": {BinaryName: "interpreter", UseAdapterResolver: true},
+	"memcode":          {BinaryName: "memcode", VersionArg: "--version"},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {

@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
@@ -78,6 +79,7 @@ var Derivers = map[string]DeriveFunc{
 	"autohand":         activitystate.StandardDeriveActivityState,
 	"vibe":             vibe.DeriveActivityState,
 	"fake":             fake.DeriveActivityState,
+	"memcode":          memcode.DeriveActivityState,
 }
 
 // SignalCoverage describes how much of a harness lifecycle AO can observe.
@@ -109,6 +111,7 @@ var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
 	domain.HarnessCommandCode:     SignalCoveragePartial,
 	domain.HarnessOpenInterpreter: SignalCoveragePartial,
 	domain.HarnessContinue:        SignalCoveragePartial,
+	domain.HarnessMemcode:         SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable
