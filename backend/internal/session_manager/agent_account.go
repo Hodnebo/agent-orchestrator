@@ -154,9 +154,8 @@ func (m *Manager) runtimeEnvOnAccount(rec domain.SessionRecord, projectEnv map[s
 }
 
 // ExitAgentsOnAccount stops every running agent that uses accountID, before the
-// account is removed. A chat session stays with its agent exited. A terminal
-// session ends: ExitAgent destroys its runtime, and the reaper then terminates
-// it. Opening or restoring either continues it on the default account.
+// account is removed. Each session stays, its agent exited; opening it resumes
+// it on the default account, and a move takes it to another one.
 func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) error {
 	if m.agentAccounts == nil {
 		return nil

@@ -3137,7 +3137,7 @@
 	"settings.agentAccounts.refresh": "Refresh limits",
 	"settings.agentAccounts.signedOut": "Signed out",
 	"settings.agentAccounts.remove": "Remove account",
-	"settings.agentAccounts.removeDescription": "AO stops the agents that run on {{email}}, signs it out and deletes its folder. A stopped session continues on the default account when you open or restore it. You can then move it to another account in its Summary.",
+	"settings.agentAccounts.removeDescription": "AO stops the agents that run on {{email}}, signs it out and deletes its folder. A stopped session continues on the default account when you open it. You can then move it to another account in its Summary.",
 	"settings.agentAccounts.loginTitle": "Sign in to {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Check sign-in",
 	"settings.agentAccounts.loginWaiting": "Not signed in yet. Finish in the terminal, then check again.",

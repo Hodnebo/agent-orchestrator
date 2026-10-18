@@ -3203,7 +3203,7 @@
 	"settings.agentAccounts.refresh": "Atualizar limites",
 	"settings.agentAccounts.signedOut": "Desconectado",
 	"settings.agentAccounts.remove": "Remover conta",
-	"settings.agentAccounts.removeDescription": "O AO para os agentes que usam {{email}}, desconecta a conta e apaga a pasta dela. Uma sessão parada continua com a conta padrão quando você a abre ou restaura. Depois, você pode movê-la para outra conta no Resumo dela.",
+	"settings.agentAccounts.removeDescription": "O AO para os agentes que usam {{email}}, desconecta a conta e apaga a pasta dela. Uma sessão parada continua com a conta padrão quando você a abre. Depois, você pode movê-la para outra conta no Resumo dela.",
 	"settings.agentAccounts.loginTitle": "Entrar no {{provider}}",
 	"settings.agentAccounts.checkSignIn": "Verificar login",
 	"settings.agentAccounts.loginWaiting": "Ainda sem login. Conclua no terminal e verifique de novo.",

@@ -711,6 +711,7 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
+	RuntimeReleasedLaunchID          string
 }
 
 type SessionAgentAccount struct {
