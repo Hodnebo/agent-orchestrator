@@ -1441,7 +1441,7 @@
 	"settings.project.saveChanges": "Änderungen speichern",
 	"settings.project.scripts": "Scripts",
 	"settings.project.scriptSetup": "Setup",
-	"settings.project.scriptCleanup": "Cleanup",
+	"settings.project.scriptCleanup": "Bereinigung",
 	"settings.project.workspaceSetup": "Workspace setup",
 	"settings.project.setupHintGit": "Runs before the agent starts in a new or recreated worktree.",
 	"settings.project.setupHintScratch": "Runs before the agent starts in a new or recreated scratch workspace.",
