@@ -375,9 +375,41 @@ type Run struct {
 // other sandbox in the pass for up to Budget; a later tick's Delete waits for
 // the same run. The hook itself runs the commands at most once per sandbox,
 // so a run another replica starts only waits for and reports the first one.
+//
+// At most MaxRuns runs go at once for the provider, and MaxOrgRuns for one
+// organization; the rest wait for a slot, up to QueueWait, and are then
+// reported as not run, so a burst of deletions cannot flood the provider (or
+// one organization take every slot) and a deletion is never held for long.
 type Tracker struct {
 	runs sync.Map // key -> *Run
+
+	// MaxRuns, MaxOrgRuns and QueueWait override DefaultMaxRuns,
+	// DefaultMaxOrgRuns and DefaultQueueWait when positive (tests).
+	MaxRuns    int
+	MaxOrgRuns int
+	QueueWait  time.Duration
+
+	mu      sync.Mutex
+	running int
+	byOrg   map[string]int
+	freed   chan struct{} // closed and replaced when a slot frees
 }
+
+const (
+	// DefaultMaxRuns bounds one provider's concurrent Cleanup runs in a
+	// control-plane process.
+	DefaultMaxRuns = 4
+	// DefaultMaxOrgRuns bounds one organization's.
+	DefaultMaxOrgRuns = 2
+	// DefaultQueueWait is how long a run waits for a slot. With a run's own
+	// limit (up to Budget, Margin and a resume) and StaleAfter it keeps a
+	// deletion within the reconciler's deletion deadline (15 minutes).
+	DefaultQueueWait = 2 * time.Minute
+)
+
+// QueueFullReason is what a Cleanup that waited too long for a slot reports
+// on each of its steps.
+const QueueFullReason = "AO was running too many Cleanups at once, so this Cleanup step did not run before the sandbox was deleted."
 
 // Lookup returns the run recorded for key.
 func (t *Tracker) Lookup(key string) (*Run, bool) {
@@ -388,20 +420,94 @@ func (t *Tracker) Lookup(key string) (*Run, bool) {
 	return run.(*Run), true
 }
 
-// Start runs fn in the background as key's run, which Delete waits for up to
-// limit (plus StaleAfter), unless a run is already recorded for key; it
-// returns the run recorded for key.
-func (t *Tracker) Start(key string, limit time.Duration, fn func()) *Run {
-	run := &Run{done: make(chan struct{}), started: time.Now(), limit: limit}
+// Start runs fn in the background as key's run, once a slot is free for the
+// provider and orgID ("" counts only against the provider), unless a run is
+// already recorded for key; it returns the run recorded for key. A run that
+// waits QueueWait without a slot calls skip with QueueFullReason instead.
+// Delete waits for the run up to the queue wait, limit and StaleAfter.
+func (t *Tracker) Start(key, orgID string, limit time.Duration, fn func(), skip func(reason string)) *Run {
+	queueWait := t.QueueWait
+	if queueWait <= 0 {
+		queueWait = DefaultQueueWait
+	}
+	run := &Run{done: make(chan struct{}), started: time.Now(), limit: queueWait + limit}
 	if existing, loaded := t.runs.LoadOrStore(key, run); loaded {
 		return existing.(*Run)
 	}
 	t.prune()
 	go func() {
 		defer close(run.done)
+		if !t.acquire(orgID, queueWait) {
+			slog.Warn("project cleanup waited too long for a slot; deleting the sandbox without it",
+				"key", key, "org_id", orgID, "queue_wait", queueWait)
+			skip(QueueFullReason)
+			return
+		}
+		defer t.release(orgID)
 		fn()
 	}()
 	return run
+}
+
+// acquire takes a provider slot and one of orgID's, waiting up to wait.
+func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
+	maxRuns, maxOrgRuns := t.MaxRuns, t.MaxOrgRuns
+	if maxRuns <= 0 {
+		maxRuns = DefaultMaxRuns
+	}
+	if maxOrgRuns <= 0 {
+		maxOrgRuns = DefaultMaxOrgRuns
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		t.mu.Lock()
+		if t.byOrg == nil {
+			t.byOrg = map[string]int{}
+		}
+		if t.freed == nil {
+			t.freed = make(chan struct{})
+		}
+		if t.running < maxRuns && (orgID == "" || t.byOrg[orgID] < maxOrgRuns) {
+			t.running++
+			if orgID != "" {
+				t.byOrg[orgID]++
+			}
+			t.mu.Unlock()
+			return true
+		}
+		freed := t.freed
+		t.mu.Unlock()
+		select {
+		case <-freed:
+		case <-timer.C:
+			return false
+		}
+	}
+}
+
+func (t *Tracker) release(orgID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.running--
+	if orgID != "" {
+		if t.byOrg[orgID]--; t.byOrg[orgID] <= 0 {
+			delete(t.byOrg, orgID)
+		}
+	}
+	if t.freed != nil {
+		close(t.freed)
+	}
+	t.freed = make(chan struct{})
+}
+
+// Skipper returns a Start skip function that reports the run as not run
+// (ReportNotRun) under ctx's stage observer and session event recorder.
+func Skipper(ctx context.Context, attrs map[string]string, steps worker.CleanupRun) func(reason string) {
+	return func(reason string) {
+		ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), attrs, steps, reason,
+			fmt.Errorf("project cleanup did not run: %s", reason))
+	}
 }
 
 func (t *Tracker) prune() {

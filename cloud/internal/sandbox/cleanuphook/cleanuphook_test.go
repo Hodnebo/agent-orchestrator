@@ -165,8 +165,9 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 	var tracker Tracker
 	var calls atomic.Int32
 	release := make(chan struct{})
-	run := tracker.Start("vm-1", time.Minute, func() { calls.Add(1); <-release })
-	if again := tracker.Start("vm-1", time.Minute, func() { calls.Add(1) }); again != run {
+	noSkip := func(reason string) { t.Errorf("skipped: %s", reason) }
+	run := tracker.Start("vm-1", "org-1", time.Minute, func() { calls.Add(1); <-release }, noSkip)
+	if again := tracker.Start("vm-1", "org-1", time.Minute, func() { calls.Add(1) }, noSkip); again != run {
 		t.Fatal("a second Start for the key started another run")
 	}
 	if run.Await(context.Background(), 20*time.Millisecond) {
@@ -182,7 +183,7 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 
 	wedged := make(chan struct{})
 	defer close(wedged)
-	stale := tracker.Start("vm-2", -time.Hour, func() { <-wedged })
+	stale := tracker.Start("vm-2", "org-1", -time.Hour, func() { <-wedged }, noSkip)
 	if !stale.Await(context.Background(), 10*time.Millisecond) {
 		t.Fatal("a run past its limit still holds the deletion")
 	}
@@ -287,6 +288,93 @@ func TestReportRedactsTheStageOutputLikeTheSteps(t *testing.T) {
 	if len(r.events) != 1 || strings.Contains(r.events[0].Output, "abc123") || strings.Contains(r.events[0].Output, "hunter2") ||
 		strings.Contains(stage, "abc123") || strings.Contains(stage, "hunter2") || !strings.Contains(stage, "[REDACTED]") {
 		t.Fatalf("stage output %q, events %+v", stage, r.events)
+	}
+}
+
+// At most MaxRuns runs go at once for the provider and MaxOrgRuns for one
+// organization; the rest wait for a slot, and one that waits past QueueWait
+// is skipped with QueueFullReason. A waiting run holds its Delete.
+func TestTrackerBoundsConcurrentRuns(t *testing.T) {
+	t.Parallel()
+	tracker := Tracker{MaxRuns: 3, MaxOrgRuns: 2, QueueWait: time.Hour}
+	var mu sync.Mutex
+	running, peak, peakOrg := map[string]int{}, 0, 0
+	release := make(chan struct{})
+	started := make(chan string, 10)
+	start := func(key, org string) *Run {
+		return tracker.Start(key, org, time.Minute, func() {
+			mu.Lock()
+			running[org]++
+			total := 0
+			for _, count := range running {
+				total += count
+			}
+			peak, peakOrg = max(peak, total), max(peakOrg, running[org])
+			mu.Unlock()
+			started <- key
+			<-release
+			mu.Lock()
+			running[org]--
+			mu.Unlock()
+		}, func(reason string) { t.Errorf("%s skipped: %s", key, reason) })
+	}
+	runs := []*Run{start("a1", "a"), start("a2", "a"), start("a3", "a"), start("b1", "b"), start("c1", "c")}
+	seen := map[string]bool{}
+	for range 3 {
+		select {
+		case key := <-started:
+			seen[key] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("the first runs did not start")
+		}
+	}
+	select {
+	case key := <-started:
+		t.Fatalf("%s started beyond the provider's 3 slots", key)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if seen["a3"] && seen["a1"] && seen["a2"] {
+		t.Fatal("three runs of one organization went at once")
+	}
+	if runs[2].Await(context.Background(), 10*time.Millisecond) && !seen["a3"] {
+		t.Fatal("a waiting run let its Delete go ahead")
+	}
+	close(release)
+	for _, run := range runs {
+		if !run.Await(context.Background(), 5*time.Second) {
+			t.Fatal("a queued run never ran")
+		}
+	}
+	if peak != 3 || peakOrg != 2 {
+		t.Fatalf("peak runs = %d (want 3), peak for one organization = %d (want 2)", peak, peakOrg)
+	}
+
+	full := Tracker{MaxRuns: 1, QueueWait: 50 * time.Millisecond}
+	hold := make(chan struct{})
+	defer close(hold)
+	holding := make(chan struct{})
+	full.Start("x1", "", time.Minute, func() { close(holding); <-hold }, func(string) {})
+	<-holding
+	skipped := make(chan string, 1)
+	queued := full.Start("x2", "", time.Minute, func() { t.Error("x2 ran without a slot") }, func(reason string) { skipped <- reason })
+	select {
+	case reason := <-skipped:
+		if reason != QueueFullReason || !queued.Await(context.Background(), time.Second) {
+			t.Fatalf("skip reason %q", reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a run that waited past QueueWait was not skipped")
+	}
+}
+
+// Skipper reports a run that never ran: each step skipped with the reason.
+func TestSkipperReportsTheRunAsNotRun(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	Skipper(r.context(), map[string]string{"provider_id": "vm-1"}, worker.CleanupRun{RunID: "run-1", Commands: []string{"make down"}})(QueueFullReason)
+	if len(r.events) != 1 || r.events[0].Status != worker.ScriptStepSkipped || r.events[0].Hint != QueueFullReason ||
+		r.stages[0].Attrs["result"] != Skipped || r.stages[0].Err == nil {
+		t.Fatalf("events %+v, stages %+v", r.events, r.stages)
 	}
 }
 

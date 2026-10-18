@@ -289,3 +289,45 @@ func TestDeleteResumesAPausedVMForCleanup(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+// A paused VM of an organization over its plan is not resumed for its
+// Cleanup: it is deleted at once, each step reported as skipped with the
+// reason, once. A running VM of such an organization still runs its Cleanup.
+func TestDeleteKeepsAVMPausedForBillingPaused(t *testing.T) {
+	t.Parallel()
+	const reason = "The organization is over its plan."
+	api, client, id := cleanupVM(t, "paused")
+	api.startTo = "running"
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := recorder.Context(sandbox.WithoutCleanupResume(
+		sandbox.WithCleanupCommands(context.Background(), []string{"make down", "docker compose down"}), reason))
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	for _, call := range api.calls() {
+		if strings.HasSuffix(call, "/start") || strings.HasSuffix(call, "/exec-await") {
+			t.Fatalf("calls = %v; a VM paused for billing was resumed", api.calls())
+		}
+	}
+	if api.exists(id) {
+		t.Fatalf("calls = %v; want the VM deleted", api.calls())
+	}
+	stage, _ := recorder.Stage()
+	if stage.Attrs["result"] != cleanuphook.Skipped || stage.Attrs["resumed"] != "false" {
+		t.Fatalf("stage = %+v", stage)
+	}
+	events := recorder.Events(t)
+	if len(events) != 2 || events[0].Status != worker.ScriptStepSkipped || events[0].Hint != reason || events[1].Hint != reason {
+		t.Fatalf("events = %+v", events)
+	}
+
+	running, runningClient, id := cleanupVM(t, "running")
+	running.execOut = "\n" + cleanuphook.Marker + ":0\n"
+	ctx = sandbox.WithoutCleanupResume(context.Background(), reason)
+	if err := runningClient.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if running.execs() != 1 {
+		t.Fatalf("calls = %v; a running VM must still run its Cleanup", running.calls())
+	}
+}

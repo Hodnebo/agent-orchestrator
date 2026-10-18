@@ -36,7 +36,9 @@ var cleanupRuns cleanuphook.Tracker
 // Unlike a stopped Coder workspace, whose compute is gone, a paused VM keeps
 // its memory and disk and resumes in about a second, so a paused (or
 // stopped) VM is resumed for its Cleanup; one that does not resume is
-// deleted with its Cleanup reported as skipped.
+// deleted with its Cleanup reported as skipped. A VM of an organization over
+// its plan (sandbox.WithoutCleanupResume) is not resumed: its Cleanup is
+// reported as skipped with the reason.
 func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if sandbox.CleanupSkipped(ctx) {
 		return true
@@ -62,6 +64,18 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 		return true
 	}
 	plan, _ := cleanuphook.NewPlan(ctx, "provider_id", key)
+	// Detached from the reconcile pass's cancellation, but keeping its stage
+	// observer and session event recorder.
+	runCtx := context.WithoutCancel(ctx)
+	attrs := map[string]string{"provider_id": key}
+	skip := cleanuphook.Skipper(runCtx, attrs, plan.Steps)
+	if reason, refused := sandbox.CleanupResumeRefused(ctx); resume && refused {
+		// The organization is over its plan: its paused VM stays paused, and
+		// the Cleanup is reported as not run, once.
+		attrs["resumed"] = "false"
+		run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), 0, func() { skip(reason) }, skip)
+		return run.Await(ctx, c.cleanupInline, "provider_id", key)
+	}
 	wait := c.cleanupWait
 	if wait <= 0 {
 		wait = cleanuphook.Budget
@@ -74,14 +88,11 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if resume {
 		limit += resumeWait
 	}
-	// Detached from the reconcile pass's cancellation, but keeping its stage
-	// observer and session event recorder.
-	runCtx := context.WithoutCancel(ctx)
-	run := cleanupRuns.Start(key, limit, func() {
+	run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), limit, func() {
 		c.log.InfoContext(ctx, "freestyle: running project cleanup before deleting the VM",
 			"provider_id", key, "budget", wait, "resume", resume)
-		c.runCleanup(runCtx, id, resume, resumeWait, wait, plan)
-	})
+		c.runCleanup(runCtx, id, resume, resumeWait, wait, plan, attrs)
+	}, skip)
 	return run.Await(ctx, c.cleanupInline, "provider_id", key)
 }
 
@@ -94,9 +105,9 @@ func (c *Client) runCleanup(
 	resume bool,
 	resumeWait, wait time.Duration,
 	plan cleanuphook.Plan,
+	attrs map[string]string,
 ) {
 	finish := sandbox.BeginStage(ctx, cleanuphook.Stage)
-	attrs := map[string]string{"provider_id": string(id)}
 	steps := plan.Steps
 	if resume {
 		attrs["resumed"] = "true"

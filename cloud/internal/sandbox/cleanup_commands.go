@@ -36,3 +36,35 @@ func CleanupSkipped(ctx context.Context) bool {
 	skip, _ := ctx.Value(skipCleanupKey{}).(bool)
 	return skip
 }
+
+type cleanupOrgKey struct{}
+
+// WithCleanupOrg names the organization whose sandbox Provider.Delete
+// removes, so a provider can bound how many Cleanup runs one organization has
+// at once.
+func WithCleanupOrg(ctx context.Context, orgID string) context.Context {
+	return context.WithValue(ctx, cleanupOrgKey{}, orgID)
+}
+
+// CleanupOrg returns the organization WithCleanupOrg named, or "".
+func CleanupOrg(ctx context.Context) string {
+	orgID, _ := ctx.Value(cleanupOrgKey{}).(string)
+	return orgID
+}
+
+type cleanupNoResumeKey struct{}
+
+// WithoutCleanupResume tells Provider.Delete not to resume a paused or
+// stopped sandbox to run the project's Cleanup, with the reason, said to the
+// user: the organization is over its plan, so its paused sandboxes stay
+// paused. A running sandbox still runs its Cleanup.
+func WithoutCleanupResume(ctx context.Context, reason string) context.Context {
+	return context.WithValue(ctx, cleanupNoResumeKey{}, reason)
+}
+
+// CleanupResumeRefused returns the reason WithoutCleanupResume gave, and
+// whether it was given.
+func CleanupResumeRefused(ctx context.Context) (string, bool) {
+	reason, ok := ctx.Value(cleanupNoResumeKey{}).(string)
+	return reason, ok
+}

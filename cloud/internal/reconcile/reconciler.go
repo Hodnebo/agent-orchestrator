@@ -869,7 +869,7 @@ func (r *Reconciler) reconcileDeletion(
 			"provider_id", record.ProviderEnvironmentID,
 		)
 	}
-	if err := provider.Delete(r.withSessionEvents(r.withCleanupCommands(ctx, record), record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+	if err := provider.Delete(r.withSessionEvents(r.withCleanupScope(r.withCleanupCommands(ctx, record), record), record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return r.fail(ctx, record, err)
 	}
 	// DELETE acceptance is not deletion confirmation. Keep the provider id and
@@ -906,6 +906,40 @@ func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sand
 		return ctx
 	}
 	return sandbox.WithCleanupCommands(ctx, commands)
+}
+
+// cleanupResumeStore is the optional Store capability that says whether a
+// sandbox being deleted may be resumed to run its project's Cleanup under its
+// organization's plan.
+type cleanupResumeStore interface {
+	CleanupResumeAllowed(ctx context.Context, orgID, sessionID string) error
+}
+
+// CleanupResumeRefusedReason is what each step of a Cleanup not run because
+// the organization is over its plan says.
+const CleanupResumeRefusedReason = "The sandbox was paused because the organization is over its plan, so it was not resumed to run this Cleanup step before it was deleted."
+
+// withCleanupScope names the sandbox's organization to Provider.Delete, so
+// its Cleanup runs count against the organization's share, and keeps a paused
+// sandbox paused (sandbox.WithoutCleanupResume) when the organization is over
+// its plan. A plan check that fails is logged and the sandbox may resume.
+func (r *Reconciler) withCleanupScope(ctx context.Context, record domain.Sandbox) context.Context {
+	ctx = sandbox.WithCleanupOrg(ctx, record.OrgID)
+	plan, ok := r.store.(cleanupResumeStore)
+	if !ok {
+		return ctx
+	}
+	err := plan.CleanupResumeAllowed(ctx, record.OrgID, record.SessionID)
+	switch {
+	case err == nil:
+		return ctx
+	case postgres.IsPlanRefusal(err):
+		return sandbox.WithoutCleanupResume(ctx, CleanupResumeRefusedReason)
+	default:
+		r.log.WarnContext(ctx, "check whether the sandbox may resume for its Cleanup; resuming it if paused",
+			"session_id", record.SessionID, "err", err)
+		return ctx
+	}
 }
 
 // sessionEventTimeout bounds one event a provider appends to the session.

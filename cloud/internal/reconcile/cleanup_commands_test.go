@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
@@ -156,5 +157,43 @@ func TestDeletionLetsTheProviderAppendSessionEvents(t *testing.T) {
 	defer store.mu.Unlock()
 	if len(store.events) != 1 || store.events[0] != `org-1/session-1 workspace.script.step {"phase":"cleanup","step":1}` {
 		t.Fatalf("events = %q", store.events)
+	}
+}
+
+// cleanupResumeLookupStore answers CleanupResumeAllowed with err.
+type cleanupResumeLookupStore struct {
+	lifecycleStore
+	err error
+}
+
+func (s *cleanupResumeLookupStore) CleanupResumeAllowed(context.Context, string, string) error {
+	return s.err
+}
+
+// Delete learns the sandbox's organization, for the per-organization bound on
+// Cleanup runs, and is told to keep a paused sandbox paused only when the
+// organization is over its plan.
+func TestDeletionCarriesTheCleanupScope(t *testing.T) {
+	record := domain.Sandbox{OrgID: "org-1", SessionID: "session-1"}
+	scope := func(store Store) context.Context {
+		reconciler := New(store, lifecycleResolver{}, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		return reconciler.withCleanupScope(context.Background(), record)
+	}
+	for name, test := range map[string]struct {
+		store   Store
+		refused bool
+	}{
+		"within plan": {&cleanupResumeLookupStore{}, false},
+		"over plan":   {&cleanupResumeLookupStore{err: &postgres.PlanLimitError{Code: postgres.LimitWeekly}}, true},
+		"check fails": {&cleanupResumeLookupStore{err: errors.New("database down")}, false},
+		"no check":    {&lifecycleStore{}, false},
+	} {
+		ctx := scope(test.store)
+		if sandbox.CleanupOrg(ctx) != "org-1" {
+			t.Fatalf("%s: organization = %q", name, sandbox.CleanupOrg(ctx))
+		}
+		if reason, refused := sandbox.CleanupResumeRefused(ctx); refused != test.refused || (refused && reason != CleanupResumeRefusedReason) {
+			t.Fatalf("%s: resume refused = %v (%q)", name, refused, reason)
+		}
 	}
 }

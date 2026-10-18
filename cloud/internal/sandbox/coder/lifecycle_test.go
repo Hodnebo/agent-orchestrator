@@ -317,7 +317,7 @@ func TestDeleteProceedsWhenCleanupNeverReports(t *testing.T) {
 	// A run whose limit is long past: it never reports.
 	wedged := make(chan struct{})
 	defer close(wedged)
-	cleanupRuns.Start(key, -time.Hour, func() { <-wedged })
+	cleanupRuns.Start(key, "", -time.Hour, func() { <-wedged }, func(string) {})
 	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
