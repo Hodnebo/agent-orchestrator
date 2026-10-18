@@ -28,9 +28,9 @@ const (
 	WorkspaceBranchPullRequest WorkspaceBranchKind = "pull_request"
 )
 
-// WorkspaceBranch is one row of the branch list. A local row whose branch has
-// a pull request carries that PR's number, URL and title; only a PR with no
-// local branch gets a row of its own.
+// WorkspaceBranch is one row of the branch list. A local row that is a pull
+// request's own branch carries that PR's number, URL and title; any other PR
+// gets a row of its own.
 type WorkspaceBranch struct {
 	Kind WorkspaceBranchKind
 	// Name is the branch, the PR's source branch, or empty for a detached HEAD.
@@ -110,8 +110,88 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 		return WorkspaceBranches{}, err
 	}
 	checkedOut.UpdatedAt = detachedAt
-	result.Branches, result.Truncated = workspaceBranchRows(checkedOut, locals, prs, result.DefaultBranch)
+	owners := prBranchOwners(ctx, root, checkedOut, locals, prs)
+	result.Branches, result.Truncated = workspaceBranchRows(checkedOut, locals, prs, owners, result.DefaultBranch)
 	return result, nil
+}
+
+// prBranchOwners reports, by PR URL, which pull requests are a listed local
+// branch's own: the PR's head is that branch's tip, either here or on a remote
+// of the PR's repository. A fork's PR, or another repository's, that only
+// shares the branch name never matches, so it keeps a row of its own.
+func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest) map[string]bool {
+	owners := map[string]bool{}
+	tips := make(map[string]string, len(locals)+1)
+	for _, row := range locals {
+		tips[row.Name] = row.TipSHA
+	}
+	if !checkedOut.Detached && checkedOut.TipSHA != "" {
+		tips[checkedOut.Name] = checkedOut.TipSHA
+	}
+	var pending []domain.PullRequest
+	for _, pr := range prs {
+		tip, ok := tips[pr.SourceBranch]
+		switch {
+		case !ok || pr.SourceBranch == "":
+		case tip == pr.HeadSHA:
+			owners[pr.URL] = true
+		case validWorkspaceBranchName(pr.SourceBranch):
+			pending = append(pending, pr)
+		}
+	}
+	if len(pending) == 0 {
+		return owners
+	}
+	remotes := gitRemoteURLs(ctx, root)
+	var patterns []string
+	for _, pr := range pending {
+		for name, url := range remotes {
+			if requireSameRepo(pr.URL, url) == nil {
+				patterns = append(patterns, "refs/remotes/"+name+"/"+pr.SourceBranch)
+			}
+		}
+	}
+	if len(patterns) == 0 {
+		return owners
+	}
+	out, err := gitWorkspaceOutput(ctx, root, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)"}, patterns...)...)
+	if err != nil {
+		return owners
+	}
+	remoteTips := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if ref, sha, ok := strings.Cut(line, "\x00"); ok {
+			remoteTips[ref] = sha
+		}
+	}
+	for _, pr := range pending {
+		for name, url := range remotes {
+			if requireSameRepo(pr.URL, url) == nil && remoteTips["refs/remotes/"+name+"/"+pr.SourceBranch] == pr.HeadSHA {
+				owners[pr.URL] = true
+			}
+		}
+	}
+	return owners
+}
+
+// gitRemoteURLs maps each remote's name to its fetch URL; empty when there are
+// none or they cannot be read.
+func gitRemoteURLs(ctx context.Context, root string) map[string]string {
+	out, err := gitWorkspaceOutput(ctx, root, "config", "--get-regexp", `^remote\..*\.url$`)
+	if err != nil {
+		return nil
+	}
+	remotes := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		key, url, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		if name, ok := strings.CutSuffix(strings.TrimPrefix(key, "remote."), ".url"); ok && name != "" {
+			remotes[name] = url
+		}
+	}
+	return remotes
 }
 
 // readableWorkspacePRs returns the session's pull requests a pull request view
@@ -226,10 +306,10 @@ func unixTime(raw string) time.Time {
 }
 
 // workspaceBranchRows puts the checked-out row first and the rest newest
-// first. A pull request whose source branch has a row annotates it (the most
-// recently updated PR wins); any other gets a row of its own. The cap always
-// keeps the checked-out row.
-func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest, defaultBranch string) ([]WorkspaceBranch, bool) {
+// first. A pull request that owns a listed branch annotates its row (the most
+// recently updated PR wins); any other gets a row of its own, so no PR is
+// dropped. The cap always keeps the checked-out row.
+func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest, owners map[string]bool, defaultBranch string) ([]WorkspaceBranch, bool) {
 	rows := make([]WorkspaceBranch, 0, 1+len(locals)+len(prs))
 	rows = append(rows, checkedOut)
 	byName := map[string]int{}
@@ -248,10 +328,8 @@ func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, p
 		rows = append(rows, row)
 	}
 	for _, pr := range prs {
-		if i, ok := byName[pr.SourceBranch]; ok && pr.SourceBranch != "" {
-			if rows[i].PRNumber == 0 {
-				rows[i].PRNumber, rows[i].PRURL, rows[i].PRTitle = pr.Number, pr.URL, pr.Title
-			}
+		if i, ok := byName[pr.SourceBranch]; ok && owners[pr.URL] && rows[i].PRNumber == 0 {
+			rows[i].PRNumber, rows[i].PRURL, rows[i].PRTitle = pr.Number, pr.URL, pr.Title
 			continue
 		}
 		rows = append(rows, WorkspaceBranch{

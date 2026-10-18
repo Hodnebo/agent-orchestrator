@@ -85,8 +85,10 @@ func TestListWorkspaceBranchesCapsAt200KeepingCheckedOut(t *testing.T) {
 	runGit(t, repo, "switch", "session")
 	svc := branchViewService(repo)
 	store := svc.store.(*fakeStore)
-	// b000 is local but left out too, so its PR must not become a PR row.
-	store.prs["ao-1"] = []domain.PullRequest{readablePR(9, "b000", strings.Repeat("c", 40), time.Now())}
+	// b000 is local but left out too, so its PR, whose head is b000's tip,
+	// must not become a PR row.
+	b000 := strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/b000"))
+	store.prs["ao-1"] = []domain.PullRequest{readablePR(9, "b000", b000, time.Now())}
 
 	branches, err := svc.ListWorkspaceBranches(context.Background(), "ao-1")
 	if err != nil {
@@ -120,10 +122,11 @@ func TestListWorkspaceBranchesAnnotatesLocalPRAndAddsNonLocalPR(t *testing.T) {
 	remote.UpdatedAtProvider = time.Unix(1650000000, 0).UTC()
 	unreadable := readablePR(4, "unreadable", strings.Repeat("e", 40), time.Now())
 	unreadable.BaseSHA = ""
+	featureTip := strings.TrimSpace(runGit(t, repo, "rev-parse", "refs/heads/feature"))
 	svc.store.(*fakeStore).prs["ao-1"] = []domain.PullRequest{
 		readablePR(1, "session", gitHead(t, repo), time.Now()),
 		remote,
-		readablePR(3, "feature", strings.Repeat("f", 40), time.Now()),
+		readablePR(3, "feature", featureTip, time.Now()),
 		unreadable,
 	}
 
@@ -146,6 +149,61 @@ func TestListWorkspaceBranchesAnnotatesLocalPRAndAddsNonLocalPR(t *testing.T) {
 	}
 	if row := branches.Branches[2]; row != want {
 		t.Fatalf("pull request row = %+v, want %+v", row, want)
+	}
+}
+
+func TestListWorkspaceBranchesFoldsOnlyAPullRequestThatOwnsTheBranch(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "branch", "-M", "main")
+	importBranches(t, repo, gitHead(t, repo), 1600000000, "session")
+	runGit(t, repo, "switch", "session")
+	pushed := gitHead(t, repo)
+	// The PR's head was pushed to the PR's repository; the branch has moved on locally since.
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/acme/repo.git")
+	runGit(t, repo, "update-ref", "refs/remotes/origin/session", pushed)
+	runGit(t, repo, "commit", "--allow-empty", "-m", "unpushed")
+	// A fork has its own main, which a PR from that fork names as its source branch.
+	forkMain := strings.Repeat("9", 40)
+	runGit(t, repo, "remote", "add", "fork", "https://github.com/someone/repo.git")
+	svc := branchViewService(repo)
+	now := time.Now()
+	svc.store.(*fakeStore).prs["ao-1"] = []domain.PullRequest{
+		readablePR(1, "session", pushed, now),
+		readablePR(2, "main", forkMain, now.Add(-time.Minute)),
+		// A second PR from the same branch; the row already carries PR 1.
+		readablePR(3, "session", pushed, now.Add(-2*time.Minute)),
+	}
+
+	branches, err := svc.ListWorkspaceBranches(context.Background(), "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPR := map[int]WorkspaceBranch{}
+	for _, row := range branches.Branches {
+		if row.PRNumber != 0 {
+			byPR[row.PRNumber] = row
+		}
+	}
+	if row := byPR[1]; !row.CheckedOut || row.Kind != WorkspaceBranchLocal {
+		t.Fatalf("PR 1 = %+v, want it on the checked-out row, whose branch it owns through origin", row)
+	}
+	if row := byPR[2]; row.Kind != WorkspaceBranchPullRequest || row.Name != "main" || row.TipSHA != forkMain {
+		t.Fatalf("PR 2 = %+v, want the fork's PR on a row of its own", row)
+	}
+	if row := byPR[3]; row.Kind != WorkspaceBranchPullRequest {
+		t.Fatalf("PR 3 = %+v, want a row of its own rather than being dropped", row)
+	}
+	var localMain int
+	for _, row := range branches.Branches {
+		if row.Kind == WorkspaceBranchLocal && row.Name == "main" {
+			localMain++
+			if row.PRNumber != 0 {
+				t.Fatalf("local main = %+v, want no PR: the fork's main is another repository's branch", row)
+			}
+		}
+	}
+	if localMain != 1 {
+		t.Fatalf("local main rows = %d, want 1 (%v)", localMain, branchNames(branches.Branches))
 	}
 }
 
@@ -203,13 +261,17 @@ func TestListWorkspaceBranchesForWorkspaceProjectListsCheckedOutAndPRs(t *testin
 		t.Fatal(err)
 	}
 	// Local branches are left out: only a single repository can review one.
-	if got, want := strings.Join(branchNames(branches.Branches), ","), "session,child-fix"; got != want || !branches.Supported {
+	// The checked-out row spans several repositories, so a branch name cannot
+	// say which one a PR belongs to: every PR keeps a row of its own.
+	if got, want := strings.Join(branchNames(branches.Branches), ","), "session,child-fix,session"; got != want || !branches.Supported {
 		t.Fatalf("rows = %s (supported=%v), want %s", got, branches.Supported, want)
 	}
-	if row := branches.Branches[0]; !row.CheckedOut || row.PRNumber != 1 {
-		t.Fatalf("checked-out row = %+v, want it annotated with PR 1", row)
+	if row := branches.Branches[0]; !row.CheckedOut || row.PRNumber != 0 {
+		t.Fatalf("checked-out row = %+v, want no PR folded into it", row)
 	}
-	if row := branches.Branches[1]; row.Kind != WorkspaceBranchPullRequest || row.PRNumber != 2 {
-		t.Fatalf("second row = %+v, want PR 2", row)
+	for _, i := range []int{1, 2} {
+		if row := branches.Branches[i]; row.Kind != WorkspaceBranchPullRequest || row.PRNumber == 0 {
+			t.Fatalf("row %d = %+v, want a PR row", i, row)
+		}
 	}
 }

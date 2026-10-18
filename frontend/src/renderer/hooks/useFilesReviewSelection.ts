@@ -153,10 +153,12 @@ export function useFilesReviewSelection({
 		if (selectionErrorCode === "WORKSPACE_REF_MOVED") invalidateWorkspaceViews(queryClient, sessionId, hostId);
 	}, [hostId, queryClient, selectionErrorCode, sessionId]);
 
-	// The picked branch or PR left the list, or its history says it is gone.
+	// The picked branch or PR left the whole list, or its history says it is
+	// gone. A capped list leaves branches out, so missing from it proves nothing;
+	// the history read still finds a branch that was deleted.
 	const historyErrorCode = workspaceErrorCode(historyQuery.error);
 	const branchGone = branch.kind !== "checked_out"
-		&& ((branchesQuery.isSuccess && !selectedRow) || historyErrorCode === "WORKSPACE_BRANCH_NOT_FOUND" || historyErrorCode?.startsWith("PR_") === true);
+		&& ((branchesQuery.isSuccess && !branchesQuery.data.truncated && !selectedRow) || historyErrorCode === "WORKSPACE_BRANCH_NOT_FOUND" || historyErrorCode?.startsWith("PR_") === true);
 	const goneName = branch.kind === "branch" ? branch.name
 		: branch.kind === "pull_request" ? t("files.branches.prLabel", { number: branch.number, branch: branch.branch })
 		: "";

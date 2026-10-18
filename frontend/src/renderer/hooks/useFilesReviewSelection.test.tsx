@@ -186,6 +186,29 @@ describe("useFilesReviewSelection", () => {
 		expect(result.current.changesMenu.stats).toBeUndefined();
 	});
 
+	it("keeps a picked branch a capped list leaves out, until its history says it is gone", async () => {
+		respond({ branchList: { ...branches, truncated: true } });
+		useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "old-branch" }, changes: null });
+		const { result } = renderSelection(manifest());
+
+		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
+		await waitFor(() => expect(requests("/workspace/history").some((call) => call[1]?.params?.query?.branch === "old-branch")).toBe(true));
+		expect(result.current.notice).toBe("");
+		expect(useUiStore.getState().inspectorSessions[SESSION]?.filesSelection?.branch).toEqual({ kind: "branch", name: "old-branch" });
+		expect(result.current.changesMenu.mode).toBe("view");
+
+		// Deleted after all: its own history read finds out, and the pick falls back.
+		getMock.mockImplementation(async (path: string, init: { params: { query?: { branch?: string } } }) => {
+			if (path.endsWith("/workspace/branches")) return { data: { ...branches, truncated: true } };
+			if (path.endsWith("/workspace/history") && init.params.query?.branch === "gone") return errorResponse("WORKSPACE_BRANCH_NOT_FOUND", 404);
+			if (path.endsWith("/workspace/history")) return { data: checkedOutHistory };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		act(() => useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "gone" }, changes: null }));
+		await waitFor(() => expect(result.current.notice).toBe("gone is no longer available; showing the checked-out branch."));
+		expect(useUiStore.getState().inspectorSessions[SESSION]?.filesSelection).toBeUndefined();
+	});
+
 	it("falls back to the checked-out branch with a notice when the picked branch leaves the list", async () => {
 		const onBranchChange = vi.fn();
 		useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "deleted" }, changes: null });
