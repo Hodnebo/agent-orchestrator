@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -47,7 +49,7 @@ import {
 	type PairingEndpoint,
 } from "../../lib/pairing-payload";
 
-export const mobileStatusQueryKey = ["mobile-status"] as const;
+export { mobileStatusQueryKey };
 
 // One scan gives the mobile app every value required to connect. Keep the
 // secure key absent for plaintext payloads so older mobile builds can decode
@@ -418,6 +420,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
+	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	const stayAwake = useStayAwake(active);
+
 	const setKeepAwake = useMutation({
 		mutationFn: async (keepAwake: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
@@ -505,6 +510,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setKeepAwake.isPending ||
+		stayAwake.busy ||
 		setLidAwake.isPending;
 
 	const clearActionErrors = () => {
@@ -551,6 +557,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
+		stayAwake.error ||
 		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
 		null;
 
@@ -796,11 +803,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={status.keepAwake}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on }}
 					disabled={busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						setKeepAwake.mutate(next);
+						// On: remember the mobile choice and start the shared session. Off:
+						// the shared switch ends the session and clears the mobile flag.
+						if (next) {
+							setKeepAwake.mutate(true);
+							void stayAwake.set(true);
+						} else void stayAwake.set(false);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
