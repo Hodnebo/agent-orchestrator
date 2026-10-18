@@ -212,12 +212,14 @@ func (r scriptRedactor) redact(text string) string {
 	return workerTokenPattern.ReplaceAllString(activity.Redact(text), "[REDACTED]")
 }
 
-// scriptStepOutput turns a step's raw output tail into what an event carries:
-// carriage-return overwrites (progress bars) collapsed to their last state,
-// terminal escapes and control characters removed, credentials masked, and
-// the tail of at most ScriptStepOutputLimit bytes. headDropped says the raw
-// output already lost its beginning; its partial first line is dropped, so a
-// secret cut in half there is never published.
+// scriptStepOutput turns a finished step's raw output tail into what an event
+// carries: carriage-return overwrites (progress bars) collapsed to their last
+// state, terminal escapes and control characters removed, credentials masked,
+// and the tail of at most ScriptStepOutputLimit bytes. headDropped says the
+// raw output already lost its beginning; its partial first line is dropped, so
+// a secret cut in half there is never published. An unfinished last line (the
+// step ended mid-line) is published, but its end is masked when it may be the
+// start of a credential (maskTrailingFragment).
 func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, bool) {
 	if headDropped {
 		if index := strings.IndexByte(raw, '\n'); index >= 0 {
@@ -227,7 +229,44 @@ func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, 
 	text := collapseCarriageReturns(raw)
 	// Excerpt with no limit strips escapes and control characters and redacts.
 	text = r.redact(activity.Excerpt(text, 0))
+	if raw != "" && !strings.HasSuffix(raw, "\n") {
+		text = r.maskTrailingFragment(text)
+	}
 	return scriptOutputTail(text, headDropped)
+}
+
+// liveStepOutput is scriptStepOutput for a step still running: only its
+// finished lines are published. The line being written may be a credential
+// printed part way ("DB_PASSWORD=supersecr"), which no pattern recognizes
+// until it is whole, so it waits for its newline or the step's final event.
+func (r scriptRedactor) liveStepOutput(raw string, headDropped bool) (string, bool) {
+	return r.scriptStepOutput(raw[:strings.LastIndexByte(raw, '\n')+1], headDropped)
+}
+
+// minSecretFragmentLength is the shortest end of an output that is masked as
+// the start of a known secret value.
+const minSecretFragmentLength = 4
+
+// tokenFragmentPattern matches the start of a well-known token shape at the
+// end of an output, however short: what a step printed before it ended mid-way
+// through a token the full patterns would mask.
+var tokenFragmentPattern = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]?-?|AKIA|eyJ|npm_|AIza|glpat-|SG\.)[A-Za-z0-9_.-]*$`)
+
+// maskTrailingFragment masks the end of an output that may be a credential
+// cut short: the beginning of a known secret value (at least
+// minSecretFragmentLength bytes of it), or of a well-known token shape.
+func (r scriptRedactor) maskTrailingFragment(text string) string {
+	for _, value := range r.values {
+		for length := min(len(value)-1, len(text)); length >= minSecretFragmentLength; length-- {
+			if strings.HasSuffix(text, value[:length]) {
+				return text[:len(text)-length] + "[REDACTED]"
+			}
+		}
+	}
+	if location := tokenFragmentPattern.FindStringIndex(text); location != nil {
+		return text[:location[0]] + "[REDACTED]"
+	}
+	return text
 }
 
 // scriptOutputTail keeps the last ScriptStepOutputLimit bytes of already
@@ -489,8 +528,8 @@ func liveUpdateInterval(elapsed time.Duration) time.Duration {
 	return time.Second
 }
 
-// watchStepOutput sends a live update whenever the step's output changed,
-// paced by interval, until the returned stop is called.
+// watchStepOutput sends a live update whenever the step finished another line
+// of output, paced by interval, until the returned stop is called.
 func watchStepOutput(
 	tail *liveTail,
 	interval func(elapsed time.Duration) time.Duration,
@@ -502,6 +541,7 @@ func watchStepOutput(
 	go func() {
 		defer close(finished)
 		var sent uint64
+		lastOutput, lastTruncated := "", false
 		for {
 			timer := time.NewTimer(interval(time.Since(started)))
 			select {
@@ -515,7 +555,12 @@ func watchStepOutput(
 				continue
 			}
 			sent = version
-			output, truncated := redactor.scriptStepOutput(raw, dropped)
+			output, truncated := redactor.liveStepOutput(raw, dropped)
+			if output == "" || (output == lastOutput && truncated == lastTruncated) {
+				// Nothing new is finished: the step is still writing a line.
+				continue
+			}
+			lastOutput, lastTruncated = output, truncated
 			emit(output, truncated)
 		}
 	}()

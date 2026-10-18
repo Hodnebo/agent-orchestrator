@@ -435,3 +435,65 @@ func TestValidScriptStepEvent(t *testing.T) {
 		}
 	}
 }
+
+// A running step's unfinished last line is never published: a credential
+// printed part way is not yet whole for any pattern to recognize. The
+// finished step's last line is published with a credential's start masked.
+func TestScriptStepOutputHoldsBackAnUnfinishedLine(t *testing.T) {
+	t.Parallel()
+	redactor := newScriptRedactor([]string{"DB_PASSWORD=supersecret-value"}, nil)
+	for _, raw := range []string{
+		"DB_PASSWORD=supersecr",
+		"ghp_abcdefghijklmno",
+		"export TOKEN\nready\nDB_PASSWORD=supersecr",
+		"ready\nghp_abcdefghijklmno",
+	} {
+		live, _ := redactor.liveStepOutput(raw, false)
+		if strings.Contains(live, "supersecr") || strings.Contains(live, "ghp_") {
+			t.Fatalf("live output of %q = %q; the unfinished line leaked", raw, live)
+		}
+		if strings.Contains(raw, "ready\n") && !strings.Contains(live, "ready") {
+			t.Fatalf("live output of %q = %q; the finished lines are missing", raw, live)
+		}
+		final, _ := redactor.scriptStepOutput(raw, false)
+		if strings.Contains(final, "supersecr") || strings.Contains(final, "ghp_") || !strings.HasSuffix(final, "[REDACTED]") {
+			t.Fatalf("final output of %q = %q; the fragment must be masked", raw, final)
+		}
+	}
+	// A value's start printed on its own, with nothing naming it a secret.
+	if final, _ := redactor.scriptStepOutput("value: supersec", false); final != "value: [REDACTED]" {
+		t.Fatalf("final output = %q", final)
+	}
+	// Ordinary unfinished lines are kept whole.
+	for _, raw := range []string{"done", "50% complete", "risk-free"} {
+		if final, _ := redactor.scriptStepOutput(raw, false); final != raw {
+			t.Fatalf("final output of %q = %q", raw, final)
+		}
+	}
+}
+
+// End to end: a step that prints a credential part way and pauses never has
+// the part published live, and its final event masks what it printed.
+func TestSetupStepEventsNeverPublishAPartialSecret(t *testing.T) {
+	t.Setenv("DB_PASSWORD", "supersecret-value")
+	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond}, []string{
+		"echo started; printf 'DB_PASSWORD=supersecr'; sleep 0.3; printf 'et-value\\n'; echo done",
+		"echo started; printf 'ghp_abcdefghijklmno'; sleep 0.3",
+	})
+	sawStarted := false
+	for _, event := range events {
+		if strings.Contains(event.Output, "supersecr") || strings.Contains(event.Output, "ghp_") {
+			t.Fatalf("event %+v published a partial secret", event)
+		}
+		if event.Status == ScriptStepRunning && strings.Contains(event.Output, "started") {
+			sawStarted = true
+		}
+	}
+	if !sawStarted {
+		t.Fatalf("events %+v: the finished lines must still be published live", events)
+	}
+	last := finals(events)
+	if last[1].Output != "started\nDB_PASSWORD=[REDACTED]\ndone" || last[2].Output != "started\n[REDACTED]" {
+		t.Fatalf("final outputs = %q, %q", last[1].Output, last[2].Output)
+	}
+}

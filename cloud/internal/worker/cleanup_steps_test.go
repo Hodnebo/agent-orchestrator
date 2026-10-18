@@ -243,3 +243,17 @@ func itoa64(value int64) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
 }
+
+// A Cleanup step that ends part way through printing a token has the token's
+// start masked, as a Setup step's final event does.
+func TestCleanupStepMasksAnUnfinishedToken(t *testing.T) {
+	t.Parallel()
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript([]string{
+		"echo stopping; printf 'ghp_abcdefghijklmno'", "printf 'DB_PASSWORD=supersecr'",
+	}, nonce), t.TempDir())
+	events := CleanupStepEvents(output, CleanupRun{RunID: "cleanup-1", Nonce: nonce, ExitCode: code, StartedAt: time.Now()})
+	if len(events) != 2 || events[0].Output != "stopping\n[REDACTED]" || events[1].Output != "DB_PASSWORD=[REDACTED]" {
+		t.Fatalf("events = %+v", events)
+	}
+}

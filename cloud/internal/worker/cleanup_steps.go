@@ -120,7 +120,13 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			continue
 		}
 		if before := line[:index]; before != "" {
-			write(before)
+			if current != nil {
+				// The step ended mid-line: its output's unfinished last line,
+				// kept without a newline so its end is read as one.
+				current.output.WriteString(before)
+			} else {
+				write(before)
+			}
 		}
 		marker := line[index+len(prefix):]
 		if path, ok := strings.CutPrefix(marker, "log "); ok {
