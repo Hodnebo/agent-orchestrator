@@ -145,7 +145,7 @@ func TestTestingVerbsAndExpiry(t *testing.T) {
 	is(t, "TESTING_REPO_UNRESOLVED")(svc.Prepare(ctx, "s1")) // no resolver wired
 	is(t, "TESTING_LEG_INVALID")(svc.Launch(ctx, "s1", "main"))
 	is(t, "TESTING_NOT_PREPARED")(svc.Launch(ctx, "s1", "head"))
-	is(t, "TESTING_ACTION_UNSUPPORTED")(svc.Drive(ctx, "s1", "open", nil))
+	is(t, "TESTING_RUN_NOT_RUNNING")(svc.Drive(ctx, "s1", "open", nil))
 	is(t, "TESTING_RUN_NOT_RUNNING")(svc.Drive(ctx, "s1", "click", []string{"e1"})) // intake only: nothing is launched
 	is(t, "TESTING_RECIPE_UNREADABLE")(svc.RecipeValidate(ctx, "recipe.yaml"))
 

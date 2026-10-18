@@ -271,6 +271,7 @@ func TestLitmusSkillFrontmatterWordCapAndInstall(t *testing.T) {
 		t.Fatalf("litmus SKILL.md is %d words, want at most 920", n)
 	}
 	for _, verb := range []string{"intake", "prepare", "launch", "check add", "snapshot", "compare", "replay <headCheckId> --leg base", "--shot <N>", "submit", "--leg base", "only through `ao testing`", "never push or post to GitHub", "You have 25 minutes", "gate notes",
+		"ao testing browser --leg head -- <action> [args...]", "ao testing browser --leg head -- --help", "compact snapshots and receipt evidence", "Put upstream flags and multiword or multiline text after `--`", "screenshot", "record", "comment workflow",
 		"You test one pull request. Litmus builds the PR and its base commit in private app windows. Check the PR's claim and likely nearby breakage.",
 		"Notes go to the PR author. Say what you saw in plain words: buttons present, what happened after a click, what was missing. Omit check ids, build names, receipt numbers and comparisons; Litmus adds those.",
 		"at most 4 for a PR over 30 files, 6 otherwise", "(a guide, not a limit)", "split a check that mixes two things", "it is done only when it has a result on both",

@@ -75,6 +75,15 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(t.pruneCommand())
 	cmd.AddCommand(t.runsCommand(), t.showCommand(), t.rerunCommand(), t.decideCommand("post", "Publish the evidence and post the comment of a run awaiting approval"),
 		t.decideCommand("discard", "Close a run awaiting approval without posting its comment"), t.settingsCommand())
+	cmd.AddCommand(verb("browser -- <action> [args...]", "Run any agent-browser command on the selected leg", nil, func(cmd *cobra.Command, a []string) error {
+		if len(a) == 0 {
+			return usageError{errors.New("usage: ao testing browser [AO flags] -- <action> [args...]")}
+		}
+		if t.leg == "" {
+			a = append(a[:len(a):len(a)], "--leg", "")
+		}
+		return t.drive(cmd, "browser", a)
+	}))
 
 	for _, d := range []struct {
 		use, short string

@@ -108,6 +108,7 @@ func (e *Engine) env() []string {
 	}
 	h := e.home()
 	return append(env, "HOME="+h, "USERPROFILE="+h, "XDG_CONFIG_HOME="+h, "XDG_CACHE_HOME="+h, "TEMP="+h, "TMP="+h, "TMPDIR="+h,
+		"AGENT_BROWSER_SCREENSHOT_DIR="+filepath.Join(e.RunDir, "shots"),
 		"AGENT_BROWSER_CONFIG="+filepath.Join(h, "config.json"), "AGENT_BROWSER_CDP="+e.Endpoint,
 		"AGENT_BROWSER_SOCKET_DIR="+e.SocketDir, "AGENT_BROWSER_SESSION="+e.Session, "AGENT_BROWSER_NAMESPACE="+e.Namespace,
 		"AGENT_BROWSER_CONTENT_BOUNDARIES=1", "AGENT_BROWSER_MAX_OUTPUT=50000", "AGENT_BROWSER_IDLE_TIMEOUT_MS=300000", "AGENT_BROWSER_AUTO_CONNECT=0")
@@ -152,10 +153,37 @@ func (e *Engine) Run(ctx context.Context, timeout time.Duration, args ...string)
 		}
 	}
 	out, err := e.invoke(ctx, args...)
+	if err == nil && (changesTab(args) || slices.Contains(args, "--new-tab")) {
+		// An explicit tab change also changes where the next receipt is taken.
+		// Incidental focus changes still use the recovery above.
+		if list, listErr := e.invoke(ctx, "tab", "list"); listErr == nil {
+			e.tab, _ = parseTabs(list)
+			e.refs = nil
+		}
+	}
 	if err != nil {
 		err = fmt.Errorf("agent-browser %s: %w", args[0], err)
 	}
 	return out, err
+}
+
+func changesTab(args []string) bool {
+	if args[0] != "tab" && !strings.HasPrefix(args[0], "-") {
+		return false
+	}
+	i := slices.Index(args, "tab")
+	if i < 0 {
+		return false
+	}
+	for _, a := range args[i+1:] {
+		if a == "--help" || a == "-h" {
+			return false
+		}
+		if !strings.HasPrefix(a, "-") {
+			return a != "list"
+		}
+	}
+	return false
 }
 
 var tabLine = regexp.MustCompile(`^(→)? *\[(t\d+)\] .* - (\S+)\s*$`)

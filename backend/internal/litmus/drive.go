@@ -26,8 +26,8 @@ var (
 	shotRetry   = time.Second            // pause before the one retry of an after-shot that timed out
 )
 
-// verb says how a worker action maps onto the engine. No open, navigate, eval, upload,
-// download, cookies, storage, auth, plugin or pushstate verb exists here.
+// verb describes legacy aliases and evidence/replay behavior, not permission to
+// execute an action. Commands absent from this table are forwarded with receipts.
 type verb struct {
 	engine   []string // engine words ahead of the caller's arguments; default is the action name
 	min, max int      // caller arguments, flags included
@@ -58,17 +58,12 @@ var refPattern = regexp.MustCompile(`^@?(e\d+)$`)
 
 // splitLeg pulls "--leg <name>" or "--leg=<name>" out of args; the CLI appends it when --leg is given.
 func splitLeg(args []string) (leg string, rest []string) {
-	for i := 0; i < len(args); i++ {
-		switch a := args[i]; {
-		case a == "--leg" && i+1 < len(args):
-			leg, i = args[i+1], i+1
-		case strings.HasPrefix(a, "--leg="):
-			leg = strings.TrimPrefix(a, "--leg=")
-		default:
-			rest = append(rest, a)
-		}
+	if n := len(args); n >= 2 && args[n-2] == "--leg" {
+		return args[n-1], args[:n-2]
+	} else if n > 0 && strings.HasPrefix(args[n-1], "--leg=") {
+		return strings.TrimPrefix(args[n-1], "--leg="), args[:n-1]
 	}
-	return leg, rest
+	return "", args
 }
 
 // pickLeg names the launched leg an action applies to; without --leg it must be unambiguous.
@@ -152,11 +147,36 @@ func cmdWords(action string, v verb) []string {
 // Drive runs one worker action on a launched leg. It is refused unless the run is
 // running, inside its deadline and the named leg is launched.
 func (s *Service) Drive(ctx context.Context, sessionID, action string, args []string) (map[string]any, error) {
-	v, ok := verbs[action]
-	if !ok {
-		return nil, invalid("TESTING_ACTION_UNSUPPORTED", "unsupported testing action "+fmt.Sprintf("%q", action))
-	}
 	legName, args := splitLeg(args)
+	raw := action == "browser"
+	if raw {
+		if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+			return nil, invalid("TESTING_ARGS_INVALID", "browser needs an agent-browser command")
+		}
+		action, args = args[0], args[1:]
+	}
+	v, known := verbs[action]
+	raw = raw || !known
+	if raw {
+		v.engine, v.receipt = nil, true
+		switch action {
+		case "snapshot", "get", "is", "console", "errors", "wait", "help", "--help", "--version", "skills", "session":
+			v.receipt = false
+		case "network":
+			v.receipt = len(args) == 0 || args[0] != "requests"
+		case "tab":
+			v.receipt = len(args) > 0 && args[0] != "list"
+		}
+		for _, a := range append([]string{action}, args...) {
+			l := strings.ToLower(a)
+			if slices.ContainsFunc(forbiddenFlags, func(f string) bool { return l == f || strings.HasPrefix(l, f+"=") }) {
+				return nil, invalid("TESTING_ARGS_INVALID", "flag "+a+" is managed by Litmus")
+			}
+		}
+		if action == "connect" {
+			return nil, invalid("TESTING_ARGS_INVALID", "the test browser connection is managed by Litmus")
+		}
+	}
 	s.mu.Lock()
 	run, err := s.load(sessionID)
 	s.mu.Unlock()
@@ -171,21 +191,24 @@ func (s *Service) Drive(ctx context.Context, sessionID, action string, args []st
 		return nil, err
 	}
 	runDir := filepath.Join(s.store.root, run.ID)
-	cmd, file, err := argv(action, args, runDir, leg.Name)
-	if err != nil {
-		return nil, err
+	cmd, file := append([]string{action}, args...), ""
+	if !raw {
+		cmd, file, err = argv(action, args, runDir, leg.Name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	e := s.engineFor(run.ID, leg)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var target refInfo // what the last snapshot called the element about to be acted on, read before the page changes
-	if v.refs > 0 {
+	if v.refs > 0 && len(cmd) > 1 && !strings.HasPrefix(cmd[1], "-") {
 		target = e.refs[cmd[len(cmdWords(action, v))]]
 	}
 	var click *clickAt
 	var box *ElementBox
-	if action == "click" { // read before the click: the page may move or close the element
+	if action == "click" && len(cmd) > 1 && !strings.HasPrefix(cmd[1], "-") { // read before the click: the page may move or close the element
 		var pointErr error
 		click, box, pointErr = e.clickTarget(ctx, cmd[1])
 		if pointErr != nil {
@@ -207,7 +230,7 @@ func (s *Service) Drive(ctx context.Context, sessionID, action string, args []st
 	t0 := time.Now()
 	out, err := e.Run(ctx, cmdTimeout, cmd...)
 	if err != nil {
-		if action == "click" && isCoveredClickError(err) {
+		if v.receipt && (raw || action == "click" && isCoveredClickError(err)) {
 			// A covered click is a useful, reproducible result. Keep the same
 			// after-shot and receipt evidence as a successful state change, then
 			// return the refusal so the tester stops rather than guessing.
@@ -221,11 +244,14 @@ func (s *Service) Drive(ctx context.Context, sessionID, action string, args []st
 				res["snapshot"] = compactSnapshot(snap)
 			}
 			addDriveText(res, runDir, "")
-			message := "click refused because the element is covered: " + err.Error()
+			message := err.Error()
 			if text, ok := res["text"].(string); ok && text != "" {
 				message += "\n" + text
 			}
-			return res, apierr.Conflict("TESTING_ELEMENT_COVERED", message, nil)
+			if action != "click" || !isCoveredClickError(err) {
+				return res, apierr.Unavailable("TESTING_ENGINE_FAILED", message)
+			}
+			return res, apierr.Conflict("TESTING_ELEMENT_COVERED", "click refused because the element is covered: "+message, nil)
 		}
 		return nil, apierr.Unavailable("TESTING_ENGINE_FAILED", err.Error())
 	}
@@ -233,7 +259,7 @@ func (s *Service) Drive(ctx context.Context, sessionID, action string, args []st
 		e.refs = parseRefs(out)
 	}
 	res := map[string]any{"leg": leg.Name, "action": action, "output": out}
-	if action == "screenshot" {
+	if action == "screenshot" && file != "" {
 		if err := e.flatten(ctx, file); err != nil {
 			res["warning"] = "opaque screenshot: " + err.Error()
 		}
@@ -345,11 +371,9 @@ func addDriveText(res map[string]any, runDir, fallbackSnapshot string) {
 	if snapshot != "" {
 		lines = append(lines, snapshot)
 	}
-	if len(lines) == 0 {
-		if action, _ := res["action"].(string); action != "snapshot" {
-			if output, _ := res["output"].(string); output != "" {
-				lines = append(lines, output)
-			}
+	if action, _ := res["action"].(string); action != "snapshot" || snapshot == "" {
+		if output, _ := res["output"].(string); output != "" {
+			lines = append(lines, output)
 		}
 	}
 	res["text"] = strings.Join(lines, "\n")

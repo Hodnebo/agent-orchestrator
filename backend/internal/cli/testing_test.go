@@ -156,6 +156,68 @@ func TestTestingVerbsSendOneRequestEach(t *testing.T) {
 	}
 }
 
+func TestTestingBrowserForwardsGenericActions(t *testing.T) {
+	for _, tc := range []struct {
+		name, action string
+		args         []string
+	}{
+		{name: "wheel", action: "mouse", args: []string{"wheel", "120", "0"}},
+		{name: "swipe", action: "swipe", args: []string{"left", "--timeout", "5000"}},
+		{name: "upstream flags and multiline text", action: "eval", args: []string{"--json", "--full", "--timeout", "12000", "const value = 1;\nreturn value"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := testingDaemon(t, http.StatusOK, `{}`)
+			args := append([]string{"browser", "--leg", "head", "--", tc.action}, tc.args...)
+			if _, err := runTesting(t, args...); err != nil {
+				t.Fatal(err)
+			}
+			if got.method != http.MethodPost || got.path != "/api/v1/testing/drive" {
+				t.Fatalf("request = %s %s", got.method, got.path)
+			}
+			if got.body["action"] != "browser" {
+				t.Fatalf("action = %v, want browser", got.body["action"])
+			}
+			wantArgs := append([]string{tc.action}, tc.args...)
+			wantArgs = append(wantArgs, "--leg", "head")
+			if fmt.Sprint(got.body["args"]) != fmt.Sprint(wantArgs) {
+				t.Fatalf("args = %v, want %v", got.body["args"], wantArgs)
+			}
+		})
+	}
+}
+
+func TestTestingBrowserKeepsAOFlagsBeforeDelimiter(t *testing.T) {
+	got := testingDaemon(t, http.StatusOK, `{}`)
+	if _, err := runTesting(t, "--json", "browser", "--leg", "head", "--", "eval", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	if got.body["action"] != "browser" {
+		t.Fatalf("action = %v, want browser", got.body["action"])
+	}
+	wantArgs := []string{"eval", "--json", "--leg", "head"}
+	if fmt.Sprint(got.body["args"]) != fmt.Sprint(wantArgs) {
+		t.Fatalf("args = %v, want %v", got.body["args"], wantArgs)
+	}
+}
+
+func TestTestingBrowserPreservesLiteralLegArgument(t *testing.T) {
+	got := testingDaemon(t, http.StatusOK, `{}`)
+	if _, err := runTesting(t, "browser", "--", "fill", "#input", "--leg=base"); err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{"fill", "#input", "--leg=base", "--leg", ""}
+	if got.body["action"] != "browser" || fmt.Sprint(got.body["args"]) != fmt.Sprint(wantArgs) {
+		t.Fatalf("request = action %v args %v, want action browser args %v", got.body["action"], got.body["args"], wantArgs)
+	}
+}
+
+func TestTestingBrowserRequiresAction(t *testing.T) {
+	_, err := runTesting(t, "browser")
+	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "usage: ao testing browser [AO flags] -- <action> [args...]") {
+		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+	}
+}
+
 func TestTestingLongCallsOutlastServerBudgets(t *testing.T) {
 	recipe, err := litmus.NewStore(t.TempDir()).LoadRecipe(litmus.DefaultRepo)
 	if err != nil {

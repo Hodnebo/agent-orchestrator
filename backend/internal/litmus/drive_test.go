@@ -38,7 +38,7 @@ func (f *fakeEngine) exec(ctx context.Context, _ string, args, env []string) (st
 	if err := f.fail[args[2]]; err != nil {
 		return "", err
 	}
-	if args[2] == "screenshot" {
+	if args[2] == "screenshot" && len(args) > 3 && filepath.IsAbs(args[3]) {
 		data := f.shot
 		if data == nil {
 			data = pngBytes(tinyOpaque())
@@ -211,10 +211,8 @@ func TestDriveRefusals(t *testing.T) {
 	is(t, "")(nil, svc.store.Save(run))
 
 	for _, c := range []struct{ want, in string }{
-		{"TESTING_ACTION_UNSUPPORTED", "open https://example.com"}, {"TESTING_ACTION_UNSUPPORTED", "eval 1"}, {"TESTING_ACTION_UNSUPPORTED", "cookies"},
 		{"TESTING_ARGS_INVALID", "click"}, {"TESTING_ARGS_INVALID", "click button"}, {"TESTING_ARGS_INVALID", "fill e1"},
 		{"TESTING_ARGS_INVALID", "press --cdp=http://x"}, {"TESTING_ARGS_INVALID", "snapshot --session x"}, {"TESTING_ARGS_INVALID", "tab new"},
-		{"TESTING_ACTION_UNSUPPORTED", "record start v.mp4"}, {"TESTING_ACTION_UNSUPPORTED", "record stop"},
 		{"TESTING_PATH_INVALID", "screenshot ../x.png"}, {"TESTING_PATH_INVALID", "screenshot /etc/x.png"},
 		{"TESTING_LEG_NOT_LAUNCHED", "snapshot --leg base"}, {"TESTING_LEG_NOT_LAUNCHED", "snapshot --leg=main"},
 	} {
