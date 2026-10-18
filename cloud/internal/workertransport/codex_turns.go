@@ -36,16 +36,16 @@ type activityPublisher interface {
 	PublishActivity(context.Context, worker.ActivityEvent) error
 }
 
-// codexHomeFromEnvironment returns the CODEX_HOME an exec.Cmd environment
-// sets. Later entries win, as they do for the process.
-func codexHomeFromEnvironment(environment []string) string {
-	home := ""
+// environmentValue returns the value an exec.Cmd environment sets for key.
+// Later entries win, as they do for the process.
+func environmentValue(environment []string, key string) string {
+	found := ""
 	for _, entry := range environment {
-		if value, ok := strings.CutPrefix(entry, "CODEX_HOME="); ok {
-			home = value
+		if value, ok := strings.CutPrefix(entry, key+"="); ok {
+			found = value
 		}
 	}
-	return strings.TrimSpace(home)
+	return strings.TrimSpace(found)
 }
 
 // codexRolloutTail follows the newest rollout of the terminal's Codex under a
@@ -292,7 +292,9 @@ func codexTurnFailedRecord(line []byte) (codexTurnFailure, bool) {
 }
 
 // watchCodexTurnFailures runs for the life of the terminal agent's process.
-func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, tail *codexRolloutTail) {
+// checkpointSocket is the agent's AO_CHECKPOINT_SOCKET, poked as its Stop hook
+// would be, so the files a failed turn edited are checkpointed.
+func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, tail *codexRolloutTail, checkpointSocket string) {
 	ticker := time.NewTicker(codexTurnPollInterval)
 	defer ticker.Stop()
 	for {
@@ -305,6 +307,7 @@ func (s *Supervisor) watchCodexTurnFailures(ctx context.Context, tail *codexRoll
 		if len(failures) == 0 {
 			continue
 		}
+		worker.PokeCheckpoint(ctx, checkpointSocket)
 		s.reportCodexTurnFailure(ctx, failures[len(failures)-1])
 	}
 }

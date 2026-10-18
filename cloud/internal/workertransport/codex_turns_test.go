@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +195,27 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	home, dataDir := t.TempDir(), t.TempDir()
+	// The failed turn's edits are checkpointed, as a Stop hook would ask.
+	socketDir, err := os.MkdirTemp("", "aocp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDir)
+	checkpointSocket := filepath.Join(socketDir, "c.sock")
+	listener, err := net.Listen("unix", checkpointSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoints := make(chan struct{}, 4)
+	go func() {
+		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/checkpoint" {
+				checkpoints <- struct{}{}
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}))
+	}()
+	defer listener.Close()
 	terminalID := "00000000-0000-0000-0000-000000000061"
 	control := &codexActivityControl{got: make(chan struct{}, 1)}
 	supervisor := &Supervisor{
@@ -200,7 +223,7 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 		AgentTerminalID: terminalID,
 		AgentCommand: workerexec.Command{
 			Path: "/bin/sh", Args: []string{"-c", "cat"},
-			Env: map[string]string{"CODEX_HOME": home},
+			Env: map[string]string{"CODEX_HOME": home, "AO_CHECKPOINT_SOCKET": checkpointSocket},
 		},
 		terminals: make(map[string]*terminalProcess),
 	}
@@ -235,6 +258,11 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 	}
 	if idle, unverified := supervisor.tuiSourceIdle(); !idle || unverified {
 		t.Fatalf("terminal idle = %v (unverified %v), want verified idle after the failed turn", idle, unverified)
+	}
+	select {
+	case <-checkpoints:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed Codex turn was not checkpointed")
 	}
 }
 
