@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -56,7 +57,10 @@ type Config struct {
 	// InstallCheck optionally reports, without starting anything, that the
 	// adapter the chat needs is missing. See ports.ChatInstallChecker.
 	InstallCheck func(context.Context) error
-	Launch       func(context.Context, LaunchConfig) (Launch, error)
+	// RetryStartupExit starts the agent once more when it exits before
+	// answering its first handshake.
+	RetryStartupExit bool
+	Launch           func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
 	// version after the protocol handshake identifies it. This is preferable to
 	// invoking an adapter-specific version flag, which many stdio agents do not
@@ -628,7 +632,42 @@ func (d *Driver) connect(
 	initializeStarted := time.Now()
 	conv, init, state, err := d.initialize(ctx, cfg, proc)
 	d.logStartStage(cfg.SessionID, "initialize", initializeStarted, err)
+	if err == nil || !d.cfg.RetryStartupExit || proc.reconnected || !isACPPeerDisconnected(err) {
+		return conv, init, state, err
+	}
+	// The agent exited before answering its first handshake. Some do that on a
+	// cold first start (pi-acp while its background daemon comes up); a second
+	// start finds it running.
+	d.log.Info("chat: ACP agent exited during its first handshake; starting it once more",
+		"sessionID", cfg.SessionID, "harness", d.cfg.Harness, "error", err)
+	select {
+	case <-time.After(startupRetryDelay):
+	case <-ctx.Done():
+		return nil, acpsdk.InitializeResponse{}, nil, err
+	}
+	if proc, err = d.openProcess(ctx, cfg, prepareEnv); err != nil {
+		return nil, acpsdk.InitializeResponse{}, nil, err
+	}
+	initializeStarted = time.Now()
+	conv, init, state, err = d.initialize(ctx, cfg, proc)
+	d.logStartStage(cfg.SessionID, "initialize_retry", initializeStarted, err)
 	return conv, init, state, err
+}
+
+// startupRetryDelay lets an agent that exited during its first handshake
+// release its host before RetryStartupExit starts it again.
+const startupRetryDelay = 500 * time.Millisecond
+
+// isACPPeerDisconnected reports a request the agent never answered because
+// its process went away.
+func isACPPeerDisconnected(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	reason, _ := data["error"].(string)
+	return strings.HasPrefix(reason, "peer disconnected")
 }
 
 func (d *Driver) initialize(
