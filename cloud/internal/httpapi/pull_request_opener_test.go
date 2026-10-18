@@ -26,11 +26,12 @@ type openerPRStore struct {
 // session in the project, a teammate's among them.
 func (openerPRStore) ListPullRequestsBySession(context.Context, domain.Principal, string, string) ([]domain.PullRequest, error) {
 	return []domain.PullRequest{
-		{ID: "pr-1", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/app", Number: 1, Author: "ao-by-untrivial[bot]", State: contract.PRStateMerged},
+		{ID: "pr-1", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/app", Number: 1, Author: "ao-test[bot]", State: contract.PRStateMerged},
 		{ID: "pr-2", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/lib", Number: 2, Author: "octocat", State: contract.PRStateMerged},
-		{ID: "pr-3", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/web", Number: 3, Author: "aoagentsdev123[bot]", State: contract.PRStateMerged},
-		{ID: "pr-4", SessionID: openerTeammateSession, Provider: "github", Repository: "octo/app", Number: 4, Author: "ao-by-untrivial[bot]", State: contract.PRStateMerged},
-		{ID: "pr-5", SessionID: openerTeammateSession, Provider: "github", Repository: "octo/app", Number: 5, Author: "ao-by-untrivial[bot]", State: contract.PRStateMerged},
+		{ID: "pr-3", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/web", Number: 3, Author: "ao-test", State: contract.PRStateMerged},
+		{ID: "pr-4", SessionID: openerTeammateSession, Provider: "github", Repository: "octo/app", Number: 4, Author: "ao-test[bot]", State: contract.PRStateMerged},
+		{ID: "pr-5", SessionID: openerTeammateSession, Provider: "github", Repository: "octo/app", Number: 5, Author: "ao-test[bot]", State: contract.PRStateMerged},
+		{ID: "pr-6", SessionID: openerOrchestratorSession, Provider: "github", Repository: "octo/app", Number: 6, Author: "dependabot[bot]", State: contract.PRStateMerged},
 	}, nil
 }
 
@@ -49,6 +50,9 @@ func (s *openerPRStore) SessionPullRequestOpener(_ context.Context, _, sessionID
 func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *testing.T) {
 	store := &openerPRStore{openerCalls: make(map[string]int)}
 	server := New(Options{Store: store})
+	// The App's slug is ao-test (REST "ao-test[bot]", GraphQL "ao-test").
+	githubServer, _ := newGitHubCallbackTestServer(t)
+	server.github = githubServer.github
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	route := chi.NewRouteContext()
 	route.URLParams.Add("orgId", "11111111-1111-1111-1111-111111111111")
@@ -72,7 +76,7 @@ func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *tes
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.PullRequests) != 5 {
+	if len(result.PullRequests) != 6 {
 		t.Fatalf("pull requests = %+v", result.PullRequests)
 	}
 	for _, index := range []int{0, 2} {
@@ -86,6 +90,10 @@ func TestListSessionPullRequestsNamesThePersonBehindAppOpenedPullRequests(t *tes
 	}
 	if result.PullRequests[1].OpenedBy != nil {
 		t.Fatalf("a person's own pull request got openedBy %+v", result.PullRequests[1].OpenedBy)
+	}
+	// Another bot's pull request, claimed into the session, is not AO's.
+	if result.PullRequests[5].OpenedBy != nil {
+		t.Fatalf("a dependabot pull request got openedBy %+v", result.PullRequests[5].OpenedBy)
 	}
 	// A teammate's pull request names the teammate, not the orchestrator's person.
 	for _, index := range []int{3, 4} {

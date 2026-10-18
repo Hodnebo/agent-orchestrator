@@ -249,14 +249,11 @@ type pullRequestOpenerResponse struct {
 	AvatarURL   string `json:"avatarUrl,omitempty"`
 }
 
-// openedByAO reports whether a pull request's GitHub author is a bot account,
-// the AO GitHub App in practice: it opens every pull request a session raises.
+// openedByAO reports whether a pull request's GitHub author is the AO GitHub
+// App, which opens every pull request a session raises. Other bots (a
+// dependabot pull request claimed with ao claim-pr) keep their own name.
 func (s *Server) openedByAO(author string) bool {
-	login := strings.ToLower(strings.TrimSpace(author))
-	if login == "" {
-		return false
-	}
-	return strings.HasSuffix(login, "[bot]") || s.github.IsAppAccount(login)
+	return s.github.IsAppAccount(author)
 }
 
 func toPullRequestSummaryResponse(pr domain.PullRequest, snapshot domain.PullRequestSnapshot) pullRequestSummaryResponse {
