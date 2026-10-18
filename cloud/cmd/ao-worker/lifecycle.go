@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -73,7 +74,11 @@ func runProjectSetup(
 	workspace string,
 	environment worker.SessionScriptEnvironment,
 ) (failed *worker.SetupEvent) {
-	event, ran := worker.SetupRunner{DataDir: dataDir, FirstStart: firstStart}.Run(ctx, commands, workspace, environment)
+	event, ran := worker.SetupRunner{
+		DataDir: dataDir, FirstStart: firstStart,
+		Publish: scriptStepPublisher(logger, client),
+		Secrets: func() []string { return []string{client.currentToken()} },
+	}.Run(ctx, commands, workspace, environment)
 	if !ran {
 		if len(commands) > 0 {
 			logger.Info("project setup: not run; the session's workspace was set up before", "steps", len(commands))
@@ -102,6 +107,31 @@ func runProjectSetup(
 	}
 	return failed
 }
+
+// scriptStepPublisher publishes a Setup run's step events. A control plane
+// from before live Setup logs refuses the event type: that is reported as
+// worker.ErrScriptStepsUnsupported (the run then stops sending) and logged
+// once, and any other failure only at debug level, since a dropped update is
+// expected and Setup never depends on it.
+func scriptStepPublisher(logger *slog.Logger, client *client) func(context.Context, worker.ScriptStepEvent) error {
+	return func(ctx context.Context, event worker.ScriptStepEvent) error {
+		err := client.publishEvent(ctx, worker.ScriptStepEventType, event)
+		switch {
+		case err == nil:
+			return nil
+		case strings.Contains(err.Error(), "INVALID_EVENT_TYPE"):
+			scriptStepsUnsupportedOnce.Do(func() {
+				logger.Info("project setup: the control plane does not take live step logs; sending only the outcome")
+			})
+			return worker.ErrScriptStepsUnsupported
+		default:
+			logger.Debug("publish project setup step", "step", event.Step, "status", event.Status, "error", err)
+			return err
+		}
+	}
+}
+
+var scriptStepsUnsupportedOnce sync.Once
 
 // projectScripts are the project's Setup and Cleanup commands (Project
 // settings > Scripts).

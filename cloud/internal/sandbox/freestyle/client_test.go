@@ -28,6 +28,14 @@ type fakeAPI struct {
 	// createStatus, when set, answers every create with it and createBody.
 	createStatus int
 	createBody   string
+	// execFunc, when set, answers an exec with its stdout and status code;
+	// execStatus, when set, answers it with that HTTP status instead.
+	execFunc   func(command string) (string, int)
+	execStatus int
+	// execBlock, when set, holds every exec until it is closed.
+	execBlock chan struct{}
+	// startTo, when set, is the state a VM's start leaves it in.
+	startTo string
 }
 
 func stringValue(value any) string {
@@ -73,7 +81,28 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.vms[slug] = view
 		_ = json.NewEncoder(w).Encode(view)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/exec-await"):
-		_ = json.NewEncoder(w).Encode(map[string]any{"statusCode": f.execCode, "stdout": f.execOut})
+		if f.execBlock != nil {
+			f.mu.Unlock()
+			select {
+			case <-f.execBlock:
+			case <-r.Context().Done():
+			}
+			f.mu.Lock()
+		}
+		if f.execStatus != 0 {
+			w.WriteHeader(f.execStatus)
+			return
+		}
+		stdout, code := f.execOut, f.execCode
+		if f.execFunc != nil {
+			stdout, code = f.execFunc(stringValue(body["command"]))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"statusCode": code, "stdout": stdout})
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/start") && f.startTo != "":
+		if view, ok := f.vms[strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/start")]; ok {
+			view.State = f.startTo
+			f.vms[view.ID], f.vms[view.Slug] = view, view
+		}
 	case r.Method == http.MethodGet:
 		view, ok := f.vms[strings.TrimPrefix(path, "/")]
 		if !ok {

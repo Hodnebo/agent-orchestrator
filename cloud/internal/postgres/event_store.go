@@ -18,6 +18,7 @@ var clientEventTypes = []string{
 	"sandbox.provisioning",
 	"workspace.changed",
 	"workspace.setup",
+	"workspace.script.step",
 	"pull_request.created",
 	"pull_request.claimed",
 	"review.submitted",

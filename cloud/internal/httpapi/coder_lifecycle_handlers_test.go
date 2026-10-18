@@ -187,6 +187,60 @@ func TestWorkerEventRecordsSetupOutcome(t *testing.T) {
 	}
 }
 
+// A Setup step's events reach the session's event stream with their output
+// redacted again and bounded; a malformed step, or a Cleanup step (which only
+// the control plane reports), is refused.
+func TestWorkerEventRecordsScriptSteps(t *testing.T) {
+	t.Parallel()
+	store := &setupEventStore{}
+	srv := testServer(store)
+	body := `{"type":"workspace.script.step","payload":{"phase":"setup","runId":"run-1","step":2,"total":3,` +
+		`"command":"make   up","repository":"api","status":"failed","exitCode":2,"startedAt":"2026-10-18T10:00:00.000Z",` +
+		`"durationMs":1500,"output":"\u001b[31mcompose up failed\u001b[0m\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789",` +
+		`"outputTruncated":false,"logPath":"/data/setup-logs/step-2.log","user":"coder","groups":["coder"],"dir":"/w/api",` +
+		`"hint":"h","extra":"dropped"}}`
+	rec := httptest.NewRecorder()
+	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", body, "worker:event"))
+	if rec.Code >= 300 {
+		t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	raw := store.events[worker.ScriptStepEventType]
+	var recorded worker.ScriptStepEvent
+	if err := json.Unmarshal(raw, &recorded); err != nil {
+		t.Fatalf("event = %s: %v", raw, err)
+	}
+	if recorded.Phase != worker.ScriptPhaseSetup || recorded.RunID != "run-1" || recorded.Step != 2 || recorded.Total != 3 ||
+		recorded.Status != worker.SetupFailed || *recorded.ExitCode != 2 || *recorded.DurationMS != 1500 ||
+		recorded.Command != "make up" || recorded.Repository != "api" || recorded.User != "coder" ||
+		recorded.Output != "compose up failed\nGITHUB_TOKEN=[REDACTED]" || strings.Contains(string(raw), "extra") {
+		t.Fatalf("recorded = %s", raw)
+	}
+
+	running := `{"phase":"setup","runId":"r","step":1,"total":1,"command":"c","repository":"","status":"running","output":"x","outputTruncated":false}`
+	rec = httptest.NewRecorder()
+	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events",
+		`{"type":"workspace.script.step","payload":`+running+`}`, "worker:event"))
+	if rec.Code >= 300 {
+		t.Fatalf("running step: status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+
+	for name, payload := range map[string]string{
+		"cleanup phase":     `{"phase":"cleanup","runId":"r","step":1,"total":1,"status":"succeeded","exitCode":0,"durationMs":1}`,
+		"unknown status":    `{"phase":"setup","runId":"r","step":1,"total":1,"status":"done","exitCode":0}`,
+		"step past total":   `{"phase":"setup","runId":"r","step":3,"total":2,"status":"skipped"}`,
+		"no run":            `{"phase":"setup","runId":"","step":1,"total":1,"status":"running"}`,
+		"finished, no exit": `{"phase":"setup","runId":"r","step":1,"total":1,"status":"failed"}`,
+		"not an object":     `[]`,
+	} {
+		rec := httptest.NewRecorder()
+		srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events",
+			`{"type":"workspace.script.step","payload":`+payload+`}`, "worker:event"))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d; body = %s", name, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // The project context names the session's real working directory, which only
 // the worker knows: a worker that substitutes it gets a placeholder, and an
 // older worker (which shows the prompt as is) the path it always showed.
