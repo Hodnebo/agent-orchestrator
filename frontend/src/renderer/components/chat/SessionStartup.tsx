@@ -1,4 +1,4 @@
-import { Check, Circle, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -108,7 +108,12 @@ function StepIcon({ status }: { status: StepStatus }) {
 		case "failed":
 			return <X aria-hidden="true" className={cn(className, "text-destructive")} />;
 		case "pending":
-			return <Circle aria-hidden="true" className={cn(className, "text-passive")} />;
+			// Not started: a dashed ring, the same mark the plan uses for a step still to come.
+			return (
+				<svg aria-hidden="true" viewBox="0 0 16 16" className={cn(className, "text-passive")}>
+					<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.6 2.7" strokeLinecap="round" />
+				</svg>
+			);
 	}
 }
 

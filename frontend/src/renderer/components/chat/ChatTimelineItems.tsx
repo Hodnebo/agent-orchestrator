@@ -392,26 +392,25 @@ export function TurnOutcome({
 	const copy = TURN_OUTCOME_COPY[state];
 	const Icon = copy.icon;
 	return (
-		<div className="group/message flex min-w-0 flex-col gap-1" data-turn-outcome={state}>
+		<div className="group/message flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
 			<div className="flex min-w-0 items-start gap-2">
 				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
-				<div className="flex min-w-0 flex-1 flex-col gap-1.5">
-					<span className={cn("text-sm leading-5", copy.tone)}>{copy.label}</span>
-					{error ? (
-						<div
-							className={cn(
-								"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
-								// A provider's failure text is code-like (status lines, request ids, URLs):
-								// it sits in a quiet mono block like command output rather than running
-								// on as prose. A stop or recovery note stays in the turn's own voice.
-								state === "failed" ? "rounded-md bg-surface px-3 py-2 font-mono text-xs" : "text-sm",
-							)}
-						>
-							{linkifiedProviderErrorText(error)}
-						</div>
-					) : null}
-				</div>
+				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>{copy.label}</span>
 			</div>
+			{error ? (
+				<div
+					className={cn(
+						"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
+						// A provider's failure text is code-like (status lines, request ids, URLs):
+						// it sits in a quiet mono block like command output, spanning the turn's
+						// width under the title. A stop or recovery note stays in the turn's own
+						// voice, indented with the title.
+						state === "failed" ? "rounded-md bg-surface px-3 py-2 font-mono text-xs" : "pl-[22px] text-sm",
+					)}
+				>
+					{linkifiedProviderErrorText(error)}
+				</div>
+			) : null}
 			<TurnActions
 				retry={retry}
 				copyText={copyText}
@@ -468,7 +467,7 @@ export function TurnActions({
 						aria-label="Retry this turn"
 						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 						data-testid="retry-turn"
-						className={cn(TURN_ACTION_BUTTON, "gap-1.5 bg-surface px-2.5 text-xs text-foreground/90 hover:bg-interactive-active")}
+						className={cn(TURN_ACTION_BUTTON, "gap-1.5 px-2 text-xs")}
 					>
 						<RotateCw
 							aria-hidden="true"
