@@ -784,6 +784,9 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
+	if input.Kind == "agent" && !input.Review && s.Harness == "codex" {
+		go s.watchCodexTurnFailures(processCtx, codexHomeFromEnvironment(command.Env), time.Now())
+	}
 	go func() {
 		_ = command.Wait()
 		// Signal process exit before removing the terminal or publishing its exit.
