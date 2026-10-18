@@ -2362,8 +2362,11 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
 				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
 				: t("chat.projectSetup.failed", { step });
-	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
 	const failed = status !== "succeeded";
+	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	const context = failed ? detail?.setupContext?.trim() : undefined;
+	const output = context ? (stepOutput ? `${context}\n\n${stepOutput}` : context) : stepOutput;
+	const hint = failed ? detail?.setupHint?.trim() : undefined;
 	const Icon = failed ? CircleAlert : SquareTerminal;
 	return (
 		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
@@ -2382,8 +2385,9 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 					</button>
 				) : null}
 			</div>
+			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);

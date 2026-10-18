@@ -96,6 +96,31 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 	}
 }
 
+// A Setup step refused Docker says so in the startup message, and the detail
+// names the command, the user it ran as, and its full log.
+func TestSetupPermissionFailureExplainsWhoRanIt(t *testing.T) {
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace, dataDir := t.TempDir(), t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, dataDir, true,
+		[]string{"docker compose up -d || { echo 'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock' >&2; exit 1; }"},
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	report := setupStartupFailure(*failed)
+	user := worker.CurrentScriptIdentity().User
+	if !strings.Contains(report.Message, "This step ran as "+user+", which cannot use Docker") {
+		t.Fatalf("message = %q", report.Message)
+	}
+	for _, want := range []string{"Step 1: docker compose up -d", "Ran as " + user, " in " + workspace, "Full output: " + dataDir, "docker.sock"} {
+		if !strings.Contains(report.Detail, want) {
+			t.Fatalf("detail %q lacks %q", report.Detail, want)
+		}
+	}
+}
+
 // A checkout failure names its cause: the Coder connection's working
 // directory, or the repository checkout with the redacted error as detail.
 func TestCheckoutFailuresHaveTheirOwnStartupErrors(t *testing.T) {

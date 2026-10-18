@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,18 @@ type SetupEvent struct {
 	// Output is the tail of the failed command's output (the last command's on
 	// success).
 	Output string `json:"output,omitempty"`
+	// The rest describe a failed step, so it can be fixed without opening the
+	// sandbox: its command (one line, bounded), the repository folder it ran
+	// in ("" for the main repository), the directory, the Linux user and
+	// groups it ran as, the file in the sandbox with its full output, and a
+	// hint when the output shows a permission problem.
+	Command    string   `json:"command,omitempty"`
+	Repository string   `json:"repository,omitempty"`
+	Dir        string   `json:"dir,omitempty"`
+	User       string   `json:"user,omitempty"`
+	Groups     []string `json:"groups,omitempty"`
+	LogPath    string   `json:"logPath,omitempty"`
+	Hint       string   `json:"hint,omitempty"`
 }
 
 // Summary names the failed step and why, in the local daemon's words
@@ -83,6 +96,29 @@ func (e SetupEvent) Summary() string {
 		cause = "timed out after " + ProjectScriptStepTimeout.String()
 	}
 	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+}
+
+// Context is a failed step's command, who and where it ran, and its log, one
+// fact per line, for the startup screen's details and the worker log.
+func (e SetupEvent) Context() string {
+	var lines []string
+	if e.Command != "" {
+		lines = append(lines, fmt.Sprintf("Step %d: %s", e.Step, e.Command))
+	}
+	if e.User != "" {
+		ran := "Ran as " + e.User
+		if len(e.Groups) > 0 {
+			ran += " (groups: " + strings.Join(e.Groups, " ") + ")"
+		}
+		if e.Dir != "" {
+			ran += " in " + e.Dir
+		}
+		lines = append(lines, ran)
+	}
+	if e.LogPath != "" {
+		lines = append(lines, "Full output: "+e.LogPath)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Message is the startup error shown when Setup did not succeed: the summary
@@ -187,16 +223,40 @@ func (r SetupRunner) Run(
 	if timeout <= 0 {
 		timeout = ProjectScriptStepTimeout
 	}
+	// Each run keeps only its own steps' logs.
+	logs := filepath.Join(r.DataDir, setupLogsDir)
+	_ = os.RemoveAll(logs)
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		logs = ""
+	}
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
 	for index, command := range commands {
-		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map())
+		logPath := ""
+		if logs != "" {
+			logPath = filepath.Join(logs, "step-"+strconv.Itoa(index+1)+".log")
+		}
+		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath)
 		// Only a failure carries output: it is what the startup screen shows to
 		// fix the step. A successful Setup's output (often secrets a step
-		// loaded or printed) is never published to the session's events.
+		// loaded or printed) is never published to the session's events; it
+		// stays in the step's log inside the sandbox.
 		if step.Status != SetupSucceeded {
 			step.Step = index + 1
 			step.DurationMS = time.Since(started).Milliseconds()
+			step.Command, step.Repository = scriptCommandSummary(command)
+			step.Dir = dir
+			if step.Repository != "" {
+				step.Dir = filepath.Join(filepath.Dir(dir), step.Repository)
+			}
+			identity := CurrentScriptIdentity()
+			step.User, step.Groups = identity.User, identity.Groups
+			if logPath != "" {
+				if _, err := os.Stat(logPath); err == nil {
+					step.LogPath = logPath
+				}
+			}
+			step.Hint = ScriptFailureHint(step.Output, step.ExitCode, step.User)
 			return step, true
 		}
 	}
@@ -229,6 +289,7 @@ func runProjectScriptStep(
 	timeout time.Duration,
 	dir string,
 	environment map[string]string,
+	logPath string,
 ) SetupEvent {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -236,8 +297,15 @@ func runProjectScriptStep(
 	process.Dir = dir
 	process.Env = mergeEnvironment(os.Environ(), environment)
 	output := &tailBuffer{limit: ProjectScriptOutputLimit}
-	process.Stdout = output
-	process.Stderr = output
+	var sink io.Writer = output
+	if logPath != "" {
+		if file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
+			defer file.Close()
+			sink = io.MultiWriter(output, &cappedFile{file: file, left: scriptLogLimit})
+		}
+	}
+	process.Stdout = sink
+	process.Stderr = sink
 	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	process.Cancel = func() error {
 		if process.Process == nil {
@@ -316,9 +384,15 @@ func CleanupCommandsScript(commands []string) string {
 	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")
 	for index, command := range nonEmptyCommands(commands) {
 		step := strconv.Itoa(index + 1)
+		summary, _ := scriptCommandSummary(command)
 		steps.WriteString("$ao_timeout sh -c " + shellQuote(command) + " </dev/null\n")
-		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then echo \"cleanup step " + step +
-			" failed: exit status $ao_code\" >&2; exit \"$ao_code\"; fi\n")
+		// Say which step, what it ran, and as whom and where, so a failure in
+		// the logs needs no trip into the sandbox.
+		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then\n" +
+			"  echo \"cleanup step " + step + " failed: exit status $ao_code\" >&2\n" +
+			"  echo " + shellQuote("cleanup step "+step+": "+summary) + " >&2\n" +
+			"  echo \"ran as $(id -un 2>/dev/null) (groups: $(id -Gn 2>/dev/null)) in $(pwd)\" >&2\n" +
+			"  exit \"$ao_code\"\nfi\n")
 	}
 	return steps.String()
 }
@@ -359,6 +433,7 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	content.WriteString("sh " + shellQuote(commandsPath) + " >>\"$ao_state/output\" 2>&1\n" +
 		"ao_code=$?\n" +
 		"tail -c " + strconv.Itoa(ProjectScriptOutputLimit) + " \"$ao_state/output\"\n" +
+		"if [ \"$ao_code\" -ne 0 ]; then echo \"full cleanup output: $ao_state/output\"; fi\n" +
 		"echo \"$ao_code\" >\"$ao_state/status\"\n" +
 		"exit \"$ao_code\"\n")
 	return writeFileAtomic(hook, []byte(content.String()), 0o700)

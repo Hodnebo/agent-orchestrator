@@ -442,6 +442,10 @@ export interface SystemEventDetail {
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
 	setupStep?: number;
+	/** workspace.setup: a failed step's command, the user it ran as, where, and its full log, one per line. */
+	setupContext?: string;
+	/** workspace.setup: why a failed step likely failed (no Docker, no sudo, a refused path). */
+	setupHint?: string;
 	/** render */
 	render?: RenderRef;
 	/** artifact */

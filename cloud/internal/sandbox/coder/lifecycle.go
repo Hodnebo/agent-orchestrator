@@ -221,7 +221,12 @@ func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Dura
 		attrs["result"] = cleanupSkipped
 		finish(nil, attrs)
 	case result.exitCode != 0:
-		attrs["output"] = activity.Excerpt(result.output, 512)
+		// The tail carries the failed step, its command, the user and groups it
+		// ran as, and where its full output is (worker.CleanupCommandsScript).
+		attrs["output"] = activity.Excerpt(result.output, 2048)
+		if hint := worker.ScriptFailureHint(result.output, result.exitCode, ""); hint != "" {
+			attrs["hint"] = hint
+		}
 		finish(fmt.Errorf("coder: project cleanup exited %d", result.exitCode), attrs)
 	default:
 		finish(nil, attrs)

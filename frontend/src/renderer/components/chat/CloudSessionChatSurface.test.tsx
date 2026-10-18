@@ -67,6 +67,22 @@ describe("CloudSessionChatSurface", () => {
 		expect(succeeded?.turnId).toBeUndefined();
 		expect(failed?.kind === "activity" ? failed.detail?.output : "unexpected").toBeUndefined();
 	});
+	it("carries a failed setup step's command, user, directory, log and hint", () => {
+		const events: CloudCpClientEvent[] = [{
+			sessionId: session.id, sequence: 1, type: "workspace.setup",
+			payload: {
+				status: "failed", step: 2, exitCode: 1, output: "denied", command: "docker compose up -d", dir: "/w/lib",
+				user: "ao-worker", groups: ["ao-worker", "users"], logPath: "/d/setup-logs/step-2.log", hint: "No Docker.",
+			},
+			createdAt: "2026-10-01T00:00:00Z",
+		}];
+		expect(toSnapshot(session, events).items[0]).toMatchObject({
+			detail: {
+				setupHint: "No Docker.",
+				setupContext: "Step 2: docker compose up -d\nRan as ao-worker (groups: ao-worker users) in /w/lib\nFull output: /d/setup-logs/step-2.log",
+			},
+		});
+	});
 	it("preserves structured sender metadata for linked automation rendering", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",

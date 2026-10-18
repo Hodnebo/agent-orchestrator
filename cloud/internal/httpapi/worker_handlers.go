@@ -1100,6 +1100,18 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		outcome.Output = activitylog.Excerpt(outcome.Output, 2048)
+		outcome.Command = activitylog.Truncate(activitylog.Redact(outcome.Command), 512)
+		outcome.Repository = activitylog.Truncate(outcome.Repository, 256)
+		outcome.Dir = activitylog.Truncate(outcome.Dir, 1024)
+		outcome.User = activitylog.Truncate(outcome.User, 128)
+		outcome.LogPath = activitylog.Truncate(outcome.LogPath, 1024)
+		outcome.Hint = activitylog.Truncate(outcome.Hint, 512)
+		if len(outcome.Groups) > 32 {
+			outcome.Groups = outcome.Groups[:32]
+		}
+		for index, group := range outcome.Groups {
+			outcome.Groups[index] = activitylog.Truncate(group, 64)
+		}
 		logArgs := []any{
 			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,
 			"step", outcome.Step, "exit_code", outcome.ExitCode, "duration_ms", outcome.DurationMS,
@@ -1107,7 +1119,10 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if outcome.Status == worker.SetupSucceeded {
 			s.logger.Info("project setup finished", logArgs...)
 		} else {
-			s.logger.Warn("project setup did not succeed", append(logArgs, "output", outcome.Output)...)
+			s.logger.Warn("project setup did not succeed", append(logArgs,
+				"command", outcome.Command, "repository", outcome.Repository, "dir", outcome.Dir,
+				"user", outcome.User, "groups", strings.Join(outcome.Groups, " "),
+				"log", outcome.LogPath, "hint", outcome.Hint, "output", outcome.Output)...)
 		}
 		payload, err := json.Marshal(outcome)
 		if err != nil {
