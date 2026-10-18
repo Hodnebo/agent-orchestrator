@@ -685,6 +685,28 @@ func createSessionTx(
 		return domain.Session{}, err
 	}
 
+	var projectConfig json.RawMessage
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Session{}, ErrNotFound
+		}
+		return domain.Session{}, err
+	}
+	prefix, err := domain.ProjectSessionPrefix(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	// A requested branch is checked before the sandbox quota and plan limits,
+	// so a branch that can never work is reported as such rather than as a
+	// full organization the caller would wait out for nothing.
+	if input.Branch != "" {
+		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
+			return domain.Session{}, err
+		}
+	}
+
 	var activeSandboxes int
 	if err := tx.QueryRow(
 		ctx,
@@ -715,15 +737,6 @@ func createSessionTx(
 			return domain.Session{}, err
 		}
 	}
-	var projectConfig json.RawMessage
-	var defaultBranch string
-	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Session{}, ErrNotFound
-		}
-		return domain.Session{}, err
-	}
 	harness, agentConfig, err := domain.SessionAgentConfig(projectConfig, input.Kind, input.Harness, input.Model)
 	if err != nil {
 		return domain.Session{}, ErrInvalid
@@ -741,15 +754,6 @@ func createSessionTx(
 	}
 	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
-	prefix, err := domain.ProjectSessionPrefix(projectConfig)
-	if err != nil {
-		return domain.Session{}, ErrInvalid
-	}
-	if input.Branch != "" {
-		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
-			return domain.Session{}, err
-		}
-	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)

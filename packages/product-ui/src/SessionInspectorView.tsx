@@ -345,6 +345,7 @@ export function InspectorPullRequestCardView({
 	mergeAction,
 	mergeError,
 	openLabel,
+	openedViaLabel,
 	pr,
 	pullRequestIcon,
 	statusNotice,
@@ -355,6 +356,7 @@ export function InspectorPullRequestCardView({
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
+	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
 	statusNotice?: ReactNode;
@@ -395,6 +397,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
 			{pr.state !== "merged" ? (

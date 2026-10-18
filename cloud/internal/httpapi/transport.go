@@ -81,6 +81,9 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg):
 		writeError(w, r, http.StatusConflict, "github_user_scope_personal_org_only",
 			"You don't administer this GitHub installation, so it can only be connected to your personal AO account, where you are the only member.")
+	case errors.Is(err, postgres.ErrNotOrchestratorChild):
+		writeError(w, r, http.StatusNotFound, "not_orchestrator_child",
+			"That session is not one this orchestrator started. An orchestrator can only kill or message the sessions it spawned.")
 	case errors.Is(err, postgres.ErrForbidden):
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):

@@ -33,6 +33,10 @@ var (
 	// ErrProviderConnectionInUse refuses deleting a provider connection that a
 	// sandbox not yet fully deleted still runs on. It is a conflict.
 	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
+	// ErrNotOrchestratorChild refuses an orchestrator acting on a session it
+	// did not spawn. It is forbidden, but names the reason so `ao kill` and
+	// `ao send` can say so instead of reporting an organization access error.
+	ErrNotOrchestratorChild = fmt.Errorf("not a session this orchestrator started: %w", ErrForbidden)
 )
 
 type Store struct {

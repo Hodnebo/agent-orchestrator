@@ -1026,6 +1026,7 @@
 	"pr.ci.noFailingLink": "No se observó enlace de comprobación fallida",
 	"pr.ci.passing": "Correcto",
 	"pr.ci.pending": "Pendiente",
+	"pr.openedVia": "vía AO",
 	"pr.merge.action": "Fusionar",
 	"pr.merge.actionFor": "Fusionar PR #{{number}}",
 	"pr.merge.blocked": "Bloqueado",

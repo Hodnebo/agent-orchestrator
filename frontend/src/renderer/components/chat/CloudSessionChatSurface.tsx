@@ -17,6 +17,12 @@ type EventPayload = {
 	exitCode?: unknown;
 	durationMs?: unknown;
 	output?: unknown;
+	command?: unknown;
+	dir?: unknown;
+	user?: unknown;
+	groups?: unknown;
+	logPath?: unknown;
+	hint?: unknown;
 	clientMessageId?: unknown;
 	requestId?: unknown;
 	decision?: unknown;
@@ -123,6 +129,25 @@ function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
 }
 
 /**
+ * A failed Setup step's command, who and where it ran, and its full log in the
+ * sandbox, one fact per line (as the worker words them for the startup error).
+ */
+function projectSetupContext(payload: EventPayload, step: number | undefined): string | undefined {
+	const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+	const lines: string[] = [];
+	if (text(payload.command)) lines.push(`Step ${step ?? 1}: ${text(payload.command)}`);
+	if (text(payload.user)) {
+		const groups = Array.isArray(payload.groups) ? payload.groups.filter((group): group is string => typeof group === "string") : [];
+		let ran = `Ran as ${text(payload.user)}`;
+		if (groups.length > 0) ran += ` (groups: ${groups.join(" ")})`;
+		if (text(payload.dir)) ran += ` in ${text(payload.dir)}`;
+		lines.push(ran);
+	}
+	if (text(payload.logPath)) lines.push(`Full output: ${text(payload.logPath)}`);
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+/**
  * The outcome of the project's Setup commands (Project settings > Scripts), as
  * a system row: Setup runs before the agent starts, so it belongs to no turn.
  */
@@ -133,11 +158,15 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	const exitCode = typeof payload.exitCode === "number" ? payload.exitCode : undefined;
 	const durationMs = typeof payload.durationMs === "number" ? payload.durationMs : undefined;
 	const output = typeof payload.output === "string" && payload.output.trim() !== "" ? payload.output : undefined;
+	const hint = typeof payload.hint === "string" && payload.hint.trim() !== "" ? payload.hint : undefined;
 	return {
 		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
 		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
 		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
-		detail: { event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output },
+		detail: {
+			event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output,
+			setupContext: projectSetupContext(payload, step), setupHint: hint,
+		},
 		createdAt: event.createdAt,
 	};
 }

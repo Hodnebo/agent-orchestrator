@@ -1000,6 +1000,7 @@
 	"pr.ci.noFailingLink": "未观察到失败检查的链接",
 	"pr.ci.passing": "通过",
 	"pr.ci.pending": "进行中",
+	"pr.openedVia": "通过 AO",
 	"pr.merge.action": "合并",
 	"pr.merge.actionFor": "合并 PR #{{number}}",
 	"pr.merge.blocked": "已阻止",

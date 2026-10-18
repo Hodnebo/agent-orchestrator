@@ -81,9 +81,14 @@ func runProjectSetup(
 		return nil
 	}
 	logger.Info("project setup: ran", "workspace", workspace, "steps", len(commands))
+	event.Command = activity.Redact(event.Command)
 	attrs := []any{
 		"status", event.Status, "step", event.Step, "exit_code", event.ExitCode,
 		"duration_ms", event.DurationMS, "output", activity.Redact(event.Output),
+	}
+	if event.Status != worker.SetupSucceeded {
+		attrs = append(attrs, "command", event.Command, "repository", event.Repository, "dir", event.Dir,
+			"user", event.User, "groups", strings.Join(event.Groups, " "), "log", event.LogPath, "hint", event.Hint)
 	}
 	event.Output = activity.Excerpt(event.Output, setupMessageOutputLimit)
 	if event.Status == worker.SetupSucceeded {
@@ -134,11 +139,22 @@ func refreshProjectScripts(
 // setupStartupFailure is the session startup error for a failed Setup run:
 // the step and its exit status, with the command's output as the detail.
 func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
+	message := event.Summary() + "."
+	if event.Hint != "" {
+		message += " " + event.Hint
+	}
+	detail := event.Output
+	if context := event.Context(); context != "" {
+		detail = context
+		if output := strings.TrimSpace(event.Output); output != "" {
+			detail += "\n\n" + output
+		}
+	}
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorProjectSetup,
-		Message: event.Summary() + ". Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
-		Detail:  event.Output,
+		Message: message + " Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
+		Detail:  detail,
 	}
 }
 
