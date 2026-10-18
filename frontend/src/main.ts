@@ -221,6 +221,14 @@ const APP_DISPLAY_NAME = "Orchestrator.inc";
 // panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
 
+// Chromium keeps its cookie encryption key in the macOS keychain. An unsigned
+// dev Electron is a new app to macOS every time its binary changes, so it asked
+// for keychain access on start. Dev runs use Chromium's stand-in key instead;
+// packaged builds keep the keychain.
+if (!app.isPackaged && process.platform === "darwin") {
+	app.commandLine.appendSwitch("use-mock-keychain");
+}
+
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
 // Notification.isSupported() still returns true but show() silently drops the
