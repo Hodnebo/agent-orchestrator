@@ -116,6 +116,8 @@
 	"agentSwitch.busy": "El agente está trabajando. Cambia cuando esté inactivo.",
 	"agentSwitch.switchTerminalTo": "Cambiar este terminal a {{target}}",
 	"agentSwitch.switchToChat": "Cambiar a la vista de chat",
+	"agentSwitch.switched": "Cambiado",
+	"agentSwitch.switchedFromTo": "Cambiado de {{from}} a {{to}}",
 	"session.statusChecking": "Comprobando…",
 	"session.statusUnavailable": "No se puede verificar",
 	"artifactLink.unavailable": "Artefacto no disponible",

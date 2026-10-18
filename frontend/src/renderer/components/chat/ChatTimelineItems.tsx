@@ -370,12 +370,16 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 
 /** Where one agent handed the conversation to another. */
 export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
 	const detail = activity.detail;
+	const label = detail?.sourceHarness && detail.targetHarness
+		? t("agentSwitch.switchedFromTo", { from: agentLabel(detail.sourceHarness), to: agentLabel(detail.targetHarness) })
+		: t("agentSwitch.switched");
 	return (
-		<div className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+		<div role="separator" aria-label={label} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
 			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
 			<ArrowLeftRight aria-hidden="true" className="size-3 shrink-0" />
-			<span className="shrink-0">Context handoff</span>
+			<span className="shrink-0">{t("agentSwitch.switched")}</span>
 			{detail?.sourceHarness && detail.targetHarness ? (
 				<>
 					<HandoffSide harness={detail.sourceHarness} model={detail.sourceModel} />

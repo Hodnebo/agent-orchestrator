@@ -116,6 +116,8 @@
 	"agentSwitch.busy": "에이전트가 작업 중입니다. 대기 상태일 때 전환하세요.",
 	"agentSwitch.switchTerminalTo": "이 터미널을 {{target}}(으)로 전환",
 	"agentSwitch.switchToChat": "채팅 UI로 전환",
+	"agentSwitch.switched": "전환됨",
+	"agentSwitch.switchedFromTo": "{{from}}에서 {{to}}(으)로 전환됨",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",
 	"artifactLink.unavailable": "아티팩트를 사용할 수 없음",
