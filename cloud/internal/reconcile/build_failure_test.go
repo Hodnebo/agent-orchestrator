@@ -520,3 +520,38 @@ func TestFailedBuildIsDescribedOnceWhenReported(t *testing.T) {
 		}
 	}
 }
+
+// Parking suppresses Starts, never Stops: AO-managed compute of a parked
+// session that something restarted is stopped again; a customer's own is left
+// alone, and already-stopped compute gets no new stop.
+func TestParkedSessionStopsRestartedManagedCompute(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		connectionID string
+		state        string
+		wantStops    int
+	}{
+		{name: "managed running", state: sandbox.StateRunning, wantStops: 1},
+		{name: "managed starting", state: sandbox.StateProvisioning, wantStops: 1},
+		{name: "managed stopped", state: sandbox.StateStopped, wantStops: 0},
+		{name: "bring your own running", connectionID: "connection-1", state: sandbox.StateRunning, wantStops: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &lifecycleStore{}
+			provider := &buildFailureProvider{lifecycleProvider: lifecycleProvider{
+				environment: sandbox.Environment{ID: "workspace-1", State: test.state},
+			}}
+			if err := testReconciler(store, provider).reconcileSandbox(
+				context.Background(), parkedRecord("workspace-1", test.connectionID),
+			); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if provider.stops != test.wantStops || provider.starts != 0 ||
+				strings.Join(store.observations, ",") != domain.SandboxObservedTerminated {
+				t.Fatalf("stops = %d starts = %d observations = %v; want %d stops, still parked",
+					provider.stops, provider.starts, store.observations, test.wantStops)
+			}
+		})
+	}
+}

@@ -571,8 +571,14 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 	// running, too, until a user retry or a resume reopens its startup window:
 	// any wake (opening the session, a terminal, Chat) would otherwise restart
 	// a stopped workspace or retry a create the user has not asked for.
+	// Parking suppresses Starts and Creates, never Stops: AO-managed compute
+	// of a session parked with a running intent is stopped again if something
+	// restarted it, as each (daily) re-park always did.
 	if record.ObservedState == domain.SandboxObservedTerminated &&
 		(record.DesiredState != domain.SandboxDesiredRunning || parkedAfterStartupFailure(record)) {
+		if record.DesiredState == domain.SandboxDesiredRunning {
+			r.stopParkedCompute(ctx, record, provider)
+		}
 		return r.observe(ctx, record, record.ProviderEnvironmentID,
 			domain.SandboxObservedTerminated, record.LastError, 24*time.Hour)
 	}
@@ -1368,6 +1374,36 @@ func (r *Reconciler) bootstrapFailed(
 			domain.SandboxObservedProvisioning, err.Error(), notReadyRetryInterval)
 	}
 	return r.fail(ctx, record, err)
+}
+
+// stopParkedCompute stops the AO-managed compute of a parked session if it is
+// running again. It is best effort (the next re-park tries again) and never
+// touches an organization's own compute.
+func (r *Reconciler) stopParkedCompute(ctx context.Context, record domain.Sandbox, provider sandbox.Provider) {
+	if record.ProviderEnvironmentID == "" || customerOwnedCompute(record) {
+		return
+	}
+	environment, err := provider.Get(ctx, sandbox.ID(record.ProviderEnvironmentID))
+	if errors.Is(err, sandbox.ErrNotFound) {
+		return
+	}
+	if err != nil {
+		r.log.WarnContext(ctx, "probe parked sandbox", "session_id", record.SessionID, "err", err)
+		return
+	}
+	switch environment.State {
+	case sandbox.StateStopped, sandbox.StatePaused, sandbox.StateDeleted, sandbox.StateDeleting:
+		return
+	}
+	r.log.WarnContext(ctx, "stopping compute of a parked sandbox",
+		"session_id", record.SessionID,
+		"provider", record.Provider,
+		"provider_id", environment.ID,
+		"provider_state", environment.State,
+	)
+	if err := provider.Stop(ctx, environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+		r.log.WarnContext(ctx, "stop parked sandbox", "session_id", record.SessionID, "err", err)
+	}
 }
 
 // parkedAfterStartupFailure reports whether a sandbox whose worker never
