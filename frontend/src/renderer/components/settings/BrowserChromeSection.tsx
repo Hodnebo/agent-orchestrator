@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
+import { useUiStore, type GlobalSettingsSection } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -11,6 +12,26 @@ import { SettingsSection } from "./SettingsSection";
 type ChromeStatus = components["schemas"]["ControllersBrowserChromeStatusResponse"];
 
 export const browserChromeQueryKey = ["browser-chrome"] as const;
+
+const SECTION_ID = "browserChrome";
+
+/**
+ * Open Settings → Browser and bring "Agents in your Chrome" into view. The
+ * section renders after the page switches, so wait for it briefly.
+ */
+export function openChromeAgentsSettings(open: (section?: GlobalSettingsSection) => void): void {
+	open("browserProfiles");
+	const deadline = Date.now() + 1_500;
+	const reveal = () => {
+		const section = document.querySelector<HTMLElement>(`[data-section="${SECTION_ID}"]`);
+		if (section) {
+			section.scrollIntoView?.({ block: "start", behavior: "smooth" });
+			return;
+		}
+		if (Date.now() < deadline) requestAnimationFrame(reveal);
+	};
+	requestAnimationFrame(reveal);
+}
 
 const previewStatus: ChromeStatus = {
 	enabled: false,
@@ -34,6 +55,7 @@ async function fetchChromeStatus(): Promise<ChromeStatus> {
 // loading the unpacked extension is the user's own step in chrome://extensions.
 export function BrowserChromeSection() {
 	const { t } = useTranslation();
+	const developerMode = useUiStore((state) => state.developerMode);
 	const queryClient = useQueryClient();
 	const [copied, setCopied] = useState(false);
 	const query = useQuery({ queryKey: browserChromeQueryKey, queryFn: fetchChromeStatus, refetchInterval: 3000 });
@@ -66,8 +88,11 @@ export function BrowserChromeSection() {
 		setTimeout(() => setCopied(false), 1500);
 	};
 
+	// A developer-mode feature; stays visible once set up so Remove is reachable.
+	if (!developerMode && !status?.enabled) return null;
+
 	return (
-		<SettingsSection title={t("settings.browserChrome.title")} sectionId="browserChrome" grouped>
+		<SettingsSection title={t("settings.browserChrome.title")} sectionId={SECTION_ID} grouped>
 			<SettingsRow
 				label={t("settings.browserChrome.mode")}
 				description={
