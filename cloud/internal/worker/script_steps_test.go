@@ -1,0 +1,437 @@
+package worker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"unicode/utf8"
+)
+
+// stepRecorder collects the events a Setup run publishes.
+type stepRecorder struct {
+	mu     sync.Mutex
+	events []ScriptStepEvent
+}
+
+func (r *stepRecorder) publish(_ context.Context, event ScriptStepEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+	return nil
+}
+
+func (r *stepRecorder) all() []ScriptStepEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ScriptStepEvent(nil), r.events...)
+}
+
+// finals returns each step's last event, by step.
+func finals(events []ScriptStepEvent) map[int]ScriptStepEvent {
+	last := map[int]ScriptStepEvent{}
+	for _, event := range events {
+		last[event.Step] = event
+	}
+	return last
+}
+
+func runSetupWithSteps(t *testing.T, runner SetupRunner, commands []string) (SetupEvent, []ScriptStepEvent) {
+	t.Helper()
+	recorder := &stepRecorder{}
+	if runner.Publish == nil {
+		runner.Publish = recorder.publish
+	}
+	if runner.DataDir == "" {
+		runner.DataDir = t.TempDir()
+	}
+	runner.FirstStart = true
+	workspace := t.TempDir()
+	event, ran := runner.Run(context.Background(), commands, workspace, scriptEnvironment(workspace))
+	if !ran {
+		t.Fatal("setup did not run")
+	}
+	return event, recorder.all()
+}
+
+// Every step reports its start and its outcome with its output, all under one
+// run, in order; a successful step's output is published too.
+func TestSetupStepEventsReportEachStep(t *testing.T) {
+	t.Parallel()
+	summary, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 20 * time.Millisecond},
+		[]string{"echo one", " ", "echo   two >&2"})
+	if summary.Status != SetupSucceeded || summary.Output != "" {
+		t.Fatalf("summary = %+v; the workspace.setup event must not change", summary)
+	}
+	if len(events) < 4 {
+		t.Fatalf("events = %+v, want a start and an outcome per step", events)
+	}
+	runID := events[0].RunID
+	previousStep := 0
+	finished := map[int]bool{}
+	for _, event := range events {
+		if !ValidScriptStepEvent(event) {
+			t.Fatalf("invalid event %+v", event)
+		}
+		if event.Phase != ScriptPhaseSetup || event.RunID != runID || runID == "" || event.Total != 2 {
+			t.Fatalf("event %+v does not belong to the run", event)
+		}
+		if event.Step < previousStep || finished[event.Step] {
+			t.Fatalf("event %+v out of order in %+v", event, events)
+		}
+		previousStep = event.Step
+		if event.Status != ScriptStepRunning {
+			finished[event.Step] = true
+		}
+	}
+	if events[0].Status != ScriptStepRunning || events[0].Output != "" || events[0].StartedAt == "" {
+		t.Fatalf("first event = %+v, want step 1 running with no output", events[0])
+	}
+	last := finals(events)
+	for step, want := range map[int]string{1: "one", 2: "two"} {
+		event := last[step]
+		if event.Status != SetupSucceeded || *event.ExitCode != 0 || event.DurationMS == nil ||
+			event.Output != want || event.OutputTruncated || event.LogPath == "" {
+			t.Fatalf("step %d = %+v", step, event)
+		}
+		if _, err := time.Parse(time.RFC3339, event.StartedAt); err != nil {
+			t.Fatalf("startedAt %q: %v", event.StartedAt, err)
+		}
+		if event.User != "" || event.Hint != "" {
+			t.Fatalf("a successful step carries failure context: %+v", event)
+		}
+	}
+	if last[2].Command != "echo two >&2" || last[2].Repository != "" {
+		t.Fatalf("step 2 command = %q (%q)", last[2].Command, last[2].Repository)
+	}
+}
+
+// A failed step reports its exit status, output and context, and every step
+// after it is reported once as skipped, never as running.
+func TestSetupStepEventsFailureSkipsTheRest(t *testing.T) {
+	t.Parallel()
+	summary, events := runSetupWithSteps(t, SetupRunner{},
+		[]string{"true", "echo installing; echo broken >&2; exit 3", "touch never-ran", "echo later"})
+	if summary.Status != SetupFailed || summary.Step != 2 || summary.ExitCode != 3 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	counts := map[int]int{}
+	for _, event := range events {
+		counts[event.Step]++
+		if event.Step > 2 && event.Status != ScriptStepSkipped {
+			t.Fatalf("step %d reported %q after the failure", event.Step, event.Status)
+		}
+	}
+	if counts[3] != 1 || counts[4] != 1 {
+		t.Fatalf("skipped steps reported %d and %d times, want once each", counts[3], counts[4])
+	}
+	last := finals(events)
+	failed := last[2]
+	if failed.Status != SetupFailed || *failed.ExitCode != 3 || failed.Output != "installing\nbroken" ||
+		failed.User == "" || failed.Dir == "" || failed.LogPath == "" {
+		t.Fatalf("failed step = %+v", failed)
+	}
+	for _, step := range []int{3, 4} {
+		skipped := last[step]
+		if skipped.ExitCode != nil || skipped.DurationMS != nil || skipped.StartedAt != "" ||
+			skipped.Command == "" || skipped.Total != 4 {
+			t.Fatalf("skipped step %d = %+v", step, skipped)
+		}
+	}
+	if events[len(events)-1].Step != 4 {
+		t.Fatalf("the skipped steps must come last: %+v", events)
+	}
+}
+
+func TestSetupStepEventsTimeout(t *testing.T) {
+	t.Parallel()
+	_, events := runSetupWithSteps(t, SetupRunner{StepTimeout: 300 * time.Millisecond},
+		[]string{"echo started; sleep 30 & wait", "true"})
+	last := finals(events)
+	if timedOut := last[1]; timedOut.Status != SetupTimedOut || *timedOut.ExitCode != -1 || timedOut.Output != "started" {
+		t.Fatalf("timed out step = %+v", timedOut)
+	}
+	if last[2].Status != ScriptStepSkipped {
+		t.Fatalf("step after the timeout = %+v", last[2])
+	}
+}
+
+// A running step sends updates as its output grows; each carries the whole
+// tail so far, and none follows the step's final event.
+func TestSetupStepEventsLiveUpdates(t *testing.T) {
+	t.Parallel()
+	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 50 * time.Millisecond},
+		[]string{"for i in 1 2 3 4 5 6; do echo line$i; sleep 0.15; done"})
+	var updates []string
+	for _, event := range events {
+		if event.Status == ScriptStepRunning && event.Output != "" {
+			updates = append(updates, event.Output)
+		}
+	}
+	if len(updates) < 2 {
+		t.Fatalf("live updates = %q, want several while the step ran", updates)
+	}
+	for index := 1; index < len(updates); index++ {
+		if !strings.HasPrefix(updates[index], updates[index-1]) || updates[index] == updates[index-1] {
+			t.Fatalf("updates %q: each must extend the previous one and only be sent on a change", updates)
+		}
+	}
+	if final := events[len(events)-1]; final.Status != SetupSucceeded || !strings.HasSuffix(final.Output, "line6") {
+		t.Fatalf("last event = %+v", final)
+	}
+}
+
+// Publishing never holds up Setup: a control plane that takes seconds per
+// event leaves the steps' timing alone, live updates coalesce to the newest,
+// and the run waits only briefly for the rest to be sent.
+func TestSetupStepEventsNeverWaitOnPublishing(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	slow := func(ctx context.Context, _ ScriptStepEvent) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	started := time.Now()
+	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: slow, UpdateInterval: 10 * time.Millisecond},
+		[]string{"for i in 1 2 3 4 5; do echo $i; sleep 0.05; done", "echo two", "echo three"})
+	elapsed := time.Since(started)
+	mu.Lock()
+	stalledCalls := calls
+	mu.Unlock()
+	close(release)
+	if summary.Status != SetupSucceeded {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if elapsed > scriptStepFlushWait+2*time.Second {
+		t.Fatalf("setup took %s with a stalled control plane", elapsed)
+	}
+	if stalledCalls != 1 {
+		t.Fatalf("publish calls while the first was stalled = %d, want 1 (the rest wait, coalesced)", stalledCalls)
+	}
+}
+
+// The publisher coalesces live updates to the newest, drops one that fails,
+// retries a step's final event, and sends nothing more once the control plane
+// refuses the event type.
+func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	var sent []string
+	failures := map[string]int{"final-1": 2, "live-2b": 1}
+	publish := func(_ context.Context, event ScriptStepEvent) error {
+		if event.Output == "live-1a" {
+			<-gate
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if failures[event.Output] > 0 {
+			failures[event.Output]--
+			sent = append(sent, "failed:"+event.Output)
+			return errors.New("network")
+		}
+		sent = append(sent, event.Output)
+		return nil
+	}
+	publisher := newScriptStepPublisher(context.Background(), publish, time.Millisecond)
+	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1a"})
+	time.Sleep(20 * time.Millisecond)
+	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1b"})
+	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1c"})
+	publisher.final(ScriptStepEvent{Step: 1, Output: "final-1"})
+	publisher.update(ScriptStepEvent{Step: 2, Output: "live-2a"})
+	publisher.update(ScriptStepEvent{Step: 2, Output: "live-2b"})
+	close(gate)
+	time.Sleep(50 * time.Millisecond)
+	publisher.final(ScriptStepEvent{Step: 2, Output: "final-2"})
+	publisher.close(time.Second)
+	mu.Lock()
+	got := strings.Join(sent, " ")
+	mu.Unlock()
+	want := "live-1a failed:final-1 failed:final-1 final-1 failed:live-2b final-2"
+	if got != want {
+		t.Fatalf("sent %q, want %q", got, want)
+	}
+
+	calls := 0
+	refused := newScriptStepPublisher(context.Background(), func(context.Context, ScriptStepEvent) error {
+		calls++
+		return ErrScriptStepsUnsupported
+	}, time.Millisecond)
+	refused.update(ScriptStepEvent{Step: 1})
+	time.Sleep(20 * time.Millisecond)
+	refused.final(ScriptStepEvent{Step: 1})
+	refused.final(ScriptStepEvent{Step: 2, Status: ScriptStepSkipped})
+	refused.close(time.Second)
+	if calls != 1 {
+		t.Fatalf("calls after the control plane refused the event type = %d, want 1", calls)
+	}
+}
+
+// A control plane from before live logs refuses the event type: Setup runs
+// and reports its outcome exactly as before, after one refused send.
+func TestSetupWithAControlPlaneThatRefusesStepEvents(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	calls := 0
+	refuse := func(context.Context, ScriptStepEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return ErrScriptStepsUnsupported
+	}
+	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: refuse}, []string{"true", "exit 2", "true"})
+	if summary.Status != SetupFailed || summary.Step != 2 || summary.ExitCode != 2 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("sends = %d, want 1", calls)
+	}
+}
+
+// A Setup that already ran (or has nothing to run) sends no step events.
+func TestSetupStepEventsNotSentWhenSetupIsSkipped(t *testing.T) {
+	t.Parallel()
+	dataDir := t.TempDir()
+	runSetupWithSteps(t, SetupRunner{DataDir: dataDir}, []string{"true"})
+	recorder := &stepRecorder{}
+	workspace := t.TempDir()
+	if _, ran := (SetupRunner{DataDir: dataDir, FirstStart: true, Publish: recorder.publish}).Run(
+		context.Background(), []string{"true"}, workspace, scriptEnvironment(workspace)); ran {
+		t.Fatal("setup ran twice")
+	}
+	if events := recorder.all(); len(events) != 0 {
+		t.Fatalf("events for a skipped setup: %+v", events)
+	}
+}
+
+// Credentials never leave the sandbox in a step's output or command: token
+// shapes, values of secret-named variables (including AO's own token) and
+// secret key/value pairs; terminal escapes are removed.
+func TestSetupStepEventsRedactSecrets(t *testing.T) {
+	secrets := map[string]string{
+		"github":     "ghp_" + strings.Repeat("a1B2", 9),
+		"github_pat": "github_pat_" + strings.Repeat("Z9y8", 8),
+		"openai":     "sk-" + strings.Repeat("q7W", 9),
+		"aws":        "AKIA" + strings.Repeat("ABCD", 4),
+		"slack":      "xoxb-" + strings.Repeat("12345-", 3) + "abcdef",
+		"jwt":        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+		"env_token":  "plain-opaque-token-value",
+		"env_pass":   "hunter2hunter2",
+		"env_key":    "0123456789abcdef-key",
+		"worker":     "aow1.eyJvcmdJZCI6Im8ifQ.c2lnbmF0dXJlLXZhbHVl",
+		"extra":      "session-scoped-opaque-42",
+	}
+	t.Setenv("MY_SERVICE_TOKEN", secrets["env_token"])
+	t.Setenv("DB_PASSWORD", secrets["env_pass"])
+	t.Setenv("STRIPE_KEY", secrets["env_key"])
+	commands := []string{
+		"echo " + secrets["github"] + " >/dev/null; printf '\\033[31mred\\033[0m\\n'",
+		strings.Join([]string{
+			"echo " + secrets["github_pat"], "echo " + secrets["openai"], "echo " + secrets["aws"],
+			"echo " + secrets["slack"], "echo " + secrets["jwt"], `echo "$MY_SERVICE_TOKEN"`,
+			`echo "pw=$DB_PASSWORD"`, `echo "$STRIPE_KEY"`, "echo " + secrets["worker"],
+			"echo " + secrets["extra"], "echo api_key=visible-only-to-the-sandbox", "exit 1",
+		}, "; "),
+	}
+	_, events := runSetupWithSteps(t, SetupRunner{
+		UpdateInterval: 10 * time.Millisecond,
+		Secrets:        func() []string { return []string{secrets["extra"]} },
+	}, commands)
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, secret := range secrets {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("%s secret %q published in %s", name, secret, encoded)
+		}
+	}
+	if strings.Contains(string(encoded), "visible-only-to-the-sandbox") {
+		t.Fatal("a secret key/value pair was published")
+	}
+	last := finals(events)
+	if last[1].Output != "red" || strings.Contains(string(encoded), `\u001b`) {
+		t.Fatalf("step 1 output = %q; terminal escapes must be removed", last[1].Output)
+	}
+	if !strings.Contains(last[1].Command, "[REDACTED]") || !strings.Contains(last[2].Output, "[REDACTED]") {
+		t.Fatalf("redaction markers missing: command %q, output %q", last[1].Command, last[2].Output)
+	}
+}
+
+// A long output is cut to the last 16 KiB on a line start, never splitting a
+// character, and marked truncated; progress redraws keep their last state.
+func TestSetupStepEventsKeepTheTailOfLongOutput(t *testing.T) {
+	t.Parallel()
+	_, events := runSetupWithSteps(t, SetupRunner{},
+		[]string{"i=0; while [ $i -lt 2000 ]; do echo \"ligne $i éèà\"; i=$((i+1)); done; printf '10%%\\r50%%\\r100%%\\n'; echo the-end"})
+	final := finals(events)[1]
+	if !final.OutputTruncated || len(final.Output) > ScriptStepOutputLimit || !utf8.ValidString(final.Output) {
+		t.Fatalf("output (%d bytes, truncated %v) not bounded", len(final.Output), final.OutputTruncated)
+	}
+	if !strings.HasPrefix(final.Output, "ligne ") || !strings.HasSuffix(final.Output, "éèà\n100%\nthe-end") {
+		t.Fatalf("output starts %q and ends %q", final.Output[:20], final.Output[len(final.Output)-40:])
+	}
+}
+
+// Escaping can grow an output severalfold in JSON; the event still fits the
+// control plane's body limit.
+func TestScriptStepEventFitsTheEventBodyLimit(t *testing.T) {
+	t.Parallel()
+	event := fitScriptStepEvent(ScriptStepEvent{
+		Phase: ScriptPhaseSetup, RunID: "run", Step: 1, Total: 1, Status: ScriptStepRunning,
+		Output: strings.Repeat("<&>\"", ScriptStepOutputLimit/4),
+	})
+	encoded, _ := json.Marshal(EventRequest{Type: ScriptStepEventType, Payload: event})
+	if len(encoded) > 24<<10 || !event.OutputTruncated || event.Output == "" {
+		t.Fatalf("encoded %d bytes (truncated %v, %d bytes of output)", len(encoded), event.OutputTruncated, len(event.Output))
+	}
+}
+
+// A secret cut in half where the raw tail starts is not published.
+func TestScriptStepOutputDropsAPartialFirstLine(t *testing.T) {
+	t.Parallel()
+	output, truncated := scriptRedactor{}.scriptStepOutput("1B2a1B2a1B2a1B2a1B2a1B2\nnext line\n", true)
+	if output != "next line" || !truncated {
+		t.Fatalf("output = %q (truncated %v)", output, truncated)
+	}
+}
+
+func TestValidScriptStepEvent(t *testing.T) {
+	t.Parallel()
+	zero, duration := 0, int64(5)
+	valid := ScriptStepEvent{Phase: ScriptPhaseSetup, RunID: "r", Step: 1, Total: 2, Status: SetupSucceeded, ExitCode: &zero, DurationMS: &duration}
+	if !ValidScriptStepEvent(valid) {
+		t.Fatal("a finished step was refused")
+	}
+	for name, mutate := range map[string]func(*ScriptStepEvent){
+		"phase":           func(e *ScriptStepEvent) { e.Phase = "teardown" },
+		"run":             func(e *ScriptStepEvent) { e.RunID = " " },
+		"step":            func(e *ScriptStepEvent) { e.Step = 0 },
+		"total":           func(e *ScriptStepEvent) { e.Total = 0 },
+		"status":          func(e *ScriptStepEvent) { e.Status = "done" },
+		"no exit code":    func(e *ScriptStepEvent) { e.ExitCode = nil },
+		"running exit":    func(e *ScriptStepEvent) { e.Status = ScriptStepRunning },
+		"started at":      func(e *ScriptStepEvent) { e.StartedAt = "yesterday" },
+		"negative length": func(e *ScriptStepEvent) { negative := int64(-1); e.DurationMS = &negative },
+	} {
+		event := valid
+		mutate(&event)
+		if ValidScriptStepEvent(event) {
+			t.Fatalf("%s: %+v accepted", name, event)
+		}
+	}
+}

@@ -46,6 +46,9 @@ const (
 	// as a local project reads its current config at removal time.
 	CleanupHookFile     = "cleanup-hook.sh"
 	CleanupCommandsFile = "cleanup-commands.sh"
+	// CleanupHookOutputLimit bounds the output tail the Cleanup hook prints
+	// for the control plane, which splits it into the run's step events.
+	CleanupHookOutputLimit = 64 << 10
 	// cleanupStateDir, in the worker data directory, makes Cleanup run at most
 	// once per workspace: the first hook run creates it and records the
 	// outcome there, and any later run (another control-plane replica, a
@@ -203,6 +206,18 @@ type SetupRunner struct {
 	FirstStart bool
 	// StepTimeout overrides ProjectScriptStepTimeout for tests.
 	StepTimeout time.Duration
+	// Publish, when set, receives the run's ScriptStepEventType events: each
+	// step's start, live updates of its output while it runs, its final
+	// outcome, and the steps a failure skipped. It is called from its own
+	// goroutine, so a slow or failing control plane never holds up a step;
+	// it returns ErrScriptStepsUnsupported when the control plane refuses
+	// the event type.
+	Publish func(context.Context, ScriptStepEvent) error
+	// Secrets returns credentials the step's environment does not name
+	// (the worker's token), masked in the published output and commands.
+	Secrets func() []string
+	// UpdateInterval overrides liveUpdateInterval for tests.
+	UpdateInterval time.Duration
 }
 
 // Run runs commands in order in dir with `sh -c`, stopping at the first one
@@ -239,6 +254,8 @@ func (r SetupRunner) Run(
 	if err := os.MkdirAll(logs, 0o700); err != nil {
 		logs = ""
 	}
+	steps := r.startStepEvents(ctx, len(commands))
+	defer steps.close()
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
 	for index, command := range commands {
@@ -246,11 +263,11 @@ func (r SetupRunner) Run(
 		if logs != "" {
 			logPath = filepath.Join(logs, "step-"+strconv.Itoa(index+1)+".log")
 		}
-		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath)
-		// Only a failure carries output: it is what the startup screen shows to
-		// fix the step. A successful Setup's output (often secrets a step
-		// loaded or printed) is never published to the session's events; it
-		// stays in the step's log inside the sandbox.
+		live := steps.start(index+1, command, logPath)
+		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath, live)
+		// Only a failure carries output in the summary event: it is what the
+		// startup screen shows to fix the step. Each step's own events carry
+		// its redacted output (setupStepEvents).
 		if step.Status != SetupSucceeded {
 			step.Step = index + 1
 			step.DurationMS = time.Since(started).Milliseconds()
@@ -267,8 +284,11 @@ func (r SetupRunner) Run(
 				}
 			}
 			step.Hint = ScriptFailureHint(step.Output, step.ExitCode, step.User)
+			steps.finish(step)
+			steps.skip(commands[index+1:])
 			return step, true
 		}
+		steps.finish(step)
 	}
 	event.DurationMS = time.Since(started).Milliseconds()
 	r.writeMarker(marker)
@@ -300,6 +320,7 @@ func runProjectScriptStep(
 	dir string,
 	environment map[string]string,
 	logPath string,
+	live io.Writer,
 ) SetupEvent {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -307,12 +328,19 @@ func runProjectScriptStep(
 	process.Dir = dir
 	process.Env = mergeEnvironment(os.Environ(), environment)
 	output := &tailBuffer{limit: ProjectScriptOutputLimit}
-	var sink io.Writer = output
+	sinks := []io.Writer{output}
+	if live != nil {
+		sinks = append(sinks, live)
+	}
 	if logPath != "" {
 		if file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err == nil {
 			defer file.Close()
-			sink = io.MultiWriter(output, &cappedFile{file: file, left: scriptLogLimit})
+			sinks = append(sinks, &cappedFile{file: file, left: scriptLogLimit})
 		}
+	}
+	var sink io.Writer = output
+	if len(sinks) > 1 {
+		sink = io.MultiWriter(sinks...)
 	}
 	process.Stdout = sink
 	process.Stderr = sink
@@ -386,23 +414,49 @@ func (b *tailBuffer) String() string { return b.data.String() }
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
 // command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
 // timeout(1) is available, stopping at the first failure with that command's
-// status. With no commands it does nothing.
-func CleanupCommandsScript(commands []string) string {
+// status. With no commands it does nothing. Around each command it prints a
+// start and an end marker line carrying nonce (NewScriptMarkerNonce), which
+// the control plane parses into the run's step events
+// (CleanupStepEvents); the commands, their order, environment and exit
+// status are the same as without them.
+func CleanupCommandsScript(commands []string, nonce string) string {
 	seconds := strconv.Itoa(int(ProjectScriptStepTimeout / time.Second))
+	commands = nonEmptyCommands(commands)
+	total := strconv.Itoa(len(commands))
+	marker := scriptMarkerPrefix + nonce + " "
 	var steps strings.Builder
 	steps.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
 	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")
-	for index, command := range nonEmptyCommands(commands) {
+	if len(commands) > 0 {
+		// Milliseconds since the epoch: from nanoseconds when date has %N (16
+		// digits or more), else from seconds, else 0; never anything that
+		// would stop the script.
+		steps.WriteString("ao_ms() { ao_t=$(date +%s%N 2>/dev/null) || ao_t=\n" +
+			"  case \"$ao_t\" in *[!0-9]*) ao_t= ;; ????????????????*) ao_t=${ao_t%??????} ;; *) ao_t= ;; esac\n" +
+			"  [ -n \"$ao_t\" ] || ao_t=$(date +%s 2>/dev/null)000\n" +
+			"  case \"$ao_t\" in ''|*[!0-9]*) ao_t=0 ;; esac\n" +
+			"  echo \"$ao_t\"\n}\n")
+		steps.WriteString("printf '%s\\n' " + shellQuote(marker+"log") + "\" $(dirname \"$0\")/" + cleanupStateDir + "/output\"\n")
+	}
+	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
-		summary, _ := scriptCommandSummary(command)
+		summary, repository := scriptCommandSummary(command)
+		if repository == "" {
+			repository = scriptMarkerMainRepository
+		}
+		steps.WriteString("ao_started=$(ao_ms)\n")
+		steps.WriteString("printf '%s %s %s\\n' " + shellQuote(marker+step+" "+total+" start") + " \"$ao_started\" " +
+			shellQuote(repository+" "+summary) + "\n")
 		steps.WriteString("$ao_timeout sh -c " + shellQuote(command) + " </dev/null\n")
+		end := "echo \"" + marker + step + " " + total + " end $ao_code $(($(ao_ms) - $ao_started))\"\n"
 		// Say which step, what it ran, and as whom and where, so a failure in
 		// the logs needs no trip into the sandbox.
 		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then\n" +
 			"  echo \"cleanup step " + step + " failed: exit status $ao_code\" >&2\n" +
 			"  echo " + shellQuote("cleanup step "+step+": "+summary) + " >&2\n" +
 			"  echo \"ran as $(id -un 2>/dev/null) (groups: $(id -Gn 2>/dev/null)) in $(pwd)\" >&2\n" +
-			"  exit \"$ao_code\"\nfi\n")
+			"  " + end +
+			"  exit \"$ao_code\"\nfi\n" + end)
 	}
 	return steps.String()
 }
@@ -418,7 +472,7 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(commandsPath, []byte(CleanupCommandsScript(commands)), 0o600); err != nil {
+	if err := writeFileAtomic(commandsPath, []byte(CleanupCommandsScript(commands, NewScriptMarkerNonce())), 0o600); err != nil {
 		return err
 	}
 	state := filepath.Join(dataDir, cleanupStateDir)
@@ -442,7 +496,7 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	}
 	content.WriteString("sh " + shellQuote(commandsPath) + " >>\"$ao_state/output\" 2>&1\n" +
 		"ao_code=$?\n" +
-		"tail -c " + strconv.Itoa(ProjectScriptOutputLimit) + " \"$ao_state/output\"\n" +
+		"tail -c " + strconv.Itoa(CleanupHookOutputLimit) + " \"$ao_state/output\"\n" +
 		"if [ \"$ao_code\" -ne 0 ]; then echo \"full cleanup output: $ao_state/output\"; fi\n" +
 		"echo \"$ao_code\" >\"$ao_state/status\"\n" +
 		"exit \"$ao_code\"\n")

@@ -266,7 +266,7 @@ const cleanupPayloadLimit = 12 << 10
 func cleanupCommandsPayload(commands []string) (string, bool) {
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
-	if _, err := writer.Write([]byte(worker.CleanupCommandsScript(commands))); err != nil {
+	if _, err := writer.Write([]byte(worker.CleanupCommandsScript(commands, ""))); err != nil {
 		return "", false
 	}
 	if err := writer.Close(); err != nil {
