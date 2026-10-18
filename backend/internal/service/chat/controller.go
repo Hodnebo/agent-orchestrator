@@ -280,6 +280,8 @@ type Controller struct {
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
 	preserveProviderOnStop bool
+	transportInterrupted   bool
+	explicitClose          bool
 
 	// account, threadState and mcpServers are merged here before being written,
 	// because the provider reports each of them in pieces: account/updated carries
@@ -2656,6 +2658,9 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 // their historical process-close behavior. The persistent host replays detached
 // output and unresolved provider requests to the replacement controller.
 func (c *Controller) Close(ctx context.Context) error {
+	c.mu.Lock()
+	c.explicitClose = true
+	c.mu.Unlock()
 	c.once.Do(func() {
 		if preserver, ok := c.conv.(ports.ChatProviderPreserver); ok && preserver.PreservesProviderOnClose() {
 			c.mu.Lock()
@@ -2680,6 +2685,7 @@ func (c *Controller) Close(ctx context.Context) error {
 // and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
 	c.mu.Lock()
+	c.explicitClose = true
 	if c.forkCancel != nil {
 		c.forkCancel()
 	}
@@ -2752,6 +2758,8 @@ func (c *Controller) project() {
 			// A lost attachment is not proof the persistent provider stopped. Keep
 			// its turn/request correlation and queued intake for a replacement.
 			c.mu.Lock()
+			preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
+			c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
 			c.preserveProviderOnStop = true
 			c.state = ports.ChatControllerStopped
 			suppressStoppedActivity := c.suppressStoppedActivity

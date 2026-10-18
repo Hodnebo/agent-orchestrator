@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+
 	jsonschema "github.com/swaggest/jsonschema-go"
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
@@ -155,6 +157,19 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainAwakeState":                                     "AwakeState",
+	"DomainAwakeSettings":                                  "AwakeSettings",
+	"DomainAwakeSession":                                   "AwakeSession",
+	"DomainAwakeRule":                                      "AwakeRule",
+	"DomainAwakeCondition":                                 "AwakeCondition",
+	"DomainAwakeCapability":                                "AwakeCapability",
+	"DomainAwakeObservation":                               "AwakeObservation",
+	"DomainAwakeApplication":                               "AwakeApplication",
+	"DomainStartAwakeRequest":                              "StartAwakeRequest",
+	"ControllersAwakeIDParam":                              "AwakeIDParam",
+	"ControllersExtendAwakeRequest":                        "ExtendAwakeRequest",
+	"ControllersAwakeRulesRequest":                         "AwakeRulesRequest",
+	"ControllersAwakeDownloadsRequest":                     "AwakeDownloadsRequest",
 	"DomainHarnessDefault":                                 "HarnessDefault",
 	"ControllersUpdateHarnessDefaultRequest":               "UpdateHarnessDefaultRequest",
 	"ControllersSettingsResponse":                          "SettingsResponse",
@@ -683,6 +698,7 @@ func operations() []operation {
 	ops = append(ops, fsOperations()...)
 	ops = append(ops, devOperations()...)
 	ops = append(ops, mobileOperations()...)
+	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
@@ -2806,6 +2822,26 @@ func sessionOperations() []operation {
 			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/agent-browser/*", id: "getSessionAgentBrowser", tag: "sessions",
+			summary:      "Proxy the host's agent browser stream viewer (page, stream socket, downloads)",
+			pathParams:   []any{controllers.SessionIDParam{}},
+			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
+			contentTypes: map[int]string{http.StatusOK: "text/html", http.StatusBadGateway: "text/plain"},
+		},
+		{
+			method: http.MethodHead, path: "/api/v1/sessions/{sessionId}/agent-browser/*", id: "headSessionAgentBrowser", tag: "sessions",
+			summary:    "Read headers from the host's agent browser stream viewer",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/agent-browser/*", id: "postSessionAgentBrowser", tag: "sessions",
+			summary:      "Upload a file into the host's agent browser",
+			pathParams:   []any{controllers.SessionIDParam{}},
+			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
+			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",
 			summary:    "Write images into a running session's worktree and return their paths",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -3421,5 +3457,27 @@ func prOperations() []operation {
 			summary: "List repositories accessible with the stored GitHub token",
 			resps:   []respUnit{{http.StatusOK, map[string]any{"repos": []githubpat.Repo{}}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
 		},
+	}
+}
+
+func awakeOperations() []operation {
+	common := func(method, path, id string, body any, params []any) operation {
+		return operation{method: method, path: path, id: id, tag: "settings", summary: "Manage desktop Stay Awake", reqBody: body, pathParams: params, resps: []respUnit{{http.StatusOK, domain.AwakeState{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}}
+	}
+	return []operation{
+		common(http.MethodGet, "/api/v1/awake", "getAwake", nil, nil),
+		common(http.MethodGet, "/api/v1/awake/observations", "observeAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/sessions", "startAwake", domain.StartAwakeRequest{}, nil),
+		common(http.MethodPost, "/api/v1/awake/sessions/{awakeId}/end", "endAwake", nil, []any{controllers.AwakeIDParam{}}),
+		common(http.MethodPost, "/api/v1/awake/sessions/{awakeId}/extend", "extendAwake", controllers.ExtendAwakeRequest{}, []any{controllers.AwakeIDParam{}}),
+		common(http.MethodPut, "/api/v1/awake/settings", "setAwakeSettings", domain.AwakeSettings{}, nil),
+		common(http.MethodPut, "/api/v1/awake/rules", "setAwakeRules", controllers.AwakeRulesRequest{}, nil),
+		common(http.MethodPost, "/api/v1/awake/low-power/authorize", "authorizeAwakeLowPower", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/low-power/revoke", "revokeAwakeLowPower", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/stop", "stopAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/resume", "resumeAwake", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/recover", "recoverAwake", nil, nil),
+		common(http.MethodDelete, "/api/v1/awake/history", "clearAwakeHistory", nil, nil),
+		common(http.MethodPost, "/api/v1/awake/downloads", "awakeDownloads", controllers.AwakeDownloadsRequest{}, nil),
 	}
 }
