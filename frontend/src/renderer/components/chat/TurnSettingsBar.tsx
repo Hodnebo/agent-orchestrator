@@ -62,7 +62,7 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
-const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string }> = {
+const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: string }> = {
 	...APPROVAL_COPY,
 	default: { label: "Ask for approval" },
 	"bypass-permissions": { label: "Auto-approve" },
