@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -168,6 +169,26 @@ func TestReliableDeliveryRetainsStableDerivedEventsAndReceiptOrder(t *testing.T)
 		} else if !reflect.DeepEqual(original, events) {
 			t.Fatalf("replayed derived events changed identities or content:\noriginal %#v\nreplayed %#v", original, events)
 		}
+	}
+}
+
+func TestReliableAcknowledgmentIdentifiesActualTransportLoss(t *testing.T) {
+	c, server := reliableTestConversation(t)
+	pushReliable(t, server, "host:1", false, `{"method":"hook/started","params":{"threadId":"thread-1","turnId":"turn-1"}}`)
+	event := collectReliable(t, c, 1)[0]
+	if err := c.conn.closeWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
+		t.Fatalf("derived event identity attempted a transport acknowledgment: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.AcknowledgeProviderEvent(cancelled, event.ProviderReceiptID); !errors.Is(err, context.Canceled) || errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("caller cancellation classified as a disconnected host: %v", err)
+	}
+	if err := c.AcknowledgeProviderEvent(context.Background(), event.ProviderReceiptID); !errors.Is(err, ports.ErrChatRecoveryInconclusive) || !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("actual acknowledgment write failure lost transport proof: %v", err)
 	}
 }
 

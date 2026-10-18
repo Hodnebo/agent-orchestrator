@@ -1064,7 +1064,7 @@ func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, receiptID s
 		return nil
 	}
 	if err := c.conn.notify(persistenthost.CodexAckMethod, map[string]string{"eventId": receiptID}); err != nil {
-		return err
+		return fmt.Errorf("%w: acknowledge persistent Codex event: %w", ports.ErrChatRecoveryInconclusive, err)
 	}
 	c.mu.Lock()
 	delete(c.receipts, receiptID)

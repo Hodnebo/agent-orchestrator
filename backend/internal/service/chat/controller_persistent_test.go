@@ -402,3 +402,144 @@ func TestFencedPersistentProjectionNeverAcknowledgesOrPromotesQueue(t *testing.T
 		})
 	}
 }
+
+func TestAwakeReconnectCandidatesRequireObservedTransportLoss(t *testing.T) {
+	for _, deliberate := range []bool{false, true} {
+		t.Run(map[bool]string{false: "lost attachment", true: "explicit close"}[deliberate], func(t *testing.T) {
+			provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+			h := newHarnessWithConversation(t, provider)
+			if got := h.svc.InterruptedAwakeAgents(); len(got) != 0 {
+				t.Fatal("live controller offered as interrupted")
+			}
+			if deliberate {
+				if err := h.ctrl.Close(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				provider.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped, Err: ports.ErrChatRecoveryInconclusive})
+				_ = provider.Close()
+				h.ctrl.Wait()
+			}
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				got := h.svc.InterruptedAwakeAgents()
+				if !deliberate && len(got) == 1 {
+					if got[0].SessionID != testSession || got[0].Owner.ControllerGeneration != h.ctrl.Generation() || got[0].Owner.ProviderConversationID != h.ctrl.ProviderConversationID() {
+						t.Fatalf("candidate lost provider identity: %+v", got)
+					}
+					return
+				}
+				if deliberate && len(got) > 0 {
+					t.Fatal("explicit close offered for automatic reconnect")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !deliberate {
+				t.Fatal("observed loss did not retain a recovery candidate")
+			}
+		})
+	}
+}
+
+func TestAwakeReconnectProofIsInvalidatedByExplicitStop(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerStopped, Err: ports.ErrChatRecoveryInconclusive})
+	_ = provider.Close()
+	h.ctrl.Wait()
+	var target domain.AwakeAgentTarget
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if list := h.svc.InterruptedAwakeAgents(); len(list) == 1 {
+			target = list[0]
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if target.SessionID == "" {
+		t.Fatal("missing interrupted proof")
+	}
+	if err := h.svc.Stop(context.Background(), testSession); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.svc.InterruptedAwakeAgents()) != 0 {
+		t.Fatal("explicit stop retained recovery proof")
+	}
+	_, err := h.svc.Start(context.Background(), chatsvc.StartConfig{SessionID: testSession, Harness: domain.HarnessCodex, ReconnectOnly: true, AwakeReconnectTarget: &target, ExpectedControllerOwner: target.Owner, ProviderConversationID: target.Owner.ProviderConversationID})
+	if !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+		t.Fatalf("stale proof reached provider startup: %v", err)
+	}
+}
+
+func TestAwakeReconnectRequiresACKTransportFailureProof(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ackErr        error
+		databaseFails bool
+		fenced        bool
+		explicitClose bool
+		wantCandidate bool
+	}{
+		{name: "observed ACK disconnect", ackErr: fmt.Errorf("write receipt: %w", ports.ErrChatRecoveryInconclusive), wantCandidate: true},
+		{name: "ordinary ACK failure", ackErr: context.Canceled},
+		{name: "database failure", databaseFails: true},
+		{name: "fenced controller", fenced: true},
+		{name: "explicit close during ACK disconnect", ackErr: ports.ErrChatRecoveryInconclusive, explicitClose: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ackStarted, releaseACK := make(chan struct{}), make(chan struct{})
+			provider := &receiptConversation{
+				terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+				ack: func(string) error {
+					close(ackStarted)
+					if tc.explicitClose {
+						<-releaseACK
+					}
+					return tc.ackErr
+				},
+			}
+			provider.closeStarted = make(chan struct{})
+			h := newHarnessWithConversationAndStore(t, provider, func(st *sqlite.Store) chatsvc.Store {
+				if tc.databaseFails {
+					flaky := &flakyReceiptStore{Store: st}
+					flaky.failures.Store(-1)
+					return flaky
+				}
+				return st
+			})
+			if tc.fenced {
+				if err := h.st.ClaimChatControllerGeneration(ctx, testSession, "replacement"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			provider.emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "answer", ProviderEventID: "output", ProviderReceiptID: "output-frame", Delta: "answer"})
+			if tc.explicitClose {
+				select {
+				case <-ackStarted:
+				case <-time.After(3 * time.Second):
+					t.Fatal("ACK did not start")
+				}
+				closed := make(chan error, 1)
+				go func() { closed <- h.ctrl.Close(ctx) }()
+				<-provider.closeStarted
+				close(releaseACK)
+				if err := <-closed; err != nil {
+					t.Fatal(err)
+				}
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := h.svc.Controller(testSession); errors.Is(err, chatsvc.ErrNoController) {
+					got := h.svc.InterruptedAwakeAgents()
+					if (len(got) == 1) != tc.wantCandidate {
+						t.Fatalf("interrupted candidates = %+v, want observed loss=%v", got, tc.wantCandidate)
+					}
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatal("failed projection did not leave the controller registry")
+		})
+	}
+}
