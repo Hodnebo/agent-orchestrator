@@ -36,6 +36,9 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 		},
 		ValidateTurnSettings: validateTurnSettings,
 		VersionProbe:         versionProbe,
+		// Cursor has no session/close and ignores stdin closing; it exits on
+		// SIGTERM in about 50ms.
+		QuickStop: true,
 	}, log)
 }
 

@@ -25,6 +25,11 @@ import (
 const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
+	// sessionCloseWait bounds the session/close sent before a provider is
+	// terminated; an answered close lets the host stop the provider sooner. A
+	// QuickStop provider gets quickSessionCloseWait.
+	sessionCloseWait      = 2 * time.Second
+	quickSessionCloseWait = 500 * time.Millisecond
 )
 
 var (
@@ -1155,8 +1160,16 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), 2*time.Second)
-			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
+			// The provider may save its session state while answering, so it gets
+			// a bounded wait before it is terminated (gracefully first).
+			wait := sessionCloseWait
+			if c.proc != nil && c.proc.quickStop.Load() {
+				wait = quickSessionCloseWait
+			}
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), wait)
+			if _, err := c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)}); err == nil && c.proc != nil {
+				c.proc.quickStop.Store(true)
+			}
 			cancelClose()
 		}
 		if persistent {

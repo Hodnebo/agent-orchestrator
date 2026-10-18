@@ -119,6 +119,11 @@ type Config struct {
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
+	// QuickStop marks a provider whose stop gains nothing from waiting: it
+	// keeps its session saved after every turn, or never reacts to stdin
+	// closing. It gets a short session/close wait and is signalled after
+	// providerQuickGrace instead of the full stdin grace.
+	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
@@ -768,7 +773,13 @@ func (d *Driver) connectProcess(
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
-	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
+	if d.cfg.QuickStop {
+		proc.quickStop.Store(true)
+	}
+	proc.terminate = persistentTerminate(gate, transport.Stdin, &proc.quickStop, func(shutdownCtx context.Context, quick bool) error {
+		if quick {
+			return persistenthost.ShutdownQuick(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
+		}
 		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
 	})
 	return proc, nil
