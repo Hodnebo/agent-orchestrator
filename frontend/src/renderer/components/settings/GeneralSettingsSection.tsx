@@ -9,6 +9,9 @@ import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { openChromeAgentsSettings } from "./BrowserChromeSection";
+import { Button } from "../ui/button";
+import { ArrowRight } from "lucide-react";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -254,6 +257,7 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
 	);
@@ -316,6 +320,23 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
+ * browser settings, so this row only takes the user there.
+ */
+function ChromeAgentsRow() {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	return (
+		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
+			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
+				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
 		</SettingsRow>
 	);
 }
