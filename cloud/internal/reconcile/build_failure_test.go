@@ -350,9 +350,9 @@ func TestCreateFailureIsBoundedByStartupBudget(t *testing.T) {
 			}
 			if test.wantErrors > 0 {
 				got := store.startupErrors[0]
+				// The raw API response is for operators, never the message.
 				if got.code != sandbox.StartupErrorWorkspaceCreateFailed ||
-					!strings.HasPrefix(got.message, "AO couldn't create this session's workspace: coder: API returned 400") ||
-					strings.Contains(got.message, "abc123secretvalue") {
+					got.message != "AO couldn't create this session's workspace. Try again shortly." {
 					t.Fatalf("startup error = %+v", got)
 				}
 			}
@@ -463,5 +463,60 @@ func TestParkedUncreatedSessionStaysParkedOnWake(t *testing.T) {
 	}
 	if provider.creates != 0 || strings.Join(store.observations, ",") != domain.SandboxObservedTerminated {
 		t.Fatalf("creates = %d observations = %v, want still parked", provider.creates, store.observations)
+	}
+}
+
+// A customer's own Coder is told to look at the details, which carry Coder's
+// (redacted) response; a network error is still not the message.
+func TestCreateFailureOnCustomerCoderPointsAtDetails(t *testing.T) {
+	t.Parallel()
+	got := createFailedError(domain.Sandbox{Provider: sandbox.ProviderCoder, ProviderConnectionID: "connection-1"},
+		errors.New("dial tcp 10.0.3.7:443: connect: connection refused"))
+	if got.Code != sandbox.StartupErrorWorkspaceCreateFailed || strings.Contains(got.Message, "10.0.3.7") ||
+		!strings.Contains(got.Message, "your Coder deployment") || got.Err == nil {
+		t.Fatalf("startup error = %+v", got)
+	}
+}
+
+// describingProvider explains failures, recording how it was asked.
+type describingProvider struct {
+	buildFailureProvider
+	describes     int
+	customerOwned []bool
+}
+
+func (p *describingProvider) DescribeFailure(_ context.Context, _ sandbox.ID, failure sandbox.Failure, customerOwned bool) *sandbox.StartupError {
+	p.describes++
+	p.customerOwned = append(p.customerOwned, customerOwned)
+	message := "managed reason"
+	if customerOwned {
+		message = "customer reason"
+	}
+	return &sandbox.StartupError{Code: failure.Err.Code, Message: message}
+}
+
+// The provider explains a failure only when it is reported (it may read
+// logs), told whether the compute is the customer's own.
+func TestFailedBuildIsDescribedOnceWhenReported(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		connectionID string
+		want         string
+	}{{"", "managed reason"}, {"connection-1", "customer reason"}} {
+		record := startingRecord(test.connectionID)
+		store := &markingStore{record: &record}
+		provider := &describingProvider{buildFailureProvider: buildFailureProvider{lifecycleProvider: lifecycleProvider{
+			environment: failedBuildEnvironment(failedBuildID),
+		}}}
+		reconciler := testReconciler(store, provider)
+		for range 3 {
+			if err := reconciler.reconcileSandbox(context.Background(), record); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			record.ObservedState = domain.SandboxObservedTerminated
+		}
+		if provider.describes != 1 || len(store.startupErrors) != 1 || store.startupErrors[0].message != test.want {
+			t.Fatalf("%q: describes = %d startup errors = %+v", test.connectionID, provider.describes, store.startupErrors)
+		}
 	}
 }

@@ -82,8 +82,21 @@ type Failure struct {
 	// ID identifies the failed operation (the Coder build id), so the
 	// reconciler acts on each failure once, without comparing clocks.
 	ID string
-	// Err is the user-facing reason, code StartupErrorWorkspaceBuildFailed.
+	// Canceled is set when the operation was canceled rather than failing.
+	Canceled bool
+	// Err is a generic user-facing reason, code StartupErrorWorkspaceBuildFailed.
+	// A FailureDescriber gives a specific one when the failure is reported.
 	Err *StartupError
+}
+
+// FailureDescriber is an optional provider capability that explains a failed
+// operation the reconciler is about to report. It is called once per failure,
+// so it may read provider logs. customerOwned is set for an organization's own
+// compute, whose provider errors the user may see; for AO-operated compute the
+// message must not reveal AO's infrastructure, and the provider's own words go
+// only in Err, for operators.
+type FailureDescriber interface {
+	DescribeFailure(ctx context.Context, id ID, failure Failure, customerOwned bool) *StartupError
 }
 
 // DeadlineExtender is an optional provider capability. The reconciler uses it

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
@@ -1467,15 +1466,39 @@ func (r *Reconciler) reconcileBuildFailure(
 		); err != nil {
 			return true, err
 		}
+		cause := r.describeFailure(ctx, record, environment.ID, *failure, provider)
 		r.log.WarnContext(ctx, "sandbox workspace build failed",
 			"session_id", record.SessionID,
 			"provider", record.Provider,
 			"provider_id", environment.ID,
 			"failed_build", failure.ID,
-			"reason", failure.Err.Message,
+			"err", cause,
 		)
-		return true, r.terminate(ctx, record, environment, provider, failure.Err)
+		return true, r.terminate(ctx, record, environment, provider, cause)
 	}
+}
+
+// describeFailure is the reason a failed build is reported with: the
+// provider's explanation (which may read its logs, so it is asked only here,
+// once per failure), or the generic reason the failure carries.
+func (r *Reconciler) describeFailure(
+	ctx context.Context,
+	record domain.Sandbox,
+	id sandbox.ID,
+	failure sandbox.Failure,
+	provider sandbox.Provider,
+) *sandbox.StartupError {
+	describer, ok := provider.(sandbox.FailureDescriber)
+	if !ok {
+		return failure.Err
+	}
+	describeCtx, cancel := context.WithTimeout(ctx, diagnoseTimeout)
+	defer cancel()
+	if described := describer.DescribeFailure(describeCtx, id, failure, customerOwnedCompute(record)); described != nil &&
+		described.Code != "" && described.Message != "" {
+		return described
+	}
+	return failure.Err
 }
 
 // awaitingCreate reports whether the sandbox has been trying to get compute
@@ -1507,7 +1530,7 @@ func (r *Reconciler) boundCreate(ctx context.Context, record domain.Sandbox, cau
 	if !awaitingCreate(record) {
 		return false, nil
 	}
-	startupErr := createFailedError(cause)
+	startupErr := createFailedError(record, cause)
 	if r.terminalStartupDeadlineElapsed(record) {
 		ceiling := r.terminalStartupTimeout(record)
 		r.recordActivity(ctx, record, domain.ActivitySandboxTerminated, map[string]any{
@@ -1532,28 +1555,23 @@ func (r *Reconciler) boundCreate(ctx context.Context, record domain.Sandbox, cau
 }
 
 // createFailedError is the user-facing reason a sandbox's compute could not
-// be created. A provider error that already explains itself is kept.
-func createFailedError(cause error) *sandbox.StartupError {
+// be created. A provider error that already explains itself is kept. The raw
+// error (an API response, a network failure) is never shown: it stays in Err,
+// which reaches the operator logs and, for an organization's own compute
+// only, the startup error's detail.
+func createFailedError(record domain.Sandbox, cause error) *sandbox.StartupError {
 	var startupErr *sandbox.StartupError
 	if errors.As(cause, &startupErr) && startupErr.Code != "" && startupErr.Message != "" {
 		return startupErr
 	}
-	message := "AO couldn't create this session's workspace."
-	if errors.Is(cause, sandbox.ErrAtCapacity) {
-		message = "The sandbox provider had no capacity for this session's workspace."
-	} else if reason := oneLineExcerpt(cause.Error(), 300); reason != "" {
-		message = "AO couldn't create this session's workspace: " + reason
+	message := "AO couldn't create this session's workspace. Try again shortly."
+	switch {
+	case errors.Is(cause, sandbox.ErrAtCapacity):
+		message = "The sandbox provider had no capacity for this session's workspace. Try again shortly."
+	case customerOwnedCompute(record) && record.Provider == sandbox.ProviderCoder:
+		message = "AO couldn't create this session's workspace on your Coder deployment. The details show Coder's response."
 	}
 	return &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceCreateFailed, Message: message, Err: cause}
-}
-
-// oneLineExcerpt is text redacted, on one line, and cut to at most limit bytes.
-func oneLineExcerpt(text string, limit int) string {
-	text = strings.Join(strings.Fields(activity.Excerpt(text, 0)), " ")
-	if len(text) <= limit {
-		return text
-	}
-	return strings.ToValidUTF8(text[:limit-3], "") + "..."
 }
 
 // recordStartupError stores err's user-facing reason, when it carries one.
