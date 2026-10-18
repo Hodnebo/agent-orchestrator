@@ -1027,11 +1027,49 @@ export function AssistantMessage({
 }
 
 
-export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
+/** What the live row says the agent is doing right now, in the words its own row uses. */
+export function liveTaskLabel(activity: ConversationActivity): string {
+	if (activity.activityKind === "reasoning") return "Thinking";
+	if (activity.activityKind === "auto_review") return "Reviewing";
+	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
+	return splitSummary(activity).label;
+}
+
+/**
+ * A provider retry, split for display: the attempt count up front and the reason
+ * behind it, so "Reconnecting… 4/5" reads as a state and the 401 as its detail.
+ * Codex puts the whole error in the summary; Claude keeps the reason in `text`.
+ */
+export function reconnectCopy(activity: ConversationActivity): { label: string; detail?: string } {
+	const summary = activity.summary.trim();
+	const text = activity.detail?.text?.trim() || undefined;
+	const match = /(\d+)\s*(?:\/|of)\s*(\d+)/.exec(summary);
+	if (!match) return { label: summary || "Reconnecting…", detail: text };
+	const rest = summary.slice(match.index + match[0].length).replace(/^[\s.:,;—–-]+/, "").trim();
+	return { label: `Reconnecting… ${match[1]}/${match[2]}`, detail: text ?? (rest || undefined) };
+}
+
+const LIVE_RECONNECT_CHIP =
+	"inline-flex max-w-full items-center gap-1.5 rounded-md bg-warning/10 px-1.5 py-px text-xs font-medium text-warning";
+
+/**
+ * The live edge of a turn: the orb, what the agent is doing, and for how long.
+ *
+ * It sits at the end of the turn and follows the work down. It says only what the
+ * reader cannot see for themselves: the orb is the liveness, the label the current
+ * step (or the retry the provider is on), the timer the duration. No "Working for":
+ * when the turn settles this row fades out where it is and "Worked for" opens at the
+ * top of the turn, so nothing appears to travel between the two.
+ */
+export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, reconnect, children }: {
 	startedAt?: string;
-	settling?: boolean;
+	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
 	failed?: boolean;
+	/** What the agent is doing right now, named the way its activity row names it. */
+	task?: string;
+	/** The provider is retrying; the row says so in place of the task. */
+	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
 	const reducedMotion = useReducedMotion();
@@ -1041,43 +1079,62 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 	}, [startedAt]);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
-		if (settling) {
-			// The interval stops while settling; refresh once so the frozen label
-			// matches the final duration instead of lagging up to a second.
-			setNow(Date.now());
-			return;
-		}
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(timer);
-	}, [settling]);
+	}, []);
 	const elapsedMs = Math.max(0, now - started);
-	// Settling animates opacity and transform only, never layout, so it stays smooth
-	// even when the main thread is busy finishing the turn. These are keyframe
-	// animations rather than transitions so they also play when the row first
-	// mounts already settled. The orb shrinks and fades in place while the label
-	// slides left by the orb's footprint (20px + 6px gap), so "Worked for" ends flush
-	// with the turn's text before the row hands over. The label keeps its shimmer class
-	// throughout (only the highlight fades), so the text never changes paint
-	// technique and cannot blink.
+	const label = startupLabel ?? reconnect?.label ?? task;
 	return (
 		<div className="min-w-0">
-			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0">
-				<span
-					aria-hidden={settling || undefined}
-					data-settling={settling || undefined}
-					className="chat-working-spinner-slot flex shrink-0 origin-center"
-				>
+			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
+				<span aria-hidden="true" className="flex shrink-0">
 					{failed ? <X className="size-3 text-destructive" /> : <ThinkingOrb />}
 				</span>
 				<span
 					role={failed ? "alert" : "status"}
 					data-testid="live-working-label"
-					data-settling={settling || undefined}
-					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
+					className="flex min-w-0 items-center gap-2 text-sm"
 				>
-					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
+					{/* The label swaps as the agent moves between steps; a short crossfade keeps
+					    that from reading as a flicker, and popLayout keeps the two from stacking. */}
+					<AnimatePresence initial={false} mode="popLayout">
+						{label ? (
+							<motion.span
+								key={label}
+								initial={reducedMotion ? false : { opacity: 0, y: 2 }}
+								animate={{ opacity: 1, y: 0 }}
+								exit={{ opacity: 0, transition: { duration: reducedMotion ? 0 : 0.1 } }}
+								transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+								className="min-w-0 truncate"
+								data-testid="live-working-task"
+							>
+								{reconnect && !startupLabel ? (
+									<span className={LIVE_RECONNECT_CHIP}>
+										<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
+										<span className="truncate">{label}</span>
+									</span>
+								) : (
+									<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
+								)}
+							</motion.span>
+						) : null}
+					</AnimatePresence>
+					{startupLabel ? null : (
+						<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
+							{formatDuration(elapsedMs)}
+						</span>
+					)}
 				</span>
 			</div>
+			{reconnect?.detail && !startupLabel ? (
+				<p
+					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					title={reconnect.detail}
+					data-testid="live-turn-status"
+				>
+					{linkifiedProviderErrorText(reconnect.detail)}
+				</p>
+			) : null}
 			<AnimatePresence initial={false}>
 				{children ? (
 					<motion.div
@@ -1236,6 +1293,11 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
 	// list: no rule above it and no inset, so it lines up with the turn's text.
 	const notice = activity.activityKind === "system" && activity.detail?.event === "provider.failure";
+	// Only a retry with an attempt count splits; other provider notes keep their summary
+	// whole, and their reason stays behind the disclosure like any other row's.
+	const retry = notice ? reconnectCopy(activity) : undefined;
+	const noticeLabel = retry?.label.startsWith("Reconnecting…") ? retry.label : undefined;
+	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
 	// Live output is only live if it is on screen, so a command that is still
@@ -1310,12 +1372,16 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 										? "font-normal text-muted-foreground"
 										: "text-foreground"),
 						)}
-						title={compactSummary ? undefined : label}
+						title={compactSummary ? undefined : noticeLabel ?? label}
 					>
-						<ActivityTitle text={label} />
+						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
 				)}
-				{path && !singleEdit ? (
+				{noticeDetail ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
+						{noticeDetail}
+					</span>
+				) : path && !singleEdit ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}

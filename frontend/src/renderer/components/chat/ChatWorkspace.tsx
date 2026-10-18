@@ -124,6 +124,8 @@ import {
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
+	liveTaskLabel,
+	reconnectCopy,
 	type TurnOutcomeRetryControl,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -4261,16 +4263,21 @@ const TurnGroup = memo(function TurnGroup({
 	// folding away with the routine work.
 	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
-	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
-	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
-	useEffect(() => {
-		if (group.live) {
-			setShowSettledStatus(false);
-			return;
-		}
-		const timer = window.setTimeout(() => setShowSettledStatus(true), 440);
-		return () => window.clearTimeout(timer);
-	}, [group.live]);
+	// What the live row names: the step the agent is on right now. Items the user acts
+	// on (approvals, questions) are not work, and a provider retry has its own slot.
+	const currentTask = group.live
+		? [...group.items]
+				.reverse()
+				.find(
+					(item): item is ConversationActivity =>
+						item.kind === "activity" &&
+						item.status === "running" &&
+						item.activityKind !== "plan" &&
+						item.activityKind !== "approval" &&
+						item.activityKind !== "user_input" &&
+						item.detail?.event !== "provider.failure",
+				)
+		: undefined;
 	const renderRun = (run: TimelineRun) =>
 		run.kind === "activities" ? (
 			<ActivityRun
@@ -4324,41 +4331,55 @@ const TurnGroup = memo(function TurnGroup({
 	// when the turn settles: the final answer leaving the worked runs, or a notice
 	// moving out from among them, does not remount it or drop the reader's selection.
 	const body: ReactNode[] = humanRuns.map(renderRun);
-	// The Working row sits at the end of the live turn, under what the agent has
-	// written so far, where the reader is already looking. A live provider failure
-	// replaces it with its reconnect card, and a turn that stops without an outcome
-	// (cancelled) has no settled row to hand over to. The setup checklist shares the
-	// row, so the handoff from setup to work does not move anything.
+	// The live row sits at the end of the turn, under what the agent has written so
+	// far, where the reader is already looking: orb, current step, timer. A provider
+	// retry shows in the same row. The setup checklist shares it too, so the handoff
+	// from setup to work does not move anything.
 	const workingRow =
-		startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus))) ? (
+		startup || group.live ? (
 			<LiveResponseStatus
 				startedAt={group.liveStartedAt}
-				settling={!startup && !group.live}
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
+				task={currentTask ? liveTaskLabel(currentTask) : undefined}
+				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup ? <SessionStartup {...startup} /> : null}
 			</LiveResponseStatus>
 		) : null;
-	const outcome = showSettledStatus ? group.outcome : undefined;
-	if (outcome) {
-		const disclosureKey = `${group.key}:worked`;
-		body.push(
-			<TurnWorkSummary
-				key="turn-worked"
-				durationMs={outcome.durationMs}
-				open={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-			>
-				{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
-			</TurnWorkSummary>,
-		);
-	}
-	// While the agent works, and through the handoff to "Worked for", its steps scroll
-	// in a window that follows the newest one. The reply being written stays outside
-	// at full size, so streaming text is never squeezed into the window. Once the turn
-	// settles the window fades away beneath "Worked for", which holds the same work.
-	const windowed = group.live || (Boolean(group.outcome) && !showSettledStatus);
+	const outcome = group.outcome;
+	// "Worked for" opens where the live window was, over the same beat the window
+	// folds, so the top of the turn reads as the work collapsing into its summary
+	// rather than one line appearing while another vanishes. A settled turn loaded
+	// from history mounts it without the animation. The wrapper's own gutter keeps
+	// the summary's hover wash, which overhangs by 4px, inside the clip.
+	const disclosureKey = `${group.key}:worked`;
+	body.push(
+		<AnimatePresence key="turn-worked" initial={false}>
+			{outcome ? (
+				<motion.div
+					key="turn-worked-summary"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="-mx-1 overflow-hidden px-1"
+				>
+					<TurnWorkSummary
+						durationMs={outcome.durationMs}
+						open={Boolean(activityDisclosureOverrides[disclosureKey])}
+						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
+					>
+						{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+					</TurnWorkSummary>
+				</motion.div>
+			) : null}
+		</AnimatePresence>,
+	);
+	// While the agent works, its steps scroll in a window that follows the newest one.
+	// The reply being written stays outside at full size, so streaming text is never
+	// squeezed into the window. Once the turn settles the window folds away beneath
+	// "Worked for", which holds the same work.
+	const windowed = group.live;
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
 	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
@@ -4414,7 +4435,7 @@ const TurnGroup = memo(function TurnGroup({
 					</motion.div>
 				) : null}
 			</AnimatePresence>
-			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
+			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
 			{/* No assistant prose to hang the undo on — still offer it so a tool-only
 			    turn is not stuck without a way back. A stopped or failed turn carries
 			    it on its outcome's row instead. */}
@@ -4439,47 +4460,14 @@ const TurnGroup = memo(function TurnGroup({
 	);
 });
 
-function TurnLiveStatus({
-	blocked,
-	providerFailure,
-}: {
-	blocked?: boolean;
-	providerFailure?: ConversationActivity;
-}) {
-	if (blocked) {
-		return (
-			<span role="alert" className="sr-only">
-				The agent is waiting for your decision.
-			</span>
-		);
-	}
-	if (providerFailure) {
-		return (
-			<div
-				role="status"
-				aria-live="polite"
-				className="flex min-h-8 items-start gap-2 px-1 py-1"
-				data-testid="live-turn-status"
-			>
-				<TriangleAlert
-					aria-hidden="true"
-					className="mt-0.5 size-3.5 shrink-0 text-warning"
-				/>
-				<span className="flex min-w-0 flex-col gap-0.5">
-					<strong className="text-xs font-medium text-warning">
-						{providerFailure.summary}
-					</strong>
-					{providerFailure.detail?.text ? (
-						<span className="text-xs leading-snug text-muted-foreground">
-							{providerFailure.detail.text}
-						</span>
-					) : null}
-				</span>
-			</div>
-		);
-	}
-
-	return null;
+/** The one live state that has no row of its own: a decision the reader has to make. */
+function TurnLiveStatus({ blocked }: { blocked?: boolean }) {
+	if (!blocked) return null;
+	return (
+		<span role="alert" className="sr-only">
+			The agent is waiting for your decision.
+		</span>
+	);
 }
 
 function TimelineItem({

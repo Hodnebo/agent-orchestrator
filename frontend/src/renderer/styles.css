@@ -1896,10 +1896,9 @@ textarea,
 	to { background-position: -400px center; }
 }
 
-/* Live "Working for" label: solid muted text with a soft brighter band sweeping across it.
-   The muted layer keeps every glyph painted; the band fades in and out so it has no hard edge.
-   The band's strength is a registered property so it can fade out when the turn settles
-   without the text ever switching paint technique (which would blink). */
+/* Live status label (the chat's current step, a board card's working state): solid
+   muted text with a soft brighter band sweeping across it. The muted layer keeps every
+   glyph painted; the band fades in and out so it has no hard edge. */
 @property --working-shimmer {
 	syntax: "<number>";
 	inherits: false;
@@ -1920,29 +1919,6 @@ textarea,
 	will-change: transform;
 }
 
-/* Settling: the highlight fades, the label slides over the spinner's footprint, the
-   spinner shrinks away. Keyframes (not transitions) so a row that first mounts
-   already settled still plays them. */
-.chat-working-shimmer[data-settling] {
-	animation:
-		chat-working-shimmer 2.4s ease-in-out infinite,
-		chat-working-shift 400ms cubic-bezier(0.22, 1, 0.36, 1) both,
-		chat-working-fade 300ms ease-out both;
-}
-
-.chat-working-spinner-slot {
-	will-change: transform, opacity;
-}
-
-.chat-working-spinner-slot[data-settling] {
-	animation: chat-working-close 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes chat-working-close {
-	from { opacity: 1; transform: scale(1); }
-	to { opacity: 0; transform: scale(0); }
-}
-
 /* Streamed prose: each newly revealed character fades in once, on mount (see
    lib/rehype-stream-fade.ts). */
 .stream-char {
@@ -1953,35 +1929,16 @@ textarea,
 	from { opacity: 0; }
 }
 
-@keyframes chat-working-shift {
-	from { transform: translateX(0); }
-	to { transform: translateX(-26px); }
-}
-
-@keyframes chat-working-fade {
-	from { --working-shimmer: 1; }
-	to { --working-shimmer: 0; }
-}
-
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
 	to { background-position: 110% center, 0 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.chat-working-shimmer,
-	.chat-working-shimmer[data-settling] {
+	.chat-working-shimmer {
 		animation: none;
 		background: none;
 		color: var(--color-muted-foreground);
-	}
-	.chat-working-shimmer[data-settling] {
-		transform: translateX(-26px);
-	}
-	.chat-working-spinner-slot[data-settling] {
-		animation: none;
-		opacity: 0;
-		transform: scale(0);
 	}
 }
 
