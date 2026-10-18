@@ -119,10 +119,13 @@ type WorkspaceStartupEvent struct {
 // SessionScriptEnvironment is the AO_* environment a Setup or Cleanup command
 // sees.
 type SessionScriptEnvironment struct {
-	SessionID     string
-	SessionKind   string
-	Branch        string
-	WorkspaceDir  string
+	SessionID    string
+	SessionKind  string
+	Branch       string
+	WorkspaceDir string
+	// ReposRoot is the folder that holds the session's checkouts: the main
+	// repository's and each additional repository's beside it.
+	ReposRoot     string
 	RepositoryURL string
 	ProjectID     string
 	ProjectName   string
@@ -132,8 +135,15 @@ type SessionScriptEnvironment struct {
 // AO_SOURCE_TREE_PATH are the variables a local project's scripts use. A
 // cloud session has no separate source tree (its checkout is the only copy of
 // the repository in the sandbox), so both name the session's workspace.
+// AO_REPOS_ROOT is the folder that holds every checkout of a project with
+// additional repositories, each in its own folder (see ExtraRepoPath).
 func (e SessionScriptEnvironment) Map() map[string]string {
+	reposRoot := e.ReposRoot
+	if reposRoot == "" && e.WorkspaceDir != "" {
+		reposRoot = filepath.Dir(e.WorkspaceDir)
+	}
 	return map[string]string{
+		"AO_REPOS_ROOT":       reposRoot,
 		"AO_SESSION_ID":       e.SessionID,
 		"AO_SESSION_KIND":     e.SessionKind,
 		"AO_SESSION_BRANCH":   e.Branch,

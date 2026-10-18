@@ -188,3 +188,42 @@ func TestSetupRunsOnlyForTheSessionsFirstPreparation(t *testing.T) {
 		t.Fatal("Setup ran again after it succeeded")
 	}
 }
+
+// Setup and Cleanup of a project with additional repositories reach every
+// checkout through AO_REPOS_ROOT, the folder that holds them all.
+func TestScriptEnvironmentNamesTheReposRoot(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	root := t.TempDir()
+	workspace := filepath.Join(root, "repository")
+	if err := os.MkdirAll(filepath.Join(root, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	environment := scriptEnvironment(workspace)
+	if got := environment.Map()["AO_REPOS_ROOT"]; got != root {
+		t.Fatalf("AO_REPOS_ROOT = %q, want the workspace's parent %q", got, root)
+	}
+	environment.ReposRoot = root
+	dataDir := t.TempDir()
+	event, ran := SetupRunner{DataDir: dataDir, FirstStart: true}.Run(context.Background(),
+		[]string{`ls "$AO_REPOS_ROOT" > "$AO_REPOS_ROOT/api/listing"`}, workspace, environment)
+	if !ran || event.Status != SetupSucceeded {
+		t.Fatalf("event = %+v, ran = %v", event, ran)
+	}
+	listing, err := os.ReadFile(filepath.Join(root, "api", "listing"))
+	if err != nil || !strings.Contains(string(listing), "api") || !strings.Contains(string(listing), "repository") {
+		t.Fatalf("listing = %q (%v), want both checkouts", listing, err)
+	}
+	if err := WriteCleanupHook(dataDir, nil, workspace, environment); err != nil {
+		t.Fatal(err)
+	}
+	hook, err := os.ReadFile(filepath.Join(dataDir, CleanupHookFile))
+	if err != nil || !strings.Contains(string(hook), "export AO_REPOS_ROOT=") {
+		t.Fatalf("cleanup hook does not export AO_REPOS_ROOT: %s (%v)", hook, err)
+	}
+}

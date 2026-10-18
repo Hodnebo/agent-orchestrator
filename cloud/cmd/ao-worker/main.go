@@ -209,6 +209,7 @@ func run(logger *slog.Logger) error {
 		SessionKind:   bootstrap.Launch.Kind,
 		Branch:        bootstrap.Launch.Branch,
 		WorkspaceDir:  workspace,
+		ReposRoot:     filepath.Dir(workspace),
 		RepositoryURL: bootstrap.Launch.RepositoryURL,
 		ProjectID:     bootstrap.Launch.ProjectID,
 		ProjectName:   bootstrap.Launch.ProjectName,
