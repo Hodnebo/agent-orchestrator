@@ -792,6 +792,8 @@ export interface CloudCpWorkspaceReviewResponse {
 export interface CloudCpWorkspaceRepository {
 	/** The folder it is checked out into; the `repository` parameter for a sibling. */
 	name: string;
+	/** The name to show when it differs from the folder (the main repository's own name). */
+	label?: string;
 	/** owner/name on GitHub, when known. */
 	repository?: string;
 	branch?: string;

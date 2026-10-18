@@ -65,7 +65,10 @@ type Supervisor struct {
 	// Repositories are the session's additional repository checkouts beside
 	// Workspace (worker.SessionRepoCheckouts without the main one). Workspace
 	// requests select one with "repository".
-	Repositories        []worker.RepoCheckout
+	Repositories []worker.RepoCheckout
+	// MainRepository is the main repository's identity (URL and GitHub
+	// owner/name); its Name and Path are always the Workspace folder's.
+	MainRepository      worker.RepoCheckout
 	repositories        repositoryWorkspaces
 	DataDir             string
 	Harness             string
