@@ -20,6 +20,17 @@ const DefaultTurnFailureTick = 2 * time.Second
 // reports, matching Claude Code's StopFailure hook.
 const TurnFailureEvent = "stop-failure"
 
+// turnFailureHarnesses are the harnesses whose terminal turn can end on a
+// provider error without firing a hook. Codex runs its Stop hook only after a
+// successful turn; Claude Code reports such a turn through StopFailure.
+var turnFailureHarnesses = []domain.AgentHarness{domain.HarnessCodex}
+
+// turnFailureSource lists the sessions worth checking: live terminal sessions
+// of one harness that are in a turn and have a native transcript path.
+type turnFailureSource interface {
+	ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error)
+}
+
 // TurnFailureConfig controls failed-turn polling.
 type TurnFailureConfig struct {
 	Tick   time.Duration
@@ -33,7 +44,7 @@ type TurnFailureConfig struct {
 // that never came. The 30 second stale-activity observer only recovers that
 // after two minutes, and only when the screen positively shows an idle prompt.
 type TurnFailureObserver struct {
-	sessions sessionSource
+	sessions turnFailureSource
 	sink     activitySink
 	agents   ports.AgentResolver
 	tick     time.Duration
@@ -58,7 +69,7 @@ type turnFailureWatch struct {
 }
 
 // NewTurnFailureObserver builds a failed-turn observer.
-func NewTurnFailureObserver(sessions sessionSource, sink activitySink, agents ports.AgentResolver, cfg TurnFailureConfig) *TurnFailureObserver {
+func NewTurnFailureObserver(sessions turnFailureSource, sink activitySink, agents ports.AgentResolver, cfg TurnFailureConfig) *TurnFailureObserver {
 	o := &TurnFailureObserver{
 		sessions: sessions,
 		sink:     sink,
@@ -81,20 +92,27 @@ func (o *TurnFailureObserver) Start(ctx context.Context) <-chan struct{} {
 	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "turn failure observer")
 }
 
-// Poll performs one pass. It is not safe for concurrent use.
+// Poll performs one pass. It is not safe for concurrent use. The store
+// returns only live terminal sessions in a turn (active, or waiting_input:
+// Codex reports an approval prompt as waiting_input and fires no hook when the
+// approved turn continues, so a turn that then fails would otherwise stay
+// "needs input"). Chat sessions report turn ends through their controller, and
+// an idle session has nothing to recover.
 func (o *TurnFailureObserver) Poll(ctx context.Context) error {
-	sessions, err := o.sessions.ListAllSessions(ctx)
-	if err != nil {
-		return err
-	}
 	watched := make(map[domain.SessionID]bool, len(o.watches))
-	for _, session := range sessions {
-		detector, ok := o.detector(session)
+	for _, harness := range turnFailureHarnesses {
+		detector, ok := o.detector(harness)
 		if !ok {
 			continue
 		}
-		watched[session.ID] = true
-		o.reconcile(ctx, session, detector)
+		sessions, err := o.sessions.ListTurnFailureCandidates(ctx, harness)
+		if err != nil {
+			return err
+		}
+		for _, session := range sessions {
+			watched[session.ID] = true
+			o.reconcile(ctx, session, detector)
+		}
 	}
 	for id := range o.watches {
 		if !watched[id] {
@@ -104,21 +122,12 @@ func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 	return nil
 }
 
-// detector returns the session's failed-turn capability when the session is
-// a live terminal agent in a turn. Chat sessions report turn ends through
-// their controller, and an idle session has nothing to recover.
-func (o *TurnFailureObserver) detector(session domain.SessionRecord) (ports.TranscriptTurnFailureDetector, bool) {
-	if session.IsTerminated || o.agents == nil || session.Metadata.NativeTranscriptPath == "" ||
-		domain.NormalizeSessionMode(session.Mode) != domain.SessionModeTUI {
+// detector returns the harness's failed-turn capability.
+func (o *TurnFailureObserver) detector(harness domain.AgentHarness) (ports.TranscriptTurnFailureDetector, bool) {
+	if o.agents == nil {
 		return nil, false
 	}
-	// waiting_input is included because Codex reports an approval prompt as
-	// waiting_input and fires no hook when the approved turn continues; a turn
-	// that then fails would otherwise stay "needs input".
-	if session.Activity.State != domain.ActivityActive && session.Activity.State != domain.ActivityWaitingInput {
-		return nil, false
-	}
-	agent, ok := o.agents.Agent(session.Harness)
+	agent, ok := o.agents.Agent(harness)
 	if !ok {
 		return nil, false
 	}
@@ -126,8 +135,8 @@ func (o *TurnFailureObserver) detector(session domain.SessionRecord) (ports.Tran
 	return detector, ok
 }
 
-func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.SessionRecord, detector ports.TranscriptTurnFailureDetector) {
-	path := session.Metadata.NativeTranscriptPath
+func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.TurnFailureCandidate, detector ports.TranscriptTurnFailureDetector) {
+	path := session.NativeTranscriptPath
 	info, err := os.Stat(path)
 	if err != nil {
 		delete(o.watches, session.ID)
@@ -170,7 +179,7 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Sess
 		ExpectedRevision: &revision,
 		ExpectedHarness:  session.Harness,
 		Event:            TurnFailureEvent,
-		LaunchID:         session.Metadata.RuntimeLaunchID,
+		LaunchID:         session.RuntimeLaunchID,
 	})
 	if err != nil {
 		o.logger.Error("turn failure observer: reconciliation failed", "session", session.ID, "err", err)

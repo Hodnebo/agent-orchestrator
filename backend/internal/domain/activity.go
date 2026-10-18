@@ -45,3 +45,15 @@ type Activity struct {
 	State          ActivityState `json:"state"`
 	LastActivityAt time.Time     `json:"lastActivityAt"`
 }
+
+// TurnFailureCandidate is a live terminal session in a turn (active or
+// waiting_input) with a native transcript path: the narrow read the failed-turn
+// observer polls instead of every session row.
+type TurnFailureCandidate struct {
+	ID                   SessionID
+	Harness              AgentHarness
+	Activity             Activity
+	Revision             int64
+	RuntimeLaunchID      string
+	NativeTranscriptPath string
+}

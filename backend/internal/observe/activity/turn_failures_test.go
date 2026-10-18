@@ -176,34 +176,71 @@ func TestTurnFailureObserverLeavesSuccessfulTurnsToTheStopHook(t *testing.T) {
 	}
 }
 
+// Chat sessions report turn ends through their controller, so the store
+// query that feeds the observer leaves them out.
 func TestTurnFailureObserverIgnoresChatSessions(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "turnfail", Path: t.TempDir(), RegisteredAt: now}); err != nil {
+		t.Fatal(err)
+	}
 	rollout := filepath.Join(t.TempDir(), "rollout-2026-10-18T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl")
 	if err := os.WriteFile(rollout, []byte(startedTurn(now.Add(-2*time.Second))+failedTurn(now.Add(-time.Second))), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	session := activeSession(now, domain.HarnessCodex)
-	session.Mode = domain.SessionModeChat
-	session.Metadata.NativeTranscriptPath = rollout
-	sink := &fakeSink{}
-	observer := NewTurnFailureObserver(fakeSessions{rows: []domain.SessionRecord{session}}, sink,
+	ids := map[domain.SessionMode]domain.SessionID{}
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		session, err := store.CreateSession(ctx, domain.SessionRecord{
+			ProjectID: "turnfail",
+			Kind:      domain.KindWorker,
+			Harness:   domain.HarnessCodex,
+			Mode:      mode,
+			Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-3 * time.Second)},
+			Metadata:  domain.SessionMetadata{RuntimeLaunchID: "launch-1", NativeTranscriptPath: rollout},
+			CreatedAt: now.Add(-time.Minute),
+			UpdatedAt: now.Add(-time.Minute),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[mode] = session.ID
+	}
+	observer := NewTurnFailureObserver(store, lifecycle.New(store, nil),
 		fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: testLogger()})
-	if err := observer.Poll(context.Background()); err != nil {
+	if err := observer.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.signals) != 0 {
-		t.Fatalf("Chat session got %d signals, want none: its controller reports turn ends", len(sink.signals))
+	for mode, want := range map[domain.SessionMode]domain.ActivityState{
+		domain.SessionModeChat: domain.ActivityActive,
+		domain.SessionModeTUI:  domain.ActivityIdle,
+	} {
+		got, ok, err := store.GetSession(ctx, ids[mode])
+		if err != nil || !ok {
+			t.Fatalf("GetSession(%s): ok=%v err=%v", mode, ok, err)
+		}
+		if got.Activity.State != want {
+			t.Fatalf("%s session state = %q, want %q", mode, got.Activity.State, want)
+		}
 	}
-	// The same session in the terminal is reported.
-	session.Mode = domain.SessionModeTUI
-	observer = NewTurnFailureObserver(fakeSessions{rows: []domain.SessionRecord{session}}, sink,
-		fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: testLogger()})
-	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatal(err)
+}
+
+type fakeTurnFailureSessions struct {
+	rows []domain.TurnFailureCandidate
+}
+
+func (f fakeTurnFailureSessions) ListTurnFailureCandidates(_ context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	var out []domain.TurnFailureCandidate
+	for _, row := range f.rows {
+		if row.Harness == harness {
+			out = append(out, row)
+		}
 	}
-	if len(sink.signals) != 1 {
-		t.Fatalf("terminal session got %d signals, want 1", len(sink.signals))
-	}
+	return out, nil
 }
 
 // The transcript is re-read only when it changes, and a report the lifecycle
@@ -215,12 +252,16 @@ func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
 	if err := os.WriteFile(rollout, []byte(startedTurn(now.Add(-2*time.Second))+failedTurn(now.Add(-time.Second))), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	session := activeSession(now, domain.HarnessCodex)
-	session.Activity.LastActivityAt = now.Add(-3 * time.Second)
-	session.Metadata.NativeTranscriptPath = rollout
-	session.Revision = 7
+	session := domain.TurnFailureCandidate{
+		ID:                   "ao-1",
+		Harness:              domain.HarnessCodex,
+		Activity:             domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-3 * time.Second)},
+		Revision:             7,
+		RuntimeLaunchID:      "launch-1",
+		NativeTranscriptPath: rollout,
+	}
 	sink := &fakeSink{}
-	observer := NewTurnFailureObserver(fakeSessions{rows: []domain.SessionRecord{session}}, sink,
+	observer := NewTurnFailureObserver(fakeTurnFailureSessions{rows: []domain.TurnFailureCandidate{session}}, sink,
 		fakeAgents{domain.HarnessCodex: codex.New()}, TurnFailureConfig{Logger: testLogger()})
 	for range 3 {
 		if err := observer.Poll(context.Background()); err != nil {

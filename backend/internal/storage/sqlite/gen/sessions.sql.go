@@ -1085,6 +1085,59 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 	return items, nil
 }
 
+const listTurnFailureCandidates = `-- name: ListTurnFailureCandidates :many
+SELECT id, harness, activity_state, activity_last_at, revision,
+    runtime_launch_id, native_transcript_path
+FROM sessions
+WHERE harness = ?1 AND is_terminated = 0 AND session_mode = 'tui'
+    AND activity_state IN ('active', 'waiting_input')
+    AND native_transcript_path <> ''
+ORDER BY id
+`
+
+type ListTurnFailureCandidatesRow struct {
+	ID                   domain.SessionID
+	Harness              domain.AgentHarness
+	ActivityState        domain.ActivityState
+	ActivityLastAt       time.Time
+	Revision             int64
+	RuntimeLaunchID      string
+	NativeTranscriptPath string
+}
+
+// Terminal sessions of one harness that are in a turn and have a native
+// transcript to check. Only the columns the failed-turn observer reads.
+func (q *Queries) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]ListTurnFailureCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTurnFailureCandidates, harness)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTurnFailureCandidatesRow{}
+	for rows.Next() {
+		var i ListTurnFailureCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Harness,
+			&i.ActivityState,
+			&i.ActivityLastAt,
+			&i.Revision,
+			&i.RuntimeLaunchID,
+			&i.NativeTranscriptPath,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextSessionNum = `-- name: NextSessionNum :one
 SELECT COALESCE(MAX(num), 0) + 1 AS next FROM sessions WHERE project_id = ?
 `
