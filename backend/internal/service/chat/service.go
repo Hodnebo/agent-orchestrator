@@ -756,11 +756,13 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
+	freshIfMissing := cfg.FreshIfProviderConversationMissing
 	if cfg.ProviderConversationID != "" {
+		freshIfMissing = freshIfMissing || s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
-			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
+			FreshIfMissing:         freshIfMissing,
 			HasPriorTurns:          conversation.LatestSequence > 0,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
@@ -805,7 +807,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderConversationID != "" &&
 		conv.ProviderConversationID() != cfg.ProviderConversationID {
 		returned := conv.ProviderConversationID()
-		if !cfg.FreshIfProviderConversationMissing || liveReconnect || returned == "" {
+		if !freshIfMissing || liveReconnect || returned == "" {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf(
 				"resumed provider conversation handle %q does not match requested handle %q",
@@ -815,6 +817,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		// The provider never persisted the requested conversation and started a
 		// fresh one in its place. ControllerReady rebinds the session to it.
 		freshReplacement = true
+		if !cfg.FreshIfProviderConversationMissing {
+			// A switch branch that never had a turn: its branch row names the old
+			// handle too, so it moves with the session once the start commits.
+			cfg.ControllerReady = s.rebindBranchOnReady(ctx, cfg.ControllerReady, conversation.ID, activeBranch.ID, cfg.ProviderConversationID)
+		}
 	}
 	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
 		// A TUI handoff needs a fresh, verified native-history admission. A host
@@ -2178,6 +2185,55 @@ func (s *Service) ChatUnavailable(ctx context.Context, harnesses []domain.AgentH
 		}
 	}
 	return out
+}
+
+// branchProviderRebinder moves a branch that never had a turn to a new
+// provider conversation.
+type branchProviderRebinder interface {
+	RebindUnansweredBranchProvider(ctx context.Context, conversationID, branchID, previous, provider string) error
+}
+
+// rebindBranchOnReady wraps ready so a committed fresh start also rebinds the
+// branch that named the conversation the provider never saved.
+func (s *Service) rebindBranchOnReady(
+	ctx context.Context,
+	ready func(StartResult) (ControllerCommit, error),
+	conversationID, branchID, previous string,
+) func(StartResult) (ControllerCommit, error) {
+	return func(started StartResult) (ControllerCommit, error) {
+		commit := ControllerCommit{Conversation: started.Conversation}
+		if ready != nil {
+			var err error
+			if commit, err = ready(started); err != nil {
+				return commit, err
+			}
+		}
+		if rebinder, ok := s.store.(branchProviderRebinder); ok {
+			if err := rebinder.RebindUnansweredBranchProvider(context.WithoutCancel(ctx), conversationID, branchID, previous, started.ProviderConversationID); err != nil {
+				s.log.Warn("rebind unanswered switch branch", "branch", branchID, "error", err)
+			}
+		}
+		return commit, nil
+	}
+}
+
+// switchBranchUnanswered reports a branch a switch opened whose agent never
+// had a turn, so its provider never saved the conversation. Resuming it would
+// fail forever; it can start fresh, since its handoff note holds the context.
+func (s *Service) switchBranchUnanswered(ctx context.Context, conversationID string, branch domain.ConversationBranch) bool {
+	if s.reader == nil || branch.Strategy != domain.ConversationBranchStrategyApproximateContext || branch.HandoffNote == "" {
+		return false
+	}
+	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
+	if err != nil {
+		return false
+	}
+	for _, turn := range rows.Turns {
+		if turn.BranchID == branch.ID {
+			return false
+		}
+	}
+	return true
 }
 
 // prewarmTimeout bounds one background readiness check.

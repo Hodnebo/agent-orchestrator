@@ -202,3 +202,50 @@ func TestProviderSwitchStartsTheTargetUnderTheChatsPermissionMode(t *testing.T) 
 		t.Fatalf("target permissions = %q, want the chat's bypass mode", target.Permissions)
 	}
 }
+
+func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	// The target never had a turn, so its provider never saved the conversation.
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	record, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	var resumed ports.ChatResumeConfig
+	driver := fakeDriver{conv: newFakeConversation()}
+	driver.resume = func(cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+		resumed = cfg
+		if !cfg.FreshIfMissing {
+			return nil, errors.New("provider conversation not found")
+		}
+		conv := newFakeConversation()
+		conv.providerConversationID = "thread-started-fresh"
+		return conv, nil
+	}
+	restarted := newRestartedEditService(t, h, driver, "unanswered-branch-restart")
+	if _, err := restarted.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessClaudeCode, WorkspacePath: t.TempDir(),
+		ProviderConversationID: record.Metadata.ProviderConversationID,
+	}); err != nil {
+		t.Fatalf("Start after an unanswered switch: %v", err)
+	}
+	if !resumed.FreshIfMissing || !strings.Contains(resumed.SystemPrompt, domain.HandoffNotePrefix) {
+		t.Fatalf("resume = fresh %v, handoff in prompt %v; want a fresh start carrying the handoff",
+			resumed.FreshIfMissing, strings.Contains(resumed.SystemPrompt, domain.HandoffNotePrefix))
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("ConversationForSession: %v", err)
+	}
+	branch, err := h.st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil || branch.ProviderConversationID != "thread-started-fresh" {
+		t.Fatalf("active branch provider = %q, %v; want it moved to the fresh conversation", branch.ProviderConversationID, err)
+	}
+}
