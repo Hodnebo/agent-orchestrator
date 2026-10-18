@@ -497,3 +497,69 @@ func TestSetupStepEventsNeverPublishAPartialSecret(t *testing.T) {
 		t.Fatalf("final outputs = %q, %q", last[1].Output, last[2].Output)
 	}
 }
+
+// The redaction every Setup and Cleanup step gets, on the worker and the
+// control plane alike: secret-named pairs in every common form, token shapes,
+// and private key bodies, without masking values that are not secrets.
+func TestScriptRedactionPatterns(t *testing.T) {
+	t.Parallel()
+	privateKeyBody := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\nVJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n"
+	cases := []struct {
+		name, text, want string
+	}{
+		{"env assignment", "DB_PASSWORD=hunter2", "DB_PASSWORD=[REDACTED]"},
+		{"export", "export MY_SERVICE_TOKEN='abc def'", "export MY_SERVICE_TOKEN=[REDACTED]"},
+		{"colon", "Api-Key: abc123", "Api-Key: [REDACTED]"},
+		{"yaml", "  client_secret: s3cr3t", "  client_secret: [REDACTED]"},
+		{"aws secret key", "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", "AWS_SECRET_ACCESS_KEY=[REDACTED]"},
+		{"short pass", "MYSQL_PASS=pw", "MYSQL_PASS=[REDACTED]"},
+		{"auth", "NPM_AUTH=dXNlcjpwYXNz", "NPM_AUTH=[REDACTED]"},
+		{"credential", "GOOGLE_CREDENTIALS={x}", "GOOGLE_CREDENTIALS=[REDACTED]"},
+		{"private", "PRIVATE_THING=abc", "PRIVATE_THING=[REDACTED]"},
+		{"json", `{"user": "admin", "password": "hunter2"}`, `{"user": "admin", "password": [REDACTED]}`},
+		{"json escaped", `"{\"user\":\"admin\",\"password\":\"hunter2\"}"`, `"{\"user\":\"admin\",\"password\":\"[REDACTED]\"}"`},
+		{"secrets manager", `"SecretString": "{\"username\":\"admin\",\"password\":\"p4ss\"}",`, `"SecretString": [REDACTED],`},
+		{"secrets manager text", `{"username":"admin","password":"p4ss"}`, `{"username":"admin","password":[REDACTED]}`},
+		{"npm token", "npm_" + strings.Repeat("a1B2", 9), "[REDACTED]"},
+		{"google key", "key AIza" + strings.Repeat("Sy0_", 9), "key [REDACTED]"},
+		{"sendgrid", "SG." + strings.Repeat("ab_cd", 5) + "." + strings.Repeat("Ef-gh", 9), "[REDACTED]"},
+		{"slack bot", "xoxb-" + strings.Repeat("1234-", 3) + "abcdef", "[REDACTED]"},
+		{"slack user", "xoxp-" + strings.Repeat("1234-", 3) + "abcdef", "[REDACTED]"},
+		{"gitlab", "glpat-" + strings.Repeat("x1Y2", 6), "[REDACTED]"},
+		{"github oauth", "gho_" + strings.Repeat("a1B2", 9), "[REDACTED]"},
+		{"private key", "-----BEGIN RSA PRIVATE KEY-----\n" + privateKeyBody + "-----END RSA PRIVATE KEY-----\nnext", "[REDACTED]\nnext"},
+		{"private key end only", "...\n" + privateKeyBody + "-----END PRIVATE KEY-----\nnext", "...\n[REDACTED]\nnext"},
+		// Not secrets.
+		{"ssh agent socket", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1"},
+		{"key path", "KEY_PATH=/etc/ssl/key.pem", "KEY_PATH=/etc/ssl/key.pem"},
+		{"pass file", "PASS_FILE=/run/pass.txt", "PASS_FILE=/run/pass.txt"},
+		{"auth dir", "AUTH_DIR=/var/lib/auth", "AUTH_DIR=/var/lib/auth"},
+		{"auth url", "AUTH_URL=https://auth.example.com", "AUTH_URL=https://auth.example.com"},
+		{"git author", "GIT_AUTHOR_NAME=Jane", "GIT_AUTHOR_NAME=Jane"},
+		{"tests passed", "Tests passed: 42", "Tests passed: 42"},
+		{"plain", "HOME=/root ready", "HOME=/root ready"},
+	}
+	for _, test := range cases {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("%s: RedactScriptOutput(%q) = %q, want %q", test.name, test.text, got, test.want)
+		}
+	}
+}
+
+// The control plane applies the same redaction to a worker's step event and
+// to a Cleanup hook's output, which reach it without the sandbox's values.
+func TestControlPlaneRedactsLikeTheWorker(t *testing.T) {
+	t.Parallel()
+	text := `DB_PASSWORD=hunter2 {\"api_token\":\"abc\"} npm_` + strings.Repeat("a1B2", 9)
+	sanitized := SanitizeScriptStepEvent(ScriptStepEvent{Output: text, Command: "echo DB_PASSWORD=hunter2"})
+	if strings.Contains(sanitized.Output, "hunter2") || strings.Contains(sanitized.Output, `abc\"`) ||
+		strings.Contains(sanitized.Output, "a1B2") || strings.Contains(sanitized.Command, "hunter2") {
+		t.Fatalf("sanitized = %+v", sanitized)
+	}
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript([]string{`echo "DB_PASSWORD=hunter2"; echo '{"password": "x"}'`}, nonce), t.TempDir())
+	events := CleanupStepEvents(output, CleanupRun{RunID: "cleanup-1", Nonce: nonce, ExitCode: code, StartedAt: time.Now()})
+	if len(events) != 1 || events[0].Output != "DB_PASSWORD=[REDACTED]\n{\"password\": [REDACTED]}" {
+		t.Fatalf("events = %+v", events)
+	}
+}

@@ -270,3 +270,20 @@ func TestReportNotRunSkipsEveryStep(t *testing.T) {
 		t.Fatalf("stage = %+v", stage)
 	}
 }
+
+// A failed run's stage output and its step events are redacted alike.
+func TestReportRedactsTheStageOutputLikeTheSteps(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	ctx := r.context()
+	printed := "@@ao-step-00000000000000aa 1 1 start 0 / make down\nAPI_KEY: abc123\n{\\\"password\\\":\\\"hunter2\\\"}\n" +
+		"cleanup step 1 failed: exit status 3\n@@ao-step-00000000000000aa 1 1 end 3 20\n"
+	Report(ctx, sandbox.BeginStage(ctx, Stage), map[string]string{}, worker.CleanupRun{
+		RunID: "run-1", Nonce: "00000000000000aa", StartedAt: time.Now(),
+	}, printed, "3", nil, "test")
+	stage := r.stages[0].Attrs["output"]
+	if len(r.events) != 1 || strings.Contains(r.events[0].Output, "abc123") || strings.Contains(r.events[0].Output, "hunter2") ||
+		strings.Contains(stage, "abc123") || strings.Contains(stage, "hunter2") || !strings.Contains(stage, "[REDACTED]") {
+		t.Fatalf("stage output %q, events %+v", stage, r.events)
+	}
+}

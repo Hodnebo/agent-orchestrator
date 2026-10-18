@@ -165,7 +165,83 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 
 // secretNamePattern matches the names of environment variables whose values
 // are masked in a step's output.
-var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|AUTH)`)
+var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|AUTH|PRIVATE)`)
+
+// secretPairPattern matches a NAME=value or NAME: value pair, or a JSON
+// "name": "value" member (also escaped inside a JSON string, as in
+// \"password\":\"x\" or an AWS Secrets Manager SecretString), whose name
+// looks like a secret's. Its groups are the opening quote, the name, the
+// closing quote, the separator and the value: a JSON-escaped string, a quoted
+// string, or a bare word.
+var secretPairPattern = regexp.MustCompile(`(?i)(\\?["']?)([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)(\\?["']?)(\s*[:=]\s*)(\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;&"'\\]+)`)
+
+var (
+	// secretNameFragment is what makes a pair's name look like a secret's.
+	secretNameFragment = regexp.MustCompile(`(?i)token|secret|key|pass|auth|credential|private`)
+	// benignNameWords are common words that contain a fragment but name no
+	// secret (GIT_AUTHOR_NAME, "tests passed: 3"); they are ignored when the
+	// name is checked.
+	benignNameWords = regexp.MustCompile(`(?i)author|passed|passes|passing|bypass|keyboard|monkey`)
+	// publicNameSuffix marks a name whose value is a socket, path, directory,
+	// file or URL (SSH_AUTH_SOCK, KEY_PATH); credentials in a URL are masked
+	// on their own.
+	publicNameSuffix = regexp.MustCompile(`(?i)[_.-](?:sock|path|dir|file|url)$`)
+)
+
+// isSecretName reports whether a pair's value is masked: its name contains a
+// secretNameFragment outside benignNameWords and has no publicNameSuffix.
+func isSecretName(name string) bool {
+	return !publicNameSuffix.MatchString(name) &&
+		secretNameFragment.MatchString(benignNameWords.ReplaceAllString(name, ""))
+}
+
+// secretShapes are token shapes masked on top of activity.Redact's: npm,
+// Google API and SendGrid keys, and the body of a private key whose BEGIN
+// line is no longer in the output (only its END line is).
+var secretShapes = []*regexp.Regexp{
+	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{20,}\b`),
+	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`),
+	regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}`),
+	regexp.MustCompile(`(?m)(?:^[A-Za-z0-9+/=]{16,}\r?\n)+-----END [A-Z ]*PRIVATE KEY-----`),
+}
+
+// RedactScriptOutput masks credentials in a Setup or Cleanup run's output
+// with the patterns every step event gets (no known secret values): the
+// control plane's redaction of what a worker or a Cleanup hook printed.
+func RedactScriptOutput(text string) string {
+	return scriptRedactor{}.redact(text)
+}
+
+// redactSecretPairs masks the value of each secretPairPattern pair with a
+// secret's name (isSecretName), keeping its quotes.
+func redactSecretPairs(text string) string {
+	matches := secretPairPattern.FindAllStringSubmatchIndex(text, -1)
+	if matches == nil {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		name, value := text[match[4]:match[5]], text[match[10]:match[11]]
+		if bare := strings.Trim(value, `\"'`); !isSecretName(name) || strings.HasPrefix(bare, "[REDACTED") {
+			continue
+		}
+		masked := "[REDACTED]"
+		switch {
+		case strings.HasPrefix(value, `\"`):
+			masked = `\"[REDACTED]\"`
+		case strings.HasPrefix(value, `"`):
+			masked = `"[REDACTED]"`
+		case strings.HasPrefix(value, "'"):
+			masked = "'[REDACTED]'"
+		}
+		out.WriteString(text[last:match[10]])
+		out.WriteString(masked)
+		last = match[11]
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
 
 // workerTokenPattern matches an AO worker token (see TokenManager.Issue).
 var workerTokenPattern = regexp.MustCompile(`\b` + tokenPrefix + `\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
@@ -177,7 +253,9 @@ const minSecretValueLength = 6
 // scriptRedactor masks credentials in a step's output and command before they
 // leave the sandbox: the values of secret-named environment variables and any
 // extra secrets (the worker's own token) verbatim, then activity.Redact's
-// patterns and AO worker tokens.
+// patterns, the values of secret-named pairs, secretShapes and AO worker
+// tokens. The control plane redacts what it receives and a Cleanup hook's
+// output with the same patterns (scriptRedactor{}, without values).
 type scriptRedactor struct {
 	values []string
 }
@@ -209,7 +287,13 @@ func (r scriptRedactor) redact(text string) string {
 	for _, value := range r.values {
 		text = strings.ReplaceAll(text, value, "[REDACTED]")
 	}
-	return workerTokenPattern.ReplaceAllString(activity.Redact(text), "[REDACTED]")
+	// Pairs first: activity.Redact masks a quoted value up to its first
+	// quote, which would cut an escaped JSON string (a SecretString) short.
+	text = activity.Redact(redactSecretPairs(text))
+	for _, shape := range secretShapes {
+		text = shape.ReplaceAllString(text, "[REDACTED]")
+	}
+	return workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
 }
 
 // scriptStepOutput turns a finished step's raw output tail into what an event

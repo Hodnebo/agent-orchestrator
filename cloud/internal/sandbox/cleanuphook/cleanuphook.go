@@ -290,10 +290,11 @@ func ReportNotRun(
 	finish(err, attrs)
 }
 
-// boundedOutput is the hook's output for the stage: redacted, without
-// carriage returns or control characters, at most stageOutputLimit bytes.
+// boundedOutput is the hook's output for the stage: redacted as its step
+// events are (worker.RedactScriptOutput), without carriage returns or control
+// characters, at most stageOutputLimit bytes.
 func boundedOutput(output string) string {
-	output = activity.Redact(strings.ReplaceAll(output, "\r", ""))
+	output = worker.RedactScriptOutput(strings.ReplaceAll(output, "\r", ""))
 	output = strings.Map(func(character rune) rune {
 		if character == '\n' || character == '\t' || character >= ' ' {
 			return character
