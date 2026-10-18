@@ -2242,11 +2242,11 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
-	if needsOpenInterpreter {
-		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
-	}
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
+	}
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
 	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
@@ -2300,11 +2300,11 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'command-code'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
 	}
-	if !strings.Contains(schema, "'open-interpreter'") {
-		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
-	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
 	}
 	return nil
 }

@@ -896,7 +896,7 @@ func (m *Manager) preflightInterfaceTarget(
 	if err := m.preflightLaunchAuth(ctx, agent, rec, env); err != nil {
 		return err
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
 // preflightLaunchAuth refuses a target whose login the provider reports as
@@ -926,6 +926,7 @@ func (m *Manager) preflightTerminalLaunch(
 	rec domain.SessionRecord,
 	project domain.ProjectRecord,
 	nativeConversationID string,
+	env map[string]string,
 ) error {
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
