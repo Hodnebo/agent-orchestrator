@@ -421,7 +421,9 @@ describe("isHiddenBackgroundSession", () => {
 	it("hides a background session until it needs the user or opens a PR", () => {
 		expect(isHiddenBackgroundSession(base)).toBe(true);
 		expect(isHiddenBackgroundSession({ ...base, status: "terminated" })).toBe(true);
-		for (const status of ["needs_input", "exited", "no_signal"] as const) {
+		// AO stops a finished run's agent just before marking it ended.
+		expect(isHiddenBackgroundSession({ ...base, status: "exited" })).toBe(true);
+		for (const status of ["needs_input", "no_signal"] as const) {
 			expect(isHiddenBackgroundSession({ ...base, status })).toBe(false);
 		}
 		expect(isHiddenBackgroundSession({ ...base, prs: [{ url: "https://github.com/acme/app/pull/7" }] as WorkspaceSession["prs"] })).toBe(false);

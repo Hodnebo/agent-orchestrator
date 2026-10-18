@@ -394,8 +394,10 @@ function validTimestamp(value?: string): number | undefined {
 	return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-// A background session comes into view when it needs the user.
-const BACKGROUND_ATTENTION_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>(["needs_input", "exited", "no_signal"]);
+// A background session comes into view when it needs the user. "exited" is
+// not one: AO stops a finished run's agent a moment before marking it ended,
+// and a run whose agent crashes fails and shows its error on its automation.
+const BACKGROUND_ATTENTION_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>(["needs_input", "no_signal"]);
 
 /**
  * A background session, such as a dream, stays out of every session list,
