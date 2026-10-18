@@ -13,6 +13,14 @@ import type { CloudCpClientEvent } from "./cloud-cp";
  */
 export const SCRIPT_STEP_EVENT = "workspace.script.step";
 
+/**
+ * Session events that only follow a finished Setup run: the worker's
+ * `workspace.setup` summary, sent once the run ends, and `agent.ready`, which
+ * the worker sends only after Setup succeeded. A run still unfinished before
+ * one of them lost its final event and will not move again.
+ */
+export const SCRIPT_RUN_END_EVENTS: ReadonlySet<string> = new Set(["workspace.setup", "agent.ready"]);
+
 export type ScriptPhase = "setup" | "cleanup";
 export type ScriptStepStatus = "running" | "succeeded" | "failed" | "timed_out" | "skipped";
 
@@ -34,6 +42,12 @@ export interface ScriptStepEventPayload {
 	/** Redacted, ANSI-stripped tail of combined stdout and stderr (at most 16 KiB). */
 	output?: string;
 	outputTruncated?: boolean;
+	/**
+	 * The reader may not see this step's output (a share grantee outside the
+	 * organization): `output` is empty and the user, groups, folder and log
+	 * path are left out.
+	 */
+	outputHidden?: boolean;
 	logPath?: string;
 	user?: string;
 	groups?: string[];
@@ -52,6 +66,8 @@ export interface ScriptRunStep {
 	durationMs?: number;
 	output: string;
 	outputTruncated: boolean;
+	/** The output is withheld from this reader; see {@link ScriptStepEventPayload.outputHidden}. */
+	outputHidden: boolean;
 	logPath?: string;
 	user?: string;
 	groups?: string[];
@@ -62,8 +78,28 @@ export interface ScriptRunStep {
 /**
  * `interrupted`: the run never finished and a later run of the same phase
  * started (a worker restart or a retry), so its running step will not end.
+ * `unknown`: the run never reported its end, but the session moved past it
+ * (a later Setup summary or agent start, or the session's sandbox is gone),
+ * so it is no longer running and its outcome was never received.
+ * `notRun`: every step was reported skipped before any ran (a Cleanup the
+ * control plane could not run before deleting the sandbox).
  */
-export type ScriptRunStatus = "running" | "succeeded" | "failed" | "interrupted";
+export type ScriptRunStatus = "running" | "succeeded" | "failed" | "interrupted" | "unknown" | "notRun";
+
+export interface GroupScriptRunsOptions {
+	/** The session's sandbox is gone or AO stopped starting it: nothing runs any more. */
+	sessionEnded?: boolean;
+}
+
+/**
+ * True once a Cloud session's sandbox is deleted or AO gave up starting it, so
+ * no Setup or Cleanup step of it can still be running. A session being deleted
+ * is not ended yet: its Cleanup runs then.
+ */
+export function cloudSessionScriptsEnded(cloud: { observedState?: string; runtimeState?: string } | undefined): boolean {
+	if (!cloud) return false;
+	return cloud.observedState === "deleted" || cloud.observedState === "terminated" || cloud.runtimeState === "terminated";
+}
 
 export interface ScriptRun {
 	runId: string;
@@ -82,8 +118,6 @@ export interface ScriptRun {
 	firstSequence: number;
 	/** Sequence of its newest event: changes whenever the run does. */
 	lastSequence: number;
-	/** Number of events folded into the run; a cheap revision for memoized rows. */
-	eventCount: number;
 }
 
 const statuses = new Set<ScriptStepStatus>(["running", "succeeded", "failed", "timed_out", "skipped"]);
@@ -116,6 +150,7 @@ export function parseScriptStepPayload(payload: unknown): ScriptStepEventPayload
 		durationMs: integer(value.durationMs),
 		output: text(value.output),
 		outputTruncated: value.outputTruncated === true,
+		outputHidden: value.outputHidden === true,
 		logPath: nonEmpty(value.logPath),
 		user: nonEmpty(value.user),
 		groups: groups && groups.length > 0 ? groups : undefined,
@@ -130,7 +165,7 @@ export function scriptStepFinished(status: ScriptRunStep["status"]): boolean {
 }
 
 function pendingStep(step: number): ScriptRunStep {
-	return { step, status: "pending", command: "", repository: "", output: "", outputTruncated: false };
+	return { step, status: "pending", command: "", repository: "", output: "", outputTruncated: false, outputHidden: false };
 }
 
 function timeOf(value: string | undefined): number | undefined {
@@ -142,32 +177,33 @@ function timeOf(value: string | undefined): number | undefined {
 /**
  * Groups `workspace.script.step` events by `runId`, oldest run first. The
  * newest event per (runId, step) wins: each carries the latest output tail, so
- * nothing is accumulated. Other event types are ignored, so callers can pass a
- * session's whole event list.
+ * nothing is accumulated. Other event types are ignored, except
+ * {@link SCRIPT_RUN_END_EVENTS}, so callers can pass a session's whole event
+ * list.
  */
-export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRun[] {
+export function groupScriptRuns(events: readonly CloudCpClientEvent[], { sessionEnded = false }: GroupScriptRunsOptions = {}): ScriptRun[] {
 	const runs = new Map<string, {
 		phase: ScriptPhase;
 		total: number;
 		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload }>;
 		firstSequence: number;
 		lastSequence: number;
-		eventCount: number;
 		firstCreatedAt: string;
 	}>();
+	let lastEndSequence = -Infinity;
 	for (const event of events) {
+		if (SCRIPT_RUN_END_EVENTS.has(event.type)) lastEndSequence = Math.max(lastEndSequence, event.sequence);
 		if (event.type !== SCRIPT_STEP_EVENT) continue;
 		const payload = parseScriptStepPayload(event.payload);
 		if (!payload) continue;
 		let run = runs.get(payload.runId);
 		if (!run) {
-			run = { phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence, eventCount: 0, firstCreatedAt: event.createdAt };
+			run = { phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence, firstCreatedAt: event.createdAt };
 			runs.set(payload.runId, run);
 		}
 		run.total = Math.max(run.total, payload.total);
 		run.firstSequence = Math.min(run.firstSequence, event.sequence);
 		run.lastSequence = Math.max(run.lastSequence, event.sequence);
-		run.eventCount++;
 		const previous = run.latest.get(payload.step);
 		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload });
 	}
@@ -190,21 +226,28 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 				exitCode: finished ? payload.exitCode : undefined,
 				startedAt: payload.startedAt,
 				durationMs: finished ? payload.durationMs : undefined,
-				output: payload.output ?? "",
+				output: payload.outputHidden ? "" : payload.output ?? "",
 				outputTruncated: payload.outputTruncated === true,
-				logPath: payload.logPath,
-				user: failed ? payload.user : undefined,
-				groups: failed ? payload.groups : undefined,
-				dir: failed ? payload.dir : undefined,
+				outputHidden: payload.outputHidden === true,
+				// Withheld with the output, whatever an older control plane sent.
+				logPath: payload.outputHidden ? undefined : payload.logPath,
+				user: failed && !payload.outputHidden ? payload.user : undefined,
+				groups: failed && !payload.outputHidden ? payload.groups : undefined,
+				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
 			});
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;
 		const allSucceeded = steps.length > 0 && steps.every((step) => step.status === "succeeded");
+		const noneRan = steps.length > 0 && steps.every((step) => step.status === "skipped");
 		const superseded = ordered.slice(index + 1).some(([, later]) => later.phase === run.phase);
+		// Its final event was lost: the session has moved on past the run.
+		const ended = sessionEnded || lastEndSequence > run.lastSequence;
 		const status: ScriptRunStatus = failedStep !== undefined ? "failed"
 			: allSucceeded ? "succeeded"
+			: noneRan ? "notRun"
 			: superseded ? "interrupted"
+			: ended ? "unknown"
 			: "running";
 		const runningStep = status === "running"
 			? (steps.find((step) => step.status === "running") ?? steps.find((step) => step.status === "pending"))?.step
@@ -225,7 +268,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[]): ScriptRu
 		}
 		return {
 			runId, phase: run.phase, total: run.total, steps, status, failedStep, runningStep, startedAt, durationMs,
-			firstSequence: run.firstSequence, lastSequence: run.lastSequence, eventCount: run.eventCount,
+			firstSequence: run.firstSequence, lastSequence: run.lastSequence,
 		};
 	});
 }
@@ -238,25 +281,48 @@ export function latestScriptRun(runs: readonly ScriptRun[], phase: ScriptPhase):
 	return undefined;
 }
 
-/** Keeps only `workspace.script.step` events, so a small cache can hold them. */
+/** Keeps only the events {@link groupScriptRuns} reads, so a small cache can hold them. */
 export function scriptStepEvents(events: readonly CloudCpClientEvent[]): CloudCpClientEvent[] {
-	return events.filter((event) => event.type === SCRIPT_STEP_EVENT);
+	return events.filter((event) => event.type === SCRIPT_STEP_EVENT || SCRIPT_RUN_END_EVENTS.has(event.type));
 }
 
-/** Merges events into a sequence-ordered list without duplicates. */
+/** The cache key of an event it keeps: one per (runId, step), and one end marker. */
+const END_MARKER_KEY = "\u0000end";
+
+function stepKey(event: CloudCpClientEvent): string | undefined {
+	if (SCRIPT_RUN_END_EVENTS.has(event.type)) return END_MARKER_KEY;
+	const payload = parseScriptStepPayload(event.payload);
+	return payload ? `${payload.runId}\u0000${payload.step}` : undefined;
+}
+
+/**
+ * Merges events into a sequence-ordered list that keeps only the newest event
+ * per (runId, step): every event carries the step's latest output tail, so
+ * older live snapshots of a step are never read again and are dropped rather
+ * than held for the session's lifetime. Of the run-ending events it keeps the
+ * newest, all {@link groupScriptRuns} needs. Returns `existing` unchanged when
+ * nothing newer arrived.
+ */
 export function mergeScriptStepEvents(existing: readonly CloudCpClientEvent[], incoming: readonly CloudCpClientEvent[]): CloudCpClientEvent[] {
 	const fresh = scriptStepEvents(incoming);
 	if (fresh.length === 0) return existing as CloudCpClientEvent[];
-	const bySequence = new Map<number, CloudCpClientEvent>();
-	for (const event of existing) bySequence.set(event.sequence, event);
-	let changed = false;
+	const latest = new Map<string, CloudCpClientEvent>();
+	for (const event of existing) {
+		const key = stepKey(event);
+		const current = key ? latest.get(key) : undefined;
+		if (key && (!current || event.sequence > current.sequence)) latest.set(key, event);
+	}
+	let changed = latest.size !== existing.length;
 	for (const event of fresh) {
-		if (bySequence.has(event.sequence)) continue;
-		bySequence.set(event.sequence, event);
+		const key = stepKey(event);
+		if (!key) continue;
+		const current = latest.get(key);
+		if (current && current.sequence >= event.sequence) continue;
+		latest.set(key, event);
 		changed = true;
 	}
 	if (!changed) return existing as CloudCpClientEvent[];
-	return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+	return [...latest.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
 /** m:ss, or h:mm:ss past an hour, as GitHub Actions shows step times. */

@@ -482,7 +482,7 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
-			scripts={session.cloud ? <CloudScriptRunSections orgId={session.cloud.orgId} sessionId={session.id} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);
@@ -493,9 +493,9 @@ const SummaryView = memo(function SummaryView({
  * covers the startup loader once it starts, and Cleanup only runs after the
  * session is deleted, so this is where both stay reachable.
  */
-function CloudScriptRunSections({ orgId, sessionId }: { orgId: string; sessionId: string }) {
+function CloudScriptRunSections({ cloud, sessionId }: { cloud: NonNullable<WorkspaceSession["cloud"]>; sessionId: string }) {
 	const { t } = useTranslation();
-	const runs = useCloudScriptRuns(orgId, sessionId);
+	const runs = useCloudScriptRuns(cloud.orgId, sessionId, { lifecycle: cloud });
 	const setup = latestScriptRun(runs, "setup");
 	const cleanup = latestScriptRun(runs, "cleanup");
 	if (!setup && !cleanup) return null;

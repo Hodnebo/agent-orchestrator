@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
+import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
+import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 
 type EventPayload = {
@@ -169,13 +171,14 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 
 /**
  * One Setup or Cleanup run as a system row, placed where its first step event
- * arrived. Its revision moves with every event so the row redraws live.
+ * arrived. Its revision is the run's newest event, so the row redraws live
+ * even where only the newest event per step is kept.
  */
 function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActivity {
 	return {
-		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.eventCount,
+		kind: "activity", id: `cloud-script-run-${run.runId}`, sequence: run.firstSequence, revision: run.lastSequence,
 		activityKind: "system", status: run.status === "running" ? "running" : run.status === "failed" ? "failed" : "completed",
-		summary: `${run.phase === "setup" ? "Setup" : "Cleanup"} ${run.status}`,
+		summary: appI18n.t("scriptRun.activitySummary", { phase: scriptRunTitle(run, appI18n.t), status: scriptRunStatusText(run, appI18n.t) }),
 		detail: { event: "workspace.script.run", scriptRun: run },
 		createdAt,
 	};
@@ -192,7 +195,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
 	// that predate step events keep that summary row.
-	const scriptRuns = new Map(groupScriptRuns(events).map((run) => [run.runId, run]));
+	const scriptRuns = new Map(groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) }).map((run) => [run.runId, run]));
 	const placedRuns = new Set<string>();
 	const unclaimedSetupRuns = [...scriptRuns.values()].filter((run) => run.phase === "setup");
 	for (const event of events) {

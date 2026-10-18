@@ -188,4 +188,79 @@ describe("ScriptRunPanel", () => {
 		expect(screen.getByText("Succeeded", { selector: ".truncate" })).toBeInTheDocument();
 		expect(screen.getByText("docker compose down")).toBeInTheDocument();
 	});
+
+	it("announces step transitions in a polite status region, never the output", () => {
+		const announcer = () => screen.getByTestId("script-run-announcer");
+		const first = { step: 1, command: "npm ci", startedAt: "2026-10-18T10:00:00Z" };
+		const { rerender } = render(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a" })} />);
+		expect(announcer()).toHaveAttribute("role", "status");
+		expect(announcer()).toHaveAttribute("aria-live", "polite");
+		// What the panel first draws is not announced.
+		expect(announcer()).toHaveTextContent("");
+		expect(screen.getByTestId("script-step-output")).not.toHaveAttribute("aria-live");
+		// New output alone says nothing.
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a\nb" })} />);
+		expect(announcer()).toHaveTextContent("");
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf(
+			{ ...first, status: "succeeded", exitCode: 0, durationMs: 1000, output: "a\nb" },
+			{ step: 2, command: "make", status: "running", startedAt: "2026-10-18T10:00:01Z" },
+		)} />);
+		expect(announcer()).toHaveTextContent("Setup step 1 succeeded Setup step 2 of 3 started: make");
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf(
+			{ ...first, status: "succeeded", exitCode: 0, durationMs: 1000, output: "a\nb" },
+			{ step: 2, command: "make", status: "failed", exitCode: 2, startedAt: "2026-10-18T10:00:01Z", durationMs: 500, output: "boom" },
+			{ step: 3, command: "npm test", status: "skipped" },
+		)} />);
+		expect(announcer()).toHaveTextContent("Setup step 2 failed");
+		expect(announcer().textContent).not.toContain("boom");
+	});
+
+	it("lists a hidden run's steps and statuses with a note instead of output, and nothing to copy", () => {
+		const run = runOf(
+			{ step: 1, status: "succeeded", command: "npm ci", exitCode: 0, durationMs: 1000, outputHidden: true, output: "" },
+			{ step: 2, status: "failed", command: "make", exitCode: 1, durationMs: 500, outputHidden: true, output: "" },
+			{ step: 3, status: "skipped", command: "npm test" },
+		);
+		render(<ScriptRunPanel run={run} />);
+		expect(screen.getByText("Failed at step 2")).toBeInTheDocument();
+		expect(steps().map((row) => row.getAttribute("data-status"))).toEqual(["succeeded", "failed", "skipped"]);
+		const failed = steps()[1];
+		expect(toggleOf(failed)).toHaveAttribute("aria-expanded", "true");
+		expect(within(failed).getByText("Output is visible to organization members only.")).toBeInTheDocument();
+		expect(within(failed).getByText("Exited with code 1")).toBeInTheDocument();
+		expect(within(failed).queryByTestId("script-step-output")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Copy output" })).toBeNull();
+		fireEvent.click(toggleOf(steps()[0])!);
+		expect(within(steps()[0]).getByText("Output is visible to organization members only.")).toBeInTheDocument();
+	});
+
+	it("explains a Cleanup that could not run in the reader's language", () => {
+		const run = groupScriptRuns([
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "skipped", command: "docker compose down", hint: "The sandbox was paused and did not resume." }),
+			stepEvent({ phase: "cleanup", runId: "c", total: 2, step: 2, status: "skipped", command: "rm -rf tmp", hint: "The sandbox was paused and did not resume." }),
+		])[0];
+		const { container } = render(<ScriptRunPanel collapsible run={run} />);
+		expect(screen.getByText("Did not run")).toBeInTheDocument();
+		expect(screen.getByText("AO could not run Cleanup before deleting the sandbox, so none of its steps ran.")).toBeInTheDocument();
+		expect(steps().map((row) => row.getAttribute("data-status"))).toEqual(["skipped", "skipped"]);
+		expect(container.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByText(/did not resume/)).toBeNull();
+	});
+
+	it("stops the spinner of a run that ended without reporting its last step", () => {
+		const run = groupScriptRuns([
+			stepEvent({ total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T10:00:00Z", output: "added 10" }),
+		], { sessionEnded: true })[0];
+		const { container } = render(<ScriptRunPanel run={run} />);
+		expect(screen.getByText("Ended without reporting a result")).toBeInTheDocument();
+		const [first, second] = steps();
+		expect(first).toHaveAttribute("data-status", "unknown");
+		expect(within(first).getByText("Result unknown")).toBeInTheDocument();
+		expect(second).toHaveAttribute("data-status", "pending");
+		expect(container.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByLabelText(/Elapsed/)).toBeNull();
+	});
 });

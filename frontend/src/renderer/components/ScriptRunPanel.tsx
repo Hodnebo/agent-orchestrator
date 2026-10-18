@@ -1,5 +1,6 @@
 import { Check, ChevronRight, Circle, Loader2, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { stripAnsi } from "../lib/ansi";
 import { formatScriptDuration, type ScriptRun, type ScriptRunStep } from "../lib/cloud-script-runs";
@@ -24,9 +25,14 @@ function elapsedSince(startedAt: string | undefined, now: number): number | unde
 	return Number.isFinite(start) ? Math.max(0, now - start) : undefined;
 }
 
-/** A step is shown as running only while its run is; an interrupted run's step stopped. */
-function displayStatus(step: ScriptRunStep, run: ScriptRun): ScriptRunStep["status"] | "stopped" {
-	if (run.status === "interrupted" && (step.status === "running" || step.status === "pending")) return step.status === "running" ? "stopped" : "pending";
+/**
+ * A step is shown as running only while its run is: an interrupted run's step
+ * stopped, and a run that ended without reporting it has no known result.
+ */
+function displayStatus(step: ScriptRunStep, run: ScriptRun): ScriptRunStep["status"] | "stopped" | "unknown" {
+	if (step.status !== "running") return step.status;
+	if (run.status === "interrupted") return "stopped";
+	if (run.status === "unknown") return "unknown";
 	return step.status;
 }
 
@@ -50,6 +56,9 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 		const node = pre.current;
 		if (node && follow.current) node.scrollTop = node.scrollHeight;
 	}, [output]);
+	if (step.outputHidden) {
+		return <p className="px-1 text-caption text-muted-foreground" data-testid="script-step-output-hidden">{t("scriptRun.outputHidden")}</p>;
+	}
 	if (!output) {
 		return <p className="px-1 text-caption text-muted-foreground">{running ? t("scriptRun.waitingForOutput") : t("scriptRun.noOutput")}</p>;
 	}
@@ -57,7 +66,6 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 		<div className="relative">
 			<pre
 				aria-label={label}
-				aria-live={running ? "polite" : undefined}
 				className="scrollbar-none max-h-60 cursor-text select-text overflow-auto whitespace-pre-wrap break-words border border-border bg-background py-2 pl-2.5 pr-9 font-mono text-caption leading-relaxed text-muted-foreground"
 				data-testid="script-step-output"
 				onScroll={(event) => {
@@ -80,6 +88,35 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 			/>
 		</div>
 	);
+}
+
+/**
+ * What changed in a run since its last render, for screen readers: a step
+ * starting, succeeding or failing. The output itself is never announced; it
+ * changes about once a second while a step runs. Nothing is said for the state
+ * the panel first draws, only for transitions it sees happen.
+ */
+function useStepAnnouncement(run: ScriptRun, title: string): string {
+	const { t } = useTranslation();
+	const previous = useRef<{ runId: string; statuses: Map<number, ScriptRunStep["status"]> }>(undefined);
+	const [message, setMessage] = useState("");
+	useEffect(() => {
+		const before = previous.current;
+		previous.current = { runId: run.runId, statuses: new Map(run.steps.map((step) => [step.step, step.status])) };
+		if (!before) return;
+		const sameRun = before.runId === run.runId;
+		const lines: string[] = [];
+		for (const step of run.steps) {
+			if ((sameRun ? before.statuses.get(step.step) : "pending") === step.status) continue;
+			const values = { phase: title, step: step.step, total: run.total, command: step.command || t("scriptRun.stepNumber", { step: step.step }) };
+			if (step.status === "running") lines.push(t("scriptRun.announce.started", values));
+			else if (step.status === "succeeded") lines.push(t("scriptRun.announce.succeeded", values));
+			else if (step.status === "failed") lines.push(t("scriptRun.announce.failed", values));
+			else if (step.status === "timed_out") lines.push(t("scriptRun.announce.timedOut", values));
+		}
+		if (lines.length > 0) setMessage(lines.join(" "));
+	}, [run, t, title]);
+	return message;
 }
 
 function StepNotes({ step }: { step: ScriptRunStep }) {
@@ -176,6 +213,26 @@ function StepRow({
 	);
 }
 
+/** "Setup" or "Cleanup", in the reader's language. */
+export function scriptRunTitle(run: ScriptRun, t: TFunction): string {
+	return run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
+}
+
+/** The run's state as the panel header says it ("Running step 2 of 3", "Failed at step 2"). */
+export function scriptRunStatusText(run: ScriptRun, t: TFunction): string {
+	return run.status === "running"
+		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
+		: run.status === "succeeded"
+			? t("scriptRun.succeeded")
+			: run.status === "failed"
+				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
+				: run.status === "unknown"
+					? t("scriptRun.unknown")
+					: run.status === "notRun"
+						? t("scriptRun.notRun")
+						: t("scriptRun.interrupted");
+}
+
 /**
  * One Setup or Cleanup run, drawn like a CI job's step log: a header with the
  * run's state and elapsed time, then one row per step that opens onto its
@@ -209,14 +266,9 @@ export function ScriptRunPanel({
 		setListToggled(undefined);
 	}
 	const listOpen = !collapsible || (listToggled ?? run.status !== "succeeded");
-	const title = run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
-	const summary = run.status === "running"
-		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
-		: run.status === "succeeded"
-			? t("scriptRun.succeeded")
-			: run.status === "failed"
-				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
-				: t("scriptRun.interrupted");
+	const title = scriptRunTitle(run, t);
+	const announcement = useStepAnnouncement(run, title);
+	const summary = scriptRunStatusText(run, t);
 	const elapsed = live ? elapsedSince(run.startedAt, now) : run.durationMs;
 	const headerIcon = run.status === "running" ? "running" : run.status === "succeeded" ? "succeeded" : run.status === "failed" ? "failed" : "stopped";
 	const header = (
@@ -240,6 +292,7 @@ export function ScriptRunPanel({
 			data-run-status={run.status}
 			data-testid="script-run-panel"
 		>
+			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-announcer" role="status">{announcement}</div>
 			{collapsible ? (
 				<button
 					aria-controls={listId}
@@ -271,6 +324,9 @@ export function ScriptRunPanel({
 						);
 					})}
 				</ol>
+			) : null}
+			{listOpen && run.status === "notRun" && run.phase === "cleanup" ? (
+				<p className="border-t border-border px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">{t("scriptRun.cleanupNotRun")}</p>
 			) : null}
 		</section>
 	);

@@ -13,6 +13,10 @@ const listChatEvents = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { retrySessionStartup, requestWorkspaceCheckout, listChatEvents }, ready: true, baseUrl: "https://cloud.test" }),
 }));
+const subscribeSessionEvents = vi.hoisted(() => vi.fn());
+vi.mock("../lib/cloud-cp/stream-bridge", () => ({
+	subscribeSessionEventsBridged: (options: unknown) => subscribeSessionEvents(options),
+}));
 
 function mount(problem: Parameters<typeof CloudSessionStartupError>[0]["problem"], coderWorkspaceUrl?: string) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -32,6 +36,8 @@ describe("CloudSessionStartupError", () => {
 	beforeEach(() => {
 		retrySessionStartup.mockReset();
 		requestWorkspaceCheckout.mockReset();
+		subscribeSessionEvents.mockReset();
+		subscribeSessionEvents.mockResolvedValue(undefined);
 		listChatEvents.mockReset();
 		listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 	});
@@ -51,7 +57,7 @@ describe("CloudSessionStartupError", () => {
 		});
 		mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret" });
 		const panel = await screen.findByTestId("script-run-panel");
-		expect(listChatEvents).toHaveBeenCalledWith("org-1", "sess-1", { after: 0, limit: 500 }, expect.anything());
+		expect(listChatEvents).toHaveBeenCalledWith("org-1", "sess-1", expect.objectContaining({ after: 0, limit: 500 }), expect.anything());
 		expect(panel).toHaveTextContent("Failed at step 1");
 		expect(panel).toHaveTextContent("Add the secret in Project settings.");
 		expect(screen.getByRole("alert")).not.toContainElement(panel);
@@ -91,6 +97,51 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByText("Setup step 1 failed: exit status 3.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
 		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("still missing");
+	});
+
+	it("leaves the retrying state when the retried Setup fails again, even if the failure is re-sent unchanged", async () => {
+		const step = (sequence: number, payload: Record<string, unknown>) => ({
+			sessionId: "sess-1", sequence, type: "workspace.script.step", createdAt: "2026-10-14T10:00:00Z",
+			payload: { phase: "setup", total: 1, step: 1, command: "./bin/bootstrap", repository: "", ...payload },
+		});
+		listChatEvents.mockResolvedValue({ events: [step(2, { runId: "run-1", status: "failed", exitCode: 3 })], hasMore: false, nextAfter: 2 });
+		requestWorkspaceCheckout.mockResolvedValue({ requested: true });
+		const failure = { phase: "failed" as const, code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", at: "2026-10-14T10:00:00Z" };
+		const { rerender } = mount(failure);
+		expect(await screen.findByText("Failed at step 1")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(await screen.findByRole("heading", { name: "Preparing the workspace" })).toBeInTheDocument();
+		await waitFor(() => expect(subscribeSessionEvents).toHaveBeenCalled());
+		const { onEvent } = subscribeSessionEvents.mock.calls.at(-1)![0] as { onEvent: (event: unknown) => void };
+		// The old failed run is not the retry's: still preparing.
+		act(() => onEvent(step(2, { runId: "run-1", status: "failed", exitCode: 3 })));
+		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+		act(() => onEvent(step(5, { runId: "run-2", status: "running" })));
+		expect(await screen.findByText("Running step 1 of 1")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+		act(() => onEvent(step(6, { runId: "run-2", status: "failed", exitCode: 3 })));
+		// The same failure, re-sent with the same `at`.
+		rerender({ ...failure });
+		expect(await screen.findByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+		expect(screen.getByText("Failed at step 1")).toBeInTheDocument();
+		// Another Retry waits for a run after this one.
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(await screen.findByRole("button", { name: "Retrying…" })).toBeDisabled();
+	});
+
+	it("stops waiting on a retry that nothing picked up", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			requestWorkspaceCheckout.mockResolvedValue({ requested: true });
+			mount({ phase: "failed", code: "repository_checkout_failed", message: "Could not clone the repository.", at: "2026-10-14T10:00:00Z" });
+			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+			expect(await screen.findByRole("button", { name: "Retrying…" })).toBeDisabled();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+			expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("names a repository checkout failure", () => {
