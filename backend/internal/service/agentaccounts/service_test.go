@@ -55,6 +55,7 @@ type fakeClaude struct {
 	unshared   bool
 	onIdentity func(home string) // runs as a folder's identity is read
 	apiKey     map[string]bool   // folders logged in with an API key
+	failing    map[string]bool   // folders whose check fails (a timeout)
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -62,6 +63,9 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if hook := f.onIdentity; hook != nil {
 		f.onIdentity = nil
 		hook(home)
+	}
+	if f.failing[home] {
+		return domain.AgentAccountIdentityCheck{}, errors.New("account/read: context deadline exceeded")
 	}
 	email, ok := f.signedInAs[home]
 	if f.apiKey[home] {
@@ -512,5 +516,56 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	}
 	if len(changed) < 2 {
 		t.Fatalf("readiness was told %v, want at least the sign-in and the new default", changed)
+	}
+}
+
+// The data directory may be reached through a symlink now, though the account
+// was made under its real path. Removal still deletes the folder, and still
+// refuses anything outside the account root.
+func TestRemoveDeletesTheFolderThroughASymlinkedRoot(t *testing.T) {
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skip("no symlinks here")
+	}
+	folder := filepath.Join(physical, "claude", "acct-b")
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	svc := New(&memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}, nil, alias, fakeTerminals{}, nil)
+	svc.removeFolder(outside)
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("removed a folder outside the root: %v", err)
+	}
+	svc.removeFolder(folder)
+	if _, err := os.Stat(folder); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("account folder kept after removal through the alias: %v", err)
+	}
+}
+
+// A check that fails (a timeout under load) says nothing about the login: the
+// account keeps reading as signed in, with the failure shown as its problem.
+func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, failing: map[string]bool{}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	claude.failing[b] = true
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range views {
+		if view.Account.ID == start.OperationID && (!view.SignedIn || view.IdentityErr == "") {
+			t.Fatalf("after a failed check: signed in %v, problem %q", view.SignedIn, view.IdentityErr)
+		}
 	}
 }

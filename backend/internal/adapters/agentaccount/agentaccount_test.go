@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -206,6 +208,53 @@ func TestCodexPrepareKeepsLoginAndDaemonPrivate(t *testing.T) {
 	}
 	absent(t, filepath.Join(home, "auth.json"))
 	absent(t, filepath.Join(home, "app-server-daemon"))
+}
+
+// A fresh computer may not have the files Codex writes on its first run. The
+// account's first launch must still share them, and an account that already
+// made its own (before they were shared) gives its copy to the computer.
+func TestCodexPrepareSharesFilesTheComputerDoesNotHaveYet(t *testing.T) {
+	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
+	write(t, filepath.Join(home, "history.jsonl"), "{\"text\":\"asked on the account\"}\n")
+
+	c := &Codex{DeviceHome: device}
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.toml", "history.jsonl"} {
+		linksTo(t, filepath.Join(home, name), filepath.Join(device, name))
+	}
+	if data, err := os.ReadFile(filepath.Join(device, "history.jsonl")); err != nil || !strings.Contains(string(data), "asked on the account") {
+		t.Fatalf("the account's own history was not kept as the shared one: %q %v", data, err)
+	}
+}
+
+// A link to an entry the user deleted from the computer's own folder is
+// removed; a link to an entry AO always shares is restored.
+func TestPrepareDropsLinksToDeletedEntries(t *testing.T) {
+	device, home := t.TempDir(), filepath.Join(t.TempDir(), "acct")
+	write(t, filepath.Join(device, "rules", "r.md"), "x")
+	c := &Codex{DeviceHome: device}
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+	linksTo(t, filepath.Join(home, "rules"), filepath.Join(device, "rules"))
+	if err := os.RemoveAll(filepath.Join(device, "rules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(device, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Prepare(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "rules")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("link to a deleted entry kept: %v", err)
+	}
+	linksTo(t, filepath.Join(home, "sessions"), filepath.Join(device, "sessions"))
+	if _, err := os.Stat(filepath.Join(home, "sessions")); err != nil {
+		t.Fatalf("shared sessions not restored: %v", err)
+	}
 }
 
 // TestLaunchEnvOverridesCredentialEnv pins the right-account guarantee: a key

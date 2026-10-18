@@ -70,3 +70,23 @@ it("does not check a closed sign-in, and the remove dialog starts without an old
 	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/verify", expect.anything());
 	expect(await screen.findByRole("dialog")).not.toHaveTextContent("sign-in");
 });
+
+it("checks a sign-in once when the CLI exits during a check", async () => {
+	const user = userEvent.setup();
+	let finish: (value: unknown) => void = () => undefined;
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return new Promise((resolve) => { finish = resolve; });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+	// The CLI exits while that check is still running.
+	terminalState.value?.("exited");
+	finish({ data: { status: "complete", account: { ...saved, signedIn: true } } });
+
+	await waitFor(() => expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument());
+	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/login/{operationId}/verify")).toHaveLength(1);
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});

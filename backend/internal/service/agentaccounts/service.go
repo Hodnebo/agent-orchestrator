@@ -183,6 +183,13 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) {
 	r.identity = identity
 	if err != nil {
 		r.identityErr = err.Error()
+		// A failed check (a timeout under load) says nothing about the login:
+		// keep what the last good one found, so it does not read as signed out.
+		s.mu.Lock()
+		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
+			r.identity, r.limits = prev.identity, prev.limits
+		}
+		s.mu.Unlock()
 	}
 	switch {
 	case err != nil:
@@ -584,8 +591,17 @@ func (s *Service) endLogin(ctx context.Context, op *login, discard bool) {
 // removeFolder deletes an account folder AO made. Links inside it are removed,
 // never followed, so the computer's own history is untouched.
 func (s *Service) removeFolder(home string) {
-	rel, err := filepath.Rel(s.root, home)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+	// The root may now be reached through another spelling (a symlinked data
+	// directory) than when the account was made; compare where both resolve.
+	root, home2 := s.root, home
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if h, err := filepath.EvalSymlinks(home); err == nil {
+		home2 = h
+	}
+	rel, err := filepath.Rel(root, home2)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return
 	}
 	_ = os.RemoveAll(home)

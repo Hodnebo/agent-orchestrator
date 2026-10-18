@@ -59,13 +59,17 @@ export function AgentAccountsPanel({ provider }: { provider: AgentAccountProvide
 		setLoginNote("");
 		setLogin(await (accountId ? actions.signInAgain(accountId) : actions.startLogin(provider)));
 	});
+	// One check at a time: the CLI exiting checks on its own, and a second check
+	// racing a click would find the sign-in already finished and report an error.
+	const verifying = useRef(false);
 	const checkLogin = (current: AgentAccountLogin) => {
 		// A closed sign-in's terminal still reports its exit; there is nothing left to check.
-		if (pendingLogins[provider]?.operationId !== current.operationId) return;
+		if (pendingLogins[provider]?.operationId !== current.operationId || verifying.current) return;
 		void verifyLogin(current);
 	};
 	const verifyLogin = (current: AgentAccountLogin) => run(`verify:${provider}`, async () => {
-		const result = await actions.verifyLogin(current.operationId);
+		verifying.current = true;
+		const result = await actions.verifyLogin(current.operationId).finally(() => { verifying.current = false; });
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
 		else {
 			setLogin(undefined);

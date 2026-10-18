@@ -19,6 +19,11 @@ var codexKnownShared = []string{
 	"skills", "plugins", "cache", "logs", "mcp-oauth-locks", "thread-writer-locks",
 }
 
+// codexKnownSharedFiles are files Codex writes in a fresh home itself. Shared
+// before the computer's own home has them, or the account's first launch keeps
+// a private copy.
+var codexKnownSharedFiles = []string{"config.toml", "history.jsonl"}
+
 // codexPrivate stay inside the account's home: its sign-in, the models its plan
 // offers, scratch space, and the app-server daemon's control files, so a
 // terminal on one account never attaches to a daemon running as another.
@@ -201,6 +206,9 @@ func (c *Codex) Prepare(home string) error {
 	for _, name := range codexKnownShared {
 		names[name] = false // a directory
 	}
+	for _, name := range codexKnownSharedFiles {
+		names[name] = true
+	}
 	entries, err := os.ReadDir(c.DeviceHome)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -210,6 +218,7 @@ func (c *Codex) Prepare(home string) error {
 			names[entry.Name()] = !entry.IsDir()
 		}
 	}
+	pruneDangling(home, c.DeviceHome, names)
 	var errs []error
 	for name, file := range names {
 		if codexPrivate[name] {

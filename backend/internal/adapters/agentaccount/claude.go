@@ -256,6 +256,11 @@ func (c *Claude) Prepare(home string) error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
+	keep := map[string]bool{"history.jsonl": true}
+	for _, dir := range claudeSharedDirs {
+		keep[dir] = true
+	}
+	pruneDangling(home, c.DeviceHome, keep)
 	var errs []error
 	for _, dir := range claudeSharedDirs {
 		errs = append(errs, linkShared(home, c.DeviceHome, dir, false, false))

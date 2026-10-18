@@ -19,9 +19,11 @@ import (
 
 // linkShared makes home/name a symlink to shared/name. A missing target is
 // created first (a directory, or an empty file when file is true), so the link
-// never dangles. An existing link is left alone; so is a real entry, unless it
-// is an empty directory or replaceable, which the CLI made before the link did.
-// A failure is ErrAgentAccountUnshared: the folder would keep history of its own.
+// never dangles; when only the account has the entry, its copy becomes the
+// shared one instead, so nothing it holds stays split off. An existing link is
+// left alone; so is a real entry, unless it is an empty directory or
+// replaceable, which the CLI made before the link did. A failure is
+// ErrAgentAccountUnshared: the folder would keep history of its own.
 func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 	defer func() {
 		if err != nil {
@@ -31,14 +33,8 @@ func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 	target := filepath.Join(shared, name)
 	link := filepath.Join(home, name)
 	if _, err := os.Lstat(target); errors.Is(err, fs.ErrNotExist) {
-		if file {
-			f, createErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o600)
-			if createErr != nil {
-				return fmt.Errorf("create shared %s: %w", name, createErr)
-			}
-			_ = f.Close()
-		} else if mkErr := os.MkdirAll(target, 0o700); mkErr != nil {
-			return fmt.Errorf("create shared %s: %w", name, mkErr)
+		if err := createShared(target, link, file); err != nil {
+			return fmt.Errorf("create shared %s: %w", name, err)
 		}
 	} else if err != nil {
 		return err
@@ -61,6 +57,46 @@ func linkShared(home, shared, name string, file, replaceable bool) (err error) {
 		return fmt.Errorf("link %s: %w", name, err)
 	}
 	return nil
+}
+
+// createShared makes the missing shared target. When only the account has the
+// entry, its copy is moved there; otherwise an empty file or directory is made.
+func createShared(target, link string, file bool) error {
+	if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink == 0 && os.Rename(link, target) == nil {
+		return nil
+	}
+	if !file {
+		return os.MkdirAll(target, 0o700)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// pruneDangling removes links in home that point into shared at an entry that
+// is gone, unless keep names it (linkShared recreates those). The user deleted
+// the entry from the computer's own folder; the account should not keep a
+// broken link to it.
+func pruneDangling(home, shared string, keep map[string]bool) {
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink == 0 || keep[entry.Name()] {
+			continue
+		}
+		link := filepath.Join(home, entry.Name())
+		dest, err := os.Readlink(link)
+		if err != nil || filepath.Dir(dest) != filepath.Clean(shared) {
+			continue
+		}
+		if _, err := os.Stat(link); errors.Is(err, fs.ErrNotExist) {
+			_ = os.Remove(link)
+		}
+	}
 }
 
 func emptyDir(path string) bool {
