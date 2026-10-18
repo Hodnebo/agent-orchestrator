@@ -94,7 +94,7 @@ func ScriptFailureHint(output string, exitCode int, runAs string) string {
 			"or give " + who + " passwordless sudo for it."
 	case denied:
 		return "This step ran as " + who + ", which was refused access to a file or directory: " +
-			"check that " + who + " owns or can write the path named above."
+			"check that " + who + " owns or can write the path in the step's output."
 	case exitCode == 127 || strings.Contains(lower, "command not found") || strings.Contains(lower, ": not found"):
 		return "A program this step runs is not installed in the sandbox, or not on " + who + "'s PATH."
 	}
