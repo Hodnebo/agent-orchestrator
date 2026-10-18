@@ -51,7 +51,7 @@ describe("CloudSessionStartupError", () => {
 		});
 		mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret" });
 		const panel = await screen.findByTestId("script-run-panel");
-		expect(listChatEvents).toHaveBeenCalledWith("org-1", "sess-1", { after: 0, limit: 500 }, expect.anything());
+		expect(listChatEvents).toHaveBeenCalledWith("org-1", "sess-1", expect.objectContaining({ after: 0, limit: 500 }), expect.anything());
 		expect(panel).toHaveTextContent("Failed at step 1");
 		expect(panel).toHaveTextContent("Add the secret in Project settings.");
 		expect(screen.getByRole("alert")).not.toContainElement(panel);

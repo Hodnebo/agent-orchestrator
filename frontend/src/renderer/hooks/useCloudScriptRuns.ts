@@ -1,8 +1,8 @@
 import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import type { CloudCpClientEvent } from "../lib/cloud-cp";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { CloudCpError, type CloudCpClientEvent } from "../lib/cloud-cp";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
-import { groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
+import { cloudSessionScriptsEnded, groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
 import { useCloudCp } from "./useCloudCp";
 
 /**
@@ -40,25 +40,52 @@ function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): 
 	return useSyncExternalStore(subscribe, read, read);
 }
 
+/** The event types the step log reads; everything else is skipped server side when the control plane supports it. */
+const SCRIPT_RUN_EVENT_TYPES = [SCRIPT_STEP_EVENT, ...SCRIPT_RUN_END_EVENTS] as const;
+
+/** Control planes (by client) that refused the `types` filter: they are paged unfiltered. */
+const typesFilterRefused = new WeakSet<object>();
+
+/** A fetched log is fresh this long; a later mount reads only what came after it. */
+const SCRIPT_STEPS_STALE_MS = 30_000;
+
+/** The parts of a Cloud session's state the step log follows. */
+export interface CloudScriptRunsLifecycle {
+	desiredState?: string;
+	observedState?: string;
+	runtimeState?: string;
+}
+
+/** The session is being deleted: its Cleanup runs now, with nothing else watching. */
+function cloudSessionDeleting(lifecycle: CloudScriptRunsLifecycle | undefined): boolean {
+	return lifecycle?.desiredState === "deleted" && !cloudSessionScriptsEnded(lifecycle);
+}
+
 /**
  * Setup and Cleanup runs for a Cloud session, oldest first.
  *
  * Reads, in order of preference: the chat surface's event list when it is
  * loaded (it already refreshes while the chat is open), then the script-step
- * cache the startup loader fills from its live stream. Only when neither has
- * the session does it page the session's events once. `live` additionally
- * listens on the session's event stream, for a surface (the failure card
- * after Retry) that waits on a run nothing else is watching.
+ * cache the startup loader fills from its live stream. Otherwise it reads the
+ * session's step events: only those (the `types` filter) where the control
+ * plane supports it, every event where it does not, and on a later read only
+ * the events after the newest one it holds.
+ *
+ * It never polls. It reads again when the session's state changes (a
+ * deletion starting or finishing, a startup giving up), and listens on the
+ * session's event stream only while a run is in progress or the session is
+ * being deleted (its Cleanup runs then), or when `live` asks for it.
  */
 export function useCloudScriptRuns(
 	orgId: string | undefined,
 	sessionId: string | undefined,
-	{ live = false, fetch = true, sessionEnded = false }: {
+	{ live = false, fetch = true, lifecycle }: {
+		/** Listen on the session's stream regardless (the failure card after Retry). */
 		live?: boolean;
-		/** The session's sandbox is gone: a run that never reported its end is shown as ended. */
-		sessionEnded?: boolean;
 		/** Off for a caller that already feeds the cache from its own stream (the startup loader). */
 		fetch?: boolean;
+		/** The session's state: a change reads again, and a gone sandbox ends a run that never reported its end. */
+		lifecycle?: CloudScriptRunsLifecycle;
 	} = {},
 ): ScriptRun[] {
 	const { client, ready, baseUrl } = useCloudCp();
@@ -68,24 +95,52 @@ export function useCloudScriptRuns(
 	const steps = useQuery({
 		queryKey: cloudScriptStepsQueryKey(orgId ?? "", sessionId ?? ""),
 		enabled: enabled && ready && fetch,
-		staleTime: Infinity,
+		staleTime: SCRIPT_STEPS_STALE_MS,
 		refetchOnWindowFocus: false,
 		queryFn: async ({ signal }) => {
 			const known = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!)) ?? [];
 			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(cloudChatEventsQueryKey(orgId!, sessionId!));
 			if (chat) return mergeScriptStepEvents(known, chat);
+			// Every writer of the cache read the session from its start, so
+			// nothing it lacks precedes its newest event.
+			let after = known.at(-1)?.sequence ?? 0;
 			let events = known;
-			let after = 0;
 			for (;;) {
-				const page = await client.listChatEvents(orgId!, sessionId!, { after, limit: 500 }, { signal });
+				const filtered = !typesFilterRefused.has(client);
+				let page;
+				try {
+					page = await client.listChatEvents(orgId!, sessionId!, { after, limit: 500, types: filtered ? SCRIPT_RUN_EVENT_TYPES : undefined }, { signal });
+				} catch (error) {
+					if (!filtered || !(error instanceof CloudCpError) || error.status !== 400) throw error;
+					typesFilterRefused.add(client);
+					continue;
+				}
 				events = mergeScriptStepEvents(events, page.events);
 				if (!page.hasMore || page.nextAfter <= after) return events;
 				after = page.nextAfter;
 			}
 		},
 	});
+	// A change in the session's state (deletion starting or done, startup
+	// given up) can come with step events nothing streamed here: read again.
+	const stateKey = lifecycle ? `${lifecycle.desiredState ?? ""}|${lifecycle.observedState ?? ""}|${lifecycle.runtimeState ?? ""}` : "";
+	const seenStateKey = useRef(stateKey);
 	useEffect(() => {
-		if (!live || !enabled || !ready || !baseUrl) return;
+		if (seenStateKey.current === stateKey) return;
+		seenStateKey.current = stateKey;
+		if (enabled && fetch) void queryClient.invalidateQueries({ queryKey: cloudScriptStepsQueryKey(orgId!, sessionId!), exact: true });
+	}, [enabled, fetch, orgId, queryClient, sessionId, stateKey]);
+	const sessionEnded = cloudSessionScriptsEnded(lifecycle);
+	const runs = useMemo(() => {
+		const merged = chatEvents ? mergeScriptStepEvents(steps.data ?? [], chatEvents) : steps.data ?? [];
+		return merged.length > 0 ? groupScriptRuns(merged, { sessionEnded }) : [];
+	}, [chatEvents, sessionEnded, steps.data]);
+	// The chat surface keeps its own list fresh; otherwise listen only while
+	// something can still change.
+	const inProgress = runs.some((run) => run.status === "running");
+	const listen = live || (fetch && !chatEvents && steps.isSuccess && (inProgress || cloudSessionDeleting(lifecycle)));
+	useEffect(() => {
+		if (!listen || !enabled || !ready || !baseUrl) return;
 		const controller = new AbortController();
 		const after = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!))?.at(-1)?.sequence;
 		void subscribeSessionEventsBridged({
@@ -93,9 +148,6 @@ export function useCloudScriptRuns(
 			onEvent: (event) => recordCloudScriptStepEvents(queryClient, orgId!, sessionId!, [event]),
 		});
 		return () => controller.abort();
-	}, [baseUrl, enabled, live, orgId, queryClient, ready, sessionId]);
-	return useMemo(() => {
-		const merged = chatEvents ? mergeScriptStepEvents(steps.data ?? [], chatEvents) : steps.data ?? [];
-		return merged.length > 0 ? groupScriptRuns(merged, { sessionEnded }) : [];
-	}, [chatEvents, sessionEnded, steps.data]);
+	}, [baseUrl, enabled, listen, orgId, queryClient, ready, sessionId]);
+	return runs;
 }

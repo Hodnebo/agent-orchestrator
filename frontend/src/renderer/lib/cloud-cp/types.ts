@@ -1166,6 +1166,12 @@ export interface CloudCpChatEventsQuery {
 	after?: number;
 	/** Page size, 1-500 (control-plane default: 100). */
 	limit?: number;
+	/**
+	 * Only these event types, sent as one comma-separated `types` parameter.
+	 * An older control plane ignores it (and returns every type) or refuses
+	 * it with 400; callers filter the page themselves either way.
+	 */
+	types?: readonly string[];
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/chat-events */
