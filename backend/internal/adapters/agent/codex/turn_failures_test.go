@@ -68,6 +68,13 @@ func TestLastTurnFailureIgnoresTurnsThatDidNotFail(t *testing.T) {
 		"empty":                         "",
 		// Codex has not finished writing the record: it is not read yet.
 		"unfinished failure record": lines(rolloutMeta, rolloutTaskStarted) + rolloutFailed,
+		// Without its own time a failure cannot be ordered against the current
+		// prompt, so it is not reported, and the older failure behind it is
+		// not reached either.
+		"failure without a readable timestamp": lines(rolloutMeta, rolloutFailed, rolloutTaskStarted,
+			strings.Replace(rolloutFailed, `"timestamp":"2026-10-18T10:00:02.250Z"`, `"timestamp":"not a time"`, 1)),
+		"failure without a timestamp": lines(rolloutMeta, rolloutTaskStarted,
+			strings.Replace(rolloutFailed, `"timestamp":"2026-10-18T10:00:02.250Z",`, ``, 1)),
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

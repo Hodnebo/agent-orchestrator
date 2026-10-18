@@ -110,8 +110,9 @@ func lastCodexTurnFailure(records []byte) (ports.TurnFailure, bool) {
 
 // codexTurnBoundary classifies one rollout record. boundary is true for a
 // turn start or end; failed is true only for a turn end with an error. The
-// turn ended at the record's own timestamp; a record without a readable one
-// is taken to have just ended.
+// turn ended at the record's own timestamp. A failed turn end without a
+// readable one is not reported: dating it now could make an old failure look
+// newer than the current prompt and idle a turn that is still running.
 func codexTurnBoundary(line []byte) (failure ports.TurnFailure, boundary, failed bool) {
 	// Cheap filter before decoding: large tool output records are never
 	// turn boundaries.
@@ -148,7 +149,7 @@ func codexTurnBoundary(line []byte) (failure ports.TurnFailure, boundary, failed
 	_ = json.Unmarshal(errorJSON, &detail)
 	at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
 	if err != nil {
-		at = time.Now().UTC()
+		return ports.TurnFailure{}, true, false
 	}
 	return ports.TurnFailure{At: at, Message: detail.Message}, true, true
 }
