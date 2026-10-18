@@ -158,3 +158,30 @@ func TestCodexInterruptReportsIdle(t *testing.T) {
 		t.Fatalf("Codex interrupt event = %+v, reported=%t; want valid idle activity", event, ok)
 	}
 }
+
+// Claude Code fires StopFailure instead of Stop when an API error (rate limit,
+// auth failure) ends the turn. Without it the session stayed active.
+func TestClaudeStopFailureReportsIdle(t *testing.T) {
+	event, ok := ActivityEventFromHook("claude-code", "stop-failure", []byte(`{"session_id":"s1","error":"rate_limit"}`))
+	event.SourceInterface = "tui"
+	if !ok || event.State != contract.ActivityIdle || !ValidActivityEvent(event) {
+		t.Fatalf("Claude stop-failure event = %+v, reported=%t; want valid idle activity", event, ok)
+	}
+}
+
+// Codex's turn failure comes from the worker, never a hook, and only for the
+// terminal agent.
+func TestCodexStopFailureIsTerminalOnly(t *testing.T) {
+	event := ActivityEvent{Harness: "codex", Event: "stop-failure", State: contract.ActivityIdle, SourceInterface: "tui"}
+	if !ValidActivityEvent(event) {
+		t.Fatalf("terminal Codex stop-failure rejected: %+v", event)
+	}
+	event.SourceInterface = ""
+	if ValidActivityEvent(event) {
+		t.Fatal("Codex stop-failure without the terminal source was accepted")
+	}
+	event = ActivityEvent{Harness: "codex", Event: "stop-failure", State: contract.ActivityActive, SourceInterface: "tui"}
+	if ValidActivityEvent(event) {
+		t.Fatal("Codex stop-failure with an active state was accepted")
+	}
+}

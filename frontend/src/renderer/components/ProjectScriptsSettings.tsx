@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Plus, Trash2 } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ProjectSettingsSection } from "@aoagents/product-ui";
@@ -10,10 +10,12 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { aoBridge } from "../lib/bridge";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
 import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, repoDirName, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
@@ -124,6 +126,19 @@ const cloudScriptVariables = [
 	["AO_REPOSITORY_URL", "settings.project.cloudVarRepository"],
 ] as const;
 
+/** A quiet copy icon beside a variable name; it confirms only a copy that worked. */
+function CopyVariableButton({ text, label }: { text: string; label: string }) {
+	const [copied, setCopied] = useState(false);
+	useEffect(() => {
+		if (!copied) return;
+		const timer = setTimeout(() => setCopied(false), 1400);
+		return () => clearTimeout(timer);
+	}, [copied]);
+	return <button aria-label={label} className="flex size-5 items-center justify-center rounded text-settings-muted hover:bg-interactive-hover hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { void aoBridge.clipboard.writeText(text).then(() => setCopied(true), () => {}); }} title={label} type="button">
+		{copied ? <Check aria-hidden="true" className="size-3 text-success" /> : <Copy aria-hidden="true" className="size-3" />}
+	</button>;
+}
+
 function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
@@ -221,9 +236,17 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 						</div>}
 						{!scratch && <details className="text-xs text-settings-muted">
 							<summary className="cursor-pointer font-medium text-settings-label">{t(cloud ? "settings.project.cloudVariables" : `settings.project.${kind}Paths`)}</summary>
-							{cloud ? <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
-								{cloudScriptVariables.map(([name, key]) => <Fragment key={name}><dt><code>{"$" + name}</code></dt><dd>{t(key)}</dd></Fragment>)}
-							</dl> : <div className="mt-2 space-y-1">
+							{/* The page is unselectable by default; these names are meant to be copied into a step. */}
+							{cloud ? <dl className="mt-2 grid select-text grid-cols-[max-content_1fr] items-center gap-x-3 gap-y-1">
+								{[
+									...cloudScriptVariables.map(([name, key]) => ({ name, description: t(key) })),
+									// Each additional repository is checked out in its own folder beside the main one.
+									...(repositories.length > 0 ? [{ name: "AO_REPOS_ROOT", description: t("settings.project.cloudVarReposRoot", { defaultValue: "the folder that holds every repository's folder" }) }] : []),
+								].map(({ name, description }) => <Fragment key={name}>
+									<dt className="flex items-center gap-1"><code>{"$" + name}</code><CopyVariableButton label={t("settings.project.copyVariable", { defaultValue: "Copy {{name}}", name: "$" + name })} text={"$" + name} /></dt>
+									<dd>{description}</dd>
+								</Fragment>)}
+							</dl> : <div className="mt-2 select-text space-y-1">
 								<p><code>{"AO_SOURCE_TREE_PATH"}</code>: {t(`settings.project.${kind}SourcePath`)}</p>
 								<p><code>{"AO_WORKTREE_PATH"}</code>: {t(`settings.project.${kind}WorktreePath`)}</p>
 							</div>}
@@ -262,9 +285,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 				</ProjectSettingsSection>}
 			</TabsContent>)}
 		</Tabs>
-		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="flex items-center justify-end gap-3 border-t border-border pt-4">
-			<Button disabled={!dirty || locked} type="submit">{t("settings.project.saveChanges")}</Button>
-		</div>
+		<SettingsSaveFooter dirty={dirty} disabled={locked}
+			error={mutation.isError ? mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed") : undefined} />
 	</form>;
 }

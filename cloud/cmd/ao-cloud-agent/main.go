@@ -159,7 +159,8 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 		return nil
 	}
 	activity.SourceInterface = strings.TrimSpace(os.Getenv("AO_CLOUD_SOURCE_INTERFACE"))
-	if activity.SourceInterface == "tui" && activity.Event == "stop" && activity.State != "" {
+	if activity.SourceInterface == "tui" && activity.State == contract.ActivityIdle &&
+		(activity.Event == "stop" || activity.Event == "stop-failure" || activity.Event == "interrupt") {
 		// Keep the provider's native idle proof beside the worker. The durable
 		// control-plane projection can lag terminal input and is not a safe
 		// handoff fence on its own.

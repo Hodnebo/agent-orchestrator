@@ -42,6 +42,7 @@ var claudeActivityHooks = []activityHook{
 	{"PostToolUseFailure", "post-tool-use-failure", ""},
 	{"PermissionRequest", "permission-request", ""},
 	{"Stop", "stop", ""},
+	{"StopFailure", "stop-failure", ""},
 	{"Notification", "notification", ""},
 	{"SessionEnd", "session-end", ""},
 }

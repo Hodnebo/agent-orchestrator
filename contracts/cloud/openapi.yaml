@@ -3299,9 +3299,12 @@ components:
         name:
           type: string
           description: The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session.
+        label:
+          type: string
+          description: The name to show when it differs from the folder name, such as the main repository's own name.
         repository:
           type: string
-          description: GitHub owner/name of an additional repository.
+          description: The repository's GitHub owner/name, when it is on GitHub.
         branch:
           type: string
           description: Branch an additional repository was cloned from.

@@ -209,6 +209,7 @@ func run(logger *slog.Logger) error {
 		SessionKind:   bootstrap.Launch.Kind,
 		Branch:        bootstrap.Launch.Branch,
 		WorkspaceDir:  workspace,
+		ReposRoot:     filepath.Dir(workspace),
 		RepositoryURL: bootstrap.Launch.RepositoryURL,
 		ProjectID:     bootstrap.Launch.ProjectID,
 		ProjectName:   bootstrap.Launch.ProjectName,
@@ -364,9 +365,11 @@ func run(logger *slog.Logger) error {
 	if defaultBranch := strings.TrimSpace(bootstrap.Launch.DefaultBranch); defaultBranch != "" {
 		compareBase = "origin/" + defaultBranch
 	}
+	sessionCheckouts := worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)
 	transportSupervisor := workertransport.Supervisor{
 		Control: client, Workspace: workspace, DataDir: dataDir,
-		Repositories: worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)[1:], Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
+		Repositories: sessionCheckouts[1:], MainRepository: sessionCheckouts[0],
+		Harness: bootstrap.Launch.Harness, CompareBase: compareBase, Logger: logger,
 		AgentCommandFactory: agentCommandFactory,
 		Started:             started, ChatRunner: chatRunner,
 		ChatWorkspaceReady: chatWorkspaceReady,
