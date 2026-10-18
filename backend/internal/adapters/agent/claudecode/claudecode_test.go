@@ -142,7 +142,7 @@ func TestGetLaunchCommandBypassWithPrompt(t *testing.T) {
 
 	want := []string{
 		"claude",
-		"--permission-mode", "bypassPermissions",
+		"--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
 		"--", "-add a health check",
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -725,7 +725,7 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	// The hook-captured native id wins over the derived fallback.
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1", "--", "continue from AO"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1", "--", "continue from AO"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -744,7 +744,7 @@ func TestGetRestoreCommandAppendsConfiguredModelAndEffort(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--model", "claude-opus-4-5", "--effort", "high", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--model", "claude-opus-4-5", "--effort", "high", "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -762,7 +762,7 @@ func TestGetRestoreCommandOmitsBlankConfiguredModel(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -782,7 +782,7 @@ func TestGetRestoreCommandReappendsSystemPrompt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -808,7 +808,7 @@ func TestGetRestoreCommandReappendsSystemPromptFromFile(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	want := []string{
-		"claude", "--permission-mode", "bypassPermissions",
+		"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
 		"--append-system-prompt-file", promptFile,
 		"--resume", "claude-native-1",
 		"--", "continue from AO",
@@ -840,7 +840,7 @@ func TestGetRestoreCommandFallsBackToDerivedUUID(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", claudeSessionUUID("sess-r")}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", claudeSessionUUID("sess-r")}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -1350,4 +1350,171 @@ func containsSubsequence(values, needle []string) bool {
 		}
 	}
 	return false
+}
+
+// bypassNudgeGuard is the per-session flag-settings defaultMode that keeps
+// Claude's auto-mode default dialog out of a bypassPermissions launch.
+const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"}}`
+
+// An explicit AO permission mode also rides as the flag-settings defaultMode,
+// which suppresses Claude's "Make auto mode your default permission mode?"
+// dialog for this session only. The default mode passes neither: its starting
+// mode stays Claude's own resolution from the user's settings.
+func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
+	tests := []struct {
+		permission ports.PermissionMode
+		mode       string
+	}{
+		{ports.PermissionModeAcceptEdits, "acceptEdits"},
+		{ports.PermissionModeAuto, "auto"},
+		{ports.PermissionModeBypassPermissions, "bypassPermissions"},
+		{ports.PermissionModeDefault, ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.permission), func(t *testing.T) {
+			p := &Plugin{resolvedBinary: "claude"}
+			launch, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: tt.permission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Permissions: tt.permission,
+				Session: ports.SessionRef{ID: "sess-1", Metadata: map[string]string{
+					ports.MetadataKeyAgentSessionID: "claude-native-1",
+				}},
+			})
+			if err != nil || !ok {
+				t.Fatalf("restore: ok=%v err=%v", ok, err)
+			}
+			for name, cmd := range map[string][]string{"launch": launch, "restore": restore} {
+				if tt.mode == "" {
+					if contains(cmd, "--settings") || contains(cmd, "--permission-mode") {
+						t.Fatalf("%s %#v: default mode must defer to Claude's settings", name, cmd)
+					}
+					continue
+				}
+				guard := `{"permissions":{"defaultMode":"` + tt.mode + `"}}`
+				if !containsSubsequence(cmd, []string{"--permission-mode", tt.mode, "--settings", guard}) {
+					t.Fatalf("%s %#v: missing --permission-mode %s with --settings %s", name, cmd, tt.mode, guard)
+				}
+			}
+		})
+	}
+}
+
+// PreLaunch marks the dialog seen in the global config only for a launch in
+// AO's default mode whose user settings would make Claude offer it, and never
+// touches the user's settings or permission mode.
+func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
+	tests := []struct {
+		name         string
+		permission   ports.PermissionMode
+		projectMode  ports.PermissionMode
+		userSettings string
+		wantSeen     bool
+	}{
+		{"default mode, user pins acceptEdits", ports.PermissionModeDefault, "", `{"permissions":{"defaultMode":"acceptEdits"}}`, true},
+		{"project default mode, user pins bypass", "", ports.PermissionModeDefault, `{"permissions":{"defaultMode":"bypassPermissions"}}`, true},
+		{"default mode, user already auto", ports.PermissionModeDefault, "", `{"permissions":{"defaultMode":"auto"}}`, false},
+		{"default mode, user has no defaultMode", ports.PermissionModeDefault, "", `{"permissions":{"allow":["Read"]}}`, false},
+		{"default mode, no user settings", ports.PermissionModeDefault, "", "", false},
+		{"default mode, unparsable user settings", ports.PermissionModeDefault, "", `{not json`, false},
+		{"explicit mode is guarded per session", ports.PermissionModeBypassPermissions, "", `{"permissions":{"defaultMode":"acceptEdits"}}`, false},
+		{"explicit project mode is guarded per session", "", ports.PermissionModeAcceptEdits, `{"permissions":{"defaultMode":"default"}}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if tt.userSettings != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.userSettings), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			configPath := filepath.Join(home, ".claude.json")
+			seed := `{"userID":"abc","hasCompletedOnboarding":true,"projects":{"/existing":{"hasTrustDialogAccepted":true}}}`
+			if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(home, "worktree")
+
+			err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+				WorkspacePath: workspace,
+				Permissions:   tt.permission,
+				Config:        ports.AgentConfig{Permissions: tt.projectMode},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var root map[string]any
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+			if seen := root["hasSeenAutoDefaultNudge"] == true; seen != tt.wantSeen {
+				t.Fatalf("hasSeenAutoDefaultNudge = %v, want %v", root["hasSeenAutoDefaultNudge"], tt.wantSeen)
+			}
+			projects := root["projects"].(map[string]any)
+			if entry, _ := projects[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+				t.Fatalf("workspace not trusted: %v", projects)
+			}
+			if root["userID"] != "abc" || projects["/existing"] == nil {
+				t.Fatalf("existing config dropped: %v", root)
+			}
+			if tt.userSettings != "" {
+				after, err := os.ReadFile(settingsPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(after) != tt.userSettings {
+					t.Fatalf("user settings changed: %s", after)
+				}
+			}
+		})
+	}
+}
+
+// A workspace that is already trusted still gets the nudge flag, and a second
+// PreLaunch with nothing left to record does not rewrite the config.
+func TestPreLaunchMarksAutoDefaultNudgeSeenForTrustedWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".claude.json")
+	seed := `{"projects":{"/work":{"hasTrustDialogAccepted":true}}}`
+	if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeLaunchConfigForOS(configPath, "/work", true, "linux"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), `"hasSeenAutoDefaultNudge": true`) {
+		t.Fatalf("nudge flag not recorded: %s", first)
+	}
+	before, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeLaunchConfigForOS(configPath, "/work", true, "linux"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("config rewritten although nothing changed")
+	}
 }

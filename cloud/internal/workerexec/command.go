@@ -506,6 +506,13 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 	setClaudeNonEssentialTrafficDisabled(command)
 	if err := updateJSONFile(filepath.Join(configDir, ".claude.json"), func(root map[string]any) {
 		root["hasCompletedOnboarding"] = true
+		// Claude Code 2.1.285+ otherwise opens "Make auto mode your default
+		// permission mode?" once the session goes idle, because the settings
+		// below always pin a defaultMode. The dialog takes the keyboard: a
+		// message AO types into the terminal is swallowed and its Enter picks
+		// "Yes", switching the session to auto mode. AO owns this config and
+		// sets the mode on every launch, so the offer never applies here.
+		root["hasSeenAutoDefaultNudge"] = true
 		root["theme"] = "dark"
 		projects, _ := root["projects"].(map[string]any)
 		if projects == nil {
