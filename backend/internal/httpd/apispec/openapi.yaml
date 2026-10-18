@@ -18801,11 +18801,8 @@ components:
           items:
             $ref: '#/components/schemas/SessionImportCandidate'
           type: array
-        truncated:
-          type: boolean
       required:
       - candidates
-      - truncated
       type: object
     SessionImportRequest:
       properties:

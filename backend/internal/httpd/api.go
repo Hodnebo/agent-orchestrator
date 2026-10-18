@@ -265,7 +265,8 @@ func (a *API) Register(root chi.Router) {
 			// uploading over a phone connection. Only attachment-bearing requests
 			// opt in; ordinary calls to the same routes keep the configured timeout.
 			// Resuming an agent reads its whole native history, which takes over a
-			// minute for a large imported Codex thread.
+			// minute for a large imported Codex thread, and an import scan reads
+			// every local history.
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				long := middleware.Timeout(max(timeout, 10*time.Minute))(next)
@@ -282,7 +283,7 @@ func (a *API) Register(root chi.Router) {
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) || resumeAgentRoute(req) {
+					if attachmentUploadRoute(req) || resumeAgentRoute(req) || importScanRoute(req) {
 						long.ServeHTTP(w, req)
 						return
 					}
@@ -341,6 +342,11 @@ func (a *API) Register(root chi.Router) {
 func resumeAgentRoute(req *http.Request) bool {
 	return req.Method == http.MethodPost &&
 		chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent"
+}
+
+func importScanRoute(req *http.Request) bool {
+	return req.Method == http.MethodGet &&
+		chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/session-import"
 }
 
 func attachmentUploadRoute(req *http.Request) bool {
