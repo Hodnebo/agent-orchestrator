@@ -1,12 +1,9 @@
 -- +goose Up
 
--- The earlier agent-switching tables go, with their indexes and triggers.
-DROP TABLE IF EXISTS agent_switch_failure_receipts;
-DROP TABLE IF EXISTS agent_switch_failure_outbox;
-DROP TABLE IF EXISTS agent_switch_failure_delivery_state;
-DROP TABLE IF EXISTS agent_switch_failure_policy;
-DROP TABLE IF EXISTS agent_switches;
-DROP TABLE IF EXISTS agent_native_sessions;
+-- The earlier agent-switching tables (agent_switches, agent_native_sessions,
+-- agent_switch_failure_*) are no longer used but stay for one release: an
+-- older build reads them at startup, so dropping them now would stop a
+-- downgrade from opening the database. A later migration drops them.
 
 -- One row per Terminal UI turn, fed by the prompt-submit and stop hooks. A
 -- terminal agent owns its transcript, so this is AO's only record of its turns.
