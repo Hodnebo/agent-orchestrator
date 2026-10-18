@@ -2868,6 +2868,8 @@
 	"session.interfaceSwitchFailed": "Não foi possível alternar a interface",
 	"session.dismissInterfaceSwitchError": "Dispensar erro de troca de interface",
 	"session.dismissInterfaceSwitchNotice": "Dispensar",
+	"session.interfaceSwitchDrainUnconfirmedTitle": "Troca para o chat cancelada",
+	"session.interfaceSwitchDrainUnconfirmed": "Não foi possível confirmar que o agente terminou, então a troca foi cancelada. Troque novamente para interromper o turno atual e trocar agora.",
 	"chat.draft.acceptedMessage": "O conteúdo foi aceito, mas seu rascunho local ainda precisa ser apagado.",
 	"chat.draft.steerRestart": "O AO não consegue determinar se o agente já recebeu este conteúdo. Tente novamente com o mesmo ID de entrega ou abandone a recuperação para editá-lo. Enviar novamente após abandonar pode duplicá-lo.",
 	"chat.draft.sendRestart": "A entrega da mensagem não foi confirmada. Tente novamente com o mesmo ID de entrega; o rascunho ficará bloqueado até a confirmação.",

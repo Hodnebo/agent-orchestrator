@@ -2846,6 +2846,45 @@ describe("SessionView", () => {
 		});
 	});
 
+	it("explains a Cloud drain this view watched end without proof the agent finished", async () => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "org-1", sandboxProvider: "freestyle" };
+		session.mode = "tui";
+		session.status = "working";
+		session.activity = { state: "active", lastActivityAt: "2026-10-18T18:24:00Z" };
+		const transition = {
+			id: "drain-unverified",
+			sessionId: "sess-1",
+			sourceMode: "tui" as const,
+			targetMode: "chat" as const,
+			policy: "drain" as const,
+			historyPolicy: "strict" as const,
+			phase: "draining" as const,
+			createdAt: "2026-10-18T18:24:54Z",
+			updatedAt: "2026-10-18T18:24:54Z",
+		};
+		interfaceTransitionState.status = { supported: true, targetMode: "chat", transition };
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByText("Switch to Chat cancelled")).not.toBeInTheDocument();
+
+		interfaceTransitionState.status = { supported: true, targetMode: "chat", transition: {
+			...transition,
+			phase: "failed",
+			errorCode: "SOURCE_DRAIN_FAILED",
+			errorDetail: "source controller activity cannot be verified; the agent reported no running turn for 30s",
+			updatedAt: "2026-10-18T18:25:30Z",
+		} };
+		view.rerender(<SessionView sessionId="sess-1" />);
+		const notice = screen.getByRole("alert");
+		expect(notice).toHaveTextContent("Switch to Chat cancelled");
+		expect(notice).toHaveTextContent(
+			"Couldn't confirm the agent finished, so the switch was cancelled. Switch again to stop the current turn and switch now.",
+		);
+		interfaceTransitionMock.acknowledgeNotice.mockResolvedValue(undefined);
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss interface switch error" }));
+		expect(interfaceTransitionMock.acknowledgeNotice).toHaveBeenCalledWith("drain-unverified");
+	});
+
 	it("keeps the policy dialog open when an explicit busy Chat choice fails", async () => {
 		interfaceTransitionState.status = { supported: true, targetMode: "tui" };
 		const session = workerSession("sess-1");

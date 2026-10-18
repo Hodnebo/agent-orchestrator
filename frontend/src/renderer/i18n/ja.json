@@ -2827,6 +2827,8 @@
 	"session.interfaceSwitchFailed": "インターフェースを切り替えられませんでした",
 	"session.dismissInterfaceSwitchError": "インターフェース切り替えエラーを閉じる",
 	"session.dismissInterfaceSwitchNotice": "閉じる",
+	"session.interfaceSwitchDrainUnconfirmedTitle": "チャットへの切り替えを取り消しました",
+	"session.interfaceSwitchDrainUnconfirmed": "エージェントの完了を確認できなかったため、切り替えを取り消しました。もう一度切り替えると、現在のターンを停止してすぐに切り替えます。",
 	"chat.draft.acceptedMessage": "内容は受け付けられましたが、ローカルの下書きをまだ削除する必要があります。",
 	"chat.draft.steerRestart": "この内容がすでにエージェントに届いたかどうかを AO は判断できません。同じ配信 ID で安全に再試行するか、復元を中止して編集してください。中止後の再送信は重複する可能性があります。",
 	"chat.draft.sendRestart": "メッセージの配信が確認されていません。同じ配信 ID で再試行してください。確認されるまで下書きはロックされます。",

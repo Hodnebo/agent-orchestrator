@@ -22,6 +22,9 @@ var (
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
+	// ErrSessionTerminated refuses to wake a deleted session; only a restore
+	// brings it back.
+	ErrSessionTerminated = errors.New("session is terminated")
 	// ErrTerminalSessionExited means an agent terminal finished and there is no
 	// live worker terminal to attach to. It is deliberately distinct from
 	// ErrWorkerUnavailable: the latter is expected while a sandbox is booting

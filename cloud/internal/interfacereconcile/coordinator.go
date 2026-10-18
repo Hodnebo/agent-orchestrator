@@ -60,7 +60,12 @@ type Options struct {
 	// retried before the handoff fails. A worker that never completes a command
 	// is assumed to be unreachable rather than looping forever.
 	MaxPendingRetries int
-	Logger            *slog.Logger
+	// UnverifiedIdleLimit bounds a drain whose source cannot prove it is idle
+	// (a terminal agent that received input after its last turn ended) while
+	// the provider reports no turn in progress. Without it such a drain waits
+	// forever. Active work and pending decisions still wait without a limit.
+	UnverifiedIdleLimit time.Duration
+	Logger              *slog.Logger
 }
 
 const (
@@ -69,7 +74,14 @@ const (
 	defaultMaxConcurrent = 4
 	defaultLease         = 30 * time.Second
 	defaultMaxRetries    = 10
+	// Long enough for a submitted prompt's provider hook to reach the control
+	// plane, so a turn that is just starting is never mistaken for idle.
+	defaultUnverifiedIdleLimit = 30 * time.Second
 )
+
+// unverifiedDrainDetail starts every failure detail for a drain that could not
+// prove its source idle. The desktop recognizes this prefix.
+const unverifiedDrainDetail = "source controller activity cannot be verified;"
 
 type Coordinator struct {
 	store   Store
@@ -79,6 +91,10 @@ type Coordinator struct {
 	lease   time.Duration
 	log     *slog.Logger
 	retries map[string]int
+	// unverifiedSince records when this coordinator first saw a draining source
+	// that could not prove it is idle while its provider reported no turn.
+	unverifiedSince map[string]time.Time
+	now             func() time.Time
 }
 
 // New creates an interface handoff coordinator.
@@ -95,17 +111,22 @@ func New(store Store, driver WorkerDriver, options Options) *Coordinator {
 	if options.MaxPendingRetries <= 0 {
 		options.MaxPendingRetries = defaultMaxRetries
 	}
+	if options.UnverifiedIdleLimit <= 0 {
+		options.UnverifiedIdleLimit = defaultUnverifiedIdleLimit
+	}
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
 	return &Coordinator{
-		store:   store,
-		driver:  driver,
-		options: options,
-		owner:   uuid.NewString(),
-		lease:   defaultLease,
-		log:     options.Logger,
-		retries: make(map[string]int),
+		store:           store,
+		driver:          driver,
+		options:         options,
+		owner:           uuid.NewString(),
+		lease:           defaultLease,
+		log:             options.Logger,
+		retries:         make(map[string]int),
+		unverifiedSince: make(map[string]time.Time),
+		now:             time.Now,
 	}
 }
 
@@ -434,6 +455,32 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 	if err != nil {
 		return err, false
 	}
+	now := c.now()
+	c.pruneUnverified(now)
+	if inspection.QuiescenceUnverified && !inspection.DecisionPending && !inspection.DraftPresent &&
+		providerReportsNoTurn(transition) {
+		// A terminal proves it is idle only by a Stop hook newer than its latest
+		// input. Input that never starts a turn (a message a dialog swallowed,
+		// an unsent draft, a scroll or protocol report) leaves that proof
+		// missing forever while the provider reports no work. Wait a bounded
+		// time for a turn to start and finish, then fail with the source left
+		// running, as the local daemon does (DRAIN_QUIESCENCE_UNVERIFIED).
+		since, seen := c.unverifiedSince[transition.ID]
+		if !seen {
+			since = now
+			c.unverifiedSince[transition.ID] = now
+		}
+		if now.Sub(since) >= c.options.UnverifiedIdleLimit {
+			delete(c.unverifiedSince, transition.ID)
+			return fmt.Errorf(
+				"%s the agent reported no running turn for %s, but the terminal could not prove it is idle "+
+					"since its latest input. The terminal was left running; switch with the interrupt policy to stop it now",
+				unverifiedDrainDetail, c.options.UnverifiedIdleLimit,
+			), true
+		}
+		return errSourceBusy, true
+	}
+	delete(c.unverifiedSince, transition.ID)
 	if inspection.DecisionPending || inspection.DraftPresent || inspection.QuiescenceUnverified {
 		return errSourceBusy, true
 	}
@@ -441,6 +488,30 @@ func (c *Coordinator) drain(ctx context.Context, transition postgres.Coordinated
 		return nil, true
 	}
 	return errSourceBusy, true
+}
+
+// providerReportsNoTurn reports that the session's provider hooks show no turn
+// in progress: the session is idle, or it is "active" only because AO typed a
+// message that no provider hook has confirmed as a submitted prompt.
+func providerReportsNoTurn(transition postgres.CoordinatedInterfaceTransition) bool {
+	switch transition.SessionActivityState {
+	case "idle":
+		return true
+	case "active":
+		return transition.SessionActivityUnconfirmed
+	default:
+		return false
+	}
+}
+
+// pruneUnverified drops clocks for transitions that left draining elsewhere
+// (cancelled, or claimed by another replica) so the map cannot grow forever.
+func (c *Coordinator) pruneUnverified(now time.Time) {
+	for id, since := range c.unverifiedSince {
+		if now.Sub(since) > 10*c.options.UnverifiedIdleLimit {
+			delete(c.unverifiedSince, id)
+		}
+	}
 }
 
 func (c *Coordinator) advance(

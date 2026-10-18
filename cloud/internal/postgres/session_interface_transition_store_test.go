@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -175,5 +176,61 @@ func TestLatestRelevantTransitionDoesNotResurfaceFailureAfterSuccess(t *testing.
 		if got := latestTransitionIsRelevant(tc.phase); got != tc.want {
 			t.Errorf("phase %q relevant = %v, want %v", tc.phase, got, tc.want)
 		}
+	}
+}
+
+func TestClaimedTransitionCarriesProviderActivity(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	transition, err := store.StartSessionInterfaceTransition(ctx, principal, fixture.orgID,
+		fixture.sessionID, domain.SessionInterfaceTUI, domain.SessionInterfaceChat,
+		domain.SessionInterfaceTransitionDrain, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := func(state string, sourceRequest any) CoordinatedInterfaceTransition {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `UPDATE ao_sessions
+			SET activity_state = $3, activity_source_request_id = $4
+			WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID, state, sourceRequest); err != nil {
+			t.Fatal(err)
+		}
+		// Other tests may leave transitions behind; a short lease keeps every
+		// claim here immediately reclaimable by them and by the next call.
+		claimed, err := store.ClaimCoordinatedInterfaceTransitions(ctx, "activity-test", 1000, time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range claimed {
+			if candidate.ID == transition.ID {
+				return candidate
+			}
+		}
+		t.Fatalf("transition %s was not claimed", transition.ID)
+		return CoordinatedInterfaceTransition{}
+	}
+
+	if got := claim("active", uuid.NewString()); got.SessionActivityState != "active" || !got.SessionActivityUnconfirmed {
+		t.Fatalf("typed-message activity = %q unconfirmed=%t, want active/true", got.SessionActivityState, got.SessionActivityUnconfirmed)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if got := claim("idle", nil); got.SessionActivityState != "idle" || got.SessionActivityUnconfirmed {
+		t.Fatalf("hook-reported activity = %q unconfirmed=%t, want idle/false", got.SessionActivityState, got.SessionActivityUnconfirmed)
+	}
+}
+
+func TestResumeDeletedSessionReportsTermination(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true
+		WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if _, err := store.ResumeSession(ctx, principal, fixture.orgID, fixture.sessionID); !errors.Is(err, ErrSessionTerminated) {
+		t.Fatalf("resume deleted session error = %v, want ErrSessionTerminated", err)
 	}
 }

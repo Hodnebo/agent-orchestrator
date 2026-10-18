@@ -421,6 +421,18 @@ func (s *Store) ResumeSession(
 ) (domain.SandboxLifecycle, error) {
 	var lifecycle domain.SandboxLifecycle
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// A deleted session's sandbox is torn down for good. Say so instead of
+		// a generic conflict so a client can offer Restore.
+		var terminated bool
+		if err := tx.QueryRow(ctx,
+			`SELECT is_terminated FROM ao_sessions WHERE org_id = $1 AND id = $2`,
+			orgID, sessionID,
+		).Scan(&terminated); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if terminated {
+			return ErrSessionTerminated
+		}
 		// Waking a paused billed session takes a running slot: check the plan
 		// in this transaction, under the organization lock, so two resumes
 		// cannot both take the last slot.

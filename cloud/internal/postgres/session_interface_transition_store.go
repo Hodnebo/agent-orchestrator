@@ -472,6 +472,14 @@ func deliverInterfaceTransitionMessages(ctx context.Context, tx pgx.Tx, orgID, s
 type CoordinatedInterfaceTransition struct {
 	domain.SessionInterfaceTransition
 	Harness string
+	// SessionActivityState is the session's provider-reported activity when
+	// the transition was claimed. A drain uses it only to decide how long to
+	// wait for a source that cannot prove it is idle, never to stop a source.
+	SessionActivityState string
+	// SessionActivityUnconfirmed reports an "active" state that AO set when it
+	// typed a message into the terminal and that no provider hook has
+	// confirmed since (activity_source_request_id is still set).
+	SessionActivityUnconfirmed bool
 }
 
 // ClaimCoordinatedInterfaceTransitions atomically claims one active or
@@ -490,7 +498,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 		rows, err := tx.Query(
 			ctx,
 			`WITH candidate AS (
-				SELECT t.id, session.harness
+				SELECT t.id, session.harness, session.activity_state,
+					session.activity_source_request_id IS NOT NULL AS activity_unconfirmed
 				FROM ao_interface_transitions t
 				JOIN ao_sessions session
 					ON session.org_id = t.org_id AND session.id = t.session_id
@@ -514,7 +523,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				t.target_interface, t.policy, t.phase, t.native_conversation_id,
 				t.selected_model, t.selected_effort,
 				t.error_code, t.error_detail, t.notice_acknowledged_at,
-				t.created_at, t.updated_at, t.completed_at, candidate.harness`,
+				t.created_at, t.updated_at, t.completed_at, candidate.harness,
+				candidate.activity_state, candidate.activity_unconfirmed`,
 			owner,
 			limit,
 			lease,
@@ -525,7 +535,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 		defer rows.Close()
 		for rows.Next() {
 			var transition domain.SessionInterfaceTransition
-			var harness string
+			var harness, activityState string
+			var activityUnconfirmed bool
 			if err := rows.Scan(
 				&transition.ID,
 				&transition.OrgID,
@@ -544,12 +555,16 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				&transition.UpdatedAt,
 				&transition.CompletedAt,
 				&harness,
+				&activityState,
+				&activityUnconfirmed,
 			); err != nil {
 				return err
 			}
 			transitions = append(transitions, CoordinatedInterfaceTransition{
 				SessionInterfaceTransition: transition,
 				Harness:                    harness,
+				SessionActivityState:       activityState,
+				SessionActivityUnconfirmed: activityUnconfirmed,
 			})
 		}
 		return rows.Err()

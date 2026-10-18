@@ -88,6 +88,8 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+	case errors.Is(err, postgres.ErrSessionTerminated):
+		writeError(w, r, http.StatusConflict, "SESSION_TERMINATED", "This session was deleted. Restore it to continue.")
 	case errors.Is(err, postgres.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "The resource conflicts with an existing record.")
 	case errors.Is(err, postgres.ErrTurnFinished):
