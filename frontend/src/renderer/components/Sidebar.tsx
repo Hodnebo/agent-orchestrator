@@ -637,6 +637,7 @@ export function Sidebar({
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
+	const developerMode = useUiStore((state) => state.developerMode);
 	const artifactTotal = useMemo(() => artifactCount(groupArtifactsByProject(workspaces)), [workspaces]);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -1267,7 +1268,9 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
-					<SessionImportDialog projects={workspaces.filter(w => !w.hostId && w.kind !== CLOUD_PROJECT_KIND && w.id !== STANDALONE_WORKSPACE_ID).map(w => ({ id: w.id, name: w.name }))} className={FOOTER_NAV_BUTTON_CLASS} tabIndex={isCollapsed ? -1 : 0} />
+					{developerMode ? (
+						<SessionImportDialog projects={workspaces.filter(w => !w.hostId && w.kind !== CLOUD_PROJECT_KIND && w.id !== STANDALONE_WORKSPACE_ID).map(w => ({ id: w.id, name: w.name }))} className={FOOTER_NAV_BUTTON_CLASS} tabIndex={isCollapsed ? -1 : 0} />
+					) : null}
                     <CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
 					<UpdateInstallSlide
