@@ -112,11 +112,22 @@ func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.Convers
 // session. It reads AO's own stores and the workspace only: no provider is
 // asked to summarise, and nothing is written.
 func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (string, error) {
-	turns, err := s.SessionTurns(ctx, record.ID)
+	input, err := s.handoffNoteInput(ctx, record, target, switchID)
 	if err != nil {
 		return "", err
 	}
-	return domain.BuildHandoffNote(domain.HandoffNoteInput{
+	input.ChangedFiles = handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
+	return domain.BuildHandoffNote(input), nil
+}
+
+// handoffNoteInput is the note's input without the changed files, which need
+// git and can run while the outgoing provider stops.
+func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {
+	turns, err := s.SessionTurns(ctx, record.ID)
+	if err != nil {
+		return domain.HandoffNoteInput{}, err
+	}
+	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
 		SourceHarness: record.Harness,
 		TargetHarness: target,
@@ -126,10 +137,9 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 		Branch:        record.Metadata.Branch,
 		At:            s.now(),
 		OriginalTask:  record.Metadata.Prompt,
-		ChangedFiles:  handoffChangedFiles(ctx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA),
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
-	}), nil
+	}, nil
 }
 
 // SessionHistory returns one page of a session's turns, newest first, with the

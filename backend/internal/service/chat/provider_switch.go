@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -46,10 +47,18 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		return err
 	} else if found && domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI && s.terminalSwitcher != nil {
 		// One builder writes the note for both UIs.
+		started := time.Now()
 		if request.HandoffNote, err = s.HandoffNote(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey)); err != nil {
 			return err
 		}
-		return s.terminalSwitcher.SwitchTUIProvider(ctx, id, request)
+		noteReady := time.Since(started)
+		if err := s.terminalSwitcher.SwitchTUIProvider(ctx, id, request); err != nil {
+			return err
+		}
+		s.log.Info("provider switch timing", "session", id, "mode", "terminal",
+			"source", record.Harness, "target", request.TargetHarness,
+			"handoff_note", noteReady, "total", time.Since(started))
+		return nil
 	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
@@ -95,7 +104,8 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	} else if pending {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalPendingInteraction, Detail: "answer the pending provider interaction before switching"}
 	}
-	handoffNote, err := s.HandoffNote(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey))
+	started := time.Now()
+	noteInput, err := s.handoffNoteInput(ctx, record, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey))
 	if err != nil {
 		return err
 	}
@@ -125,6 +135,13 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	sourceModel := cmp.Or(source.Settings().Model, record.Metadata.Model)
 	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
 	defer cancel()
+	// The source is idle, so the workspace does not change while it stops: list
+	// the changed files meanwhile instead of before.
+	changedFiles := make(chan []string, 1)
+	go func() {
+		changedFiles <- handoffChangedFiles(operationCtx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
+	}()
+	stopStarted := time.Now()
 	if err := source.closeForBranchHandoff(operationCtx); err != nil {
 		closeErr := fmt.Errorf("stop source provider: %w", err)
 		// A source that stopped anyway is brought back, or the session would sit
@@ -138,6 +155,10 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		}
 		return closeErr
 	}
+	stopped := time.Since(stopStarted)
+	noteInput.ChangedFiles = <-changedFiles
+	handoffNote := domain.BuildHandoffNote(noteInput)
+	noteReady := time.Since(stopStarted)
 
 	targetCfg := cloneStartConfig(startCfg)
 	targetCfg.Harness = request.TargetHarness
@@ -193,6 +214,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	if err := s.store.RecordUsage(operationCtx, conversation.ID, domain.ConversationUsage{}); err != nil {
 		s.log.Warn("clear source usage before provider switch", "session", id, "error", err)
 	}
+	targetStarted := time.Now()
 	target, err := s.startLocked(operationCtx, targetCfg)
 	if err != nil {
 		if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
@@ -204,6 +226,10 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	}
 	source.completeBranchHandoff()
 	abortSource = false
+	s.log.Info("provider switch timing", "session", id, "mode", "chat",
+		"source", source.harness, "target", request.TargetHarness,
+		"stop_source", stopped, "stop_and_note", noteReady, "start_target", time.Since(targetStarted),
+		"total", time.Since(started))
 	if request.FastMode {
 		// Fast mode is a setting of the running controller, so it is applied to
 		// the target once it exists rather than passed through its launch.
