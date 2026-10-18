@@ -134,6 +134,16 @@ const stopOwnerScript = "ao_stop() {\n" +
 	"  return $ao_found\n" +
 	"}\n"
 
+// Options says how Command reaches the hook's owner.
+type Options struct {
+	Runner Runner
+	Stop   Stop
+	// Owner, with AsRoot, is the account the hook runs as: the user the
+	// worker was provisioned to run as. Without it the hook's file owner is
+	// used (never root).
+	Owner string
+}
+
 // Command is the shell command that runs the worker-installed Cleanup hook
 // (hook is a shell word naming it) as the user that owns it, under timeout(1)
 // when the image has it, then prints the tail of its output and, after
@@ -142,14 +152,24 @@ const stopOwnerScript = "ao_stop() {\n" +
 // current Cleanup, as that user, so the hook keeps its working directory,
 // session environment and run-once lock; if that fails the installed
 // commands run. With StopOwnerProcesses it ends the owner's processes first.
-func Command(hook string, budget time.Duration, override string, runner Runner, stop Stop) string {
+func Command(hook string, budget time.Duration, override string, options Options) string {
 	seconds := strconv.Itoa(max(1, int(budget/time.Second)))
 	command := "ao_hook=" + hook + "\n" +
 		"ao_skip() { printf '\\n%s:%s\\n' " + Marker + " " + Skipped + "; exit 0; }\n" +
 		"ao_owner=\n"
 	asOwner := `sudo -n -H -u "$ao_owner"`
-	switch runner {
-	case AsRoot:
+	switch {
+	case options.Runner == AsRoot && options.Owner != "":
+		// The hook runs as the account the worker was provisioned with,
+		// whoever owns the file: an agent that swaps the hook for a link to
+		// another account's program cannot borrow that account.
+		asOwner = `runuser -u "$ao_owner" --`
+		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ] && id -u " + shellQuote(options.Owner) + " >/dev/null 2>&1; then\n" +
+			"  ao_owner=" + shellQuote(options.Owner) + "\n" +
+			"  case \"$ao_owner\" in root|\"$(id -un)\") ao_skip ;; esac\n" +
+			"  set -- " + asOwner + " \"$ao_hook\"\n" +
+			"else ao_skip; fi\n"
+	case options.Runner == AsRoot:
 		asOwner = `runuser -u "$ao_owner" --`
 		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ]; then\n" +
 			"  ao_owner=$(stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip\n" +
@@ -178,7 +198,7 @@ func Command(hook string, budget time.Duration, override string, runner Runner, 
 			"  printf %s \"$ao_payload\" | base64 -d | gzip -dc | sh -c " + write + " _ \"$ao_commands\"\n" +
 			"fi || echo \"AO: could not install the project's current Cleanup; running the commands from the session's start\" >&2\n"
 	}
-	if stop == StopOwnerProcesses {
+	if options.Stop == StopOwnerProcesses {
 		polls := strconv.Itoa(int(OwnerStopWait / (500 * time.Millisecond)))
 		command += stopOwnerScript +
 			// A hook the login user owns runs as that user (ao_owner unset).

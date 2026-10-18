@@ -97,7 +97,8 @@ func TestDeleteRunsCleanupInTheVMBeforeDeletingIt(t *testing.T) {
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
 		`set -- runuser -u "$ao_owner" -- "$ao_hook"`,
 		"timeout -k 5 600 ",
-		`case "$ao_owner" in ''|root|`,
+		// The hook runs as the provisioned worker user, not its file's owner.
+		"ao_owner='ao-worker'",
 		// The resumed worker and agent are stopped before the hook runs.
 		`ao_stop "$ao_who" TERM`,
 	} {

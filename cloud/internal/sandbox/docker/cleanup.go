@@ -72,7 +72,8 @@ func (c *Client) runCleanup(ctx context.Context, id sandbox.ID, wait time.Durati
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanuphook.Margin)
 	defer cancel()
-	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.AsLoginUser, cleanuphook.StopOwnerProcesses)
+	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override,
+		cleanuphook.Options{Runner: cleanuphook.AsLoginUser, Stop: cleanuphook.StopOwnerProcesses})
 	printed, status, err := c.execCleanupHook(runCtx, id, command)
 	cleanuphook.Report(ctx, finish, attrs, steps, printed, status, err, "docker")
 }

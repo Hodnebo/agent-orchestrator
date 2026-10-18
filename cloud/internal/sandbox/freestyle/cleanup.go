@@ -20,6 +20,11 @@ const (
 	cleanupResumePoll = 500 * time.Millisecond
 )
 
+// workerUser is the account the worker runs as in a Freestyle VM (the
+// reconciler's default worker user, which the snapshot layout provides); the
+// Cleanup hook runs as it.
+const workerUser = "ao-worker"
+
 // cleanupRuns tracks Cleanup per VM in this control-plane process.
 var cleanupRuns cleanuphook.Tracker
 
@@ -121,7 +126,9 @@ func (c *Client) runCleanup(
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanuphook.Margin)
 	defer cancel()
-	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.AsRoot, cleanuphook.StopOwnerProcesses)
+	command := cleanuphook.Command(cleanuphook.HookWord(cleanuphook.WorkspaceHook), wait, plan.Override, cleanuphook.Options{
+		Runner: cleanuphook.AsRoot, Stop: cleanuphook.StopOwnerProcesses, Owner: workerUser,
+	})
 	printed, status, err := c.execCleanupHook(runCtx, id, command, wait+cleanuphook.Margin)
 	cleanuphook.Report(ctx, finish, attrs, steps, printed, status, err, "freestyle")
 }

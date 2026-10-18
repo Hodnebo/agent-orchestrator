@@ -57,7 +57,7 @@ func TestCommandAsRootRunsTheHookAsItsOwner(t *testing.T) {
 		t.Skip("sh is unavailable")
 	}
 	hook := filepath.Join(t.TempDir(), "worker", worker.CleanupHookFile)
-	command := Command(HookWord(hook), 10*time.Second, "", AsRoot, KeepOwnerProcesses)
+	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsRoot})
 	if strings.Contains(command, "sudo") || strings.Contains(command, "[ -O") {
 		t.Fatalf("a root hook command must reach the owner only through runuser: %s", command)
 	}
@@ -105,7 +105,7 @@ func TestCommandAsRootRunsTheCurrentCleanup(t *testing.T) {
 	if !fits {
 		t.Fatal("a one-line Cleanup does not fit the payload limit")
 	}
-	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload, AsRoot, KeepOwnerProcesses)
+	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload, Options{Runner: AsRoot})
 	output := runHookCommand(t, command, rootShims(t, "ao-worker"))
 	printed, status, ok := Split(output)
 	if !ok || status != "0" || strings.Contains(printed, "installed-cleanup") {
@@ -384,13 +384,13 @@ func TestSkipperReportsTheRunAsNotRun(t *testing.T) {
 func TestCommandStopsTheOwnersProcessesFirst(t *testing.T) {
 	t.Parallel()
 	for _, runner := range []Runner{AsRoot, AsLoginUser} {
-		stopping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", runner, StopOwnerProcesses)
+		stopping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", Options{Runner: runner, Stop: StopOwnerProcesses})
 		stop, run := strings.Index(stopping, `ao_stop "$ao_who" TERM`), strings.Index(stopping, `ao_out=$(`)
 		if stop < 0 || run < stop || !strings.Contains(stopping, `ao_stop "$ao_who" KILL`) ||
 			!strings.Contains(stopping, `1|"$$") continue`) || !strings.Contains(stopping, "ao_who=${ao_owner:-$(id -un)}") {
 			t.Fatalf("runner %d: the owner's processes must be stopped, sparing PID 1 and the command, before the hook runs:\n%s", runner, stopping)
 		}
-		if keeping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", runner, KeepOwnerProcesses); strings.Contains(keeping, "ao_stop") {
+		if keeping := Command(HookWord("/workspace/.ao/worker/hook"), time.Minute, "", Options{Runner: runner}); strings.Contains(keeping, "ao_stop") {
 			t.Fatalf("runner %d: KeepOwnerProcesses stops processes:\n%s", runner, keeping)
 		}
 	}
@@ -435,7 +435,7 @@ func TestCommandStopEndsOnlyTheOwnersProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	output := runHookCommand(t, Command(HookWord(hook), 10*time.Second, "", AsLoginUser, StopOwnerProcesses),
+	output := runHookCommand(t, Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsLoginUser, Stop: StopOwnerProcesses}),
 		append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH")))
 	if !strings.Contains(output, "hook ran") || !strings.Contains(output, Marker+":0") {
 		t.Fatalf("output = %q", output)
@@ -452,5 +452,41 @@ func TestCommandStopEndsOnlyTheOwnersProcesses(t *testing.T) {
 	}
 	if err := bystander.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("a process the owner does not own was signalled: %v", err)
+	}
+}
+
+// Run as root with a pinned owner, the hook runs as that account whoever owns
+// the file (an agent could point the hook at another account's program), and
+// is skipped when the account does not exist.
+func TestCommandAsRootRunsTheHookAsThePinnedOwner(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	hook := filepath.Join(t.TempDir(), worker.CleanupHookFile)
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho hook ran\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsRoot, Owner: "ao-worker"})
+	if strings.Contains(command, "stat -c %U") {
+		t.Fatalf("a pinned owner must not be read from the hook's file:\n%s", command)
+	}
+	// stat would name another account; id knows ao-worker.
+	environment := rootShims(t, "postgres")
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "id"), []byte("#!/bin/sh\ncase \"$1\" in -un) echo root ;; -u) [ \"$2\" = ao-worker ] && echo 1000 ;; esac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for index, entry := range environment {
+		if strings.HasPrefix(entry, "PATH=") {
+			environment[index] = "PATH=" + bin + string(os.PathListSeparator) + strings.TrimPrefix(entry, "PATH=")
+		}
+	}
+	if output := runHookCommand(t, command, environment); !strings.Contains(output, "runuser:ao-worker") || !strings.Contains(output, "hook ran") {
+		t.Fatalf("output = %q", output)
+	}
+	missing := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsRoot, Owner: "no-such-user"})
+	if output := runHookCommand(t, missing, environment); !strings.Contains(output, Marker+":"+Skipped) {
+		t.Fatalf("missing account: output = %q", output)
 	}
 }

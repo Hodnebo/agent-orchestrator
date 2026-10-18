@@ -165,5 +165,5 @@ func cleanupHookCommand(durableRoot string, budget time.Duration, override strin
 	if sandbox.NormalizeCoderDurableRoot(durableRoot) == sandbox.CoderHomeDurableRoot {
 		hook = `"$HOME"/.ao/worker/` + cleanupHookFile
 	}
-	return cleanuphook.Command(hook, budget, override, cleanuphook.AsLoginUser, cleanuphook.KeepOwnerProcesses)
+	return cleanuphook.Command(hook, budget, override, cleanuphook.Options{Runner: cleanuphook.AsLoginUser})
 }
