@@ -62,7 +62,6 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 		<div className="relative">
 			<pre
 				aria-label={label}
-				aria-live={running ? "polite" : undefined}
 				className="scrollbar-none max-h-60 cursor-text select-text overflow-auto whitespace-pre-wrap break-words border border-border bg-background py-2 pl-2.5 pr-9 font-mono text-caption leading-relaxed text-muted-foreground"
 				data-testid="script-step-output"
 				onScroll={(event) => {
@@ -85,6 +84,35 @@ function StepOutput({ step, running, label }: { step: ScriptRunStep; running: bo
 			/>
 		</div>
 	);
+}
+
+/**
+ * What changed in a run since its last render, for screen readers: a step
+ * starting, succeeding or failing. The output itself is never announced; it
+ * changes about once a second while a step runs. Nothing is said for the state
+ * the panel first draws, only for transitions it sees happen.
+ */
+function useStepAnnouncement(run: ScriptRun, title: string): string {
+	const { t } = useTranslation();
+	const previous = useRef<{ runId: string; statuses: Map<number, ScriptRunStep["status"]> }>(undefined);
+	const [message, setMessage] = useState("");
+	useEffect(() => {
+		const before = previous.current;
+		previous.current = { runId: run.runId, statuses: new Map(run.steps.map((step) => [step.step, step.status])) };
+		if (!before) return;
+		const sameRun = before.runId === run.runId;
+		const lines: string[] = [];
+		for (const step of run.steps) {
+			if ((sameRun ? before.statuses.get(step.step) : "pending") === step.status) continue;
+			const values = { phase: title, step: step.step, total: run.total, command: step.command || t("scriptRun.stepNumber", { step: step.step }) };
+			if (step.status === "running") lines.push(t("scriptRun.announce.started", values));
+			else if (step.status === "succeeded") lines.push(t("scriptRun.announce.succeeded", values));
+			else if (step.status === "failed") lines.push(t("scriptRun.announce.failed", values));
+			else if (step.status === "timed_out") lines.push(t("scriptRun.announce.timedOut", values));
+		}
+		if (lines.length > 0) setMessage(lines.join(" "));
+	}, [run, t, title]);
+	return message;
 }
 
 function StepNotes({ step }: { step: ScriptRunStep }) {
@@ -215,6 +243,7 @@ export function ScriptRunPanel({
 	}
 	const listOpen = !collapsible || (listToggled ?? run.status !== "succeeded");
 	const title = run.phase === "setup" ? t("scriptRun.setup") : t("scriptRun.cleanup");
+	const announcement = useStepAnnouncement(run, title);
 	const summary = run.status === "running"
 		? t("scriptRun.running", { step: run.runningStep ?? 1, total: run.total })
 		: run.status === "succeeded"
@@ -247,6 +276,7 @@ export function ScriptRunPanel({
 			data-run-status={run.status}
 			data-testid="script-run-panel"
 		>
+			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-announcer" role="status">{announcement}</div>
 			{collapsible ? (
 				<button
 					aria-controls={listId}

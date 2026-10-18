@@ -189,6 +189,35 @@ describe("ScriptRunPanel", () => {
 		expect(screen.getByText("docker compose down")).toBeInTheDocument();
 	});
 
+	it("announces step transitions in a polite status region, never the output", () => {
+		const announcer = () => screen.getByTestId("script-run-announcer");
+		const first = { step: 1, command: "npm ci", startedAt: "2026-10-18T10:00:00Z" };
+		const { rerender } = render(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a" })} />);
+		expect(announcer()).toHaveAttribute("role", "status");
+		expect(announcer()).toHaveAttribute("aria-live", "polite");
+		// What the panel first draws is not announced.
+		expect(announcer()).toHaveTextContent("");
+		expect(screen.getByTestId("script-step-output")).not.toHaveAttribute("aria-live");
+		// New output alone says nothing.
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf({ ...first, status: "running", output: "a\nb" })} />);
+		expect(announcer()).toHaveTextContent("");
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf(
+			{ ...first, status: "succeeded", exitCode: 0, durationMs: 1000, output: "a\nb" },
+			{ step: 2, command: "make", status: "running", startedAt: "2026-10-18T10:00:01Z" },
+		)} />);
+		expect(announcer()).toHaveTextContent("Setup step 1 succeeded Setup step 2 of 3 started: make");
+		sequence = 0;
+		rerender(<ScriptRunPanel run={runOf(
+			{ ...first, status: "succeeded", exitCode: 0, durationMs: 1000, output: "a\nb" },
+			{ step: 2, command: "make", status: "failed", exitCode: 2, startedAt: "2026-10-18T10:00:01Z", durationMs: 500, output: "boom" },
+			{ step: 3, command: "npm test", status: "skipped" },
+		)} />);
+		expect(announcer()).toHaveTextContent("Setup step 2 failed");
+		expect(announcer().textContent).not.toContain("boom");
+	});
+
 	it("stops the spinner of a run that ended without reporting its last step", () => {
 		const run = groupScriptRuns([
 			stepEvent({ total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T10:00:00Z", output: "added 10" }),

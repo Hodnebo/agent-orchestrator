@@ -7,6 +7,13 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
   data-run-status="succeeded"
   data-testid="script-run-panel"
 >
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="sr-only"
+    data-testid="script-run-announcer"
+    role="status"
+  />
   <button
     aria-controls="_r_a_"
     aria-expanded="true"
@@ -209,6 +216,13 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
   data-run-status="failed"
   data-testid="script-run-panel"
 >
+  <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="sr-only"
+    data-testid="script-run-announcer"
+    role="status"
+  />
   <button
     aria-controls="_r_d_"
     aria-expanded="true"
@@ -543,6 +557,13 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
   data-testid="script-run-panel"
 >
   <div
+    aria-atomic="true"
+    aria-live="polite"
+    class="sr-only"
+    data-testid="script-run-announcer"
+    role="status"
+  />
+  <div
     class="flex min-h-8 items-center gap-2 px-2.5 py-1.5"
   >
     <svg
@@ -727,7 +748,6 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
         >
           <pre
             aria-label="Output of step 2"
-            aria-live="polite"
             class="scrollbar-none max-h-60 cursor-text select-text overflow-auto whitespace-pre-wrap break-words border border-border bg-background py-2 pl-2.5 pr-9 font-mono text-caption leading-relaxed text-muted-foreground"
             data-testid="script-step-output"
             tabindex="0"
