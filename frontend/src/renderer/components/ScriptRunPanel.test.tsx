@@ -188,4 +188,18 @@ describe("ScriptRunPanel", () => {
 		expect(screen.getByText("Succeeded", { selector: ".truncate" })).toBeInTheDocument();
 		expect(screen.getByText("docker compose down")).toBeInTheDocument();
 	});
+
+	it("stops the spinner of a run that ended without reporting its last step", () => {
+		const run = groupScriptRuns([
+			stepEvent({ total: 2, step: 1, status: "running", command: "npm ci", startedAt: "2026-10-18T10:00:00Z", output: "added 10" }),
+		], { sessionEnded: true })[0];
+		const { container } = render(<ScriptRunPanel run={run} />);
+		expect(screen.getByText("Ended without reporting a result")).toBeInTheDocument();
+		const [first, second] = steps();
+		expect(first).toHaveAttribute("data-status", "unknown");
+		expect(within(first).getByText("Result unknown")).toBeInTheDocument();
+		expect(second).toHaveAttribute("data-status", "pending");
+		expect(container.querySelector(".animate-spin")).toBeNull();
+		expect(screen.queryByLabelText(/Elapsed/)).toBeNull();
+	});
 });

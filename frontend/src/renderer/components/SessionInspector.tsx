@@ -54,7 +54,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
-import { latestScriptRun } from "../lib/cloud-script-runs";
+import { cloudSessionScriptsEnded, latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { AwakeControl } from "./AwakeControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
@@ -482,7 +482,7 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
-			scripts={session.cloud ? <CloudScriptRunSections orgId={session.cloud.orgId} sessionId={session.id} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections orgId={session.cloud.orgId} sessionEnded={cloudSessionScriptsEnded(session.cloud)} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);
@@ -493,9 +493,9 @@ const SummaryView = memo(function SummaryView({
  * covers the startup loader once it starts, and Cleanup only runs after the
  * session is deleted, so this is where both stay reachable.
  */
-function CloudScriptRunSections({ orgId, sessionId }: { orgId: string; sessionId: string }) {
+function CloudScriptRunSections({ orgId, sessionId, sessionEnded }: { orgId: string; sessionId: string; sessionEnded: boolean }) {
 	const { t } = useTranslation();
-	const runs = useCloudScriptRuns(orgId, sessionId);
+	const runs = useCloudScriptRuns(orgId, sessionId, { sessionEnded });
 	const setup = latestScriptRun(runs, "setup");
 	const cleanup = latestScriptRun(runs, "cleanup");
 	if (!setup && !cleanup) return null;

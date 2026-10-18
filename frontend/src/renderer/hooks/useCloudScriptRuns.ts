@@ -2,7 +2,7 @@ import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/r
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { CloudCpClientEvent } from "../lib/cloud-cp";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
-import { groupScriptRuns, mergeScriptStepEvents, type ScriptRun } from "../lib/cloud-script-runs";
+import { groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
 import { useCloudCp } from "./useCloudCp";
 
 /**
@@ -25,7 +25,7 @@ function cloudChatEventsQueryKey(orgId: string, sessionId: string) {
  * card update without a request of their own.
  */
 export function recordCloudScriptStepEvents(queryClient: QueryClient, orgId: string, sessionId: string, events: readonly CloudCpClientEvent[]) {
-	if (!orgId || !events.some((event) => event.type === "workspace.script.step")) return;
+	if (!orgId || !events.some((event) => event.type === SCRIPT_STEP_EVENT || SCRIPT_RUN_END_EVENTS.has(event.type))) return;
 	queryClient.setQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId, sessionId), (current) => mergeScriptStepEvents(current ?? [], events));
 }
 
@@ -53,8 +53,10 @@ function useCachedQueryData<T>(queryKey: readonly unknown[], enabled: boolean): 
 export function useCloudScriptRuns(
 	orgId: string | undefined,
 	sessionId: string | undefined,
-	{ live = false, fetch = true }: {
+	{ live = false, fetch = true, sessionEnded = false }: {
 		live?: boolean;
+		/** The session's sandbox is gone: a run that never reported its end is shown as ended. */
+		sessionEnded?: boolean;
 		/** Off for a caller that already feeds the cache from its own stream (the startup loader). */
 		fetch?: boolean;
 	} = {},
@@ -94,6 +96,6 @@ export function useCloudScriptRuns(
 	}, [baseUrl, enabled, live, orgId, queryClient, ready, sessionId]);
 	return useMemo(() => {
 		const merged = chatEvents ? mergeScriptStepEvents(steps.data ?? [], chatEvents) : steps.data ?? [];
-		return merged.length > 0 ? groupScriptRuns(merged) : [];
-	}, [chatEvents, steps.data]);
+		return merged.length > 0 ? groupScriptRuns(merged, { sessionEnded }) : [];
+	}, [chatEvents, sessionEnded, steps.data]);
 }

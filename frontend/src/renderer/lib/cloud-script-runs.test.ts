@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CloudCpClientEvent } from "./cloud-cp";
 import {
+	cloudSessionScriptsEnded,
 	formatScriptDuration,
 	groupScriptRuns,
 	latestScriptRun,
@@ -127,12 +128,76 @@ describe("groupScriptRuns", () => {
 	});
 });
 
+describe("a run whose final event never arrived", () => {
+	const marker = (type: string): CloudCpClientEvent => {
+		sequence++;
+		return { sessionId: "s1", sequence, type, payload: {}, createdAt: "2026-10-18T10:01:00Z" };
+	};
+
+	it("ends once a later Setup summary or agent start shows the session moved past it", () => {
+		for (const type of ["workspace.setup", "agent.ready"]) {
+			sequence = 0;
+			const events = [
+				step({ total: 2, step: 1, status: "succeeded", exitCode: 0, durationMs: 10 }),
+				step({ total: 2, step: 2, status: "running", startedAt: "2026-10-18T10:00:02Z" }),
+				marker(type),
+			];
+			const [run] = groupScriptRuns(events);
+			expect(run.status).toBe("unknown");
+			expect(run.runningStep).toBeUndefined();
+			expect(run.durationMs).toBeUndefined();
+		}
+	});
+
+	it("keeps running when the marker came before it, and leaves finished runs alone", () => {
+		sequence = 0;
+		const before = marker("agent.ready");
+		const running = step({ step: 1, status: "running" });
+		expect(groupScriptRuns([before, running])[0].status).toBe("running");
+		sequence = 0;
+		const done = groupScriptRuns([
+			step({ total: 1, step: 1, status: "failed", exitCode: 1 }),
+			marker("workspace.setup"),
+		])[0];
+		expect(done.status).toBe("failed");
+		sequence = 0;
+		expect(groupScriptRuns([step({ runId: "a", step: 1, status: "running" }), step({ runId: "b", step: 1, status: "running" }), marker("agent.ready")])
+			.map((run) => run.status)).toEqual(["interrupted", "unknown"]);
+	});
+
+	it("ends when the session's sandbox is gone", () => {
+		sequence = 0;
+		const events = [step({ phase: "cleanup", runId: "c", total: 2, step: 1, status: "succeeded", exitCode: 0 })];
+		expect(groupScriptRuns(events)[0].status).toBe("running");
+		expect(groupScriptRuns(events, { sessionEnded: true })[0].status).toBe("unknown");
+	});
+
+	it("reads a session as ended once its sandbox is deleted or AO stopped starting it, not while it is being deleted", () => {
+		expect(cloudSessionScriptsEnded(undefined)).toBe(false);
+		expect(cloudSessionScriptsEnded({ observedState: "running" })).toBe(false);
+		expect(cloudSessionScriptsEnded({ observedState: "deleting" })).toBe(false);
+		expect(cloudSessionScriptsEnded({ observedState: "deleted" })).toBe(true);
+		expect(cloudSessionScriptsEnded({ observedState: "terminated" })).toBe(true);
+		expect(cloudSessionScriptsEnded({ observedState: "failed", runtimeState: "terminated" })).toBe(true);
+	});
+
+	it("is kept by the cache as the single newest marker", () => {
+		sequence = 0;
+		const running = step({ step: 1, status: "running" });
+		const first = marker("workspace.setup");
+		const second = marker("agent.ready");
+		const cache = mergeScriptStepEvents(mergeScriptStepEvents([running], [first]), [second, marker("chat.user_message")]);
+		expect(cache.map((event) => event.type)).toEqual([SCRIPT_STEP_EVENT, "agent.ready"]);
+		expect(groupScriptRuns(cache)[0].status).toBe("unknown");
+	});
+});
+
 describe("mergeScriptStepEvents", () => {
 	it("keeps only step events, sorted, without duplicates, and returns the same list when nothing is new", () => {
 		sequence = 0;
 		const a = step({ step: 1, status: "succeeded" });
 		const b = step({ step: 2, status: "running" });
-		const other: CloudCpClientEvent = { sessionId: "s1", sequence: 99, type: "agent.ready", payload: {}, createdAt: "2026-10-18T10:00:00Z" };
+		const other: CloudCpClientEvent = { sessionId: "s1", sequence: 99, type: "chat.user_message", payload: {}, createdAt: "2026-10-18T10:00:00Z" };
 		const merged = mergeScriptStepEvents([b], [a, other, b]);
 		expect(merged.map((event) => event.sequence)).toEqual([a.sequence, b.sequence]);
 		expect(mergeScriptStepEvents(merged, [a])).toBe(merged);

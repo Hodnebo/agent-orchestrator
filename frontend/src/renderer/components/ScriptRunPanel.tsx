@@ -24,9 +24,14 @@ function elapsedSince(startedAt: string | undefined, now: number): number | unde
 	return Number.isFinite(start) ? Math.max(0, now - start) : undefined;
 }
 
-/** A step is shown as running only while its run is; an interrupted run's step stopped. */
-function displayStatus(step: ScriptRunStep, run: ScriptRun): ScriptRunStep["status"] | "stopped" {
-	if (run.status === "interrupted" && (step.status === "running" || step.status === "pending")) return step.status === "running" ? "stopped" : "pending";
+/**
+ * A step is shown as running only while its run is: an interrupted run's step
+ * stopped, and a run that ended without reporting it has no known result.
+ */
+function displayStatus(step: ScriptRunStep, run: ScriptRun): ScriptRunStep["status"] | "stopped" | "unknown" {
+	if (step.status !== "running") return step.status;
+	if (run.status === "interrupted") return "stopped";
+	if (run.status === "unknown") return "unknown";
 	return step.status;
 }
 
@@ -216,7 +221,9 @@ export function ScriptRunPanel({
 			? t("scriptRun.succeeded")
 			: run.status === "failed"
 				? t("scriptRun.failedAt", { step: run.failedStep ?? 1 })
-				: t("scriptRun.interrupted");
+				: run.status === "unknown"
+					? t("scriptRun.unknown")
+					: t("scriptRun.interrupted");
 	const elapsed = live ? elapsedSince(run.startedAt, now) : run.durationMs;
 	const headerIcon = run.status === "running" ? "running" : run.status === "succeeded" ? "succeeded" : run.status === "failed" ? "failed" : "stopped";
 	const header = (

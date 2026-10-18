@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
+import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
@@ -193,7 +193,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
 	// that predate step events keep that summary row.
-	const scriptRuns = new Map(groupScriptRuns(events).map((run) => [run.runId, run]));
+	const scriptRuns = new Map(groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) }).map((run) => [run.runId, run]));
 	const placedRuns = new Set<string>();
 	const unclaimedSetupRuns = [...scriptRuns.values()].filter((run) => run.phase === "setup");
 	for (const event of events) {
