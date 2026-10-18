@@ -212,6 +212,9 @@ func TestToolPrecedence_TurnBoundariesClearBlocked(t *testing.T) {
 	}{
 		{"user-prompt-submit", sig(domain.ActivityActive, "user-prompt-submit", "", ""), domain.ActivityActive},
 		{"stop", sig(domain.ActivityIdle, "stop", "", ""), domain.ActivityIdle},
+		// A turn that ended on an API error (Claude StopFailure, or a Codex
+		// failure read from its rollout) ends the turn the same way.
+		{"stop-failure", sig(domain.ActivityIdle, "stop-failure", "", ""), domain.ActivityIdle},
 		{"session-end", sig(domain.ActivityExited, "session-end", "", ""), domain.ActivityExited},
 		{"chat-controller-stopped", sig(domain.ActivityExited, "chat.controller.stopped", "", ""), domain.ActivityExited},
 	}
