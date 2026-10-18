@@ -3904,6 +3904,7 @@ components:
             - post-tool-use-failure
             - permission-request
             - stop
+            - stop-failure
             - notification
             - session-end
         state:
@@ -3947,6 +3948,29 @@ components:
         output:
           type: string
           description: Redacted tail of the failed (or last) command's combined output, at most 2 KiB.
+        command:
+          type: string
+          description: The failed step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in.
+        repository:
+          type: string
+          description: The repository folder the failed step ran in; absent for the main repository.
+        dir:
+          type: string
+          description: The directory the failed step ran in.
+        user:
+          type: string
+          description: The Linux user the failed step ran as.
+        groups:
+          type: array
+          items:
+            type: string
+          description: The Linux groups the failed step ran with.
+        logPath:
+          type: string
+          description: The file in the sandbox that holds the failed step's full output.
+        hint:
+          type: string
+          description: What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH).
     WorkerSetupEventInput:
       type: object
       additionalProperties: false
@@ -5075,6 +5099,23 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/PullRequestConflictFile"
+    PullRequestOpener:
+      type: object
+      additionalProperties: false
+      required: [name]
+      description: >-
+        The person who started the session behind a pull request the AO GitHub
+        App opened, so its author is the App's bot. Shown only to organization
+        members.
+      properties:
+        name:
+          type: string
+          description: Their AO display name; empty when they have none.
+        githubLogin:
+          type: string
+          description: Their GitHub login, when they connected GitHub to AO.
+        avatarUrl:
+          type: string
     PullRequestSummary:
       type: object
       additionalProperties: false
@@ -5119,6 +5160,8 @@ components:
           type: string
         authorAvatarUrl:
           type: string
+        openedBy:
+          $ref: "#/components/schemas/PullRequestOpener"
         sourceBranch:
           type: string
         targetBranch:

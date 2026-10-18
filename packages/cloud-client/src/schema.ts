@@ -1888,7 +1888,9 @@ export interface components {
         WorkspaceRepository: {
             /** @description The checkout's folder name, the value ?repository= selects it with. Empty for the main checkout of a single-repository session. */
             name: string;
-            /** @description GitHub owner/name of an additional repository. */
+            /** @description The name to show when it differs from the folder name, such as the main repository's own name. */
+            label?: string;
+            /** @description The repository's GitHub owner/name, when it is on GitHub. */
             repository?: string;
             /** @description Branch an additional repository was cloned from. */
             branch?: string;
@@ -2169,7 +2171,7 @@ export interface components {
             /** @enum {string} */
             harness: "claude-code" | "codex" | "cursor";
             /** @enum {string} */
-            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "notification" | "session-end";
+            event: "session-start" | "user-prompt-submit" | "pre-tool-use" | "post-tool-use" | "post-tool-use-failure" | "permission-request" | "stop" | "stop-failure" | "notification" | "session-end";
             state?: components["schemas"]["SessionActivityState"];
             toolName?: string;
             toolUseId?: string;
@@ -2193,6 +2195,20 @@ export interface components {
             durationMs: number;
             /** @description Redacted tail of the failed (or last) command's combined output, at most 2 KiB. */
             output?: string;
+            /** @description The failed step's command on one line, redacted and at most 300 bytes, without the cd AO wraps a repository step in. */
+            command?: string;
+            /** @description The repository folder the failed step ran in; absent for the main repository. */
+            repository?: string;
+            /** @description The directory the failed step ran in. */
+            dir?: string;
+            /** @description The Linux user the failed step ran as. */
+            user?: string;
+            /** @description The Linux groups the failed step ran with. */
+            groups?: string[];
+            /** @description The file in the sandbox that holds the failed step's full output. */
+            logPath?: string;
+            /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
+            hint?: string;
         };
         WorkerSetupEventInput: {
             /**
@@ -2706,6 +2722,14 @@ export interface components {
             pullRequestUrl: string;
             conflictFiles: components["schemas"]["PullRequestConflictFile"][];
         };
+        /** @description The person who started the session behind a pull request the AO GitHub App opened, so its author is the App's bot. Shown only to organization members. */
+        PullRequestOpener: {
+            /** @description Their AO display name; empty when they have none. */
+            name: string;
+            /** @description Their GitHub login, when they connected GitHub to AO. */
+            githubLogin?: string;
+            avatarUrl?: string;
+        };
         PullRequestSummary: {
             url: string;
             htmlUrl?: string;
@@ -2716,6 +2740,7 @@ export interface components {
             repository: string;
             author: string;
             authorAvatarUrl?: string;
+            openedBy?: components["schemas"]["PullRequestOpener"];
             sourceBranch: string;
             targetBranch: string;
             headSha: string;
