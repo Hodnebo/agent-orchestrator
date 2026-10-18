@@ -432,3 +432,30 @@ func TestAccountTransitionContinuesAnExitedAgentOnTheNewAccount(t *testing.T) {
 		})
 	}
 }
+
+// A move that stops the turn tells the chat that the switch ended it, so the
+// conversation shows the switch rather than a failed turn. A drain lets the
+// turn finish, so there is nothing to explain.
+func TestAccountTransitionThatStopsTheTurnMarksTheSwitchInChat(t *testing.T) {
+	for _, tc := range []struct {
+		policy domain.SessionInterfaceTransitionPolicy
+		want   string
+	}{
+		{domain.SessionInterfaceTransitionInterrupt, "[acct-b]"},
+		{domain.SessionInterfaceTransitionDrain, "[]"},
+	} {
+		t.Run(string(tc.policy), func(t *testing.T) {
+			manager, store, _, chat, _, _ := newAccountTransitionManager(t, domain.SessionModeChat)
+			transition, err := manager.StartAccountTransition(context.Background(), "session-1", "acct-b", tc.policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled := awaitTransition(t, store, transition.ID); settled.Phase != domain.SessionInterfaceTransitionCompleted {
+				t.Fatalf("phase = %s %s", settled.Phase, settled.ErrorDetail)
+			}
+			if got := fmt.Sprint(chat.switchMarks); got != tc.want {
+				t.Fatalf("switch marks = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}

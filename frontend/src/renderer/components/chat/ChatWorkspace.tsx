@@ -4361,7 +4361,7 @@ const TurnGroup = memo(function TurnGroup({
 					) : null}
 				</div>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -4710,6 +4710,8 @@ type TimelineGroup = {
 	liveProviderFailure?: ConversationActivity;
 	/** The provider accepted this turn, so there is history it can be asked to drop. */
 	rollbackable?: boolean;
+	/** An account switch stopped this turn; its notice replaces the outcome. */
+	accountSwitched?: boolean;
 };
 
 type GroupPreview = { title: string; detail?: string };
@@ -4893,6 +4895,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 			);
 		if (turn.state === "running" || turn.state === "queued" || turn.state === "cancelled") continue;
 		group.rollbackable = Boolean(turn.providerTurnId);
+		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
 			state: turn.state,
 			durationMs: settledTurnDuration(turn),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -142,6 +143,24 @@ func (m *Manager) preflightAccountTarget(
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
 	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+}
+
+// markAccountSwitch tells the conversation that a move which stopped the turn
+// in progress is why that turn ended, so the chat shows the switch instead of
+// a failure. Best-effort: the move has already committed.
+func (m *Manager) markAccountSwitch(ctx context.Context, rec domain.SessionRecord, transition domain.SessionInterfaceTransition) {
+	if transition.Policy != domain.SessionInterfaceTransitionInterrupt || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
+		return
+	}
+	marker, ok := m.chat.(interface {
+		MarkAccountSwitch(context.Context, domain.SessionID, string, time.Time) error
+	})
+	if !ok {
+		return
+	}
+	if err := marker.MarkAccountSwitch(ctx, rec.ID, transition.TargetAccountID, transition.CreatedAt); err != nil {
+		m.logger.Warn("account transition: stopped turn not marked as switched", "sessionID", rec.ID, "transition", transition.ID, "error", err)
+	}
 }
 
 // runtimeEnvOnAccount is runtimeEnv as the session's agent would get it on

@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
  *
@@ -1053,6 +1054,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
+	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2387,6 +2389,14 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			) : null}
 		</div>
 	);
+}
+
+/** Where an account switch stopped the turn: not a failure, the conversation
+ * continues on the new account with the next message. */
+function AccountSwitchedRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} />;
 }
 
 function ReauthRow({ activity }: { activity: ConversationActivity }) {

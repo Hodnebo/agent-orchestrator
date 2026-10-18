@@ -633,6 +633,7 @@ func (m *Manager) runInterfaceTransition(
 		}
 		m.clearAccountOverride(rec.ID)
 		accountStarting = false
+		m.markAccountSwitch(ctx, rec, transition)
 	}
 	if err := m.moveInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionActivating, "", ""); err != nil {
 		// The target is live. Do not tear it down merely because diagnostics failed

@@ -83,7 +83,9 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 		{account ? <AccountLimits account={account} /> : null}
 		{confirming ? <ConfirmDialog open
 			title={t("settings.agentAccounts.stopAndMoveTitle")}
-			description={t("settings.agentAccounts.stopAndMoveDescription", { email: label(confirming) })}
+			description={session.activity?.state === "blocked"
+				? t("settings.agentAccounts.stopAndMoveDeciding", { email: label(confirming) })
+				: t("settings.agentAccounts.stopAndMoveWorking", { email: label(confirming) })}
 			confirmLabel={t("settings.agentAccounts.stopAndMove")}
 			onConfirm={() => void move(confirming, true)}
 			onOpenChange={(open) => { if (!open) setConfirming(null); }}

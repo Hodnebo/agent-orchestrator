@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
@@ -725,6 +726,12 @@ func (c chatLauncher) ArmChatHandoff(
 	policy domain.SessionInterfaceTransitionPolicy,
 ) error {
 	return c.svc.ArmChatHandoff(ctx, id, policy)
+}
+
+// MarkAccountSwitch marks the turn an account move stopped, so the chat shows
+// the switch instead of a failure.
+func (c chatLauncher) MarkAccountSwitch(ctx context.Context, id domain.SessionID, accountID string, since time.Time) error {
+	return c.svc.MarkAccountSwitch(ctx, id, accountID, since)
 }
 
 func (c chatLauncher) PrepareChatHandoff(
