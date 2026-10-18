@@ -62,9 +62,10 @@ const (
 	scriptStepAttempts = 3
 	// scriptStepSendTimeout bounds one send.
 	scriptStepSendTimeout = 10 * time.Second
-	// scriptStepFlushWait is how long a finished run waits for its events to
-	// be sent before the worker goes on; the rest are sent in the background.
-	scriptStepFlushWait = 2 * time.Second
+	// scriptStepFinalWait bounds how long the steps' final events still
+	// queued are sent once the run is over or the worker is stopping, and
+	// how long a finished run waits for them.
+	scriptStepFinalWait = 10 * time.Second
 )
 
 // ErrScriptStepsUnsupported is what a publish function returns when the
@@ -464,29 +465,37 @@ func (t *liveTail) snapshot() (string, bool, uint64) {
 // scriptStepPublisher sends one run's step events, in order, from its own
 // goroutine, so a step never waits on the network. Live updates coalesce:
 // only the newest waits to be sent, and one that fails is dropped. A step's
-// final event is sent up to scriptStepAttempts times. Once the control plane
-// refuses the event type, the run sends nothing more.
+// final event is sent up to scriptStepAttempts times, each on a context
+// detached from the worker's, so a worker that is stopping still reports how
+// its steps ended: once the run is closed or the worker's context ends, live
+// updates are dropped and the queued final events are sent for up to
+// finalWait more. Once the control plane refuses the event type, the run
+// sends nothing more.
 type scriptStepPublisher struct {
 	ctx        context.Context
 	publish    func(context.Context, ScriptStepEvent) error
 	retryDelay time.Duration
+	finalWait  time.Duration
 
 	mu          sync.Mutex
 	live        *ScriptStepEvent
 	finals      []ScriptStepEvent
 	closed      bool
 	unsupported bool
-	wake        chan struct{}
-	done        chan struct{}
+	// flushBy is when the run stopped (closed, or the worker's context
+	// ended) plus finalWait: no final event is sent after it.
+	flushBy time.Time
+	wake    chan struct{}
+	done    chan struct{}
 }
 
 func newScriptStepPublisher(
 	ctx context.Context,
 	publish func(context.Context, ScriptStepEvent) error,
-	retryDelay time.Duration,
+	retryDelay, finalWait time.Duration,
 ) *scriptStepPublisher {
 	publisher := &scriptStepPublisher{
-		ctx: ctx, publish: publish, retryDelay: retryDelay,
+		ctx: ctx, publish: publish, retryDelay: retryDelay, finalWait: finalWait,
 		wake: make(chan struct{}, 1), done: make(chan struct{}),
 	}
 	go publisher.run()
@@ -519,14 +528,16 @@ func (p *scriptStepPublisher) final(event ScriptStepEvent) {
 	p.signal()
 }
 
-// close stops taking events and waits up to wait for the queued ones to be
-// sent; any left are still sent in the background.
-func (p *scriptStepPublisher) close(wait time.Duration) {
+// close stops taking events and waits for the queued final events to be
+// sent, up to finalWait.
+func (p *scriptStepPublisher) close() {
 	p.mu.Lock()
 	p.closed = true
+	p.stoppingLocked()
 	p.mu.Unlock()
 	p.signal()
-	timer := time.NewTimer(wait)
+	// A send in flight ends by flushBy too; a moment more lets it return.
+	timer := time.NewTimer(p.finalWait + 100*time.Millisecond)
 	defer timer.Stop()
 	select {
 	case <-p.done:
@@ -541,11 +552,28 @@ func (p *scriptStepPublisher) signal() {
 	}
 }
 
+// stoppingLocked reports whether the run is closed or the worker's context
+// ended, and when it is, the time final events are sent until. p.mu is held.
+func (p *scriptStepPublisher) stoppingLocked() (time.Time, bool) {
+	if !p.closed && p.ctx.Err() == nil {
+		return time.Time{}, false
+	}
+	if p.flushBy.IsZero() {
+		p.flushBy = time.Now().Add(p.finalWait)
+	}
+	return p.flushBy, true
+}
+
 func (p *scriptStepPublisher) run() {
 	defer close(p.done)
 	for {
 		p.mu.Lock()
-		if p.unsupported || p.ctx.Err() != nil {
+		flushBy, stopping := p.stoppingLocked()
+		if stopping {
+			// Live updates no longer matter; final events do, until flushBy.
+			p.live = nil
+		}
+		if p.unsupported || (stopping && !time.Now().Before(flushBy)) {
 			p.live, p.finals = nil, nil
 			p.mu.Unlock()
 			return
@@ -556,17 +584,17 @@ func (p *scriptStepPublisher) run() {
 			event := p.finals[0]
 			p.finals = p.finals[1:]
 			p.mu.Unlock()
-			p.send(event, scriptStepAttempts)
+			p.send(event, true)
 			continue
 		}
 		if p.live != nil {
 			event := *p.live
 			p.live = nil
 			p.mu.Unlock()
-			p.send(event, 1)
+			p.send(event, false)
 			continue
 		}
-		if p.closed {
+		if stopping {
 			p.mu.Unlock()
 			return
 		}
@@ -578,9 +606,29 @@ func (p *scriptStepPublisher) run() {
 	}
 }
 
-func (p *scriptStepPublisher) send(event ScriptStepEvent, attempts int) {
+// send sends a live update once, on the worker's context, or a final event
+// up to scriptStepAttempts times, on a context detached from the worker's and
+// bounded by flushBy once the run is stopping.
+func (p *scriptStepPublisher) send(event ScriptStepEvent, final bool) {
+	attempts := 1
+	if final {
+		attempts = scriptStepAttempts
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
-		ctx, cancel := context.WithTimeout(p.ctx, scriptStepSendTimeout)
+		parent, timeout := p.ctx, scriptStepSendTimeout
+		if final {
+			parent = context.WithoutCancel(p.ctx)
+			p.mu.Lock()
+			flushBy, stopping := p.stoppingLocked()
+			p.mu.Unlock()
+			if stopping {
+				timeout = min(timeout, time.Until(flushBy))
+				if timeout <= 0 {
+					return
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
 		err := p.publish(ctx, event)
 		cancel()
 		if err == nil {
@@ -592,13 +640,20 @@ func (p *scriptStepPublisher) send(event ScriptStepEvent, attempts int) {
 			p.mu.Unlock()
 			return
 		}
-		if attempt < attempts {
-			select {
-			case <-p.ctx.Done():
-				return
-			case <-time.After(p.retryDelay * time.Duration(attempt)):
-			}
+		if attempt == attempts {
+			return
 		}
+		delay := p.retryDelay * time.Duration(attempt)
+		if !final {
+			return
+		}
+		p.mu.Lock()
+		flushBy, stopping := p.stoppingLocked()
+		p.mu.Unlock()
+		if stopping && time.Until(flushBy) < delay {
+			return
+		}
+		time.Sleep(delay)
 	}
 }
 
@@ -687,8 +742,12 @@ func (r SetupRunner) startStepEvents(ctx context.Context, total int) *setupStepE
 	if r.UpdateInterval > 0 {
 		interval = func(time.Duration) time.Duration { return r.UpdateInterval }
 	}
+	finalWait := scriptStepFinalWait
+	if r.FinalWait > 0 {
+		finalWait = r.FinalWait
+	}
 	return &setupStepEvents{
-		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second),
+		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second, finalWait),
 		redactor:  newScriptRedactor(os.Environ(), secrets),
 		interval:  interval,
 		runID:     uuid.NewString(),
@@ -765,7 +824,7 @@ func (s *setupStepEvents) close() {
 		return
 	}
 	s.stopWatching()
-	s.publisher.close(scriptStepFlushWait)
+	s.publisher.close()
 }
 
 func (s *setupStepEvents) stopWatching() {

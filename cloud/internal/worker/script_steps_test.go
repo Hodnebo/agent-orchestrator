@@ -203,7 +203,7 @@ func TestSetupStepEventsNeverWaitOnPublishing(t *testing.T) {
 		return nil
 	}
 	started := time.Now()
-	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: slow, UpdateInterval: 10 * time.Millisecond},
+	summary, _ := runSetupWithSteps(t, SetupRunner{Publish: slow, UpdateInterval: 10 * time.Millisecond, FinalWait: time.Second},
 		[]string{"for i in 1 2 3 4 5; do echo $i; sleep 0.05; done", "echo two", "echo three"})
 	elapsed := time.Since(started)
 	mu.Lock()
@@ -213,7 +213,7 @@ func TestSetupStepEventsNeverWaitOnPublishing(t *testing.T) {
 	if summary.Status != SetupSucceeded {
 		t.Fatalf("summary = %+v", summary)
 	}
-	if elapsed > scriptStepFlushWait+2*time.Second {
+	if elapsed > time.Second+2*time.Second {
 		t.Fatalf("setup took %s with a stalled control plane", elapsed)
 	}
 	if stalledCalls != 1 {
@@ -244,7 +244,7 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 		sent = append(sent, event.Output)
 		return nil
 	}
-	publisher := newScriptStepPublisher(context.Background(), publish, time.Millisecond)
+	publisher := newScriptStepPublisher(context.Background(), publish, time.Millisecond, time.Second)
 	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1a"})
 	time.Sleep(20 * time.Millisecond)
 	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1b"})
@@ -255,7 +255,7 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 	close(gate)
 	time.Sleep(50 * time.Millisecond)
 	publisher.final(ScriptStepEvent{Step: 2, Output: "final-2"})
-	publisher.close(time.Second)
+	publisher.close()
 	mu.Lock()
 	got := strings.Join(sent, " ")
 	mu.Unlock()
@@ -268,12 +268,12 @@ func TestScriptStepPublisherCoalescesAndRetries(t *testing.T) {
 	refused := newScriptStepPublisher(context.Background(), func(context.Context, ScriptStepEvent) error {
 		calls++
 		return ErrScriptStepsUnsupported
-	}, time.Millisecond)
+	}, time.Millisecond, time.Second)
 	refused.update(ScriptStepEvent{Step: 1})
 	time.Sleep(20 * time.Millisecond)
 	refused.final(ScriptStepEvent{Step: 1})
 	refused.final(ScriptStepEvent{Step: 2, Status: ScriptStepSkipped})
-	refused.close(time.Second)
+	refused.close()
 	if calls != 1 {
 		t.Fatalf("calls after the control plane refused the event type = %d, want 1", calls)
 	}
@@ -574,5 +574,60 @@ func TestLiveUpdateInterval(t *testing.T) {
 		if got := liveUpdateInterval(elapsed); got != want {
 			t.Fatalf("liveUpdateInterval(%s) = %s, want %s", elapsed, got, want)
 		}
+	}
+}
+
+// A worker that is stopping still reports how its steps ended: its queued
+// final events are sent on a context that is not cancelled with the worker's,
+// live updates are dropped, and close waits for the finals, but no longer
+// than the final wait.
+func TestScriptStepPublisherSendsFinalsAfterTheWorkerStops(t *testing.T) {
+	t.Parallel()
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	var sent []string
+	publish := func(ctx context.Context, event ScriptStepEvent) error {
+		if event.Output == "live-1" {
+			<-gate
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, event.Output)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	publisher := newScriptStepPublisher(ctx, publish, time.Millisecond, 5*time.Second)
+	publisher.update(ScriptStepEvent{Step: 1, Output: "live-1"})
+	time.Sleep(20 * time.Millisecond)
+	publisher.final(ScriptStepEvent{Step: 1, Output: "final-1"})
+	publisher.update(ScriptStepEvent{Step: 2, Output: "live-2"})
+	publisher.final(ScriptStepEvent{Step: 2, Output: "final-2"})
+	publisher.final(ScriptStepEvent{Step: 3, Status: ScriptStepSkipped, Output: "skipped-3"})
+	cancel()
+	close(gate)
+	publisher.close()
+	mu.Lock()
+	got := strings.Join(sent, " ")
+	mu.Unlock()
+	// live-1 was in flight on the worker's context and ended with it; live-2
+	// was dropped.
+	if got != "final-1 final-2 skipped-3" {
+		t.Fatalf("sent %q after the worker stopped; want every final event and no live update", got)
+	}
+
+	// A control plane that never answers holds close only for the final wait.
+	stuck := newScriptStepPublisher(context.Background(), func(ctx context.Context, _ ScriptStepEvent) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, time.Millisecond, 200*time.Millisecond)
+	stuck.final(ScriptStepEvent{Step: 1})
+	stuck.final(ScriptStepEvent{Step: 2})
+	started := time.Now()
+	stuck.close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("close waited %s for a control plane that never answers", elapsed)
 	}
 }
