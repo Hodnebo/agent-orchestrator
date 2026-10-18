@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -12,6 +12,24 @@ import { cn } from "../lib/utils";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { Button } from "./ui/button";
+
+/**
+ * How long a workspace retry may show no new Setup run before the card stops
+ * waiting and offers Retry again. A checkout and Setup that run report their
+ * own run long before this; it only covers a retry nothing visibly picked up.
+ */
+const RETRY_PICKUP_LIMIT_MS = 5 * 60_000;
+
+/** True once `waiting` has held for {@link RETRY_PICKUP_LIMIT_MS} since this retry. */
+function useRetryStalled(waiting: boolean, retry: object | undefined): boolean {
+	const [stalled, setStalled] = useState<object>();
+	useEffect(() => {
+		if (!waiting || !retry) return;
+		const timer = window.setTimeout(() => setStalled(retry), RETRY_PICKUP_LIMIT_MS);
+		return () => window.clearTimeout(timer);
+	}, [retry, waiting]);
+	return stalled !== undefined && stalled === retry;
+}
 
 /**
  * Replaces a cloud session's pane once its runtime has ended without a worker:
@@ -39,18 +57,35 @@ export function CloudSessionStartupError({
 	const workspaceProblem = problem.phase === "failed" && isWorkspaceStartupError(problem.code);
 	const failureAt = problem.phase === "failed" ? problem.at : undefined;
 	// A workspace retry only queues the request: the worker reports again once
-	// the checkout and Setup finish, which can take minutes. Until a newer
-	// failure arrives (or the session starts and this screen goes away), show
-	// that it is running rather than the old failure with Retry enabled.
-	const [retriedFailureAt, setRetriedFailureAt] = useState<string | undefined>(undefined);
-	const rerunning = workspaceProblem && retriedFailureAt !== undefined && retriedFailureAt === failureAt;
+	// the checkout and Setup finish, which can take minutes. Until that retry
+	// visibly ends (or the session starts and this screen goes away), show that
+	// it is running rather than the old failure with Retry enabled.
+	const [retried, setRetried] = useState<{ failureAt: string; afterSequence: number }>();
+	const awaitingRetry = workspaceProblem && retried !== undefined && retried.failureAt === failureAt;
+	// The step log, also read while a retry runs: after Retry the worker runs
+	// Setup again, and listening on the session's stream shows that run live.
+	const scriptRuns = useCloudScriptRuns(orgId, sessionId, { live: awaitingRetry });
+	const latestRun = latestScriptRun(scriptRuns, "setup");
+	// The Setup run the retry started, if any: one that began after Retry.
+	const retryRun = awaitingRetry && latestRun && latestRun.firstSequence > retried.afterSequence ? latestRun : undefined;
+	const retryStalled = useRetryStalled(awaitingRetry && !retryRun, retried);
+	// The retry is over once a newer failure arrives (a new `at`), its Setup
+	// run ends without succeeding (the control plane may re-send the same
+	// failure unchanged), or nothing started for a long while. A Setup that
+	// succeeded keeps it up until the agent starts and this screen goes away.
+	const rerunning = awaitingRetry
+		&& !(retryRun && (retryRun.status === "failed" || retryRun.status === "unknown" || retryRun.status === "interrupted"))
+		&& !retryStalled;
 	const retry = useMutation({
-		mutationFn: async (): Promise<void> => {
+		mutationFn: async (): Promise<number> => {
+			// Runs that exist now are not the retry's, whatever arrives later.
+			const afterSequence = Math.max(0, ...scriptRuns.map((run) => run.lastSequence));
 			if (workspaceProblem) await client.requestWorkspaceCheckout(orgId, sessionId);
 			else await client.retrySessionStartup(orgId, sessionId);
+			return afterSequence;
 		},
-		onSuccess: async () => {
-			if (workspaceProblem && failureAt !== undefined) setRetriedFailureAt(failureAt);
+		onSuccess: async (afterSequence) => {
+			if (workspaceProblem && failureAt !== undefined) setRetried({ failureAt, afterSequence });
 			await Promise.allSettled([
 				queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
 				queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
@@ -74,10 +109,8 @@ export function CloudSessionStartupError({
 				: problem.phase === "failed" && problem.code === "working_directory_unusable"
 					? t("cloud.startupError.workingDirectoryUnusableTitle")
 					: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
-	// The failed Setup run as a step log. After Retry the worker runs Setup
-	// again; listening on the session's stream shows that run live here.
-	const scriptRuns = useCloudScriptRuns(orgId, sessionId, { live: rerunning });
-	const latestSetup = projectSetupFailed || rerunning ? latestScriptRun(scriptRuns, "setup") : undefined;
+	// The failed Setup run as a step log, or the retry's run while it goes.
+	const latestSetup = projectSetupFailed || rerunning ? latestRun : undefined;
 	const setupRun = latestSetup && (latestSetup.status === "failed" || (rerunning && latestSetup.status === "running")) ? latestSetup : undefined;
 	// A failed Setup step's output is what the user needs to fix the script, so
 	// it starts expanded, unless the step log below already shows it.
