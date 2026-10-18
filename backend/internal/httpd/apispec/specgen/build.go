@@ -228,6 +228,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
 	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
+	"ControllersProviderSwitchResponse":                    "ProviderSwitchResponse",
 	"ControllersProviderSwitchRequest":                     "ProviderSwitchRequest",
 	"ControllersSessionHistoryQuery":                       "SessionHistoryQuery",
 	"DomainHandoffTurn":                                    "SessionHistoryTurn",
@@ -1058,7 +1059,7 @@ func shellTerminalOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			reqBody:    controllers.ProviderSwitchRequest{},
 			resps: []respUnit{
-				{http.StatusOK, map[string]string{"status": "ok"}},
+				{http.StatusOK, controllers.ProviderSwitchResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},

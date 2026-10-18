@@ -73,6 +73,15 @@ export interface ConversationSendInput {
 	clientMessageId?: string;
 	/** The user's one-click "continue" after stopping a turn. */
 	continuation?: boolean;
+	/** Switches the agent first; the new agent answers this message as its first turn. */
+	providerSwitch?: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey" | "message">;
+}
+
+/** A send whose agent switch was refused or failed, so the message never left. */
+export class ProviderSwitchFailed extends Error {
+	constructor(readonly reason: unknown) {
+		super(apiErrorMessage(reason));
+	}
 }
 
 interface ConversationSendMutationInput {
@@ -431,6 +440,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	};
 }
 
+/** Drops what was cached from a session's outgoing agent once it switched. */
+async function refreshAfterProviderSwitch(queryClient: QueryClient, sessionId: string, hostId?: string) {
+	await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+	// Provider catalogs are keyed by the AO session id, so the outgoing provider's must go first.
+	clearConversationProviderCatalogs(queryClient, sessionId, hostId);
+	await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+	invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
+}
+
 /** Switches the session's agent, then drops what was cached from the outgoing one. */
 export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
@@ -443,13 +461,7 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-			// Provider catalogs are keyed by the AO session id, so the outgoing provider's must go first.
-			clearConversationProviderCatalogs(queryClient, sessionId, hostId);
-			await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
-			invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
-		},
+		onSuccess: () => refreshAfterProviderSwitch(queryClient, sessionId, hostId),
 	});
 }
 
@@ -551,6 +563,20 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			clientMessageId,
 			input,
 		}: ConversationSendMutationInput) => {
+			const { providerSwitch, ...message } = input;
+			if (providerSwitch) {
+				// One request: the daemon switches, then sends, so the message does not
+				// wait on this renderer refetching between the two.
+				const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
+					params: { path: { sessionId: targetSessionId } },
+					body: { ...providerSwitch, idempotencyKey: crypto.randomUUID(), message: { ...message, clientMessageId } },
+				});
+				const switched = !error || response.headers.get("X-AO-Provider-Switched") === "1";
+				if (switched) void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
+				if (error) throw switched ? error : new ProviderSwitchFailed(error);
+				const accepted: components["schemas"]["SendConversationMessageResponse"] = data.message ?? { duplicate: true };
+				return accepted;
+			}
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/messages",
 				{
@@ -558,7 +584,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					// A stable id per attempt makes a retry idempotent: the daemon
 					// answers `duplicate` instead of opening a second provider turn.
-					body: { ...input, clientMessageId },
+					body: { ...message, clientMessageId },
 				},
 			);
 			if (error) throw error;

@@ -2514,6 +2514,16 @@ type ProviderSwitchRequest struct {
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	// Message is sent to the new agent as its first turn once the switch
+	// completes, in the same request. Attachments are sent separately.
+	Message *SendConversationMessageRequest `json:"message,omitempty"`
+}
+
+// ProviderSwitchResponse reports a completed switch, and the send of a message
+// that came with it.
+type ProviderSwitchResponse struct {
+	Status  string                           `json:"status"`
+	Message *SendConversationMessageResponse `json:"message,omitempty"`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.

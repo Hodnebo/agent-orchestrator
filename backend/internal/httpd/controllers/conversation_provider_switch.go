@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.Request) {
@@ -23,7 +24,23 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	err := c.Svc.SwitchProvider(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), domain.ProviderSwitchRequest{
+	// A message sent with the switch is checked before anything stops, so a
+	// malformed one refuses the switch instead of following it.
+	var message ports.ChatUserMessage
+	if req.Message != nil {
+		if len(req.Message.Attachments) > 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_BODY",
+				"send attachments separately after the switch", nil)
+			return
+		}
+		var invalid *attachmentError
+		if message, invalid = chatUserMessage(*req.Message); invalid != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
+			return
+		}
+	}
+	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
+	err := c.Svc.SwitchProvider(r.Context(), sessionID, domain.ProviderSwitchRequest{
 		TargetHarness: domain.AgentHarness(req.TargetHarness), IdempotencyKey: req.IdempotencyKey,
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
@@ -41,10 +58,26 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), nil)
 	} else if err != nil {
 		writeConversationError(w, r, err)
+	} else if req.Message == nil {
+		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok"})
 	} else {
-		envelope.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		// The new agent answers the message as its first turn. A send that fails
+		// now is a send failure, not a switch failure: the header tells the
+		// client the switch went through, so it retries the message on its own.
+		turn, sendErr := c.Svc.Send(r.Context(), sessionID, message)
+		if sendErr != nil {
+			w.Header().Set(providerSwitchedHeader, "1")
+			writeConversationError(w, r, sendErr)
+			return
+		}
+		response := sendConversationMessageResponse(turn)
+		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok", Message: &response})
 	}
 }
+
+// providerSwitchedHeader marks an error response to a switch that carried a
+// message: the switch completed, and only the message's send failed.
+const providerSwitchedHeader = "X-AO-Provider-Switched"
 
 // sessionHistory serves `ao session history`: the turns AO holds for a session
 // in full, newest first, so an agent that took over can read what its handoff

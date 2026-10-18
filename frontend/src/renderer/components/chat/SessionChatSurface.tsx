@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import {
+	ProviderSwitchFailed,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -225,6 +226,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// next message, so the handoff note is written when it is needed.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const [switchSending, setSwitchSending] = useState(false);
+	// A switch refused inside a send; the separate switch request keeps its own.
+	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
+	const switchError = providerSwitch.error ?? sendSwitchError;
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
 	const pendingHarness = pendingSwitch?.harness;
@@ -611,26 +616,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						}
 						return;
 					}
-					if (pendingSwitch) {
-						// Nothing was sent if the switch fails, so the draft must stay editable
-						// instead of being held as a delivery that might have gone through.
-						const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
-						// Match the displayed effort, as the terminal switch does. Cursor's
-						// variant model id already carries its effort.
-						const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
-						// The message shows at once; the switch can take seconds.
-						if (clientMessageId) commands.echoBeforeSend({ clientMessageId, text, excerpts });
-						await providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, autoCompactWindow })
-							.catch((error) => {
-								if (clientMessageId) commands.dropEcho(clientMessageId);
-								throw Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
-							});
-						setChosenSwitch(undefined);
-						// Ultracode picked with the switch stays on for the messages after it.
-						ultracode.onChange(Boolean(pendingSwitch.ultracode));
-					}
 					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
-					return commands.send({
+					const message = {
 						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
@@ -640,16 +627,68 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							revision: excerpt.revision,
 							text: excerpt.text,
 						})),
-					}); }}
+					};
+					if (!pendingSwitch) return commands.send(message);
+					const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
+					// Match the displayed effort, as the terminal switch does. Cursor's
+					// variant model id already carries its effort.
+					const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
+					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow };
+					// Nothing was sent if the switch fails, so the draft must stay editable
+					// instead of being held as a delivery that might have gone through.
+					const switchFailed = (error: unknown) => Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+					const switched = () => {
+						setChosenSwitch(undefined);
+						// Ultracode picked with the switch stays on for the messages after it.
+						ultracode.onChange(Boolean(pendingSwitch.ultracode));
+					};
+					if (attachments?.length) {
+						// Attachments upload on their own route, so this send follows the switch.
+						// The message shows at once; the switch can take seconds.
+						if (clientMessageId) commands.echoBeforeSend({ clientMessageId, text, excerpts });
+						await providerSwitch.mutateAsync(switchRequest).catch((error) => {
+							if (clientMessageId) commands.dropEcho(clientMessageId);
+							throw switchFailed(error);
+						});
+						switched();
+						return commands.send(message);
+					}
+					// The daemon switches and sends in one request; the message shows at once.
+					setSendSwitchError(undefined);
+					setSwitchSending(true);
+					try {
+						const sent = await commands.send({ ...message, providerSwitch: switchRequest });
+						switched();
+						return sent;
+					} catch (error) {
+						if (error instanceof ProviderSwitchFailed) {
+							setSendSwitchError(error.reason);
+							throw switchFailed(error.reason);
+						}
+						// The switch went through and only the send failed: the composer
+						// retries the message as an ordinary send.
+						switched();
+						throw error;
+					} finally {
+						setSwitchSending(false);
+					}
+				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
 				composerAction={interfaceSwitch?.control}
-				composerNotice={interfaceSwitch?.errorNotice ?? (providerSwitch.error ? (
-					<ComposerErrorNotice title="Couldn't switch agent" message={apiErrorMessage(providerSwitch.error)} onDismiss={providerSwitch.reset} />
+				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
+					<ComposerErrorNotice
+						title="Couldn't switch agent"
+						message={apiErrorMessage(switchError)}
+						onDismiss={() => {
+							providerSwitch.reset();
+							setSendSwitchError(undefined);
+						}}
+					/>
 				) : pendingSwitch ? (
 					<PendingAgentSwitchNotice
 						pending={pendingSwitch}
-						switching={providerSwitch.isPending}
+						switching={providerSwitch.isPending || switchSending}
 						onCancel={() => setChosenSwitch(undefined)}
 					/>
 				) : undefined)}

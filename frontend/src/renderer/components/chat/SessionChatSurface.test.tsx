@@ -73,6 +73,14 @@ const {
 	},
 }));
 
+const switchFailure = vi.hoisted(() => ({
+	ProviderSwitchFailed: class ProviderSwitchFailed extends Error {
+		constructor(readonly reason: unknown) {
+			super("switch failed");
+		}
+	},
+}));
+
 const configState = vi.hoisted(() => ({
 	options: [] as ChatConfigOption[], loaded: false, error: undefined as string | undefined,
 }));
@@ -101,6 +109,7 @@ vi.mock("../../lib/api-client", () => ({
 }));
 
 vi.mock("../../hooks/useConversation", () => ({
+	ProviderSwitchFailed: switchFailure.ProviderSwitchFailed,
 	clearConversationProviderCatalogs: clearCatalogsMock,
 	conversationQueryKey: (sessionId: string) => ["conversation", sessionId],
 	invalidateConversationProviderCatalogs: invalidateCatalogsMock,
@@ -150,8 +159,10 @@ vi.mock("./ChatWorkspace", async () => {
 			snapshot,
 			shellTarget,
 			onSend,
+			composerNotice,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			composerNotice?: ReactNode;
 			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
@@ -183,6 +194,7 @@ vi.mock("./ChatWorkspace", async () => {
 					/>
 					{snapshot.sessionId ? <div>Mounted {mountedSessionId}</div> : null}
 					{snapshot.sessionId ? <div>Rendered {snapshot.sessionId}</div> : null}
+					{composerNotice}
 					<div data-testid="remember-available">{String(Boolean(onRememberPermissions))}</div>
 					<div data-testid="turn-settings-available">{String(Boolean(onChooseSettings))}</div>
 					<div data-testid="config-option-error">{configOptionError}</div>
@@ -278,10 +290,31 @@ describe("SessionChatSurface pending switch effort", () => {
 		await act(async () => {
 			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
 		});
-		expect(providerSwitchMock).toHaveBeenCalledWith(expect.objectContaining({ targetHarness: harness, effort: expected }));
+		// The switch and the message go out in one request.
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
+			text: "Recall the code word.",
+			clientMessageId: "switch-message",
+			providerSwitch: expect.objectContaining({ targetHarness: harness, effort: expected }),
+		}));
+		expect(providerSwitchMock).not.toHaveBeenCalled();
 	});
 
-	it("shows the message while the switch runs, and takes it back when the switch fails", async () => {
+	it("reports a refused switch as a switch failure, so the draft stays editable", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		conversationCommandState.send = vi.fn().mockRejectedValue(new switchFailure.ProviderSwitchFailed({ code: "PROVIDER_SWITCH_busy" }));
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "chosen-model" });
+		});
+		let failure: unknown;
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message").catch((error) => { failure = error; });
+		});
+		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+		expect(await screen.findByText("Couldn't switch agent")).toBeInTheDocument();
+	});
+
+	it("shows a message with attachments while the switch runs, and takes it back when the switch fails", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		let failSwitch: (error: Error) => void = () => {};
 		providerSwitchMock.mockReturnValue(new Promise((_resolve, reject) => { failSwitch = reject; }));
@@ -291,7 +324,8 @@ describe("SessionChatSurface pending switch effort", () => {
 		});
 		let sent: Promise<void> | undefined;
 		await act(async () => {
-			sent = sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
+			sent = (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
+				"Recall the code word.", [{ mimeType: "image/png", data: "AA==" }], "switch-message");
 		});
 		expect(conversationCommandState.echoBeforeSend).toHaveBeenCalledWith(
 			expect.objectContaining({ clientMessageId: "switch-message", text: "Recall the code word." }),

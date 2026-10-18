@@ -5397,9 +5397,14 @@ export interface components {
             effort?: string;
             fastMode?: boolean;
             idempotencyKey?: string;
+            message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
             targetHarness: string;
             ultracode?: boolean;
+        };
+        ProviderSwitchResponse: {
+            message?: components["schemas"]["SendConversationMessageResponse"];
+            status: string;
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -17280,9 +17285,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ProviderSwitchResponse"];
                 };
             };
             /** @description Bad Request */
