@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -684,4 +685,111 @@ func TestReconcilePendingWorkerCommandRecovers(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected terminal phase recovery_required after pending retries, got %v", store.advances)
+}
+
+func TestReconcileDrainFailsWhenIdleSourceNeverProvesQuiescence(t *testing.T) {
+	for name, transition := range map[string]postgres.CoordinatedInterfaceTransition{
+		"provider idle": func() postgres.CoordinatedInterfaceTransition {
+			transition := testTransition(domain.SessionInterfaceTransitionRequested)
+			transition.SessionActivityState = "idle"
+			return transition
+		}(),
+		// AO typed a message (an API send) that no provider hook confirmed,
+		// for example because a terminal dialog swallowed it.
+		"unconfirmed typed message": func() postgres.CoordinatedInterfaceTransition {
+			transition := testTransition(domain.SessionInterfaceTransitionRequested)
+			transition.SessionActivityState = "active"
+			transition.SessionActivityUnconfirmed = true
+			return transition
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+			driver := &fakeDriver{Inspection: SourceInspection{QuiescenceUnverified: true}}
+			coordinator := newCoordinator(store, driver)
+			clock := time.Date(2026, 10, 18, 18, 24, 54, 0, time.UTC)
+			coordinator.now = func() time.Time { return clock }
+
+			if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			clock = clock.Add(defaultUnverifiedIdleLimit - time.Second)
+			if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionDraining {
+				t.Fatalf("phase inside the proof window = %q, want draining", got)
+			}
+			clock = clock.Add(time.Second)
+			if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := store.transitions[0]
+			if got.Phase != domain.SessionInterfaceTransitionFailed || got.ErrorCode != "SOURCE_DRAIN_FAILED" {
+				t.Fatalf("transition = %q/%q, want failed/SOURCE_DRAIN_FAILED", got.Phase, got.ErrorCode)
+			}
+			if !strings.HasPrefix(got.ErrorDetail, "source controller activity cannot be verified;") {
+				t.Fatalf("error detail = %q, want the unverified-source prefix the desktop recognizes", got.ErrorDetail)
+			}
+			if driver.stopCalls != 0 || driver.interruptCalls != 0 || store.committed != "" {
+				t.Fatalf("source was touched: stop=%d interrupt=%d committed=%q", driver.stopCalls, driver.interruptCalls, store.committed)
+			}
+			if !store.heldMessagesReleased {
+				t.Fatal("held messages stay fenced after the source was left running")
+			}
+		})
+	}
+}
+
+func TestReconcileDrainWaitsWithoutLimitWhileProviderReportsWork(t *testing.T) {
+	for _, state := range []string{"active", "waiting_input", "blocked", ""} {
+		t.Run(state, func(t *testing.T) {
+			transition := testTransition(domain.SessionInterfaceTransitionRequested)
+			transition.SessionActivityState = state
+			store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+			driver := &fakeDriver{Inspection: SourceInspection{QuiescenceUnverified: true}}
+			coordinator := newCoordinator(store, driver)
+			clock := time.Date(2026, 10, 18, 18, 0, 0, 0, time.UTC)
+			coordinator.now = func() time.Time { return clock }
+			for range 5 {
+				if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				clock = clock.Add(time.Hour)
+			}
+			if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionDraining {
+				t.Fatalf("phase while the provider reports work = %q, want draining", got)
+			}
+		})
+	}
+}
+
+func TestReconcileDrainRestartsProofWindowWhenATurnStarts(t *testing.T) {
+	transition := testTransition(domain.SessionInterfaceTransitionRequested)
+	transition.SessionActivityState = "idle"
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+	driver := &fakeDriver{Inspection: SourceInspection{QuiescenceUnverified: true}}
+	coordinator := newCoordinator(store, driver)
+	clock := time.Date(2026, 10, 18, 18, 0, 0, 0, time.UTC)
+	coordinator.now = func() time.Time { return clock }
+	step := func(state string, advance time.Duration) {
+		t.Helper()
+		store.transitions[0].SessionActivityState = state
+		clock = clock.Add(advance)
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	step("idle", 0)
+	step("active", 20*time.Second) // a prompt was submitted
+	step("idle", 20*time.Second)   // its Stop has not reached the worker yet
+	step("idle", defaultUnverifiedIdleLimit-time.Second)
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionDraining {
+		t.Fatalf("phase after the turn restarted the window = %q, want draining", got)
+	}
+	driver.Inspection = SourceInspection{Idle: true}
+	step("idle", time.Second)
+	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase once the source proves idle = %q, want completed", got)
+	}
 }
