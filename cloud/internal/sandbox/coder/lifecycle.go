@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/google/uuid"
 )
 
 // Worker environment for a bring-your-own connection's working directory and
@@ -128,9 +129,11 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if err != nil {
 		return true
 	}
-	override := ""
+	// The current Cleanup's commands script marks its steps with a nonce made
+	// for this run, so its step events are read only from those markers.
+	override, nonce := "", worker.NewScriptMarkerNonce()
 	if known {
-		if payload, fits := cleanupCommandsPayload(current); fits {
+		if payload, fits := cleanupCommandsPayload(current, nonce); fits {
 			override = payload
 		} else {
 			slog.WarnContext(ctx, "coder: the project's current Cleanup is too large to pass to the workspace; running the commands from the session's start",
@@ -150,9 +153,13 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	// observer so the outcome is still logged against the session.
 	runCtx := context.WithoutCancel(ctx)
 	attrs := c.stageAttrs(string(id), agent.ID)
+	steps := worker.CleanupRun{RunID: uuid.NewString()}
+	if override != "" {
+		steps.Nonce, steps.Commands = nonce, current
+	}
 	go func() {
 		defer close(run.done)
-		c.runCleanup(runCtx, ptyURL, wait, override, attrs)
+		c.runCleanup(runCtx, ptyURL, wait, override, attrs, steps)
 	}()
 	slog.InfoContext(ctx, "coder: running project cleanup before deleting the workspace",
 		"workspace_id", string(id), "budget", wait)
@@ -183,10 +190,13 @@ func (c *Client) awaitCleanup(ctx context.Context, id sandbox.ID, run *cleanupRu
 	return false
 }
 
-// runCleanup runs the worker-installed Cleanup hook through the agent PTY and
-// reports the outcome as StageCleanup.
-func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Duration, override string, attrs map[string]string) {
+// runCleanup runs the worker-installed Cleanup hook through the agent PTY,
+// reports the outcome as StageCleanup, and appends the run's steps to the
+// session's events (steps names the run and, with an override, its marker
+// nonce and commands).
+func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Duration, override string, attrs map[string]string, steps worker.CleanupRun) {
 	finish := sandbox.BeginStage(ctx, StageCleanup)
+	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanupMargin)
 	defer cancel()
 	attemptURL := *ptyURL
@@ -204,7 +214,7 @@ func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Dura
 	var err error
 	for attempt := 1; ; attempt++ {
 		started := time.Now()
-		result, status, err = c.runMarkedCommandOnce(runCtx, &attemptURL, cleanupMarker, wait+cleanupMargin)
+		result, status, err = c.runMarkedCommandOnce(runCtx, &attemptURL, cleanupMarker, wait+cleanupMargin, cleanupOutputLimit)
 		if err == nil || !errors.Is(err, errTerminalNotReady) || attempt == cleanupTerminalAttempts ||
 			time.Since(started) > cleanupQuickFailure || runCtx.Err() != nil {
 			break
@@ -212,6 +222,12 @@ func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Dura
 		select {
 		case <-runCtx.Done():
 		case <-time.After(cleanupTerminalRetryDelay):
+		}
+	}
+	if err == nil && status != cleanupSkipped {
+		steps.ExitCode, steps.Duration = result.exitCode, time.Since(steps.StartedAt)
+		for _, event := range worker.CleanupStepEvents(result.raw, steps) {
+			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
 		}
 	}
 	switch {
@@ -260,13 +276,18 @@ func pruneCleanupRuns() {
 // commands the worker installed.
 const cleanupPayloadLimit = 12 << 10
 
+// cleanupOutputLimit bounds the Cleanup output the hook command prints and AO
+// keeps: the hook's own tail (worker.CleanupHookOutputLimit) and its last
+// lines, split into the run's step events.
+const cleanupOutputLimit = worker.CleanupHookOutputLimit + 1<<10
+
 // cleanupCommandsPayload is the gzip-compressed, base64-encoded Cleanup
-// commands script for the project's current Cleanup, and whether it fits
-// cleanupPayloadLimit.
-func cleanupCommandsPayload(commands []string) (string, bool) {
+// commands script for the project's current Cleanup, its step markers carrying
+// nonce, and whether it fits cleanupPayloadLimit.
+func cleanupCommandsPayload(commands []string, nonce string) (string, bool) {
 	var compressed bytes.Buffer
 	writer := gzip.NewWriter(&compressed)
-	if _, err := writer.Write([]byte(worker.CleanupCommandsScript(commands, ""))); err != nil {
+	if _, err := writer.Write([]byte(worker.CleanupCommandsScript(commands, nonce))); err != nil {
 		return "", false
 	}
 	if err := writer.Close(); err != nil {
@@ -321,6 +342,6 @@ func cleanupHookCommand(durableRoot string, budget time.Duration, override strin
 		"  ao_out=$(\"$@\" 2>&1 </dev/null)\n" +
 		"fi\n" +
 		"ao_code=$?\n" +
-		"printf '%s\\n' \"$ao_out\" | tail -c " + strconv.Itoa(readyProbeOutputLimit) + "\n" +
+		"printf '%s\\n' \"$ao_out\" | tail -c " + strconv.Itoa(cleanupOutputLimit) + "\n" +
 		"printf '\\n%s:%s\\n' " + cleanupMarker + " \"$ao_code\"\n"
 }

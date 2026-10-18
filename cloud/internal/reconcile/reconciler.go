@@ -869,7 +869,7 @@ func (r *Reconciler) reconcileDeletion(
 			"provider_id", record.ProviderEnvironmentID,
 		)
 	}
-	if err := provider.Delete(r.withCleanupCommands(ctx, record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+	if err := provider.Delete(r.withSessionEvents(r.withCleanupCommands(ctx, record), record), environment.ID); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return r.fail(ctx, record, err)
 	}
 	// DELETE acceptance is not deletion confirmation. Keep the provider id and
@@ -906,6 +906,28 @@ func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sand
 		return ctx
 	}
 	return sandbox.WithCleanupCommands(ctx, commands)
+}
+
+// sessionEventTimeout bounds one event a provider appends to the session.
+const sessionEventTimeout = 10 * time.Second
+
+// withSessionEvents lets Provider.Delete append events to the session it
+// deletes the sandbox of (the project's Cleanup steps). The session row is
+// never removed (a deleted session is only terminated), so the events stay
+// readable afterwards; a failed append is only logged.
+func (r *Reconciler) withSessionEvents(ctx context.Context, record domain.Sandbox) context.Context {
+	return sandbox.WithSessionEventRecorder(ctx, func(ctx context.Context, eventType string, payload any) {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			r.log.WarnContext(ctx, "encode provider session event", "session_id", record.SessionID, "event_type", eventType, "err", err)
+			return
+		}
+		appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionEventTimeout)
+		defer cancel()
+		if _, err := r.store.AppendSessionEvent(appendCtx, record.OrgID, record.SessionID, eventType, encoded); err != nil {
+			r.log.WarnContext(ctx, "append provider session event", "session_id", record.SessionID, "event_type", eventType, "err", err)
+		}
+	})
 }
 
 func (r *Reconciler) restore(
