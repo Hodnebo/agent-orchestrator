@@ -120,7 +120,7 @@ func (w *loseReliableACK) Write(p []byte) (int, error) {
 	var f frame
 	if json.Unmarshal(bytes.TrimSpace(p), &f) == nil && f.Method == persistenthost.CodexAckMethod &&
 		w.store.terminalCommitted.Load() && w.store.loseTerminalACK.CompareAndSwap(true, false) {
-		_ = w.WriteCloser.Close()
+		_ = w.Close()
 		return 0, io.ErrClosedPipe // Database COMMIT succeeded; the host never sees its ACK.
 	}
 	return w.WriteCloser.Write(p)
@@ -129,10 +129,10 @@ func (w *loseReliableACK) Write(p []byte) (int, error) {
 func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 	for _, fault := range []string{"daemon detached before completion", "output transaction rolled back", "completion committed but ACK lost", "root and child completed while detached"} {
 		t.Run(fault, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-			defer cancel()
 			dataDir, workspace := t.TempDir(), t.TempDir()
 			st := sqlitetest.MustOpenAt(t, t.TempDir())
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
 			now := time.Now().UTC()
 			const sessionID domain.SessionID = "reliable-1"
 			const projectID domain.ProjectID = "reliable"
@@ -196,7 +196,7 @@ func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			awaitReliableReplay(t, ctx, "seed committed", func() bool {
+			awaitReliableReplay(ctx, t, "seed committed", func() bool {
 				rows, err := st.LoadConversationSnapshot(ctx, first.ConversationID())
 				return err == nil && len(rows.Messages) == 2 && rows.Messages[1].Text == "~" && (!withChild || len(rows.Turns) == 2)
 			})
@@ -211,12 +211,12 @@ func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dataDir, "release"), nil, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			awaitReliableReplay(t, ctx, "provider completed", func() bool {
+			awaitReliableReplay(ctx, t, "provider completed", func() bool {
 				_, err := os.Stat(filepath.Join(dataDir, "turn-1-completed"))
 				return err == nil
 			})
 			if fault != "daemon detached before completion" && !withChild {
-				awaitReliableReplay(t, ctx, "failed controller detached", func() bool { return first.State() == ports.ChatControllerStopped })
+				awaitReliableReplay(ctx, t, "failed controller detached", func() bool { return first.State() == ports.ChatControllerStopped })
 				first.Wait()
 			}
 			original, err := st.TurnByID(ctx, turn.ID)
@@ -247,7 +247,7 @@ func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 			if err := secondService.DrainQueued(ctx, sessionID); err != nil {
 				t.Fatalf("startup queue drain: %v", err)
 			}
-			awaitReliableReplay(t, ctx, "original and queued followup completed", func() bool {
+			awaitReliableReplay(ctx, t, "original and queued followup completed", func() bool {
 				original, _ := st.TurnByID(ctx, turn.ID)
 				queued, _ := st.TurnByID(ctx, followup.ID)
 				return original.State == domain.TurnStateCompleted && queued.State == domain.TurnStateCompleted && second.State() == ports.ChatControllerReady
@@ -300,7 +300,7 @@ func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 	}
 }
 
-func awaitReliableReplay(t *testing.T, ctx context.Context, stage string, ready func() bool) {
+func awaitReliableReplay(ctx context.Context, t *testing.T, stage string, ready func() bool) {
 	t.Helper()
 	for !ready() {
 		select {

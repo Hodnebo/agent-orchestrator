@@ -385,7 +385,7 @@ func (h *host) codexProviderFrameLocked(frame []byte) error {
 		return nil
 	}
 	if int64(len(frame)) > h.codex.limit {
-		return fmt.Errorf("Codex conversation frame exceeds journal limit: %w", errJournalFull)
+		return fmt.Errorf("persistent Codex conversation frame exceeds journal limit: %w", errJournalFull)
 	}
 	if h.codex.stopped {
 		return context.Canceled
@@ -395,7 +395,7 @@ func (h *host) codexProviderFrameLocked(frame []byte) error {
 			return err
 		}
 		if h.codex.journal.size+int64(len(frame)) > h.codex.limit {
-			return fmt.Errorf("Codex active turn exceeds journal limit: %w", errJournalFull)
+			return fmt.Errorf("persistent Codex active turn exceeds journal limit: %w", errJournalFull)
 		}
 	}
 	span, err := h.codex.journal.append(h.ctx, frame)

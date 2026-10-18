@@ -65,9 +65,12 @@ const (
 	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
 	// which can differ from mutable session settings after reconnect.
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
-	CodexEventMethod             = "_ao/persistent_codex_event"
-	CodexAckMethod               = "_ao/persistent_codex_ack"
-	CodexReplayMethod            = "_ao/persistent_codex_replay"
+	// CodexEventMethod wraps one replayable conversation notification.
+	CodexEventMethod = "_ao/persistent_codex_event"
+	// CodexAckMethod acknowledges durable projection of a retained notification.
+	CodexAckMethod = "_ao/persistent_codex_ack"
+	// CodexReplayMethod opens replay after durable turn ownership is restored.
+	CodexReplayMethod = "_ao/persistent_codex_replay"
 )
 
 // CodexEvent is an AO-private wrapper; Frame remains the native provider frame.
@@ -298,7 +301,8 @@ func randomToken() (string, error) {
 }
 
 func validateDescriptor(cfg Config, d Descriptor) error {
-	if d.Protocol != cfg.Protocol && !(cfg.Protocol == ProtocolCodex && d.Protocol == ProtocolRaw) {
+	legacyCodex := cfg.Protocol == ProtocolCodex && d.Protocol == ProtocolRaw
+	if d.Protocol != cfg.Protocol && !legacyCodex {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
 	// Codex raw hosts predate this ACP compatibility contract and retain their

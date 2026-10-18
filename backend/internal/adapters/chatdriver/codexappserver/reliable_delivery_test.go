@@ -6,10 +6,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -137,6 +138,7 @@ func TestReliableDeliveryRetainsStableDerivedEventsAndReceiptOrder(t *testing.T)
 		}
 		seen := map[string]bool{}
 		for _, event := range events {
+			require.NoError(t, event.Err)
 			if event.ProviderEventID == "" || seen[event.ProviderEventID] {
 				t.Fatalf("unstable/colliding semantic ID: %#v", event)
 			}
@@ -166,8 +168,8 @@ func TestReliableDeliveryRetainsStableDerivedEventsAndReceiptOrder(t *testing.T)
 		}
 		if original == nil {
 			original = events
-		} else if !reflect.DeepEqual(original, events) {
-			t.Fatalf("replayed derived events changed identities or content:\noriginal %#v\nreplayed %#v", original, events)
+		} else {
+			require.Equal(t, original, events, "replayed derived events changed identities or content")
 		}
 	}
 }
@@ -356,13 +358,16 @@ func TestReliableReplayRestoresCitationFormatterFromRetainedPrefix(t *testing.T)
 		pushReliable(t, server, "host:1", replayed, string(search))
 		pushReliable(t, server, "host:2", replayed, string(answer))
 		events := collectReliable(t, c, 2)
+		for _, event := range events {
+			require.NoError(t, event.Err)
+		}
 		if events[len(events)-1].Text != "Claim [1](<https://example.com/first>)" {
 			t.Fatalf("lost citation prefix state: %#v", events)
 		}
 		if original == nil {
 			original = events
-		} else if !reflect.DeepEqual(original, events) {
-			t.Fatal("citation replay changed projected facts")
+		} else {
+			require.Equal(t, original, events, "citation replay changed projected facts")
 		}
 	}
 }
