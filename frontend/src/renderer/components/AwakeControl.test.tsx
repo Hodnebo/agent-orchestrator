@@ -91,6 +91,24 @@ describe("Stay Awake sidebar toggle", () => {
 		);
 	});
 
+	it("resumes after a safety stop and retries the start", async () => {
+		test.actAsync.mockImplementation(async (action: { kind: string }) => {
+			if (action.kind === "start" && test.actAsync.mock.calls.filter(([a]) => a.kind === "start").length === 1)
+				throw new Error("invalid stay-awake request: resume after the safety stop before starting another session");
+		});
+		show();
+		fireEvent.click(screen.getByRole("button", { name: "Stay Awake" }));
+		await waitFor(() => expect(test.actAsync.mock.calls.map(([a]) => a.kind)).toEqual(["start", "resume", "start"]));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it("resumes first when the daemon reports it paused", async () => {
+		test.state!.paused = true;
+		show();
+		fireEvent.click(screen.getByRole("button", { name: "Stay Awake" }));
+		await waitFor(() => expect(test.actAsync.mock.calls.map(([a]) => a.kind)).toEqual(["resume", "start"]));
+	});
+
 	it("is disabled when the Mac cannot hold idle sleep off", () => {
 		test.state!.capabilities = [{ id: "idle", available: false }] as AwakeState["capabilities"];
 		show();

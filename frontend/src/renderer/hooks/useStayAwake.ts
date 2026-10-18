@@ -30,11 +30,24 @@ export function useStayAwake(enabled = true) {
 		setFailure(null);
 		try {
 			if (next) {
-				if (sessions.length === 0)
-					await awake.actAsync({
-						kind: "start",
-						request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: awake.state?.settings.lidClosed ?? true },
-					});
+				if (sessions.length === 0) {
+					const start = () =>
+						awake.actAsync({
+							kind: "start",
+							request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: awake.state?.settings.lidClosed ?? true },
+						});
+					// A battery or heat stop blocks new sessions until it is resumed. Turning
+					// the switch on is the user's request to resume, so do that and retry;
+					// resume still refuses while the battery or heat limit is still breached.
+					if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
+					try {
+						await start();
+					} catch (e) {
+						if (!(e instanceof Error) || !e.message.includes("safety stop")) throw e;
+						await awake.actAsync({ kind: "resume" });
+						await start();
+					}
+				}
 			} else {
 				for (const source of sessions) await awake.actAsync({ kind: "end", id: source.id });
 				if (legacyOn) {
