@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -190,5 +192,66 @@ func TestScriptOutputIsServedOnlyToMembers(t *testing.T) {
 	}
 	if _, ok := shared[worker.SetupEventType]["output"]; ok {
 		t.Fatalf("setup summary for a share grantee = %+v", shared[worker.SetupEventType])
+	}
+}
+
+// A step's final event replaces its live updates: appending it deletes the
+// step's earlier running events of the same run, and nothing else, under the
+// app role's forced RLS. A client reading after a deleted event's sequence
+// still gets everything after it.
+func TestScriptStepFinalEventDropsItsLiveUpdates(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	appendStep := func(runID string, step int, status, output string) int64 {
+		t.Helper()
+		event := worker.ScriptStepEvent{Phase: worker.ScriptPhaseSetup, RunID: runID, Step: step, Total: 2,
+			Status: status, Output: output}
+		if status != worker.ScriptStepRunning {
+			exitCode, duration := 0, int64(5)
+			event.ExitCode, event.DurationMS = &exitCode, &duration
+		}
+		payload, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		appended, err := store.AppendSessionEvent(ctx, fixture.orgID, fixture.sessionID, worker.ScriptStepEventType, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return appended.Sequence
+	}
+	firstLive := appendStep("run-a", 1, worker.ScriptStepRunning, "")
+	appendStep("run-a", 1, worker.ScriptStepRunning, "line 1")
+	if _, err := store.AppendSessionEvent(ctx, fixture.orgID, fixture.sessionID, "workspace.changed", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	appendStep("run-b", 1, worker.ScriptStepRunning, "other run")
+	appendStep("run-a", 1, worker.SetupSucceeded, "line 1\nline 2")
+	appendStep("run-a", 2, worker.ScriptStepRunning, "")
+
+	events, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, event := range events {
+		if event.Type != worker.ScriptStepEventType {
+			kept = append(kept, event.Type)
+			continue
+		}
+		var step worker.ScriptStepEvent
+		if err := json.Unmarshal(event.Payload, &step); err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, step.RunID+"/"+strconv.Itoa(step.Step)+"/"+step.Status)
+	}
+	if got := strings.Join(kept, " "); got != "workspace.changed run-b/1/running run-a/1/succeeded run-a/2/running" {
+		t.Fatalf("events = %s", got)
+	}
+	after, _, err := store.ListClientEvents(ctx, principal, fixture.orgID, fixture.sessionID, firstLive, 100)
+	if err != nil || len(after) != len(events) {
+		t.Fatalf("events after a deleted update's sequence = %d (%v), want %d", len(after), err, len(events))
 	}
 }

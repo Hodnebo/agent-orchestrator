@@ -2983,7 +2983,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. */
+        /** @description One step of a project's Setup (reported by the worker, live) or Cleanup (reported by the control plane after the run, before the workspace is deleted) run. Group by payload.runId; the newest event per (runId, step) wins. A step's live updates (status running) are deleted once its final event is stored, so a replay shows only the final event and sequences may skip. */
         ScriptStepEvent: {
             sessionId: string;
             /** Format: int64 */

@@ -602,14 +602,15 @@ func (p *scriptStepPublisher) send(event ScriptStepEvent, attempts int) {
 	}
 }
 
-// liveUpdateInterval paces a running step's updates: about every second, and
+// liveUpdateInterval paces a running step's updates: every two seconds, and
 // every five seconds once the step has run two minutes, so a long, chatty
-// step does not fill the session's event stream.
+// step does not fill the session's event stream (the control plane also
+// drops a step's live updates once its final event arrives).
 func liveUpdateInterval(elapsed time.Duration) time.Duration {
 	if elapsed >= 2*time.Minute {
 		return 5 * time.Second
 	}
-	return time.Second
+	return 2 * time.Second
 }
 
 // watchStepOutput sends a live update whenever the step finished another line

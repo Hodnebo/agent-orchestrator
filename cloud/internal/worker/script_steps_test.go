@@ -563,3 +563,16 @@ func TestControlPlaneRedactsLikeTheWorker(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+// Live updates go every two seconds, and every five once a step has run two
+// minutes.
+func TestLiveUpdateInterval(t *testing.T) {
+	t.Parallel()
+	for elapsed, want := range map[time.Duration]time.Duration{
+		0: 2 * time.Second, 119 * time.Second: 2 * time.Second, 2 * time.Minute: 5 * time.Second, time.Hour: 5 * time.Second,
+	} {
+		if got := liveUpdateInterval(elapsed); got != want {
+			t.Fatalf("liveUpdateInterval(%s) = %s, want %s", elapsed, got, want)
+		}
+	}
+}

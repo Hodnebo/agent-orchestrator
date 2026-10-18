@@ -241,7 +241,7 @@ func (s *Store) AppendSessionEvent(
 		if err != nil {
 			return err
 		}
-		return scanClientEvent(tx.QueryRow(
+		if err := scanClientEvent(tx.QueryRow(
 			ctx,
 			`INSERT INTO ao_events (
 				org_id, session_id, sequence, type, payload
@@ -252,7 +252,10 @@ func (s *Store) AppendSessionEvent(
 			sequence,
 			eventType,
 			payload,
-		), &event)
+		), &event); err != nil {
+			return err
+		}
+		return dropSupersededScriptUpdatesTx(ctx, tx, orgID, event)
 	})
 	if err != nil {
 		return domain.ClientEvent{}, err
@@ -640,6 +643,38 @@ func (s *Store) ListClientEvents(
 		}
 	}
 	return events, hasMore, nil
+}
+
+// dropSupersededScriptUpdatesTx deletes a Setup step's live updates (its
+// running events) once its final event is appended: the final event carries
+// everything they did, and a chatty step sends one every few seconds. Clients
+// keep the newest event per (runId, step), and read by sequence after a
+// cursor, which deleting older rows never moves; sequences come from
+// ao_sessions.next_sequence, so a gap is never reused. The app role may
+// delete ao_events rows of the organization in context (tenant policy, and
+// DELETE is granted on every table). It runs once per finished Setup step,
+// and Setup runs when a session starts or reopens.
+func dropSupersededScriptUpdatesTx(ctx context.Context, tx pgx.Tx, orgID string, event domain.ClientEvent) error {
+	if event.Type != worker.ScriptStepEventType {
+		return nil
+	}
+	var step struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(event.Payload, &step); err != nil || step.Status == worker.ScriptStepRunning {
+		return nil
+	}
+	_, err := tx.Exec(ctx,
+		`DELETE FROM ao_events
+		WHERE org_id = $1
+		  AND session_id = $2
+		  AND sequence < $3
+		  AND type = $4
+		  AND payload->>'status' = $5
+		  AND payload->>'runId' = $6::jsonb->>'runId'
+		  AND payload->'step' = $6::jsonb->'step'`,
+		orgID, event.SessionID, event.Sequence, worker.ScriptStepEventType, worker.ScriptStepRunning, event.Payload)
+	return err
 }
 
 // scriptOutputFields are what a Setup or Cleanup event (workspace.setup,
