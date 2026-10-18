@@ -54,7 +54,6 @@ import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
-import { AwakeControl } from "./AwakeControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
@@ -835,7 +834,6 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		return (
 			<Section title={t("inspector.sessionControls")}>
 				{terminateAction}
-				{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
 			</Section>
 		);
 	}
@@ -865,7 +863,6 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 					) : null}
 				</>
 			)}
-			{!session.cloud && (!hostId || hostId === "local") ? <AwakeControl sessionId={session.id} /> : null}
 		</Section>
 	);
 }
