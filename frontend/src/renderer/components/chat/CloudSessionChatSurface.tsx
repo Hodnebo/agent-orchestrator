@@ -636,6 +636,9 @@ export function CloudSessionChatSurface({
 							? eventsQuery.error.message
 						: send.error instanceof Error
 							? send.error.message
+							: modelsQuery.error instanceof CloudCpError && modelsQuery.error.code === "SESSION_TERMINATED"
+								// The session was deleted under this view; its own words say how to recover.
+								? modelsQuery.error.message
 							: modelsQuery.error instanceof Error
 								? `Model choices unavailable: ${modelsQuery.error.message}`
 								: undefined

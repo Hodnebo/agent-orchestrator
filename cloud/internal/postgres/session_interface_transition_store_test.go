@@ -220,3 +220,17 @@ func TestClaimedTransitionCarriesProviderActivity(t *testing.T) {
 		t.Fatalf("hook-reported activity = %q unconfirmed=%t, want idle/false", got.SessionActivityState, got.SessionActivityUnconfirmed)
 	}
 }
+
+func TestResumeDeletedSessionReportsTermination(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true
+		WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if _, err := store.ResumeSession(ctx, principal, fixture.orgID, fixture.sessionID); !errors.Is(err, ErrSessionTerminated) {
+		t.Fatalf("resume deleted session error = %v, want ErrSessionTerminated", err)
+	}
+}

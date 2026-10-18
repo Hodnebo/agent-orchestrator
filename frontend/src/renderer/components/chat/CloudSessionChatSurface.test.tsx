@@ -274,6 +274,25 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 	});
 
+	it("says a session deleted under the composer must be restored", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockRejectedValue(
+			new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }),
+		);
+		cloudMocks.resumeSession.mockReset().mockRejectedValue(
+			new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" }),
+		);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// The session list has not caught up with the delete yet.
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError)
+			.toBe("This session was deleted. Restore it to continue."));
+	});
+
 	it("shows provider models and sends the selected model and effort with the next turn", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true, efforts: ["low", "high"] }] });
