@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -16,6 +17,66 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
+
+func TestReadLiveTurnsRefreshesAcceptedRootCorrelationBeforeReplay(t *testing.T) {
+	c, server := reliableTestConversation(t)
+	c.proc.liveState = &persistenthost.CodexState{ActiveTurns: map[string]string{"thread-1": "obsolete-hello"}}
+	server.respondTo(persistenthost.CodexReplayMethod, `{"activeTurns":{"thread-1":"current","child":"child-active"},"retainedTurns":{"thread-1":["older","completed"],"child":["child-completed"]},"acceptedTurns":{"thread-1":{"completed":"original-client","current":"current-client"},"child":{"child-completed":"child-client"}}}`)
+	reader, ok := any(c).(ports.ChatLiveTurnReader)
+	if !ok {
+		t.Fatal("live Codex cannot recover an accepted turn whose AO binding was lost")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	turns, err := reader.ReadLiveTurns(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.ChatLiveTurn{
+		{ProviderTurnID: c.scopedID("completed"), ClientMessageID: "original-client"},
+		{ProviderTurnID: c.scopedID("current"), ClientMessageID: "current-client", Active: true},
+		{ProviderTurnID: c.scopedID("older")},
+	}
+	if !reflect.DeepEqual(turns, want) || c.proc.liveState.ActiveTurns["thread-1"] != "current" {
+		t.Fatalf("live native turns = %#v, want %#v", turns, want)
+	}
+	request := server.awaitFrame(func(f frame) bool { return f.Method == persistenthost.CodexReplayMethod && f.ID != nil })
+	if string(request.Params) != `{"threadId":"thread-1"}` {
+		t.Fatalf("state query scope = %s", request.Params)
+	}
+}
+
+func TestReadLiveTurnsLegacyAndFailedProof(t *testing.T) {
+	t.Run("legacy host keeps history recovery", func(t *testing.T) {
+		c, server := reliableTestConversation(t)
+		c.proc.reliableReplay = false
+		turns, err := c.ReadLiveTurns(context.Background())
+		if err != nil || turns != nil || server.sentMethod(persistenthost.CodexReplayMethod) {
+			t.Fatalf("legacy state query = %#v, %v", turns, err)
+		}
+	})
+	t.Run("failed proof preserves inconclusive recovery", func(t *testing.T) {
+		c, server := reliableTestConversation(t)
+		server.replyError(persistenthost.CodexReplayMethod, -32603, "native start unresolved")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := c.ReadLiveTurns(ctx); !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+			t.Fatalf("failed proof error = %v", err)
+		}
+	})
+	t.Run("cancelled proof preserves caller deadline", func(t *testing.T) {
+		c, _ := reliableTestConversation(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		_, err := c.ReadLiveTurns(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ports.ErrChatRecoveryInconclusive) {
+			t.Fatalf("cancelled proof error = %v", err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("detach cancelled proof: %v", err)
+		}
+	})
+}
 
 func TestLiveReconnectRecoversCompletionLostBeforeDaemonRestart(t *testing.T) {
 	for _, tc := range []struct {

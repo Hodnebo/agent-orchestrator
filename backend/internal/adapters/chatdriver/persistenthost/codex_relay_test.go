@@ -23,6 +23,20 @@ type codexDiscardWriter struct{}
 func (codexDiscardWriter) Write(p []byte) (int, error) { return len(p), nil }
 func (codexDiscardWriter) Close() error                { return nil }
 
+type codexRecordedWriter struct{ frames chan []byte }
+
+func (w codexRecordedWriter) Write(frame []byte) (int, error) {
+	w.frames <- append([]byte(nil), frame...)
+	return len(frame), nil
+}
+
+func (codexRecordedWriter) Close() error { return nil }
+
+type codexFailedWriter struct{ written int }
+
+func (w codexFailedWriter) Write([]byte) (int, error) { return w.written, io.ErrClosedPipe }
+func (codexFailedWriter) Close() error                { return nil }
+
 func codexTestHost(t *testing.T) *host {
 	t.Helper()
 	relay, err := newCodexRelay(context.Background(), filepath.Join(t.TempDir(), "events.journal"))
@@ -148,6 +162,152 @@ func TestCodexHostRetainsDeliveredCompletionUntilCommitReceipt(t *testing.T) {
 		defer h.mu.Unlock()
 		return len(h.codex.byID) == 0 && h.codex.journal.size == 0
 	})
+}
+
+func TestCodexCompletionReceiptBeforeStartResponseDoesNotLoseCorrelation(t *testing.T) {
+	h := codexTestHost(t)
+	writes := make(chan []byte, 1)
+	h.stdin = codexRecordedWriter{frames: writes}
+	conn, reader, _ := codexTestAttach(t, h)
+	codexTestControl(t, conn, CodexReplayMethod, "")
+	if _, err := io.WriteString(conn, `{"id":41,"method":"turn/start","params":{"threadId":"root","clientUserMessageId":"original-ao-turn"}}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	<-writes
+	start := codexTestFrame(t, h, `{"method":"turn/started","params":{"threadId":"root","turn":{"id":"accepted"}}}`)
+	terminal := codexTestFrame(t, h, `{"method":"turn/completed","params":{"threadId":"root","turn":{"id":"accepted"}}}`)
+	for _, entry := range []*codexEntry{start, terminal} {
+		event := codexTestRead(t, reader)
+		codexTestControl(t, conn, CodexAckMethod, event.EventID)
+		codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return entry.acked })
+	}
+	h.mu.Lock()
+	retained := len(h.codex.byID)
+	h.mu.Unlock()
+	if retained != 2 {
+		t.Fatalf("start response has not identified the original AO turn, retained %d frames, want 2", retained)
+	}
+	codexTestFrame(t, h, `{"id":41,"result":{"turn":{"id":"accepted"}}}`)
+	codexAwait(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.codex.byID) == 0 && len(h.codex.turns) == 0 && h.codex.journal.size == 0
+	})
+}
+
+func TestCodexLiveStateWaitsForRootStartResponseAfterHello(t *testing.T) {
+	h := codexTestHost(t)
+	writes := make(chan []byte, 2)
+	h.stdin = codexRecordedWriter{frames: writes}
+	first, _, _ := codexTestAttach(t, h)
+	for _, request := range []string{
+		`{"id":41,"method":"turn/start","params":{"threadId":"root","clientUserMessageId":"original-ao-turn"}}`,
+		`{"id":42,"method":"turn/start","params":{"threadId":"child","clientUserMessageId":"child-ao-turn"}}`,
+	} {
+		if _, err := io.WriteString(first, request+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		<-writes
+	}
+	// Completed work can be retained alongside an older unacknowledged prefix.
+	for _, turnID := range []string{"older", "accepted"} {
+		codexTestFrame(t, h, fmt.Sprintf(`{"method":"turn/started","params":{"threadId":"root","turn":{"id":%q}}}`, turnID))
+		codexTestFrame(t, h, fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":"root","turn":{"id":%q}}}`, turnID))
+	}
+	_ = first.Close()
+	codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.client == nil })
+	second, reader, _ := codexTestAttach(t, h)
+	if _, err := io.WriteString(second, `{"id":88,"method":"_ao/persistent_codex_replay","params":{"threadId":"root"}}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = second.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, err := reader.ReadByte(); err == nil {
+		t.Fatal("state query answered before the root start response")
+	}
+	// Cancelling this attachment must not leave its deferred state reply on the
+	// host or prevent the next daemon from obtaining its own fresh proof.
+	_ = second.Close()
+	codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.client == nil })
+	third, reader, _ := codexTestAttach(t, h)
+	if _, err := io.WriteString(third, `{"id":89,"method":"_ao/persistent_codex_replay","params":{"threadId":"root"}}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = third.SetReadDeadline(time.Now().Add(time.Second))
+	codexTestFrame(t, h, `{"id":41,"result":{"turn":{"id":"accepted"}}}`)
+	var result struct {
+		ID     int `json:"id"`
+		Result struct {
+			AcceptedTurns map[string]map[string]string `json:"acceptedTurns"`
+			RetainedTurns map[string][]string          `json:"retainedTurns"`
+		} `json:"result"`
+	}
+	for result.ID != 89 {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("fresh state did not arrive while the child start remained pending: %v", err)
+		}
+		if err := json.Unmarshal(line, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.ID == 88 {
+			t.Fatal("cancelled attachment's state reply reached a replacement daemon")
+		}
+	}
+	if !reflect.DeepEqual(result.Result.AcceptedTurns, map[string]map[string]string{"root": {"accepted": "original-ao-turn"}}) {
+		t.Fatalf("accepted identity = %#v", result.Result.AcceptedTurns)
+	}
+	if !reflect.DeepEqual(result.Result.RetainedTurns["root"], []string{"accepted", "older"}) {
+		t.Fatalf("retained identities = %#v", result.Result.RetainedTurns)
+	}
+}
+
+func TestCodexStartWriteFailureRetainsOnlyAmbiguousAcceptance(t *testing.T) {
+	for _, written := range []int{0, 1} {
+		t.Run(fmt.Sprintf("written %d", written), func(t *testing.T) {
+			h := codexTestHost(t)
+			h.stdin = codexFailedWriter{written: written}
+			first, _, _ := codexTestAttach(t, h)
+			if _, err := io.WriteString(first, `{"id":41,"method":"turn/start","params":{"threadId":"root","clientUserMessageId":"original-ao-turn"}}`+"\n"); err != nil {
+				t.Fatal(err)
+			}
+			codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.client == nil })
+			second, reader, response := codexTestAttach(t, h)
+			if response.NextRequestID != 41 {
+				t.Fatalf("native request ID can be reused after ambiguous write: %d", response.NextRequestID)
+			}
+			if _, err := io.WriteString(second, `{"id":88,"method":"_ao/persistent_codex_replay","params":{"threadId":"root"}}`+"\n"); err != nil {
+				t.Fatal(err)
+			}
+			if written > 0 {
+				_ = second.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+				if _, err := reader.ReadByte(); err == nil {
+					t.Fatal("partial start write was treated as proven unaccepted")
+				}
+				codexTestFrame(t, h, `{"id":41,"result":{"turn":{"id":"accepted"}}}`)
+			}
+			_ = second.SetReadDeadline(time.Now().Add(time.Second))
+			for {
+				line, err := reader.ReadBytes('\n')
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result struct {
+					ID     int        `json:"id"`
+					Result CodexState `json:"result"`
+				}
+				if err := json.Unmarshal(line, &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.ID != 88 {
+					continue
+				}
+				if written == 0 && len(result.Result.AcceptedTurns) != 0 || written > 0 && result.Result.AcceptedTurns["root"]["accepted"] != "original-ao-turn" {
+					t.Fatalf("write outcome proof = %#v", result.Result)
+				}
+				break
+			}
+		})
+	}
 }
 
 func TestCodexJournalAcknowledgmentKeepsNormalizerPrefixAndChildOwnership(t *testing.T) {
@@ -287,11 +447,11 @@ func TestCodexJournalCompactsCompletedTurnsAndRejectsQuotaWithoutEviction(t *tes
 				t.Fatal(err)
 			}
 		}
-		if r.journal.size != childSize || len(r.entries) != 2 {
+		if r.journal.size > r.limit || r.journal.size < childSize || len(r.entries) != 2 {
 			t.Fatalf("completed stream filled journal after turn %d", i)
 		}
 		retained, err := os.ReadFile(r.journal.path)
-		if err != nil || !bytes.Equal(retained, childBytes) {
+		if err != nil || !bytes.HasPrefix(retained, childBytes) {
 			t.Fatalf("compaction changed child prefix: %v", err)
 		}
 	}
@@ -319,6 +479,42 @@ func TestCodexJournalCompactsCompletedTurnsAndRejectsQuotaWithoutEviction(t *tes
 	}
 	if !bytes.Equal(before, after) || len(r.byID) != 1 || r.byID[entry.id].acked {
 		t.Fatal("failed append evicted or acknowledged retained output")
+	}
+}
+
+func TestCodexJournalCompactsOnCapacityInsteadOfEveryReceipt(t *testing.T) {
+	h := codexTestHost(t)
+	r := h.codex
+	r.limit = 2048
+	childStart := codexTestFrame(t, h, `{"method":"turn/started","params":{"threadId":"child","turn":{"id":"background"}}}`)
+	childOutput := codexTestFrame(t, h, fmt.Sprintf(`{"method":"item/commandExecution/outputDelta","params":{"threadId":"child","turnId":"background","delta":%q}}`, strings.Repeat("c", 1100)))
+	for _, entry := range []*codexEntry{childStart, childOutput} {
+		if err := r.acknowledge(h.ctx, entry.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	childBytes, err := os.ReadFile(r.journal.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := r.journal.path
+	standalone := codexTestFrame(t, h, `{"method":"thread/status/changed","params":{"threadId":"other","status":{"type":"idle"}}}`)
+	if err := r.acknowledge(h.ctx, standalone.id); err != nil {
+		t.Fatal(err)
+	}
+	if r.journal.path != path {
+		t.Fatal("a tiny receipt recopied the retained child prefix")
+	}
+	empty := `{"method":"item/agentMessage/delta","params":{"threadId":"other","turnId":"late","delta":""}}`
+	remaining := int(r.limit) - len(childBytes)
+	frame := strings.Replace(empty, `"delta":""`, `"delta":"`+strings.Repeat("x", remaining-len(empty)-1)+`"`, 1)
+	output := codexTestFrame(t, h, frame)
+	if r.journal.path == path || r.journal.size != r.limit {
+		t.Fatalf("append did not compact before capacity: size=%d path=%s", r.journal.size, r.journal.path)
+	}
+	retained, err := os.ReadFile(r.journal.path)
+	if err != nil || !bytes.HasPrefix(retained, childBytes) || len(r.byID) != 3 || r.byID[output.id].acked {
+		t.Fatalf("capacity compaction changed retained work: %v", err)
 	}
 }
 
@@ -354,9 +550,120 @@ func TestCodexLargeReplayDoesNotBlockControlReader(t *testing.T) {
 	codexTestControl(t, conn, CodexReplayMethod, "")
 	// The attachment writer is now blocked on net.Pipe's unread replay. The
 	// independent reader must still accept a receipt instead of deadlocking.
+	codexAwait(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		_, sent := h.codex.attachment.inFlight[start.id]
+		return sent
+	})
 	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
 	codexTestControl(t, conn, CodexAckMethod, start.id)
 	codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return start.acked })
+}
+
+func TestCodexReplayCreditsKeepNativeResponsesReachable(t *testing.T) {
+	h := codexTestHost(t)
+	codexTestFrame(t, h, `{"method":"turn/started","params":{"threadId":"root","turn":{"id":"retained"}}}`)
+	for i := 0; i < 100; i++ {
+		codexTestFrame(t, h, fmt.Sprintf(`{"method":"item/commandExecution/outputDelta","params":{"threadId":"root","turnId":"retained","delta":"%d"}}`, i))
+	}
+	first, reader, _ := codexTestAttach(t, h)
+	codexTestControl(t, first, CodexReplayMethod, "")
+	var delivered []CodexEvent
+	for i := 0; i < 64; i++ {
+		delivered = append(delivered, codexTestRead(t, reader))
+	}
+	// This response must bypass replay that is waiting for durable receipts.
+	codexTestFrame(t, h, `{"id":900,"result":{"ok":true}}`)
+	_ = first.SetReadDeadline(time.Now().Add(time.Second))
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(line, &response); err != nil || response.ID != 900 {
+		t.Fatalf("native response starved behind replay without receipts: %s (%v)", line, err)
+	}
+	assertPaused := func(conn net.Conn, reader *bufio.Reader) {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+		if _, err := reader.ReadByte(); err == nil {
+			t.Fatal("replay exceeded its per-attachment receipt window")
+		}
+		_ = conn.SetReadDeadline(time.Time{})
+	}
+	assertPaused(first, reader)
+	codexTestControl(t, first, CodexAckMethod, delivered[0].EventID)
+	next := codexTestRead(t, reader)
+	if next.EventID != h.codex.entries[64].id {
+		t.Fatalf("replay order changed after receipt: %+v", next)
+	}
+	// Neither a duplicate receipt nor one for a frame not sent on this
+	// attachment may create another delivery credit.
+	codexTestControl(t, first, CodexAckMethod, delivered[0].EventID)
+	codexTestControl(t, first, CodexAckMethod, h.codex.entries[100].id)
+	assertPaused(first, reader)
+	h.mu.Lock()
+	unsentAcknowledged := h.codex.entries[100].acked
+	pending := h.codex.turns[codexTurnKey{threadID: "root", turnID: "retained"}].pending
+	h.mu.Unlock()
+	if unsentAcknowledged || pending != 100 {
+		t.Fatalf("unsent receipt altered global retention: acknowledged=%v pending=%d", unsentAcknowledged, pending)
+	}
+	_ = first.Close()
+	codexAwait(t, func() bool { h.mu.Lock(); defer h.mu.Unlock(); return h.client == nil })
+	second, replay, _ := codexTestAttach(t, h)
+	codexTestControl(t, second, CodexReplayMethod, "")
+	for i := 0; i < 64; i++ {
+		event := codexTestRead(t, replay)
+		if event.EventID != delivered[i].EventID {
+			t.Fatalf("reattachment reordered retained prefix: %+v", event)
+		}
+	}
+	assertPaused(second, replay)
+	// This source is globally acknowledged, but this attachment still needs
+	// its own credit released after rebuilding the normalization prefix.
+	codexTestControl(t, second, CodexAckMethod, delivered[0].EventID)
+	if event := codexTestRead(t, replay); event.EventID != next.EventID {
+		t.Fatalf("reattachment did not replenish its own credit: %+v", event)
+	}
+}
+
+func TestCodexReplayByteWindowAllowsOneOversizedFrame(t *testing.T) {
+	for _, size := range []int{600 << 10, 2 << 20} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			h := codexTestHost(t)
+			for i := 0; i < 2; i++ {
+				codexTestFrame(t, h, fmt.Sprintf(`{"method":"item/commandExecution/outputDelta","params":{"threadId":"root","turnId":"late","delta":%q}}`, strings.Repeat("x", size)))
+			}
+			conn, reader, _ := codexTestAttach(t, h)
+			codexTestControl(t, conn, CodexReplayMethod, "")
+			first := codexTestRead(t, reader)
+			codexTestFrame(t, h, `{"id":900,"result":{"ok":true}}`)
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response struct {
+				ID int `json:"id"`
+			}
+			if err := json.Unmarshal(line, &response); err != nil || response.ID != 900 {
+				t.Fatalf("native response blocked by byte window: frame bytes=%d (%v)", len(line), err)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+			if _, err := reader.ReadByte(); err == nil {
+				t.Fatal("second large frame bypassed the byte window")
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			codexTestControl(t, conn, CodexAckMethod, first.EventID)
+			if next := codexTestRead(t, reader); next.EventID == first.EventID {
+				t.Fatal("receipt did not admit the next retained frame")
+			}
+		})
+	}
 }
 
 func TestCodexCapabilityRejectsOldClientAndAdoptsOnlyLegacyRaw(t *testing.T) {

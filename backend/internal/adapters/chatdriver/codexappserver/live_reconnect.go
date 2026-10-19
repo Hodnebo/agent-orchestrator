@@ -3,6 +3,7 @@ package codexappserver
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
@@ -11,10 +12,48 @@ import (
 
 var _ ports.ChatLiveReconnectActivator = (*conversation)(nil)
 var _ ports.ChatLiveTurnScope = (*conversation)(nil)
+var _ ports.ChatLiveTurnReader = (*conversation)(nil)
 
 type liveTurnRecovery struct {
 	turnID string
 	events []ports.ChatEvent
+}
+
+// ReadLiveTurns crosses the host's start-response barrier, so acceptance that
+// raced the attachment hello can still bind the original durable AO turn.
+func (c *conversation) ReadLiveTurns(ctx context.Context) ([]ports.ChatLiveTurn, error) {
+	if !c.proc.reliableReplay {
+		return nil, nil
+	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	readCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	var state persistenthost.CodexState
+	if err := c.conn.request(readCtx, persistenthost.CodexReplayMethod, map[string]string{"threadId": c.threadID}, &state); err != nil {
+		return nil, fmt.Errorf("%w: read persistent Codex turns: %w", ports.ErrChatRecoveryInconclusive, err)
+	}
+	c.mu.Lock()
+	c.proc.liveState = &state
+	c.mu.Unlock()
+	byID := make(map[string]ports.ChatLiveTurn)
+	for _, id := range state.RetainedTurns[c.threadID] {
+		byID[id] = ports.ChatLiveTurn{ProviderTurnID: c.scopedID(id)}
+	}
+	for id, clientID := range state.AcceptedTurns[c.threadID] {
+		byID[id] = ports.ChatLiveTurn{ProviderTurnID: c.scopedID(id), ClientMessageID: clientID}
+	}
+	if id := state.ActiveTurns[c.threadID]; id != "" {
+		turn := byID[id]
+		turn.ProviderTurnID, turn.Active = c.scopedID(id), true
+		byID[id] = turn
+	}
+	turns := make([]ports.ChatLiveTurn, 0, len(byID))
+	for _, turn := range byID {
+		turns = append(turns, turn)
+	}
+	sort.Slice(turns, func(i, j int) bool { return turns[i].ProviderTurnID < turns[j].ProviderTurnID })
+	return turns, nil
 }
 
 // IsChildProviderTurn excludes only a proven child from the root busy gate.
@@ -24,7 +63,9 @@ func (c *conversation) IsChildProviderTurn(providerTurnID string) bool {
 	if !c.proc.reliableReplay {
 		return false
 	}
+	c.mu.Lock()
 	state := c.proc.liveState
+	c.mu.Unlock()
 	nativeTurnID := c.nativeID(providerTurnID)
 	if state == nil || c.threadID == "" || nativeTurnID == "" {
 		return false
@@ -63,8 +104,11 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 			return err
 		}
 		nativePending := c.nativeID(providerTurnID)
-		if c.proc.liveState != nil {
-			active := c.proc.liveState.ActiveTurns[c.threadID]
+		c.mu.Lock()
+		state := c.proc.liveState
+		c.mu.Unlock()
+		if state != nil {
+			active := state.ActiveTurns[c.threadID]
 			if active != "" && active != nativePending {
 				return fmt.Errorf("%w: persistent Codex has active turn %q, AO owns %q", ports.ErrChatRecoveryInconclusive, active, nativePending)
 			}

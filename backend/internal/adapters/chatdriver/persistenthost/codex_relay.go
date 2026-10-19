@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	maxCodexInFlight            = 64
+	maxCodexInFlightBytes int64 = 1 << 20
+)
+
 // codexRelay owns delivery, not Codex semantics. A whole acknowledged turn
 // prefix remains replayable until its terminal receipt: the adapter needs it to
 // rebuild citation and retry normalization state after a daemon replacement.
@@ -24,6 +29,7 @@ type codexRelay struct {
 	byID       map[string]*codexEntry
 	turns      map[codexTurnKey]*codexTurn
 	active     map[string]string
+	starts     map[string]codexStart
 	attachment *codexAttachment
 	stopped    bool
 }
@@ -31,7 +37,10 @@ type codexRelay struct {
 type codexTurn struct {
 	pending              int
 	terminalAcknowledged bool
+	clientMessageID      string
 }
+
+type codexStart struct{ threadID, clientMessageID string }
 
 type codexTurnKey struct{ threadID, turnID string }
 
@@ -53,11 +62,20 @@ type codexOutbound struct {
 }
 
 type codexAttachment struct {
-	conn        net.Conn
-	cutoff      uint64
-	open        bool
-	queue       []codexOutbound
-	directBytes int
+	conn          net.Conn
+	cutoff        uint64
+	open          bool
+	queue         []codexOutbound
+	responses     [][]byte
+	inFlight      map[string]int64
+	inFlightBytes int64
+	directBytes   int
+	stateRequest  *codexStateRequest
+}
+
+type codexStateRequest struct {
+	id       json.RawMessage
+	threadID string
 }
 
 func newCodexRelay(ctx context.Context, path string) (*codexRelay, error) {
@@ -83,16 +101,82 @@ func newCodexRelay(ctx context.Context, path string) (*codexRelay, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &codexRelay{identity: identity, journal: journal, limit: maxJournalBytes, byID: make(map[string]*codexEntry), turns: make(map[codexTurnKey]*codexTurn), active: make(map[string]string)}, nil
+	return &codexRelay{identity: identity, journal: journal, limit: maxJournalBytes, byID: make(map[string]*codexEntry), turns: make(map[codexTurnKey]*codexTurn), active: make(map[string]string), starts: make(map[string]codexStart)}, nil
+}
+
+func (r *codexRelay) startPending(threadID string) bool {
+	for _, start := range r.starts {
+		if start.threadID == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+// Register before writing stdin: Codex can accept and complete the turn before
+// its start response reaches the daemon that must bind the original AO row.
+func (h *host) observeCodexRequestLocked(frame []byte) string {
+	var request struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			ThreadID        string `json:"threadId"`
+			ClientMessageID string `json:"clientUserMessageId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(frame, &request) != nil || request.Method == "" || len(request.ID) == 0 {
+		return ""
+	}
+	var id int64
+	if json.Unmarshal(request.ID, &id) == nil && id > h.maxRequestID {
+		h.maxRequestID = id
+	}
+	if request.Method != "turn/start" || request.Params.ThreadID == "" {
+		return ""
+	}
+	requestID := string(request.ID)
+	h.codex.starts[requestID] = codexStart{threadID: request.Params.ThreadID, clientMessageID: request.Params.ClientMessageID}
+	return requestID
+}
+
+func (r *codexRelay) resolveStart(ctx context.Context, requestID, turnID string) error {
+	start, pending := r.starts[requestID]
+	if !pending {
+		return nil
+	}
+	delete(r.starts, requestID)
+	if turnID != "" {
+		key := codexTurnKey{threadID: start.threadID, turnID: turnID}
+		if r.turns[key] == nil {
+			r.turns[key] = &codexTurn{}
+		}
+		r.turns[key].clientMessageID = start.clientMessageID
+	}
+	if !r.startPending(start.threadID) {
+		for key, turn := range r.turns {
+			if key.threadID == start.threadID && turn.pending == 0 && turn.terminalAcknowledged {
+				if err := r.reclaim(ctx, key, ""); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (r *codexRelay) snapshot() *CodexState {
-	snapshot := &CodexState{ActiveTurns: make(map[string]string, len(r.active)), RetainedTurns: make(map[string][]string)}
+	snapshot := &CodexState{ActiveTurns: make(map[string]string, len(r.active)), RetainedTurns: make(map[string][]string), AcceptedTurns: make(map[string]map[string]string)}
 	for thread, turn := range r.active {
 		snapshot.ActiveTurns[thread] = turn
 	}
-	for key := range r.turns {
+	for key, turn := range r.turns {
 		snapshot.RetainedTurns[key.threadID] = append(snapshot.RetainedTurns[key.threadID], key.turnID)
+		if turn.clientMessageID != "" {
+			if snapshot.AcceptedTurns[key.threadID] == nil {
+				snapshot.AcceptedTurns[key.threadID] = make(map[string]string)
+			}
+			snapshot.AcceptedTurns[key.threadID][key.turnID] = turn.clientMessageID
+		}
 	}
 	for _, turns := range snapshot.RetainedTurns {
 		sort.Strings(turns)
@@ -198,15 +282,19 @@ func (r *codexRelay) acknowledge(ctx context.Context, id string) error {
 		turn.pending--
 		turn.terminalAcknowledged = turn.terminalAcknowledged || entry.terminal
 		// The common streamed-delta receipt needs no journal scan.
-		if turn.pending != 0 || !turn.terminalAcknowledged {
+		if turn.pending != 0 || !turn.terminalAcknowledged || r.startPending(entry.turn.threadID) {
 			return nil
 		}
-		delete(r.turns, entry.turn)
 	}
+	return r.reclaim(ctx, entry.turn, id)
+}
+
+func (r *codexRelay) reclaim(ctx context.Context, turn codexTurnKey, id string) error {
+	delete(r.turns, turn)
 	kept := r.entries[:0]
 	removed := false
 	for _, candidate := range r.entries {
-		if candidate.request == "" && candidate.acked && ((entry.turn.threadID == "" && candidate.id == id) || (entry.turn.threadID != "" && candidate.turn == entry.turn)) {
+		if candidate.request == "" && candidate.acked && ((turn.threadID == "" && candidate.id == id) || (turn.threadID != "" && candidate.turn == turn)) {
 			delete(r.byID, candidate.id)
 			removed = true
 			continue
@@ -218,9 +306,6 @@ func (r *codexRelay) acknowledge(ctx context.Context, id string) error {
 	if removed && len(r.byID) == 0 {
 		return r.journal.reset(ctx)
 	}
-	if removed && r.journal.size >= r.limit/2 {
-		return r.compact(ctx)
-	}
 	return nil
 }
 
@@ -228,17 +313,33 @@ func (h *host) writeCodex(attachment *codexAttachment) {
 	defer h.detach(attachment.conn)
 	for {
 		h.mu.Lock()
-		for h.codex.attachment == attachment && !h.codex.stopped && len(attachment.queue) == 0 {
+		for h.codex.attachment == attachment && !h.codex.stopped && len(attachment.responses) == 0 &&
+			(attachment.stateRequest == nil || h.codex.startPending(attachment.stateRequest.threadID)) &&
+			(len(attachment.queue) == 0 || attachment.queue[0].entry != nil &&
+				(len(attachment.inFlight) >= maxCodexInFlight || len(attachment.inFlight) > 0 &&
+					attachment.inFlightBytes+attachment.queue[0].entry.span.length > maxCodexInFlightBytes)) {
 			h.cond.Wait()
 		}
 		if h.codex.attachment != attachment || h.codex.stopped {
 			h.mu.Unlock()
 			return
 		}
-		next := attachment.queue[0]
-		attachment.queue[0] = codexOutbound{}
-		attachment.queue = attachment.queue[1:]
-		attachment.directBytes -= len(next.frame)
+		var next codexOutbound
+		if request := attachment.stateRequest; request != nil && !h.codex.startPending(request.threadID) {
+			state, _ := json.Marshal(h.codex.snapshot())
+			next.frame = marshalFrame(map[string]json.RawMessage{"id": request.id, "result": state}, nil)
+			attachment.stateRequest = nil
+		} else if len(attachment.responses) > 0 {
+			next.frame = attachment.responses[0]
+			attachment.responses[0] = nil
+			attachment.responses = attachment.responses[1:]
+			attachment.directBytes -= len(next.frame)
+		} else {
+			next = attachment.queue[0]
+			attachment.queue[0] = codexOutbound{}
+			attachment.queue = attachment.queue[1:]
+			attachment.directBytes -= len(next.frame)
+		}
 		frame := next.frame
 		if next.entry != nil {
 			entry := next.entry
@@ -254,6 +355,10 @@ func (h *host) writeCodex(attachment *codexAttachment) {
 			}
 			params, _ := json.Marshal(CodexEvent{EventID: entry.id, Frame: json.RawMessage(frame), Replayed: next.replayed, ObservedAt: entry.observedAt})
 			frame = marshalFrame(map[string]json.RawMessage{"method": json.RawMessage(`"` + CodexEventMethod + `"`), "params": params}, nil)
+			// Register before socket I/O: a fast durable consumer may return its
+			// receipt as soon as the write becomes readable on the other end.
+			attachment.inFlight[entry.id] = entry.span.length
+			attachment.inFlightBytes += entry.span.length
 		}
 		h.cond.Broadcast()
 		h.mu.Unlock()
@@ -263,7 +368,7 @@ func (h *host) writeCodex(attachment *codexAttachment) {
 	}
 }
 
-func (h *host) queueCodexDirectLocked(frame []byte) {
+func (h *host) queueCodexDirectLocked(frame []byte, response bool) {
 	attachment := h.codex.attachment
 	if attachment == nil {
 		return
@@ -274,7 +379,13 @@ func (h *host) queueCodexDirectLocked(frame []byte) {
 	if h.codex.attachment != attachment || h.codex.stopped {
 		return
 	}
-	attachment.queue = append(attachment.queue, codexOutbound{frame: append([]byte(nil), frame...)})
+	if response {
+		// RPC correlation must remain reachable while semantic replay waits for
+		// a receipt from a controller that is itself waiting for this response.
+		attachment.responses = append(attachment.responses, append([]byte(nil), frame...))
+	} else {
+		attachment.queue = append(attachment.queue, codexOutbound{frame: append([]byte(nil), frame...)})
+	}
 	attachment.directBytes += len(frame)
 	h.cond.Broadcast()
 }
@@ -284,8 +395,18 @@ func (h *host) codexProviderFrameLocked(frame []byte) error {
 		ID     *json.RawMessage `json:"id"`
 		Method string           `json:"method"`
 		Params json.RawMessage  `json:"params"`
+		Result struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+		} `json:"result"`
 	}
 	if json.Unmarshal(frame, &envelope) != nil || envelope.ID != nil || !codexConversationNotification(envelope.Method) {
+		if envelope.ID != nil && envelope.Method == "" {
+			if err := h.codex.resolveStart(h.ctx, string(*envelope.ID), envelope.Result.Turn.ID); err != nil {
+				return err
+			}
+		}
 		if requestID, ok := serverRequestID(frame); ok {
 			if _, exists := h.pendingRequests[requestID]; !exists {
 				h.pendingRequests[requestID] = &pendingRequest{frame: append([]byte(nil), frame...)}
@@ -297,7 +418,7 @@ func (h *host) codexProviderFrameLocked(frame []byte) error {
 				return nil
 			}
 		}
-		h.queueCodexDirectLocked(frame)
+		h.queueCodexDirectLocked(frame, envelope.ID != nil && envelope.Method == "")
 		return nil
 	}
 	if int64(len(frame)) > h.codex.limit {

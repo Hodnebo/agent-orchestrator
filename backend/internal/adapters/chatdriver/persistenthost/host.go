@@ -69,7 +69,8 @@ const (
 	CodexEventMethod = "_ao/persistent_codex_event"
 	// CodexAckMethod acknowledges durable projection of a retained notification.
 	CodexAckMethod = "_ao/persistent_codex_ack"
-	// CodexReplayMethod opens replay after durable turn ownership is restored.
+	// CodexReplayMethod queries fresh state as a request, or opens replay as a
+	// notification after durable turn ownership is restored.
 	CodexReplayMethod = "_ao/persistent_codex_replay"
 )
 
@@ -83,8 +84,9 @@ type CodexEvent struct {
 
 // CodexState preserves native activity without replaying an obsolete start.
 type CodexState struct {
-	ActiveTurns   map[string]string   `json:"activeTurns,omitempty"`
-	RetainedTurns map[string][]string `json:"retainedTurns,omitempty"`
+	ActiveTurns   map[string]string            `json:"activeTurns,omitempty"`
+	RetainedTurns map[string][]string          `json:"retainedTurns,omitempty"`
+	AcceptedTurns map[string]map[string]string `json:"acceptedTurns,omitempty"`
 }
 
 var (
@@ -804,7 +806,7 @@ func (h *host) handle(conn net.Conn) {
 	var attachment *codexAttachment
 	var writeErr error
 	if h.codex != nil {
-		attachment = &codexAttachment{conn: conn, cutoff: h.codex.next}
+		attachment = &codexAttachment{conn: conn, cutoff: h.codex.next, inFlight: make(map[string]int64)}
 		h.codex.attachment = attachment
 		response.CodexReplay, response.CodexState = true, h.codex.snapshot()
 		h.mu.Unlock()
@@ -850,6 +852,7 @@ func (h *host) handle(conn net.Conn) {
 			providerFrame := frame
 			var clientFrame []byte
 			var relayErr error
+			var startRequestID string
 			h.mu.Lock()
 			if h.codex != nil {
 				if h.codex.attachment != attachment {
@@ -857,16 +860,21 @@ func (h *host) handle(conn net.Conn) {
 					return
 				}
 				var control struct {
-					Method string `json:"method"`
+					ID     json.RawMessage `json:"id"`
+					Method string          `json:"method"`
 					Params struct {
-						EventID string `json:"eventId"`
+						EventID  string `json:"eventId"`
+						ThreadID string `json:"threadId"`
 					} `json:"params"`
 				}
 				_ = json.Unmarshal(frame, &control)
 				switch control.Method {
 				case CodexReplayMethod:
 					providerFrame = nil
-					if !attachment.open {
+					if len(control.ID) > 0 {
+						attachment.stateRequest = &codexStateRequest{id: control.ID, threadID: control.Params.ThreadID}
+						h.cond.Broadcast()
+					} else if !attachment.open {
 						attachment.open = true
 						for _, entry := range h.codex.entries {
 							if entry.request != "" {
@@ -882,8 +890,15 @@ func (h *host) handle(conn net.Conn) {
 					}
 				case CodexAckMethod:
 					providerFrame = nil
-					relayErr = h.codex.acknowledge(h.ctx, control.Params.EventID)
+					if size, sent := attachment.inFlight[control.Params.EventID]; sent {
+						delete(attachment.inFlight, control.Params.EventID)
+						attachment.inFlightBytes -= size
+						relayErr = h.codex.acknowledge(h.ctx, control.Params.EventID)
+					}
 					h.cond.Broadcast()
+				}
+				if len(providerFrame) > 0 {
+					startRequestID = h.observeCodexRequestLocked(providerFrame)
 				}
 			} else if h.acp != nil {
 				var relayed acpClientFrames
@@ -899,8 +914,14 @@ func (h *host) handle(conn net.Conn) {
 				return
 			}
 			if len(providerFrame) > 0 {
-				if _, err := h.stdin.Write(providerFrame); err != nil {
+				if written, err := h.stdin.Write(providerFrame); err != nil {
 					readErr = err
+					if written == 0 && startRequestID != "" {
+						h.mu.Lock()
+						_ = h.codex.resolveStart(h.ctx, startRequestID, "")
+						h.cond.Broadcast()
+						h.mu.Unlock()
+					}
 				} else {
 					h.observeClientFrame(providerFrame)
 				}

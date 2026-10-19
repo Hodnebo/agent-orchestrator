@@ -326,6 +326,9 @@ type ChatStartConfig struct {
 	ProviderIDsScoped bool
 	// Ephemeral asks supporting providers not to persist this conversation.
 	Ephemeral bool
+	// VolatileEvents selects delivery for RAM-only consumers that do not durably
+	// save and acknowledge provider events. It does not change native history.
+	VolatileEvents bool
 	// AdditionalDirectories are extra absolute workspace roots the provider may
 	// access alongside WorkspacePath. Workspace projects use this for child repo
 	// worktrees; it is not a replacement for AO's worktree ownership.
@@ -337,6 +340,8 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	// See ChatStartConfig.VolatileEvents.
+	VolatileEvents bool
 	// ReconnectOnly forbids launching a replacement provider during a health check.
 	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
@@ -1216,6 +1221,18 @@ type ChatLiveReconnector interface {
 // Unknown turns retain ownership until the provider supplies stronger evidence.
 type ChatLiveTurnScope interface {
 	IsChildProviderTurn(providerTurnID string) bool
+}
+
+// ChatLiveTurn is a native turn proven by the surviving provider host.
+type ChatLiveTurn struct {
+	ProviderTurnID  string
+	ClientMessageID string
+	Active          bool
+}
+
+// ChatLiveTurnReader refreshes accepted turn correlation before replay or sends.
+type ChatLiveTurnReader interface {
+	ReadLiveTurns(context.Context) ([]ChatLiveTurn, error)
 }
 
 // ChatLiveReconnectActivator releases provider replay only after the service

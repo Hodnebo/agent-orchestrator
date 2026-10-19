@@ -294,7 +294,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, cfg.VolatileEvents,
 	)
 	if err != nil {
 		return nil, err
@@ -374,7 +374,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	}
 
 	conv, reconnected, err := d.connectSession(
-		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly,
+		ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, cfg.ReconnectOnly, cfg.VolatileEvents,
 	)
 	if err != nil {
 		return nil, err
@@ -501,7 +501,7 @@ func (d *Driver) connectSession(
 	env map[string]string,
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
-	reconnectOnly bool,
+	reconnectOnly, volatileEvents bool,
 ) (*conversation, bool, error) {
 	// Injected driver tests intentionally retain the direct pipe launcher. The
 	// shipped driver uses spawnAppServer and therefore the persistent host.
@@ -527,6 +527,10 @@ func (d *Driver) connectSession(
 			return nil, false, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 		}
 	}
+	protocol := persistenthost.ProtocolCodex
+	if volatileEvents {
+		protocol = persistenthost.ProtocolRaw
+	}
 	hostConfig := persistenthost.Config{
 		SessionID:     string(sessionID),
 		ReconnectOnly: reconnectOnly,
@@ -534,7 +538,7 @@ func (d *Driver) connectSession(
 		Workdir:       workdir,
 		Env:           envSlice(env),
 		Argv:          []string{bin, "app-server"},
-		Protocol:      persistenthost.ProtocolCodex,
+		Protocol:      protocol,
 	}
 	// Ownership survives app upgrades and mutable model/permission choices.
 	owner, _ := json.Marshal([]string{filepath.Clean(workdir), string(domain.HarnessCodex), providerScopeID})
@@ -554,6 +558,9 @@ func (d *Driver) connectSession(
 	if err != nil {
 		if errors.Is(err, persistenthost.ErrNotRunning) {
 			return nil, false, ports.ErrChatHostNotRunning
+		}
+		if volatileEvents && errors.Is(err, persistenthost.ErrIncompatible) {
+			return nil, false, fmt.Errorf("%w: volatile Codex delivery does not match the existing host; close and reopen this chat: %w", ports.ErrChatRecoveryInconclusive, err)
 		}
 		if errors.Is(err, persistenthost.ErrOwnershipInconclusive) ||
 			errors.Is(err, persistenthost.ErrAttached) ||
@@ -765,7 +772,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	if !filepath.IsAbs(cfg.WorkspacePath) {
 		return nil, fmt.Errorf("workspace path must be absolute, got %q", cfg.WorkspacePath)
 	}
-	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false)
+	conv, reconnected, err := d.connectSession(ctx, cfg.SessionID, cfg.DataDir, cfg.WorkspacePath, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID, false, cfg.VolatileEvents)
 	if err != nil {
 		return nil, err
 	}

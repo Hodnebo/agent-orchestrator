@@ -449,6 +449,106 @@ func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) s
 	return latest.ProviderTurnID
 }
 
+// restoreAcceptedLiveTurns repairs only exact host acceptance/client-key pairs.
+// The native start response may precede AO's provider-ID binding; replay must
+// attach that work to its original AO row instead of failing or redispatching it.
+func (c *Controller) restoreAcceptedLiveTurns(ctx context.Context, rows *ConversationRows, live []ports.ChatLiveTurn) (string, error) {
+	if len(live) == 0 {
+		return c.restoreLiveTurnOwnership(rows.Turns), nil
+	}
+	scope, scoped := c.conv.(ports.ChatLiveTurnScope)
+	root := func(id string) bool { return !scoped || !scope.IsChildProviderTurn(id) }
+	bound := ""
+	keys := make(map[string]int)
+	for i, turn := range rows.Turns {
+		if turn.State != domain.TurnStateRunning || turn.RolledBackAt != nil ||
+			(turn.BranchID != "" && turn.BranchID != c.conversation.ActiveBranchID) {
+			continue
+		}
+		if turn.ProviderTurnID != "" {
+			if root(turn.ProviderTurnID) {
+				if bound != "" && bound != turn.ProviderTurnID {
+					return "", fmt.Errorf("%w: multiple durable root turns are running", ports.ErrChatRecoveryInconclusive)
+				}
+				bound = turn.ProviderTurnID
+			}
+			continue
+		}
+		key := turn.ID
+		for _, message := range rows.Messages {
+			if message.TurnID == turn.ID && message.Role == domain.MessageRoleUser && message.ClientMessageID != "" {
+				if key != turn.ID && key != message.ClientMessageID {
+					return "", fmt.Errorf("%w: dispatching turn has conflicting client keys", ports.ErrChatRecoveryInconclusive)
+				}
+				key = message.ClientMessageID
+			}
+		}
+		if _, exists := keys[key]; exists {
+			return "", fmt.Errorf("%w: dispatching turns share a client key", ports.ErrChatRecoveryInconclusive)
+		}
+		keys[key] = i
+	}
+	bindings := make(map[int]string)
+	seen := make(map[string]bool)
+	active := ""
+	for _, turn := range live {
+		if turn.ProviderTurnID == "" || !root(turn.ProviderTurnID) {
+			continue
+		}
+		if seen[turn.ProviderTurnID] {
+			return "", fmt.Errorf("%w: repeated host turn identity", ports.ErrChatRecoveryInconclusive)
+		}
+		seen[turn.ProviderTurnID] = true
+		if turn.Active {
+			if active != "" && active != turn.ProviderTurnID {
+				return "", fmt.Errorf("%w: multiple host root turns are active", ports.ErrChatRecoveryInconclusive)
+			}
+			active = turn.ProviderTurnID
+		}
+		if i, found := keys[turn.ClientMessageID]; found {
+			if _, exists := bindings[i]; exists {
+				return "", fmt.Errorf("%w: host accepted a client key more than once", ports.ErrChatRecoveryInconclusive)
+			}
+			bindings[i] = turn.ProviderTurnID
+			if bound != "" && bound != turn.ProviderTurnID {
+				return "", fmt.Errorf("%w: accepted turn conflicts with durable root ownership", ports.ErrChatRecoveryInconclusive)
+			}
+			bound = turn.ProviderTurnID
+		}
+	}
+	if active != "" && bound != "" && active != bound {
+		return "", fmt.Errorf("%w: active host turn differs from durable root ownership", ports.ErrChatRecoveryInconclusive)
+	}
+	for i, providerID := range bindings {
+		// projectEvent checks the newly claimed controller generation and commits
+		// the original binding atomically. This synthetic fact owns no host receipt.
+		c.dispatchingTurnID = rows.Turns[i].ID
+		projected, _, err := c.projectEvent(ctx, ports.ChatEvent{
+			Kind: ports.ChatEventTurnStarted, ProviderTurnID: providerID,
+			ProviderConversationID: c.conv.ProviderConversationID(),
+		})
+		c.dispatchingTurnID = ""
+		if err != nil {
+			return "", fmt.Errorf("%w: bind accepted live turn: %w", ports.ErrChatRecoveryInconclusive, err)
+		}
+		if !projected {
+			return "", fmt.Errorf("%w: accepted live turn lost controller ownership", ports.ErrChatRecoveryInconclusive)
+		}
+		rows.Turns[i].ProviderTurnID = providerID
+	}
+	providerID := bound
+	if providerID == "" {
+		// Provider-owned compaction or unsolicited work may have no AO row yet.
+		// Replay will adopt it; gate new sends before opening that replay stream.
+		providerID = active
+	}
+	if providerID != "" {
+		c.pendingTurnID, c.ackedTurnID = providerID, providerID
+		c.state = ports.ChatControllerBusy
+	}
+	return providerID, nil
+}
+
 // start begins live provider consumption after any durable native history has
 // been imported. Keeping construction and consumption separate prevents a resume
 // notification from racing ahead of the older turns it follows.
@@ -1884,6 +1984,11 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	if msg.ClientMessageID == "" {
+		// The host must correlate acceptance even when this caller supplied no
+		// idempotency key. This does not rewrite the durable user message's key.
+		msg.ClientMessageID = turnID
+	}
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
