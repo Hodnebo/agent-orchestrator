@@ -2029,6 +2029,7 @@
 	"orchestratorReplacement.close": "閉じる",
 	"orchestratorReplacement.openCurrent": "現在のオーケストレーターを開く",
 	"orchestratorReplacement.retry": "再試行",
+	"orchestratorReplacement.morePending": "{{count}} more project(s) also failed to replace their orchestrator.",
 	"settings.project.enableIssueIntake": "Issue インテークを有効化",
 	"settings.project.repository": "リポジトリ",
 	"settings.project.repoNotDetected": "このプロジェクトの git origin から GitHub リポジトリを検出できませんでした。",
