@@ -472,3 +472,37 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 		t.Fatalf("active branch provider = %q, %v; want it moved to the fresh conversation", branch.ProviderConversationID, err)
 	}
 }
+
+
+// liveModelConversation runs its own model, as Claude Code's chat does when it
+// does not offer the one picked for it.
+type liveModelConversation struct {
+	*fakeConversation
+}
+
+func (c liveModelConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
+	return []ports.ChatConfigOption{{
+		ID: "model", Category: "model", Type: ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: "opus"},
+		Choices: []ports.ChatConfigOptionChoice{{Value: "opus", Name: "Opus 5.5"}, {Value: "sonnet", Name: "Sonnet 5.5"}},
+	}}, nil
+}
+
+func (c liveModelConversation) SetConfigOption(context.Context, string, ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+	return c.ListConfigOptions(context.Background())
+}
+
+func TestProviderSwitchSavesTheModelATargetRunsWhenThePickDidNotTake(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return liveModelConversation{conv} }
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "claude-haiku-5-5",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "opus" {
+		t.Fatalf("saved model = %q, %v; want the opus the target runs", conversation.Settings.Model, err)
+	}
+}

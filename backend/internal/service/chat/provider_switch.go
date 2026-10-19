@@ -256,6 +256,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		"source", source.harness, "target", request.TargetHarness,
 		"stop_source", stopped, "stop_and_note", noteReady, "start_target", time.Since(targetStarted),
 		"total", time.Since(started))
+	s.adoptTargetsLiveModel(operationCtx, id, target, request.Model)
 	if request.FastMode {
 		// Fast mode is a setting of the running controller, so it is applied to
 		// the target once it exists rather than passed through its launch.
@@ -322,4 +323,40 @@ func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
 		return ports.NormalizePermissionMode(launched)
 	}
 	return ports.PermissionModeAuto
+}
+
+// adoptTargetsLiveModel saves the model the target runs when it is not the one
+// picked for it. An agent whose chat does not offer the picked model starts on
+// its own (Claude Code's chat lists the newest of each family by alias, and not
+// every model its catalog names), so the chat would otherwise show one model
+// and save another.
+func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID, target *Controller, picked string) {
+	configurer, ok := target.conv.(ports.ChatConfigOptionController)
+	if picked == "" || !ok {
+		return
+	}
+	options, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		return
+	}
+	for _, option := range options {
+		if option.Category != "model" && option.ID != "model" {
+			continue
+		}
+		live := option.Current.Select
+		if live == "" || live == picked {
+			return
+		}
+		for _, choice := range option.Choices {
+			if choice.Value == picked {
+				return
+			}
+		}
+		settings := target.Settings()
+		settings.Model = live
+		if err := target.SetSettings(ctx, settings); err != nil {
+			s.log.Warn("save the switch target's own model", "session", id, "error", err)
+		}
+		return
+	}
 }

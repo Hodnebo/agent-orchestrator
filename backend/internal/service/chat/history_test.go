@@ -583,6 +583,8 @@ type editDriverState struct {
 	beforeResume func(ports.ChatResumeConfig) error
 	// beforeStart runs, unlocked, before every start after the first.
 	beforeStart func(ports.ChatStartConfig)
+	// target, when set, is what the second start returns, wrapping fresh.
+	target func(*fakeConversation) ports.ChatConversation
 	fresh       *fakeConversation
 	resumed     map[string]*fakeConversation
 	// refusedMode is a permission mode the agent will not run in; onlyMode, when
@@ -692,6 +694,9 @@ func newEditHarnessWithOptions(
 			return nil, state.startErr
 		}
 		if state.startCalls == 2 {
+			if state.target != nil {
+				return state.target(state.fresh), nil
+			}
 			return state.fresh, nil
 		}
 		freshBranch := newFakeConversation()
