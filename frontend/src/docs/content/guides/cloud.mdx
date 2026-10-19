@@ -3,9 +3,11 @@ title: Cloud sessions
 description: Set up a hosted project and work on a remote session from the desktop app.
 ---
 
-Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud is available in current desktop builds, stable and nightly, as an early preview that you turn on in Developer mode. Sessions run in remote sandboxes that can be slow to start, lose uncommitted work, or break without notice, so commit and push often. The local product works the same with or without Cloud.
+**Available now in the latest nightly:** sign in from the desktop app and run agents in the cloud. Anyone can sign in and start; no invitation is needed.
 
-## Before you start
+Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud is an early preview: you turn it on in Developer mode, and current stable builds include it too. Sessions run in remote sandboxes that can be slow to start, lose uncommitted work, or break without notice, so commit and push often. The local product works the same with or without Cloud.
+
+## Get started
 
 1. Use a current desktop build. Install or update from the [download page](https://orchestrator.inc/download/). Stable and nightly builds both include Cloud; nightly (**Settings → Updates → Updates channel → Nightly (Pre-release)**) gets Cloud fixes first.
 2. Turn on Cloud. Open **Settings → General**, turn on **Developer mode**, then turn on **Cloud** and confirm **Enable Cloud**.
@@ -38,7 +40,7 @@ This guide does not cover Cloud pricing. Organizations on self-serve billing man
 
 Cloud also has a configurable concurrent-sandbox limit. A provider can have a lower capacity or reject a request while it is full. If session creation reports that the organization has reached its limit, archive an unused session, wait for provider teardown to finish, and try again. Your organization admin can tell you its current limits.
 
-## If access stops working
+## Troubleshooting
 
 - **Cloud option missing:** check that you are on a current build, that **Developer mode** and **Cloud** are on in **Settings → General**, and that you are signed in to AO Cloud. A local project remains available.
 - **Repository missing:** reconnect GitHub or check installation and repository grants for the organization shown in the desktop.
