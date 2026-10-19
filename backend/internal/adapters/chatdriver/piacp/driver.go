@@ -6,8 +6,11 @@
 package piacp
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -97,28 +100,109 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			}
 			return acpdriver.Launch{Command: binary, Env: env}, nil
 		},
-		ValidateInitialize:    validateInitialize,
-		SessionMeta:           sessionMeta,
-		SessionOptions:        sessionOptions,
-		PromptResponseFailure: promptResponseFailure,
+		ValidateInitialize: validateInitialize,
+		SessionMeta:        sessionMeta,
+		SessionOptions:     sessionOptions,
+		SessionPromptResponseFailure: func(sessionID string, response acpsdk.PromptResponse) error {
+			return promptResponseFailure(response, recordedModelError(piAgentDir(), sessionID))
+		},
 		// pi-acp can exit during its first handshake while its background
 		// daemon starts; the next start finds the daemon up.
 		RetryStartupExit: true,
 	}
 }
 
-// promptResponseFailure reports a turn Pi ended without reaching its model.
-// When Pi's sign-in has expired, pi-acp answers the prompt with end_turn, no
-// message and zero tokens, so the chat would show the turn as done with
-// nothing in it.
-func promptResponseFailure(response acpsdk.PromptResponse) error {
+// promptResponseFailure reports a turn Pi ended without an answer from its
+// model. pi-acp answers such a prompt with end_turn, no message and zero tokens,
+// so the chat would show the turn as done with nothing in it. Pi keeps the
+// model's error only in its own session record; recorded is that error, if any.
+func promptResponseFailure(response acpsdk.PromptResponse, recorded string) error {
 	usage := response.Usage
 	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil ||
 		usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 {
 		return nil
 	}
-	return ports.NewChatProviderFailure("Pi did not reach its model",
-		"Pi ended the turn without calling its model, usually because its sign-in has expired. Run pi in a terminal and log in again.", nil)
+	if recorded == "" || strings.Contains(recorded, "No API key") {
+		return ports.NewChatProviderFailure("Pi did not reach its model",
+			"Pi ended the turn without calling its model, usually because its sign-in has expired. Run pi in a terminal and log in again.", nil)
+	}
+	return ports.NewChatProviderFailure("Pi's model refused the turn", recorded, nil)
+}
+
+// piAgentDir is where Pi keeps its settings and sessions.
+func piAgentDir() string {
+	if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".pi", "agent")
+}
+
+// recordedModelError reads the error of the latest failed reply in Pi's record
+// of sessionID (sessions/<folder>/<time>_<id>.jsonl), with a provider's JSON
+// error body reduced to its message. It reads only the end of the record.
+func recordedModelError(agentDir, sessionID string) string {
+	if agentDir == "" || sessionID == "" || strings.ContainsAny(sessionID, `/\*?[`) {
+		return ""
+	}
+	matches, _ := filepath.Glob(filepath.Join(agentDir, "sessions", "*", "*_"+sessionID+".jsonl"))
+	if len(matches) == 0 {
+		return ""
+	}
+	file, err := os.Open(matches[0])
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	const tail = 256 << 10
+	if info, err := file.Stat(); err == nil && info.Size() > tail {
+		_, _ = file.Seek(info.Size()-tail, io.SeekStart)
+	}
+	raw, _ := io.ReadAll(file)
+	lines := strings.Split(string(raw), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var entry struct {
+			Message struct {
+				Role         string `json:"role"`
+				StopReason   string `json:"stopReason"`
+				ErrorMessage string `json:"errorMessage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &entry) != nil || entry.Message.Role != "assistant" {
+			continue
+		}
+		if entry.Message.StopReason != "error" {
+			return ""
+		}
+		return readableModelError(entry.Message.ErrorMessage)
+	}
+	return ""
+}
+
+// readableModelError turns `Codex error: {"error":{"message":"..."}}` into
+// its message, and caps any error at a few hundred characters.
+func readableModelError(text string) string {
+	text = strings.TrimSpace(text)
+	if start := strings.Index(text, "{"); start >= 0 {
+		var body struct {
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(text[start:]), &body) == nil {
+			if message := strings.TrimSpace(cmp.Or(body.Error.Message, body.Message)); message != "" {
+				text = message
+			}
+		}
+	}
+	if len(text) > 400 {
+		text = text[:399] + "…"
+	}
+	return text
 }
 
 func cloneEnv(in map[string]string) map[string]string {

@@ -195,19 +195,51 @@ func TestPiACPFeatureMapping(t *testing.T) {
 
 func TestPromptResponseFailureReportsATurnWithoutAModelCall(t *testing.T) {
 	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
-	if err := promptResponseFailure(empty); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
+	if err := promptResponseFailure(empty, ""); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
 		t.Fatalf("zero-token end_turn = %v, want a reported failure", err)
 	}
 	answered := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}}
-	if err := promptResponseFailure(answered); err != nil {
+	if err := promptResponseFailure(answered, ""); err != nil {
 		t.Fatalf("answered turn = %v, want no failure", err)
 	}
 	for _, response := range []acpsdk.PromptResponse{
 		{StopReason: acpsdk.StopReasonEndTurn},
 		{StopReason: acpsdk.StopReasonCancelled, Usage: &acpsdk.Usage{}},
 	} {
-		if err := promptResponseFailure(response); err != nil {
+		if err := promptResponseFailure(response, ""); err != nil {
 			t.Fatalf("%+v = %v, want no failure without zero usage on end_turn", response, err)
 		}
+	}
+}
+
+func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
+	agentDir := t.TempDir()
+	folder := filepath.Join(agentDir, "sessions", "--workspace--")
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// As Pi records a reply the provider refused.
+	record := `{"type":"session","id":"01a151e7"}` + "\n" +
+		`{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"assistant","content":[],"model":"gpt-5.5","stopReason":"error",` +
+		`"errorMessage":"Codex error: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",` +
+		`\"message\":\"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.\"}}"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(folder, "2026-10-19T02-05-17-807Z_01a151e7.jsonl"), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorded := recordedModelError(agentDir, "01a151e7")
+	if recorded != "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account." {
+		t.Fatalf("recorded error = %q", recorded)
+	}
+	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
+	err := promptResponseFailure(empty, recorded)
+	if err == nil || !strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "sign-in") {
+		t.Fatalf("failure = %v, want the model's refusal instead of a sign-in guess", err)
+	}
+	if !strings.Contains(err.Error(), "not supported when using Codex with a ChatGPT account") {
+		t.Fatalf("failure = %q, want the model's own words", err)
+	}
+	if got := recordedModelError(agentDir, "missing"); got != "" {
+		t.Fatalf("a session with no record = %q, want none", got)
 	}
 }

@@ -144,8 +144,10 @@ type conversation struct {
 	// credential mid-turn. Nil when the binding does not supply one.
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
-	hibernationCheck      func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
-	historyNotice         func(string) bool
+	// sessionPromptResponseFailure is promptResponseFailure given the session.
+	sessionPromptResponseFailure func(string, acpsdk.PromptResponse) error
+	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	historyNotice                func(string) bool
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
 	historyUserChunkIsMessage bool
 	// preamble is standing context attached to the first prompt that actually
@@ -800,6 +802,15 @@ func (c *conversation) finishPrompt(
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
 			if failure := c.promptResponseFailure(resp); failure != nil {
+				state = domain.TurnStateFailed
+				turnErr = failure
+			}
+		}
+		if c.sessionPromptResponseFailure != nil && turnErr == nil && state != domain.TurnStateInterrupted && !interruptedLocally {
+			c.mu.Lock()
+			sessionID := c.sessionID
+			c.mu.Unlock()
+			if failure := c.sessionPromptResponseFailure(sessionID, resp); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}

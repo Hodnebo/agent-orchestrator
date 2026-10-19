@@ -122,6 +122,10 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
+	// SessionPromptResponseFailure is PromptResponseFailure for a binding that
+	// needs the provider session the turn ran in, to read why it failed from
+	// the agent's own record (Pi keeps the model's error only there).
+	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse) error
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
@@ -703,6 +707,7 @@ func (d *Driver) initialize(
 	)
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
+	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
