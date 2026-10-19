@@ -18,6 +18,10 @@ let mobile: { keepAwake: { supported: boolean; enabled: boolean; lidClosed: bool
 let release: (() => void) | undefined;
 let blockStart: boolean;
 function snapshot() { return structuredClone(state); }
+function awakeSession(overrides: Partial<AwakeState["sessions"][number]>) {
+	return { id: "awake", scope: "ao" as const, sessionId: "", mode: "indefinite" as const,
+		boundId: "", boundIdentity: "", createdAt: "2026-10-19T00:00:00Z", endReason: "", label: "For AO", lidClosed: false, ...overrides };
+}
 beforeEach(() => {
 	test.mac = true;
 	release = undefined;
@@ -33,7 +37,7 @@ beforeEach(() => {
 		}
 		if (path === "/api/v1/awake/sessions") {
 			if (blockStart) await new Promise<void>((resolve) => { release = resolve; });
-			state.sessions.push({ id: "new", ...options.body });
+			state.sessions.push(awakeSession({ id: "new", ...options.body }));
 			state.active = true;
 		} else if (path === "/api/v1/awake/stop") {
 			state.sessions = state.sessions.map((s) => ({ ...s, endedAt: "now" }));
@@ -72,7 +76,7 @@ describe("shared Stay Awake controls", () => {
 		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
 	});
 	it("stops session-scoped, timed, and automatic wake owners", async () => {
-		state.sessions = [{ id: "scoped", scope: "session", sessionId: "work" }, { id: "timer", scope: "ao", mode: "duration" }] as AwakeState["sessions"];
+		state.sessions = [awakeSession({ id: "scoped", scope: "session", sessionId: "work" }), awakeSession({ id: "timer", mode: "duration" })];
 		state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
 		await show();
 		fireEvent.click(coffee());
@@ -111,7 +115,7 @@ describe("shared Stay Awake controls", () => {
 		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(0);
 	});
 	it("releases legacy desktop lid ownership when the lid option is turned off", async () => {
-		state.sessions = [{ id: "legacy", scope: "ao", lidClosed: true }] as AwakeState["sessions"];
+		state.sessions = [awakeSession({ id: "legacy", lidClosed: true })];
 		mobile.keepAwake.enabled = true;
 		mobile.keepAwake.lidClosed = true;
 		await show();
