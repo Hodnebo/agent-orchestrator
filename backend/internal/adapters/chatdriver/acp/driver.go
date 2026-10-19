@@ -653,6 +653,24 @@ func (d *Driver) connect(
 	initializeStarted := time.Now()
 	conv, init, state, err := d.initialize(ctx, cfg, proc)
 	d.logStartStage(cfg.SessionID, "initialize", initializeStarted, err)
+	if errors.Is(err, errHostNeverStarted) {
+		// Nothing to recover: stop the host so it does not block every later
+		// start, then start the agent afresh, which reloads the conversation.
+		d.log.Info("chat: ACP host never finished starting; replacing it", "sessionID", cfg.SessionID, "harness", d.cfg.Harness)
+		if stopErr := proc.terminate(); stopErr != nil {
+			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf(
+				"%w: stop ACP host that never finished starting: %w", ports.ErrChatRecoveryInconclusive, stopErr)
+		}
+		if cfg.ReconnectOnly {
+			return nil, acpsdk.InitializeResponse{}, nil, ports.ErrChatHostNotRunning
+		}
+		if proc, err = d.openProcess(ctx, cfg, prepareEnv); err != nil {
+			return nil, acpsdk.InitializeResponse{}, nil, err
+		}
+		conv, init, state, err = d.initialize(ctx, cfg, proc)
+		d.logStartStage(cfg.SessionID, "initialize_replaced", initializeStarted, err)
+		return conv, init, state, err
+	}
 	if err == nil || !d.cfg.RetryStartupExit || proc.reconnected || !isACPPeerDisconnected(err) {
 		return conv, init, state, err
 	}
@@ -674,6 +692,9 @@ func (d *Driver) connect(
 	d.logStartStage(cfg.SessionID, "initialize_retry", initializeStarted, err)
 	return conv, init, state, err
 }
+
+// errHostNeverStarted is a reattached persistent host that holds no session.
+var errHostNeverStarted = errors.New("persistent ACP host never finished starting")
 
 // startupRetryDelay lets an agent that exited during its first handshake
 // release its host before RetryStartupExit starts it again.
@@ -715,7 +736,13 @@ func (d *Driver) initialize(
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState
-		if state == nil || len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 || state.SessionID == "" {
+		if state == nil || state.SessionID == "" {
+			// The host never got as far as a session: its first handshake was cut
+			// short, as by a daemon stopped mid-start. It holds no conversation.
+			conv.discard()
+			return nil, acpsdk.InitializeResponse{}, nil, errHostNeverStarted
+		}
+		if len(state.InitializeResult) == 0 || len(state.SessionResult) == 0 {
 			conv.discard()
 			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf(
 				"%w: persistent ACP host has incomplete reconnect state", ports.ErrChatRecoveryInconclusive)
