@@ -405,6 +405,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		[conversation.snapshot, session],
 	);
 	const startupShown = startupVisible(startupView, conversation.snapshot);
+	// The agent coming up is not a conversation event, so over the direct link
+	// nothing tells the screen. With an opening brief the turn's own events cover
+	// it; a promptless start stayed on "Connecting to the agent…". Re-read the
+	// conversation once provisioning settles.
+	const provisionState = "projectName" in session ? undefined : session.provisionState;
+	const previousProvisionState = useRef(provisionState);
+	useEffect(() => {
+		const before = previousProvisionState.current;
+		previousProvisionState.current = provisionState;
+		if (before === "provisioning" && provisionState !== "provisioning") void refreshConversation();
+	}, [provisionState, refreshConversation]);
 	const retryStart = useCallback(() => void resume(), [resume]);
 	const timelineStartup = useMemo<TimelineStartup | undefined>(
 		() => (startupView ? { view: startupView, visible: startupShown, onRetry: retryStart, retrying: resuming } : undefined),
