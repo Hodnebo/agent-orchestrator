@@ -307,7 +307,7 @@ describe("SessionChatSurface pending switch effort", () => {
 			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
 		});
 		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
-		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} shellTarget={{ kind: "shell", handleId: "shell-1" }} /></Wrapper>);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} shellTarget={{ kind: "shell", handleId: "shell-1", generation: "generation-1", title: "Shell" }} /></Wrapper>);
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});

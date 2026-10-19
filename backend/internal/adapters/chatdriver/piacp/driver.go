@@ -156,7 +156,7 @@ func recordedModelError(agentDir, sessionID string) string {
 	if err != nil {
 		return ""
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	const tail = 256 << 10
 	if info, err := file.Stat(); err == nil && info.Size() > tail {
 		_, _ = file.Seek(info.Size()-tail, io.SeekStart)
