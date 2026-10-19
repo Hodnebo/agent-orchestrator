@@ -187,13 +187,15 @@ describe("useFilesReviewSelection", () => {
 	});
 
 	it("keeps a picked branch a capped list leaves out, until its history says it is gone", async () => {
+		const onBranchChange = vi.fn();
 		respond({ branchList: { ...branches, truncated: true } });
 		useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "old-branch" }, changes: null });
-		const { result } = renderSelection(manifest());
+		const { result } = renderSelection(manifest(), { onBranchChange });
 
 		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
 		await waitFor(() => expect(requests("/workspace/history").some((call) => call[1]?.params?.query?.branch === "old-branch")).toBe(true));
 		expect(result.current.notice).toBe("");
+		expect(onBranchChange).not.toHaveBeenCalled();
 		expect(useUiStore.getState().inspectorSessions[SESSION]?.filesSelection?.branch).toEqual({ kind: "branch", name: "old-branch" });
 		expect(result.current.changesMenu.mode).toBe("view");
 
@@ -207,6 +209,7 @@ describe("useFilesReviewSelection", () => {
 		act(() => useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "gone" }, changes: null }));
 		await waitFor(() => expect(result.current.notice).toBe("gone is no longer available; showing the checked-out branch."));
 		expect(useUiStore.getState().inspectorSessions[SESSION]?.filesSelection).toBeUndefined();
+		expect(onBranchChange).toHaveBeenCalledTimes(1);
 	});
 
 	it("falls back to the checked-out branch with a notice when the picked branch leaves the list", async () => {

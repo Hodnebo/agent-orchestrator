@@ -74,6 +74,7 @@ func TestListWorkspaceBranchesPutsCheckedOutFirstThenNewest(t *testing.T) {
 
 func TestListWorkspaceBranchesCapsAt200KeepingCheckedOut(t *testing.T) {
 	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/acme/repo.git")
 	runGit(t, repo, "branch", "-M", "main")
 	names := []string{"session"}
 	for i := 0; i < maxWorkspaceBranches+5; i++ {
@@ -113,6 +114,7 @@ func TestListWorkspaceBranchesCapsAt200KeepingCheckedOut(t *testing.T) {
 
 func TestListWorkspaceBranchesAnnotatesLocalPRAndAddsNonLocalPR(t *testing.T) {
 	repo := newWorkspaceRepo(t)
+	runGit(t, repo, "remote", "add", "origin", "https://github.com/acme/repo.git")
 	runGit(t, repo, "branch", "-M", "main")
 	importBranches(t, repo, gitHead(t, repo), 1600000000, "session", "feature")
 	runGit(t, repo, "switch", "session")
@@ -273,5 +275,36 @@ func TestListWorkspaceBranchesForWorkspaceProjectListsCheckedOutAndPRs(t *testin
 		if row := branches.Branches[i]; row.Kind != WorkspaceBranchPullRequest || row.PRNumber == 0 {
 			t.Fatalf("row %d = %+v, want a PR row", i, row)
 		}
+	}
+}
+
+func TestListWorkspaceBranchesDoesNotFoldOtherRepositoriesWithIdenticalTips(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		origin string
+		prURL  string
+	}{
+		{"fork", "https://github.com/acme/repo.git", "https://github.com/someone/repo/pull/1"},
+		{"child repository", "https://github.com/acme/repo.git", "https://github.com/acme/child/pull/1"},
+		{"unknown origin", "", "https://github.com/acme/repo/pull/1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newWorkspaceRepo(t)
+			runGit(t, repo, "branch", "-M", "main")
+			if tc.origin != "" {
+				runGit(t, repo, "remote", "add", "origin", tc.origin)
+			}
+			pr := readablePR(1, "main", gitHead(t, repo), time.Now())
+			pr.URL = tc.prURL
+			svc := branchViewService(repo)
+			svc.store.(*fakeStore).prs["ao-1"] = []domain.PullRequest{pr}
+			branches, err := svc.ListWorkspaceBranches(context.Background(), "ao-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(branches.Branches) != 2 || branches.Branches[0].PRNumber != 0 || branches.Branches[1].Kind != WorkspaceBranchPullRequest || branches.Branches[1].PRURL != pr.URL {
+				t.Fatalf("rows = %+v, want separate local and PR rows", branches.Branches)
+			}
+		})
 	}
 }

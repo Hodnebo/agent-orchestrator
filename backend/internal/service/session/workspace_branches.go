@@ -125,6 +125,10 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 // shares the branch name never matches, so it keeps a row of its own.
 func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch, locals []WorkspaceBranch, prs []domain.PullRequest) map[string]bool {
 	owners := map[string]bool{}
+	if len(prs) == 0 {
+		return owners
+	}
+	remotes := gitRemoteURLs(ctx, root)
 	tips := make(map[string]string, len(locals)+1)
 	for _, row := range locals {
 		if row.Kind != WorkspaceBranchLocal {
@@ -137,6 +141,11 @@ func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch
 	}
 	var pending []domain.PullRequest
 	for _, pr := range prs {
+		// Equal commits can exist in unrelated repositories and forks. Only
+		// the workspace repository's PRs can own one of its local branches.
+		if requireSameRepo(pr.URL, remotes["origin"]) != nil {
+			continue
+		}
 		tip, ok := tips[pr.SourceBranch]
 		switch {
 		case !ok || pr.SourceBranch == "":
@@ -149,7 +158,6 @@ func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch
 	if len(pending) == 0 {
 		return owners
 	}
-	remotes := gitRemoteURLs(ctx, root)
 	var patterns []string
 	for _, pr := range pending {
 		for name, url := range remotes {
