@@ -1,76 +1,94 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useState, useSyncExternalStore } from "react";
+import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
+type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean };
+const mutationKey = ["stay-awake-toggle"] as const;
 
-/**
- * One on/off Stay Awake for the sidebar button and the Connect Mobile switch.
- *
- * "On" is an indefinite AO-scope awake session. Turning it off also clears the
- * older mobile-only keep-awake flag when the cached mobile status shows it set,
- * so a flag saved before the two were joined cannot keep the Mac awake with no
- * switch left to turn it off.
- */
+/** The desktop and mobile controls share intent, pending state, and ownership. */
 export function useStayAwake(enabled = true) {
 	const cache = useQueryClient();
 	const awake = useAwake(enabled);
-	const [intent, setIntent] = useState<boolean | null>(null);
-	const [failure, setFailure] = useState<string | null>(null);
-	const sessions = awake.state?.sessions?.filter((s) => !s.endedAt && s.scope === "ao") ?? [];
-	// Watch the mobile status the Connect Mobile page keeps fresh. A cache
-	// subscription, not a second observer, so this never fetches or steers that query.
-	const legacyOn = useSyncExternalStore(
-		(notify) => cache.getQueryCache().subscribe(notify),
-		() => cache.getQueryData<MobileStatus>(mobileStatusQueryKey)?.keepAwake?.enabled ?? false,
-	);
-	const on = intent ?? (sessions.length > 0 || legacyOn);
-	const set = async (next: boolean) => {
-		setIntent(next);
-		setFailure(null);
-		try {
-			if (next) {
-				if (sessions.length === 0) {
-					const start = () =>
-						awake.actAsync({
-							kind: "start",
-							request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: awake.state?.settings.lidClosed ?? true },
-						});
-					// A battery or heat stop blocks new sessions until it is resumed. Turning
-					// the switch on is the user's request to resume, so do that and retry;
-					// resume still refuses while the battery or heat limit is still breached.
-					if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
-					try {
-						await start();
-					} catch (e) {
-						if (!(e instanceof Error) || !e.message.includes("safety stop")) throw e;
-						await awake.actAsync({ kind: "resume" });
-						await start();
-					}
+	const mobile = useQuery({
+		queryKey: mobileStatusQueryKey,
+		enabled,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/mobile/status", { signal });
+			if (error) throw new Error(apiErrorMessage(error));
+			if (!data) throw new Error("Mobile status is unavailable");
+			return data;
+		},
+		refetchInterval: enabled ? () => cache.isMutating({ mutationKey }) > 0 ? false : 5_000 : false,
+		retry: false,
+	});
+	const sessions = awake.state?.sessions?.filter((s) => !s.endedAt) ?? [];
+	const rules = awake.state?.paused ? [] : awake.state?.rules?.filter((r) => r.enabled && !r.suppressed) ?? [];
+	const desktopOn = sessions.length > 0 || rules.length > 0 || !!awake.state?.active;
+	const desktopLid = sessions.some((s) => s.lidClosed) || rules.some((r) => r.lidClosed) || !!awake.state?.lidActive;
+	const pending = useMutationState<Change>({
+		filters: { mutationKey, status: "pending" },
+		select: (m) => m.state.variables as Change,
+	});
+	const intent = pending.at(-1);
+	const busy = useIsMutating({ mutationKey }) > 0 || awake.busy;
+	const mutation = useMutation({
+		mutationKey,
+		mutationFn: async (change: Change) => {
+			// Cancel an older status read before writing the authoritative response.
+			await cache.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const updateMobile = async (on: boolean, lidClosed: boolean) => {
+				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: on, lidClosed } });
+				if (error) throw new Error(apiErrorMessage(error));
+				if (!data) throw new Error("Mobile status is unavailable");
+				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
+			};
+			const start = () => awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
+			const ensureDesktop = async () => {
+				if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
+				if (sessions.length > 0) return;
+				try {
+					await start();
+				} catch (e) {
+					if (!(e instanceof Error) || !e.message.includes("safety stop")) throw e;
+					await awake.actAsync({ kind: "resume" });
+					await start();
 				}
+			};
+			if (!change.on) {
+				// Stop all scopes and pause automatic rules, including pre-upgrade owners.
+				// Attempt both releases even if one backend fails.
+				const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(false, false)]);
+				for (const result of results) if (result.status === "rejected") throw result.reason;
+			} else if (change.lidClosed === false) {
+				if (desktopLid) {
+					// Retire legacy desktop lid owners and replace them with idle-only wake.
+					const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(true, false)]);
+					for (const result of results) if (result.status === "rejected") throw result.reason;
+					await start();
+				} else await updateMobile(true, false);
 			} else {
-				for (const source of sessions) await awake.actAsync({ kind: "end", id: source.id });
-				if (legacyOn) {
-					const { error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: false, lidClosed: false } });
-					if (error) throw new Error(apiErrorMessage(error));
-					await cache.invalidateQueries({ queryKey: mobileStatusQueryKey });
-				}
+				await ensureDesktop();
+				// Main toggle is idle-only. Closed-lid wake requires the explicit option.
+				if (change.lidClosed === true || change.rememberMobile) await updateMobile(true, change.lidClosed === true);
 			}
-		} catch (e) {
-			setFailure(e instanceof Error ? e.message : String(e));
-		} finally {
-			setIntent(null);
-		}
+		},
+	});
+	const change = (next: Change) => {
+		// The cache guard also covers two calls before React renders the disabled UI.
+		if (cache.isMutating({ mutationKey }) > 0 || awake.busy) return;
+		mutation.mutate(next);
 	};
 	return {
-		on,
-		set,
-		busy: awake.busy,
-		error: failure,
-		supported: awakeCapability(awake.state, "idle")?.available ?? false,
-		starting: on && !awake.state?.active,
+		on: intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled),
+		lidOn: intent ? intent.on && (intent.lidClosed ?? false) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed),
+		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
+		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
+		busy,
+		error: mutation.error instanceof Error ? mutation.error.message : null,
+		supported: (awakeCapability(awake.state, "idle")?.available ?? false) && (!!mobile.data || desktopOn),
+		starting: (intent?.on ?? desktopOn) && !awake.state?.active,
 	};
 }

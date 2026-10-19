@@ -423,30 +423,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
 	const stayAwake = useStayAwake(active);
 
-	const setKeepAwake = useMutation({
-		mutationFn: async (keepAwake: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		// Flip the cached status up front so the switch never falls back to the
-		// old value between the POST finishing and the refetch landing.
-		onMutate: async (keepAwake) => {
-			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
-			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous?.keepAwake) {
-				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
-					...previous,
-					keepAwake: { ...previous.keepAwake, enabled: keepAwake, lidClosed: false, lidActive: false },
-				});
-			}
-			return { previous };
-		},
-		onError: (_error, _keepAwake, context) => {
-			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
-		},
-		onSettled: invalidate,
-	});
 
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
@@ -492,16 +468,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
-	const setLidAwake = useMutation({
-		mutationFn: async (lidClosed: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
-				body: { enabled: lidClosed || (status?.keepAwake?.enabled ?? false), lidClosed },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSettled: invalidate,
-	});
 
 	const busy =
 		enable.isPending ||
@@ -509,9 +475,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending ||
-		stayAwake.busy ||
-		setLidAwake.isPending;
+		stayAwake.busy;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -519,8 +483,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
-		setKeepAwake.reset();
-		setLidAwake.reset();
 	};
 
 	const copyPassword = async () => {
@@ -556,9 +518,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
-		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
 		stayAwake.error ||
-		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
 		null;
 
 	const turnOff = () => {
@@ -803,20 +763,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on }}
-					disabled={busy}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						// On: remember the mobile choice and start the shared session. Off:
-						// the shared switch ends the session and clears the mobile flag.
-						if (next) {
-							setKeepAwake.mutate(true);
-							void stayAwake.set(true);
-						} else void stayAwake.set(false);
+						stayAwake.set(next, true);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
-						setLidAwake.mutate(next);
+						stayAwake.setLid(next);
 					}}
 				/>
 			)}

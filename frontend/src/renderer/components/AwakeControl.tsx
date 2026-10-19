@@ -22,7 +22,7 @@ function MacAwakeControl({ className }: { className?: string }) {
 				aria-label={title}
 				aria-pressed={stay.on}
 				aria-busy={stay.starting || undefined}
-				disabled={!stay.supported}
+				disabled={!stay.supported || stay.busy}
 				data-testid="awake-button"
 				onClick={() => void stay.set(!stay.on)}
 				className={cn(
@@ -34,7 +34,7 @@ function MacAwakeControl({ className }: { className?: string }) {
 					className,
 				)}
 			>
-				<NavRowHighlight disabled={!stay.supported || stay.on} />
+				<NavRowHighlight disabled={!stay.supported || stay.busy || stay.on} />
 				<span className="relative z-[1] grid place-items-center">
 					<Coffee aria-hidden="true" />
 				</span>
