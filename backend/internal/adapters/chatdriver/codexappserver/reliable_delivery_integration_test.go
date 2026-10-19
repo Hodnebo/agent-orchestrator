@@ -241,13 +241,12 @@ func TestReliableCodexReplayCommitsExactlyOnceAcrossAttachments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reattach: %v", err)
 			}
-			// Session Manager calls this existing hook after restoring a controller.
-			// A committed completion may replay as a deduplicated event with no
-			// lifecycle transition left to trigger the normal queue drain.
-			if err := secondService.DrainQueued(ctx, sessionID); err != nil {
-				t.Fatalf("startup queue drain: %v", err)
-			}
-			awaitReliableReplay(ctx, t, "original and queued followup completed", func() bool {
+			// Reconnect itself must recover already accepted intake, including a
+			// terminal COMMIT whose lost ACK bypassed the old controller's drain.
+			// Calling DrainQueued here would conceal that failure.
+			recoveryCtx, stopRecovery := context.WithTimeout(ctx, 5*time.Second)
+			defer stopRecovery()
+			awaitReliableReplay(recoveryCtx, t, "original and queued followup automatically completed after reconnect", func() bool {
 				original, _ := st.TurnByID(ctx, turn.ID)
 				queued, _ := st.TurnByID(ctx, followup.ID)
 				return original.State == domain.TurnStateCompleted && queued.State == domain.TurnStateCompleted && second.State() == ports.ChatControllerReady

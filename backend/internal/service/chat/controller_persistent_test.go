@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -211,6 +212,288 @@ func TestPersistentCompletionIsAcknowledgedBeforeQueuedTurnDispatch(t *testing.T
 	}
 }
 
+type completionReconnectConversation struct {
+	*receiptConversation
+	suppressCompletion bool
+}
+
+func (*completionReconnectConversation) ReconnectedLive() bool { return true }
+
+func (c *completionReconnectConversation) ActivateLiveReconnect(ctx context.Context, _ string, _ func([]ports.ChatEvent) []ports.ChatEvent) error {
+	if c.suppressCompletion {
+		// ACP may acknowledge an already committed result during admission and
+		// suppress its semantic replay; the durable queue must still recover.
+		return c.AcknowledgeProviderEvent(ctx, "original-completion")
+	}
+	return nil
+}
+
+func TestPersistentCommittedCompletionReplayResumesQueuedWorkAfterLostACK(t *testing.T) {
+	for _, suppressCompletion := range []bool{false, true} {
+		name := "completion replayed"
+		if suppressCompletion {
+			name = "completion acknowledged during activation without replay"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			var h *harness
+			var original, queued domain.ConversationTurn
+			committedBeforeLostACK := make(chan error, 1)
+			first := &receiptConversation{
+				terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+				ack: func(id string) error {
+					if id != "original-completion" {
+						return nil
+					}
+					completed, err := h.st.TurnByID(ctx, original.ID)
+					if err == nil && completed.State != domain.TurnStateCompleted {
+						err = fmt.Errorf("original is %s before failed ACK", completed.State)
+					}
+					waiting, queueErr := h.st.TurnByID(ctx, queued.ID)
+					if err == nil {
+						err = queueErr
+					}
+					if err == nil && waiting.State != domain.TurnStateQueued {
+						err = fmt.Errorf("followup is %s before failed ACK", waiting.State)
+					}
+					committedBeforeLostACK <- err
+					return fmt.Errorf("receipt write lost after database COMMIT: %w", ports.ErrChatRecoveryInconclusive)
+				},
+			}
+			h = newHarnessWithConversation(t, first)
+			var err error
+			original, err = h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "original prompt", ClientMessageID: "original-client"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.emit(
+				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: original.ProviderTurnID, ProviderEventID: "original-start"},
+				ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: original.ProviderTurnID, ProviderItemID: "original-answer", ProviderEventID: "original-output", Text: "original answer"},
+			)
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+			queued, err = h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "queued followup", ClientMessageID: "queued-client"})
+			if err != nil || queued.State != domain.TurnStateQueued {
+				t.Fatalf("followup must already be durable and queued: %+v, %v", queued, err)
+			}
+			completion := ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+				ProviderConversationID: first.ProviderConversationID(), ProviderTurnID: original.ProviderTurnID,
+				ProviderEventID: "original-completion", TurnState: domain.TurnStateCompleted}
+			first.emit(completion)
+			select {
+			case err := <-committedBeforeLostACK:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("original completion did not COMMIT before the injected ACK failure")
+			}
+			stopped := make(chan struct{})
+			go func() { h.ctrl.Wait(); close(stopped) }()
+			select {
+			case <-stopped:
+			case <-time.After(3 * time.Second):
+				t.Fatal("failed ACK did not detach the original controller")
+			}
+			if first.sendCallCount() != 1 || first.terminated.Load() {
+				t.Fatal("failed ACK dispatched the queued followup or destroyed the provider")
+			}
+			replayAcknowledged := make(chan struct{}, 1)
+			second := &completionReconnectConversation{receiptConversation: &receiptConversation{
+				terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()},
+				ack: func(id string) error {
+					if id == "original-completion" {
+						select {
+						case replayAcknowledged <- struct{}{}:
+						default:
+						}
+					}
+					return nil
+				},
+			}, suppressCompletion: suppressCompletion}
+			second.turnSeq = 1 // The provider survived; its next accepted turn is still #2.
+			second.onSend = func(id string) {
+				second.emit(
+					ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id, ProviderEventID: "followup-start"},
+					ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: id, ProviderItemID: "followup-answer", ProviderEventID: "followup-output", Text: "followup answer"},
+					ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: id, ProviderEventID: "followup-completion", TurnState: domain.TurnStateCompleted},
+				)
+			}
+			var ids atomic.Int64
+			replacement := chatsvc.New(chatsvc.Options{
+				Store: h.st, Sessions: h.st, Reader: fullSnapshotReader(h.st), Activity: h.activity,
+				Drivers: fakeRegistry{driver: fakeDriver{conv: second}}, Log: slog.New(slog.DiscardHandler),
+				NewID: func() string { return fmt.Sprintf("ack-reconnect-%d", ids.Add(1)) }, Now: h.now,
+			})
+			t.Cleanup(func() { replacement.StopAll(ctx) })
+			controller, err := replacement.Start(ctx, chatsvc.StartConfig{
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+				WorkspacePath: t.TempDir(), ProviderConversationID: first.ProviderConversationID(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// No explicit DrainQueued call: a successful replacement controller must
+			// finish the acknowledged completion's pending effects itself. A duplicate
+			// delivery must also leave the newly dispatched successor's ownership intact.
+			if !suppressCompletion {
+				second.emit(completion, completion)
+			}
+			select {
+			case <-replayAcknowledged:
+			case <-time.After(3 * time.Second):
+				t.Fatal("replacement did not acknowledge the deduplicated completion")
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				done, doneErr := h.st.TurnByID(ctx, queued.ID)
+				if doneErr == nil && done.State == domain.TurnStateCompleted && controller.State() == ports.ChatControllerReady {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			finished, err := h.st.TurnByID(ctx, queued.ID)
+			if err != nil || finished.State != domain.TurnStateCompleted || controller.State() != ports.ChatControllerReady {
+				t.Fatalf("committed completion was acknowledged on reconnect, but queued work did not resume: queued=%+v state=%s sends=%v err=%v", finished, controller.State(), second.sentTexts(), err)
+			}
+			if second.sendCallCount() != 1 || len(second.sentTexts()) != 1 || second.sentTexts()[0] != "queued followup" {
+				t.Fatalf("followup did not dispatch exactly once after reconnect: calls=%d sends=%v", second.sendCallCount(), second.sentTexts())
+			}
+			rows, err := h.st.LoadConversationSnapshot(ctx, controller.ConversationID())
+			if err != nil || len(rows.Turns) != 2 || len(rows.Messages) != 4 {
+				t.Fatalf("replay lost or duplicated original facts: turns=%+v messages=%+v err=%v", rows.Turns, rows.Messages, err)
+			}
+			archive, err := h.st.ProviderEventsSince(ctx, controller.ConversationID(), 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			completions := make(map[string]int)
+			for _, event := range archive {
+				if event.Method != string(ports.ChatEventTurnCompleted) {
+					continue
+				}
+				var payload struct {
+					ProviderTurnID string `json:"providerTurnId"`
+				}
+				if err := json.Unmarshal([]byte(event.PayloadJson), &payload); err != nil {
+					t.Fatal(err)
+				}
+				completions[payload.ProviderTurnID]++
+			}
+			if completions[original.ProviderTurnID] != 1 || completions[finished.ProviderTurnID] != 1 || len(completions) != 2 {
+				t.Fatalf("duplicate replay changed completion facts: %v", completions)
+			}
+
+		})
+	}
+}
+
+type failingPreparedConversation struct {
+	*deferredConversation
+	failText     string
+	reconnected  bool
+	prepareFails atomic.Int32
+	ack          func(string)
+}
+
+func (c *failingPreparedConversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	if msg.Text == c.failText {
+		c.prepareFails.Add(1)
+		return ports.ChatTurnRef{}, errors.New("local deferred preparation failed")
+	}
+	return c.fakeConversation.SendTurn(ctx, msg)
+}
+
+func (*failingPreparedConversation) PreservesProviderOnClose() bool { return true }
+func (c *failingPreparedConversation) ReconnectedLive() bool        { return c.reconnected }
+func (c *failingPreparedConversation) AcknowledgeProviderEvent(_ context.Context, id string) error {
+	if c.ack != nil {
+		c.ack(id)
+	}
+	return nil
+}
+
+func TestDeferredPrepareFailureHoldsQueueAfterReconnect(t *testing.T) {
+	ctx := context.Background()
+	deferred := &deferredConversation{fakeConversation: newFakeConversation()}
+	deferred.start = func(id string) error {
+		deferred.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id, ProviderEventID: "started-" + id})
+		return nil
+	}
+	first := &failingPreparedConversation{deferredConversation: deferred, failText: "older queued B"}
+	h := newHarnessWithConversation(t, first)
+	a, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Second)
+	b, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "older queued B"})
+	if err != nil || b.State != domain.TurnStateQueued {
+		t.Fatalf("queue B: %+v %v", b, err)
+	}
+	first.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: a.ProviderTurnID, ProviderEventID: "failed-A", TurnState: domain.TurnStateFailed})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["A"] == domain.TurnStateFailed && h.ctrl.State() == ports.ChatControllerReady
+	})
+	h.advance(time.Second)
+	c, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "manual C"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Second)
+	d, err := h.ctrl.Send(ctx, ports.ChatUserMessage{Text: "D stays queued"})
+	if err != nil || d.State != domain.TurnStateQueued {
+		t.Fatalf("queue D: %+v %v", d, err)
+	}
+	first.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: c.ProviderTurnID, ProviderEventID: "completed-C", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		states := turnStateByText(t, s)
+		return states["manual C"] == domain.TurnStateCompleted && states["older queued B"] == domain.TurnStateFailed
+	})
+	latest, found, err := h.st.LatestPrimaryTurn(ctx, h.ctrl.ConversationID(), first.ProviderConversationID(), h.ctrl.Generation())
+	if err != nil || !found || first.prepareFails.Load() != 1 {
+		t.Fatalf("failed preparation facts: latest=%+v found=%v attempts=%d err=%v", latest, found, first.prepareFails.Load(), err)
+	}
+	h.svc.StopAll(ctx)
+	barrier := make(chan struct{}, 1)
+	resumedDeferred := &deferredConversation{fakeConversation: newFakeConversation()}
+	resumedDeferred.turnSeq = 2 // Only A and C reached the provider's prepared-turn boundary.
+	resumedDeferred.start = func(id string) error {
+		resumedDeferred.emit(
+			ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id, ProviderEventID: "resumed-start"},
+			ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: id, ProviderEventID: "resumed-completion", TurnState: domain.TurnStateCompleted},
+		)
+		return nil
+	}
+	second := &failingPreparedConversation{deferredConversation: resumedDeferred, reconnected: true, ack: func(id string) {
+		if id == "startup-barrier" {
+			barrier <- struct{}{}
+		}
+	}}
+	var ids atomic.Int64
+	replacement := chatsvc.New(chatsvc.Options{
+		Store: h.st, Sessions: h.st, Reader: fullSnapshotReader(h.st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: second}}, Log: slog.New(slog.DiscardHandler),
+		NewID: func() string { return fmt.Sprintf("prepare-reconnect-%d", ids.Add(1)) }, Now: h.now,
+	})
+	t.Cleanup(func() { replacement.StopAll(ctx) })
+	controller, err := replacement.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), ProviderConversationID: first.ProviderConversationID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The projector processes this receipt only after startup recovery finishes.
+	second.emit(ports.ChatEvent{Kind: ports.ChatEventDeliveryReceipt, ProviderEventID: "startup-barrier"})
+	select {
+	case <-barrier:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement did not finish startup recovery")
+	}
+	queued, err := h.st.TurnByID(ctx, d.ID)
+	if err != nil || latest.ID != b.ID || latest.State != domain.TurnStateFailed || latest.ProviderTurnID != "" || queued.State != domain.TurnStateQueued || second.sendCallCount() != 0 || controller.State() != ports.ChatControllerReady {
+		t.Fatalf("deferred prepare failure lost dispatch order and released D: latest=%+v D=%+v sends=%v state=%s err=%v", latest, queued, second.sentTexts(), controller.State(), err)
+	}
+}
+
 func TestProviderPreservationReportRequiresLiveController(t *testing.T) {
 	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
 	h := newHarnessWithConversation(t, provider)
@@ -319,13 +602,13 @@ func TestPersistentSourceReceiptFollowsAllDerivedProjections(t *testing.T) {
 		t.Fatal("frame without semantic events was not acknowledged")
 	}
 	archived, err := h.st.ProviderEventsSince(ctx, h.ctrl.ConversationID(), 0, 10)
-	if err != nil || len(archived) != 4 {
-		t.Fatalf("replayed frame archives = %+v, %v; want start, two output events and one receipt", archived, err)
+	if err != nil || len(archived) != 5 || archived[0].Method != "turn.dispatching" {
+		t.Fatalf("replayed frame archives = %+v, %v; want dispatch, start, two output events and one receipt", archived, err)
 	}
 	var record struct {
 		ProviderEventID string `json:"providerEventId"`
 	}
-	if err := json.Unmarshal([]byte(archived[2].PayloadJson), &record); err != nil || record.ProviderEventID != "source-frame:1" {
+	if err := json.Unmarshal([]byte(archived[3].PayloadJson), &record); err != nil || record.ProviderEventID != "source-frame:1" {
 		t.Fatalf("archived final event = %q, %v", record.ProviderEventID, err)
 	}
 }

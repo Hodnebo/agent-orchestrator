@@ -83,6 +83,7 @@ type Store interface {
 	CleanupOwnedControllerWork(ctx context.Context, session domain.SessionID, conversationID, generation string, now time.Time) (bool, error)
 	CleanupOwnedReviewControllerWork(ctx context.Context, reviewID, conversationID, generation string, now time.Time) (bool, error)
 	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
+	LatestPrimaryTurn(ctx context.Context, conversationID, providerConversationID, generation string) (domain.ConversationTurn, bool, error)
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
 
@@ -557,6 +558,38 @@ func (c *Controller) start() {
 	if c.harness != domain.HarnessCodex {
 		go c.readRateLimits()
 	}
+}
+
+// reconcileLiveCompletion recovers effects lost after COMMIT, including when the
+// host received the ACK and has no completion left to replay.
+func (c *Controller) reconcileLiveCompletion(ctx context.Context) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	idle := func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.state == ports.ChatControllerReady && c.pendingTurnID == "" &&
+			!c.compactionPending && !c.explicitClose && c.handoff == controllerHandoffNone &&
+			c.interrupts == 0 && c.cancelQueuedAt.IsZero()
+	}
+	if !idle() {
+		return nil
+	}
+	turn, found, err := c.store.LatestPrimaryTurn(ctx, c.conversation.ID, c.conv.ProviderConversationID(), c.generation)
+	if err != nil || !found || turn.State != domain.TurnStateCompleted || turn.ProviderTurnID == "" {
+		return err
+	}
+	if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
+		return err
+	}
+	if !idle() { // Close can retire this controller while the database reads block.
+		return nil
+	}
+	c.afterProject(ctx, ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+	}, true)
+	return nil
 }
 
 type nativeHistoryHighWater struct {
@@ -1994,10 +2027,8 @@ func (c *Controller) dispatch(
 	// Move it out of the durable queue before crossing that boundary, or a live
 	// reconnect can drain the same prompt after the provider completes it. ACP's
 	// deferred start crosses the provider boundary only after binding succeeds.
-	if !hasDeferredStart {
-		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
-			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
-		}
+	if err := c.projectTurnDispatch(ctx, turnID, !hasDeferredStart); err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("record turn dispatch: %w", err)
 	}
 
 	c.mu.Lock()
@@ -2928,6 +2959,17 @@ func (c *Controller) project() {
 	// controller, and must keep persisting until the provider stream ends.
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
+	if live, ok := c.conv.(ports.ChatLiveReconnector); ok && live.ReconnectedLive() {
+		if err := c.reconcileLiveCompletion(ctx); err != nil {
+			c.log.Error("failed to reconcile committed chat completion", "session", c.sessionID, "error", err)
+			c.mu.Lock()
+			c.preserveProviderOnStop = true
+			c.state = ports.ChatControllerStopped
+			c.mu.Unlock()
+			c.once.Do(func() { c.closeErr = c.conv.Close() })
+			return
+		}
+	}
 
 	for event := range c.conv.Events() {
 		if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
@@ -3100,19 +3142,42 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	if err != nil {
 		return false, false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
-	var projected bool
-	if c.reviewID != "" {
-		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
-	} else {
-		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
-	}
+	projected, err := c.projectProviderRecord(ctx, event.ProviderEventID, string(event.Kind), string(payload),
+		func(txCtx context.Context) error { return c.apply(txCtx, event) })
 	if err != nil || !projected {
 		return projected, false, err
 	}
 	return true, c.applyCommittedTurnLifecycle(event), nil
+}
+
+// Dispatch and provider lifecycle records share one durable order, even when a
+// reordered queued prompt fails before the provider returns its turn ID.
+func (c *Controller) projectTurnDispatch(ctx context.Context, turnID string, markStarted bool) error {
+	payload, err := json.Marshal(map[string]string{
+		"turnId": turnID, "providerConversationId": c.conv.ProviderConversationID(),
+	})
+	if err != nil {
+		return err
+	}
+	projected, err := c.projectProviderRecord(ctx, "", "turn.dispatching", string(payload), func(txCtx context.Context) error {
+		if markStarted {
+			return c.store.MarkTurnDispatching(txCtx, turnID)
+		}
+		return nil // Deferred providers have not sent the prepared prompt yet.
+	})
+	if err == nil && !projected {
+		return domain.ErrChatControllerFenced
+	}
+	return err
+}
+
+func (c *Controller) projectProviderRecord(ctx context.Context, id, method, payload string, project func(context.Context) error) (bool, error) {
+	if c.reviewID != "" {
+		return c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, id, method, payload, c.now(), project)
+	}
+	return c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+		c.generation, id, method, payload, c.now(), project)
 }
 
 // applyCommittedTurnLifecycle updates the controller's volatile ownership only

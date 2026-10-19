@@ -1106,6 +1106,21 @@ func (s *Store) LatestConversationTurn(ctx context.Context, conversationID strin
 	return turnToDomain(row), nil
 }
 
+// LatestPrimaryTurn reads the owning controller's latest dispatched root work.
+// Newer unsuccessful work is returned so recovery cannot skip it to drain a queue.
+func (s *Store) LatestPrimaryTurn(ctx context.Context, conversationID, providerConversationID, generation string) (domain.ConversationTurn, bool, error) {
+	row, err := s.conversationReader(ctx).SelectLatestPrimaryConversationTurn(ctx, gen.SelectLatestPrimaryConversationTurnParams{
+		ConversationID: conversationID, ProviderConversationID: providerConversationID, Generation: generation,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, false, nil
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, false, fmt.Errorf("select latest primary conversation turn: %w", err)
+	}
+	return turnToDomain(row), true, nil
+}
+
 // LatestVisibleUserTurnSettled checks the current branch's latest user prompt
 // without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
