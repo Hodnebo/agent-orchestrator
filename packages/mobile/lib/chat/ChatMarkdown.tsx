@@ -228,7 +228,7 @@ const makeStyles = (t: Theme) =>
 		strong: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 		em: { fontStyle: "italic" },
 		strike: { textDecorationLine: "line-through" },
-		link: { color: t.accent, textDecorationLine: "underline" },
+		link: { color: t.highlight, textDecorationLine: "underline" },
 		inlineCode: { color: t.accent, fontFamily: t.fontMono, fontSize: type.subheadline.fontSize, backgroundColor: t.bgSubtle },
 		selectionCode: { color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: 20, backgroundColor: t.bgSubtle },
 		list: { gap: space.xxs },

@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
  *
@@ -299,20 +300,23 @@ function TwoRowTimelineMarker({
 	tone = "text-muted-foreground/70",
 	detailTone = "text-muted-foreground/70",
 	action,
+	wrapDetail = false,
 }: {
 	message: string;
 	detail?: string;
 	tone?: string;
 	detailTone?: string;
 	action?: ReactNode;
+	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
+	wrapDetail?: boolean;
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-2 text-xs", tone)}>
+			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs", wrapDetail && "flex-wrap", tone)}>
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
-						className={cn("min-w-0 truncate", detailTone)}
+						className={cn("min-w-0", wrapDetail ? "text-pretty" : "truncate", detailTone)}
 						title={detail}
 					>
 						{detail}
@@ -1140,6 +1144,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
+	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2474,6 +2479,14 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			) : null}
 		</div>
 	);
+}
+
+/** Where an account switch stopped the turn: not a failure, the conversation
+ * continues on the new account with the next message. */
+function AccountSwitchedRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
 }
 
 function ReauthRow({ activity }: { activity: ConversationActivity }) {
