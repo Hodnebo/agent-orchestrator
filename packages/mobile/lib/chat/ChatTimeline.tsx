@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { authHeaders, httpBase } from "../config";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
@@ -1137,7 +1138,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
 	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	statusRow: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+	// Full width with a rule under it, matching the desktop's Working / Worked
+	// rows and the setup checklist header, so the line holds through the handoff.
+	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
