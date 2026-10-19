@@ -1074,13 +1074,47 @@ describe("TerminalCacheProvider", () => {
 			expect(activeXterm()).toBe(terminalA);
 			expect(xtermUnmounts.value).toBe(0);
 
-			// Once parked, a snapshot without it still disposes it.
+			// Leaving it disposes it, though no later snapshot arrives: parked,
+			// it would outlive its session until one did.
 			view.show(sessionB);
 			await waitFor(() => expect(activeXterm()).not.toBe(terminalA));
-			act(() => {
-				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionB]));
-			});
 			await waitFor(() => expect(terminalA.isConnected).toBe(false));
+			expect(xtermUnmounts.value).toBe(1);
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("disposes a terminal opened before the snapshot lists its session when it leaves the screen", async () => {
+		// No snapshot arrives while it is on screen or after: leaving must not
+		// park it for good.
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionB] });
+		try {
+			const terminalA = await waitFor(() => activeXterm());
+			view.show(sessionB);
+			await waitFor(() => expect(activeXterm()).not.toBe(terminalA));
+			await waitFor(() => expect(terminalA.isConnected).toBe(false));
+			expect(xtermUnmounts.value).toBe(1);
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("parks a terminal opened before the snapshot listed its session once a snapshot lists it", async () => {
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionB] });
+		try {
+			const terminalA = await waitFor(() => activeXterm());
+			act(() => {
+				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+			});
+			await act(async () => {});
+			view.show(sessionB);
+			await waitFor(() => expect(activeXterm()).not.toBe(terminalA));
+			expect(terminalA.isConnected).toBe(true);
+			expect(xtermUnmounts.value).toBe(0);
+
+			view.show(sessionA);
+			await waitFor(() => expect(activeXterm()).toBe(terminalA));
 		} finally {
 			view.restore();
 		}
