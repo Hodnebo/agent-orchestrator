@@ -152,7 +152,7 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 	// Redacted before activity.Redact runs (in redact), which masks a quoted
 	// value only up to an escaped quote and would hide the rest of it.
 	event.Output, event.OutputTruncated = scriptOutputTail(redactor.redact(activity.StripControl(event.Output)), event.OutputTruncated)
-	event.Command = boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(event.Command), " "))))
+	event.Command = boundScriptCommand(redactor.redactCommand(event.Command))
 	event.Repository = activity.Truncate(event.Repository, 256)
 	event.Dir = activity.Truncate(event.Dir, 1024)
 	event.User = activity.Truncate(event.User, 128)
@@ -175,9 +175,16 @@ var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|
 // NAME: value pair, or of a JSON "name": member at any depth of escaping
 // (\"password\": inside a JSON string, \\\"password\\\": inside one more, as
 // an AWS Secrets Manager SecretString can be), whose name looks like a
-// secret's. Its groups are the name and the separator; the value after it is
-// read by secretValue.
-var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)\\*["']?(\s*[:=]\s*)`)
+// secret's, also with colour codes written out around the separator
+// (literalEscapes). Its groups are the name and the separator; the value
+// after it is read by secretValue.
+var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)` +
+	literalEscapes + `\\*["']?(` + literalEscapes + `\s*[:=]\s*` + literalEscapes + `)`)
+
+// literalEscapes matches terminal colour codes written out in a command
+// (printf '\033[32mPASSWORD\033[0m=x', \e[...m, \x1b[...m, \u001b[...m),
+// which separate a pair's name from its value in what it prints.
+const literalEscapes = `(?:\\(?:033|e|x1b|u001b)\[[0-9;]*[a-z])*`
 
 // secretFlagPattern matches a command-line flag whose name looks like a
 // secret's and its separating blanks (--password x); --password=x is a
@@ -385,14 +392,48 @@ func secretValue(text string, start int) (int, string) {
 }
 
 // bareWordEnd is the length of the bare value text starts with: up to a
-// blank. A separator or quote does not end it, as a secret may hold one
-// (PASSWORD=ab;cd, TOKEN=ab"cd); masking what follows it up to the blank
-// (the rest of a JSON member or a query string) is the lesser harm.
+// blank. A separator or quote inside it is part of it, as a secret may hold
+// one (PASSWORD=ab;cd, TOKEN=ab"cd), except where it plainly ends the value:
+// a ; or & before a blank, the end, or the next name=value (API_KEY=x;next=1,
+// ?token=x&page=2), and a quote before a blank, the end or a separator, which
+// closes a string the pair is written in (echo "API_KEY=x").
 func bareWordEnd(text string) int {
-	if end := strings.IndexAny(text, " \t\n\r"); end >= 0 {
-		return end
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case ' ', '\t', '\n', '\r':
+			return index
+		case ';', '&':
+			if index+1 == len(text) || isBlank(text[index+1]) || startsWithAssignment(text[index+1:]) {
+				return index
+			}
+		case '"', '\'':
+			if index+1 == len(text) || isBlank(text[index+1]) || strings.IndexByte(";,)]}&|<>", text[index+1]) >= 0 {
+				return index
+			}
+		}
 	}
 	return len(text)
+}
+
+func isBlank(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// startsWithAssignment reports whether text starts with name= (a letter or
+// underscore, then letters, digits, _, . or -).
+func startsWithAssignment(text string) bool {
+	for index := 0; index < len(text); index++ {
+		c := text[index]
+		switch {
+		case c == '_' || (c|0x20 >= 'a' && c|0x20 <= 'z'):
+		case index > 0 && ((c >= '0' && c <= '9') || c == '.' || c == '-'):
+		case index > 0 && c == '=':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // stringPrefixLength is the length of a Python string prefix (u, b, r, f,
@@ -462,6 +503,16 @@ func (r scriptRedactor) redact(text string) string {
 	for _, value := range r.values {
 		text = strings.ReplaceAll(text, value, redactedMarker)
 	}
+	// A printf's literal \n (in a command, or in a trace of it that set -x
+	// printed) is read as the line break it prints, so the line-based passes
+	// (a YAML block scalar, a Kubernetes Secret's data) read what it writes:
+	// as a carriage return and newline, which they take for a line's end, put
+	// back afterwards. Callers strip carriage returns first, so each one left
+	// is one of these.
+	expanded := strings.Contains(text, `\n`) && !strings.Contains(text, "\r")
+	if expanded {
+		text = strings.ReplaceAll(text, `\n`, "\r\n")
+	}
 	// Pairs first: activity.Redact masks a quoted value up to its first
 	// quote, which would cut an escaped JSON string (a SecretString) short.
 	text = redactSecretPairs(text)
@@ -472,7 +523,20 @@ func (r scriptRedactor) redact(text string) string {
 	for _, shape := range secretShapes {
 		text = shape.ReplaceAllString(text, "[REDACTED]")
 	}
-	return workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
+	text = workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
+	if expanded {
+		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", `\n`), "\r", `\n`)
+	}
+	return text
+}
+
+// redactCommand is a step's command as its events and summaries show it:
+// redacted, then on one line. It is redacted while it still has its lines, so
+// the line-based passes (a YAML block scalar, a Kubernetes Secret's data) read
+// a command that writes one (a printf's literal \n is read as a line break
+// too, see redact).
+func (r scriptRedactor) redactCommand(command string) string {
+	return strings.Join(strings.Fields(r.redact(activity.StripControl(command))), " ")
 }
 
 // scriptStepOutput turns a finished step's raw output tail into what an event
@@ -587,7 +651,7 @@ func collapseCarriageReturns(text string) string {
 // before it is cut to ScriptStepCommandLimit bytes, and its repository folder.
 func scriptStepCommand(stored string, redactor scriptRedactor) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	return boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(command), " ")))), repository
+	return boundScriptCommand(redactor.redactCommand(command)), repository
 }
 
 func boundScriptCommand(command string) string {
@@ -924,15 +988,17 @@ type setupStepEvents struct {
 	stopWatch func()
 }
 
-// redactor masks what a run publishes: the values of the secret-named
-// variables of the environment its steps run in and Secrets, then the
-// patterns.
-func (r SetupRunner) redactor() scriptRedactor {
+// redactor masks what a run of commands publishes: the values of the
+// secret-named variables of the environment its steps run in, the values its
+// commands assign to secret-named variables (assignedSecretValues: a step
+// that sets one prints it with nothing naming it, and later steps inherit it)
+// and Secrets, then the patterns.
+func (r SetupRunner) redactor(commands []string) scriptRedactor {
 	var secrets []string
 	if r.Secrets != nil {
 		secrets = r.Secrets()
 	}
-	return newScriptRedactor(os.Environ(), secrets)
+	return newScriptRedactor(os.Environ(), append(secrets, assignedSecretValues(commands)...))
 }
 
 func (r SetupRunner) startStepEvents(ctx context.Context, total int, redactor scriptRedactor) *setupStepEvents {

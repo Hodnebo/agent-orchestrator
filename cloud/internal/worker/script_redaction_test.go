@@ -22,6 +22,20 @@ type scriptLeakCase struct {
 }
 
 func scriptLeakCases() []scriptLeakCase {
+	return append(earlierLeakCases(), stagingLeakCases()...)
+}
+
+func stagingLeakCases() []scriptLeakCase {
+	var cases []scriptLeakCase
+	for index, step := range stagingRetestSteps()[:len(stagingRetestSecrets)] {
+		if secrets := stagingRetestSecrets[index]; len(secrets) > 0 {
+			cases = append(cases, scriptLeakCase{"staging case " + strconv.Itoa(index+1), step, secrets})
+		}
+	}
+	return cases
+}
+
+func earlierLeakCases() []scriptLeakCase {
 	privateKey := "-----BEGIN RSA PRIVATE KEY-----\n" +
 		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7Leak14BodyA\n" +
 		"VJTUt9Us8cKjMzEfYyjiWA4R4key=Leak14BodyB/M2bS1GB4t7NXp98C3SC6d==\n" +
@@ -110,6 +124,69 @@ func scriptLeakCases() []scriptLeakCase {
 		// Python strings.
 		{"python unicode string", `{'password': u'Leak65py', 'user': u'x'}`, []string{"Leak65py"}},
 		{"python bytes string", `{"api_key": b"Leak66py"}`, []string{"Leak66py"}},
+	}
+}
+
+// stagingRetestSteps are the Setup (and Cleanup) steps of the staging
+// re-test, verbatim: one per case, then all of them in one failing step.
+func stagingRetestSteps() []string {
+	steps := []string{
+		`echo '{"SecretString":"{\"password\":\"FAKEVAL1\"}"}'`,
+		`echo "docker login -p FAKEVAL2 registry.example.com || true"`,
+		`echo "mysql -pFAKEVAL3"`,
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
+		`echo "curl -u admin:FAKEVAL5 https://x"`,
+		`echo "https://ghp_FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`echo '["--token","FAKEVAL9"]'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`echo hf_FAKEVAL11aaaaaaaaaaaaaaaaaaaaaaaa`,
+		`echo "API_KEY=FAKEVAL12;next=1"`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`set -x; true --password FAKEVAL15`,
+		`echo "docker run -p 8080:80 nginx"`,
+	}
+	var combined []string
+	for _, step := range steps {
+		if !strings.HasPrefix(step, "set -x") {
+			combined = append(combined, step)
+		}
+	}
+	return append(steps, `echo "== summary step =="; `+strings.Join(combined, "; ")+`; set -x; true --password FAKEVAL15; echo "about to fail"; exit 3`)
+}
+
+// stagingRetestSecrets are what each staging re-test step must never publish.
+var stagingRetestSecrets = [][]string{
+	{"FAKEVAL1"}, {"FAKEVAL2"}, {"FAKEVAL3"}, {"FAKEVAL4"}, {"FAKEVAL5"}, {"FAKEVAL6"}, {"FAKEVAL7"}, {"RkFLRVZBTDg"},
+	{"FAKEVAL9"}, {"FAKEVAL10"}, {"FAKEVAL11"}, {"FAKEVAL12"}, {"FAKEVAL13"}, {"FAKEVAL14"}, {"FAKEVAL15"}, nil,
+}
+
+// The staging re-test end to end: its steps as a Setup and a Cleanup publish
+// none of their secrets on any path (each step's live and final command and
+// output, sanitized again by the control plane, the failed run's summary,
+// and Cleanup's steps with the failed step's repeated command line), and
+// still show what is not secret.
+func TestStagingRetestNeverPublishesASecret(t *testing.T) {
+	published := publishedByRuns(t, stagingRetestSteps())
+	for _, secrets := range stagingRetestSecrets {
+		for _, secret := range secrets {
+			if strings.Contains(published, secret) {
+				t.Errorf("%q published", secret)
+			}
+		}
+	}
+	for _, kept := range []string{
+		"sshpass -p [REDACTED] ssh -p 22 host", "docker run -p 8080:80 nginx", "API_KEY=[REDACTED];next=1",
+		`echo "API_KEY=[REDACTED];next=1"`, "after_block: visible", "cleanup step 17: echo", "about to fail",
+	} {
+		if !strings.Contains(published, kept) {
+			t.Errorf("%q is not shown", kept)
+		}
+	}
+	if t.Failed() {
+		t.Logf("published:\n%s", published)
 	}
 }
 
@@ -399,6 +476,9 @@ func TestScriptRedactionIsLinear(t *testing.T) {
 		"command words":            fill("docker "),
 		"sshpass words":            fill("sshpass "),
 		"quoted arguments":         "mysql " + fill(`"-p`),
+		"quoted separators":        fill(`mysql -e "a;b" -p x; `),
+		"unclosed argument quotes": fill(`mysql "a; `),
+		"enclosed commands":        fill(`echo "mysql -px"; `),
 		"curl users":               fill("curl -u a:b "),
 		"secret documents":         fill("kind: Secret\ndata:\n  a: b\n"),
 		"secret data":              "kind: Secret\ndata:\n" + fill("  a: |\n"),
@@ -422,6 +502,213 @@ func TestScriptRedactionIsLinear(t *testing.T) {
 	for name, text := range cases {
 		if elapsed := redactAll(text); elapsed > bound {
 			t.Errorf("%s: redacting 64 KiB took %v (bound %v)", name, elapsed, bound)
+		}
+	}
+}
+
+// publishedByRuns runs commands as a project's Setup and as its Cleanup (the
+// commands script with its markers, parsed as the control plane parses it,
+// with the commands it knows) and returns everything they publish: each
+// step's live and final events (command and output) as the worker sends them
+// and as the control plane sanitizes them, the failed Setup's summary (its
+// output, command and message, what the startup error's Detail is made of),
+// and the Cleanup steps, whose failed step's output repeats its command line.
+func publishedByRuns(t *testing.T, commands []string) string {
+	t.Helper()
+	summary, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond}, commands)
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript(commands, nonce), t.TempDir())
+	events = append(events, CleanupStepEvents(output, CleanupRun{
+		RunID: "r", Nonce: nonce, Commands: nonEmptyCommands(commands), ExitCode: code, StartedAt: time.Now(),
+	})...)
+	for _, event := range append([]ScriptStepEvent(nil), events...) {
+		events = append(events, SanitizeScriptStepEvent(event))
+	}
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published strings.Builder
+	for _, event := range events {
+		published.WriteString(event.Command + "\n" + event.Output + "\n")
+	}
+	published.WriteString(string(encoded) + "\n" + summary.Output + "\n" + summary.Command + "\n" + summary.Message() + "\n")
+	published.WriteString(RedactScriptOutput(summary.Output) + "\n" + RedactScriptOutput(summary.Command) + "\n")
+	return published.String()
+}
+
+// The values commands assign to secret-named variables, in every shell form,
+// literally; not those of other names or that expand something.
+func TestAssignedSecretValues(t *testing.T) {
+	t.Parallel()
+	got := assignedSecretValues([]string{
+		`MY_TOKEN=value01; export MY_SERVICE_SECRET=value02 && DB_PASSWORD="value 03" API_KEY='value04'`,
+		"declare -x DEPLOY_SECRET=value05; local -r SIGNING_KEY=value06; readonly AUTH_TOKEN=value07",
+		"typeset NPM_AUTH=value08; set -a; CI_TOKEN=value09 make deploy; (OTHER_PASS=value10)",
+		`HOST=db.example.com PORT=5432 KEY_PATH=/etc/key GIT_AUTHOR_NAME=jane TOKEN=$(cat f) SECRET="$X" PASSWORD=` + "`cat p`",
+	})
+	want := []string{"value01", "value02", "value 03", "value04", "value05", "value06", "value07", "value08", "value09", "value10"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("assignedSecretValues = %q, want %q", got, want)
+	}
+}
+
+// A value a step assigns to a secret-named variable and prints with nothing
+// naming it (the staging re-test's case 14) is masked on every path: in the
+// step that sets it, in a later step that inherits it through a file, in the
+// failed run's summary, and in Cleanup's steps and its failed step's line.
+func TestAssignedSecretNeverPublished(t *testing.T) {
+	published := publishedByRuns(t, []string{
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`echo 'export DEPLOY_TOKEN=Leak80QZXa' > "${TMPDIR:-/tmp}/ao-assigned-$$.sh"; echo saved`,
+		`echo 'DEPLOY_TOKEN=Leak81QZXb' >/dev/null; printf 'inherited %s\n' Leak81QZXb; exit 3`,
+	})
+	for _, secret := range []string{"FAKEVAL14", "Leak80QZXa", "Leak81QZXb"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	if !strings.Contains(published, "inherited [REDACTED]") {
+		t.Errorf("the later step's output is not masked:\n%s", published)
+	}
+}
+
+// The staging re-test's commands that print a Kubernetes Secret, a YAML block
+// scalar and a coloured pair (its cases 8, 10 and 13): masked in the command
+// fields too, which are redacted before they are put on one line, with a
+// printf's \n read as the line break it prints and colour codes written out
+// (\033[0m) read as escapes between a name and its value.
+func TestCommandsThatPrintSecretsAreMasked(t *testing.T) {
+	commands := []string{
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+	}
+	commands = append(commands, strings.Join(commands, "; ")+"; exit 3")
+	published := publishedByRuns(t, commands)
+	for _, secret := range []string{"RkFLRVZBTDg", "FAKEVAL10", "FAKEVAL13"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	if !strings.Contains(published, `after_block: visible\n`) || !strings.Contains(published, `name: demo\n`) {
+		t.Errorf("the commands lost what is not secret:\n%s", published)
+	}
+
+	// Each command path, and a command written on several lines.
+	redactor := newScriptRedactor(nil, nil)
+	multiline := "cat <<EOF > secret.yaml\nkind: Secret\ndata:\n  token: TGVhazgy\nEOF\nvault_key: |\n  Leak83block\nnext"
+	for _, command := range append(commands, multiline, `echo -e "\e[1mAPI_TOKEN\e[0m: \x1b[2mLeak84lit" "\u001b[1mNPM_AUTH\u001b[0m=Leak85lit"`) {
+		stepCommand, _ := scriptStepCommand(command, redactor)
+		summary, _ := scriptCommandSummary(command, redactor)
+		for path, shown := range map[string]string{
+			"scriptStepCommand":         stepCommand,
+			"scriptCommandSummary":      summary,
+			"SanitizeScriptStepEvent":   SanitizeScriptStepEvent(ScriptStepEvent{Command: command}).Command,
+			"worker then control plane": SanitizeScriptStepEvent(ScriptStepEvent{Command: stepCommand}).Command,
+		} {
+			for _, secret := range []string{"RkFLRVZBTDg", "FAKEVAL10", "FAKEVAL13", "TGVhazgy", "Leak83", "Leak84", "Leak85"} {
+				if strings.Contains(shown, secret) {
+					t.Errorf("%s published %q in %q", path, secret, shown)
+				}
+			}
+			if strings.Contains(shown, "\n") {
+				t.Errorf("%s is not on one line: %q", path, shown)
+			}
+		}
+	}
+}
+
+// Commands written inside quoted strings, one after another on a line (the
+// staging re-test's failing step): each is read up to the end of its string
+// or shell segment, so mysql's -p never reads on into sshpass's ssh -p 22,
+// and the curl -u after them is still masked, in the step's command and
+// output, the summary and Cleanup's failed step line alike.
+func TestPasswordCommandsAreReadPerSegment(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ text, want string }{
+		{
+			`echo "mysql -pFAKEVAL3"; echo "sshpass -p FAKEVAL4 ssh -p 22 host"; echo "curl -u admin:FAKEVAL5 https://x"`,
+			`echo "mysql -p[REDACTED]"; echo "sshpass -p [REDACTED] ssh -p 22 host"; echo "curl -u admin:[REDACTED] https://x"`,
+		},
+		{`echo 'run mysql -p FAKEVAL3' && ssh -p 22 host`, `echo 'run mysql -p [REDACTED]' && ssh -p 22 host`},
+		{`mysql -pFAKEVAL3 || ssh -p 22 host | curl --user admin:FAKEVAL5 x`, `mysql -p[REDACTED] || ssh -p 22 host | curl --user admin:[REDACTED] x`},
+		{`x=$(mysql -pFAKEVAL3)$(ssh -p 22 h) curl -sS -u "admin:FAKEVAL5" x`, `x=$(mysql -p[REDACTED])$(ssh -p 22 h) curl -sS -u "admin:[REDACTED]" x`},
+		{`mysql -h db -e "select 1" -pFAKEVAL3`, `mysql -h db -e "select 1" -p[REDACTED]`},
+		// A separator inside a quoted argument is part of it.
+		{`mysql -e "select 1; select 2" -pFAKEVAL3`, `mysql -e "select 1; select 2" -p[REDACTED]`},
+		{`mysql -e 'a;b|c&&d' -p FAKEVAL3 db; ssh -p 22 h`, `mysql -e 'a;b|c&&d' -p [REDACTED] db; ssh -p 22 h`},
+		{`sh -c "mysql -e 'a; b' -pFAKEVAL3"; ssh -p 22 h`, `sh -c "mysql -e 'a; b' -p[REDACTED]"; ssh -p 22 h`},
+		{`curl -d "a=1;b=2" -u "admin:FAKEVAL5" x && ssh -p 22 h`, `curl -d "a=1;b=2" -u "admin:[REDACTED]" x && ssh -p 22 h`},
+		{`echo "mysql -e"; ssh -p 22 host`, `echo "mysql -e"; ssh -p 22 host`},
+		{`don't run mysql -pFAKEVAL3; then ssh -p 22 h`, `don't run mysql -p[REDACTED]; then ssh -p 22 h`},
+	} {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("RedactScriptOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
+		}
+	}
+}
+
+func TestStagingFailedStepCommandsAreMasked(t *testing.T) {
+	combined := `echo "== summary step =="; echo "docker login -p FAKEVAL2 registry.example.com || true"; echo "mysql -pFAKEVAL3"; ` +
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"; echo "curl -u admin:FAKEVAL5 https://x"; echo "docker run -p 8080:80 nginx"; exit 3`
+	published := publishedByRuns(t, []string{combined})
+	for _, secret := range []string{"FAKEVAL2", "FAKEVAL3", "FAKEVAL4", "FAKEVAL5"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	for _, kept := range []string{"ssh -p 22 host", "docker run -p 8080:80 nginx", "cleanup step 1: echo"} {
+		if !strings.Contains(published, kept) {
+			t.Errorf("%q is not shown:\n%s", kept, published)
+		}
+	}
+	if strings.Contains(published, "ssh -p [REDACTED]") {
+		t.Errorf("ssh's port is masked:\n%s", published)
+	}
+}
+
+// A bare secret value is masked up to where it plainly ends, not past it: a ;
+// or & before the next name=value or a blank, and a quote that closes the
+// string the pair is written in (the staging re-test's case 12 lost ;next=1
+// and its closing quote). A separator or quote inside the value is still part
+// of it.
+func TestBareSecretValueEnds(t *testing.T) {
+	for _, test := range []struct{ text, want string }{
+		{`API_KEY=FAKEVAL12;next=1`, `API_KEY=[REDACTED];next=1`},
+		{`echo "API_KEY=FAKEVAL12;next=1"`, `echo "API_KEY=[REDACTED];next=1"`},
+		{`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`, `export MY_SERVICE_SECRET=[REDACTED]; printf '%s\n' "$MY_SERVICE_SECRET"`},
+		{`echo 'DEPLOY_TOKEN=abc123' >/dev/null`, `echo 'DEPLOY_TOKEN=[REDACTED]' >/dev/null`},
+		{`curl "https://x/?token=abc123&page=2"`, `curl "https://x/?token=[REDACTED]&page=2"`},
+		{`["PASSWORD=abc123","HOME=/root"]`, `["PASSWORD=[REDACTED]","HOME=/root"]`},
+		// Still part of the value.
+		{`PASSWORD=ab;cd next`, `PASSWORD=[REDACTED] next`},
+		{`PASSWORD=ab"cd next`, `PASSWORD=[REDACTED] next`},
+		{`client_secret=ab&cd`, `client_secret=[REDACTED]`},
+	} {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("RedactScriptOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
+		}
+	}
+	published := publishedByRuns(t, []string{`echo "API_KEY=FAKEVAL12;next=1"; exit 3`})
+	if strings.Contains(published, "FAKEVAL12") || !strings.Contains(published, `echo "API_KEY=[REDACTED];next=1"; exit 3`) ||
+		!strings.Contains(published, "API_KEY=[REDACTED];next=1\n") {
+		t.Errorf("case 12 published:\n%s", published)
+	}
+}
+
+// A trace of a printf that writes a Kubernetes Secret or a YAML block scalar
+// (as set -x prints it) is masked in a step's output as in its command: its
+// literal \n is read as the line break it prints, then put back.
+func TestTracedPrintfIsReadByLine(t *testing.T) {
+	t.Parallel()
+	redactor := newScriptRedactor(nil, nil)
+	for _, test := range []struct{ text, want string }{
+		{`+ printf 'apiVersion: v1\nkind: Secret\ndata:\n  foo: TGVhazkw\n'`, `+ printf 'apiVersion: v1\nkind: Secret\ndata:\n  foo: [REDACTED]\n'`},
+		{`+ printf 'vault_key: |\n  Leak91block\nnext: 1\n'`, `+ printf 'vault_key: |\n  [REDACTED]\nnext: 1\n'`},
+	} {
+		if got, _ := redactor.scriptStepOutput(test.text+"\n", false); got != test.want {
+			t.Errorf("scriptStepOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
 		}
 	}
 }

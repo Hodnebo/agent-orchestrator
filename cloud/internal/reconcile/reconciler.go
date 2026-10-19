@@ -919,6 +919,11 @@ type cleanupCommandsStore interface {
 // local project's does. When they can't be read the provider runs the
 // commands the worker installed.
 func (r *Reconciler) withCleanupCommands(ctx context.Context, record domain.Sandbox) context.Context {
+	// The commands the worker was last given, which its hook runs when the
+	// current ones cannot be passed in.
+	if installed, ok := domain.InstalledCleanupCommands(record.BootstrapContext); ok {
+		ctx = sandbox.WithInstalledCleanupCommands(ctx, installed)
+	}
 	lookup, ok := r.store.(cleanupCommandsStore)
 	if !ok {
 		return ctx

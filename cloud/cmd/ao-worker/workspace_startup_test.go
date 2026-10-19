@@ -198,3 +198,67 @@ func TestReadyWorkspaceIsReported(t *testing.T) {
 		t.Fatalf("reports = %+v", reports)
 	}
 }
+
+// The staging re-test's Setup steps, verbatim (see the worker package's
+// stagingRetestSteps): the failed run's outcome event, the startup error the
+// worker reports (its Detail is what Copy details copies) and that Detail as
+// the control plane stores it hold none of the steps' secrets, and still show
+// what is not secret.
+func TestStagingRetestStartupErrorNeverReportsASecret(t *testing.T) {
+	steps := []string{
+		`echo '{"SecretString":"{\"password\":\"FAKEVAL1\"}"}'`,
+		`echo "docker login -p FAKEVAL2 registry.example.com || true"`,
+		`echo "mysql -pFAKEVAL3"`,
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
+		`echo "curl -u admin:FAKEVAL5 https://x"`,
+		`echo "https://ghp_FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`echo '["--token","FAKEVAL9"]'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`echo hf_FAKEVAL11aaaaaaaaaaaaaaaaaaaaaaaa`,
+		`echo "API_KEY=FAKEVAL12;next=1"`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`echo "docker run -p 8080:80 nginx"`,
+	}
+	combined := `echo "== summary step =="; ` + strings.Join(steps, "; ") + `; set -x; true --password FAKEVAL15; echo "about to fail"; exit 3`
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace := t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, t.TempDir(), true, append(steps, combined),
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	startup := setupStartupFailure(*failed)
+	reportWorkspaceStartup(context.Background(), logger, c, startup)
+	recorder.mu.Lock()
+	encoded, err := json.Marshal(recorder.events)
+	recorder.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the control plane stores (worker_handlers.go): the detail through
+	// the script redaction again.
+	stored := worker.RedactScriptOutput(startup.Detail)
+	published := string(encoded) + "\n" + startup.Detail + "\n" + startup.Message + "\n" + stored
+	for index := 1; index <= 15; index++ {
+		secret := fmt.Sprintf("FAKEVAL%d", index)
+		if index == 8 {
+			secret = "RkFLRVZBTDg"
+		}
+		if strings.Contains(published, secret) {
+			t.Errorf("%q reported", secret)
+		}
+	}
+	for _, kept := range []string{"ssh -p 22 host", "docker run -p 8080:80 nginx", "API_KEY=[REDACTED];next=1", "after_block: visible"} {
+		if !strings.Contains(startup.Detail, kept) || !strings.Contains(stored, kept) {
+			t.Errorf("%q is not in the startup error's detail", kept)
+		}
+	}
+	if t.Failed() {
+		t.Logf("detail:\n%s", startup.Detail)
+	}
+}

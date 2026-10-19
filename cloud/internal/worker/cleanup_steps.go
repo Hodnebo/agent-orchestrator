@@ -64,11 +64,31 @@ type CleanupRun struct {
 	// is then read from the output.
 	Nonce    string
 	Commands []string
+	// KnownCommands are what the hook otherwise runs, as best known: the
+	// commands the worker was last given (stored when it connected), or the
+	// project's current Cleanup. With Commands they say which values the run
+	// assigns to secret-named variables (a step that sets one prints it with
+	// nothing naming it), masked in its output; both count, as a current
+	// Cleanup the hook could not install leaves the worker's commands to run.
+	KnownCommands []string
 	// ExitCode is the hook's exit status, and StartedAt and Duration when the
 	// run started and how long it took.
 	ExitCode  int
 	StartedAt time.Time
 	Duration  time.Duration
+}
+
+// redactor masks a run's output: the values its commands (Commands and
+// KnownCommands) assign to secret-named variables, then the patterns.
+func (run CleanupRun) redactor() scriptRedactor {
+	return newScriptRedactor(nil, assignedSecretValues(append(append([]string{}, run.Commands...), run.KnownCommands...)))
+}
+
+// RedactOutput masks credentials in the run's output as its step events are
+// masked: the script redaction (RedactScriptOutput) and the values its
+// commands assign to secret-named variables.
+func (run CleanupRun) RedactOutput(text string) string {
+	return run.redactor().redact(activity.StripControl(collapseCarriageReturns(text)))
 }
 
 type cleanupStep struct {
@@ -98,7 +118,10 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		nonce, own = match[1], match[1] == run.Nonce
 	}
 	prefix := scriptMarkerPrefix + nonce + " "
-	redactor := scriptRedactor{}
+	// The run's commands, when the control plane knows them, say which values
+	// they assign to secret-named variables: a step that sets one prints it
+	// with nothing naming it.
+	redactor := run.redactor()
 	steps := map[int]*cleanupStep{}
 	var current *cleanupStep
 	var preamble, trailer strings.Builder
@@ -179,7 +202,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				current.event.Repository = parts[1]
 			}
 			if len(parts) > 2 {
-				current.event.Command = boundScriptCommand(redactor.redact(activity.StripControl(parts[2])))
+				current.event.Command = boundScriptCommand(redactor.redactCommand(parts[2]))
 			}
 			steps[step] = current
 		case "end":
@@ -282,7 +305,10 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	if run.ExitCode == 0 && strings.TrimSpace(output) == "" {
 		return nil
 	}
-	redactor := scriptRedactor{}
+	// The run's commands, when the control plane knows them, say which values
+	// they assign to secret-named variables: a step that sets one prints it
+	// with nothing naming it.
+	redactor := run.redactor()
 	event := ScriptStepEvent{
 		Phase: ScriptPhaseCleanup, RunID: run.RunID, Step: 1, Total: 1,
 		StartedAt: scriptTimestamp(run.StartedAt),

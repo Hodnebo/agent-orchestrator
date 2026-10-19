@@ -256,7 +256,7 @@ func (r SetupRunner) Run(
 	if err := os.MkdirAll(logs, 0o700); err != nil {
 		logs = ""
 	}
-	redactor := r.redactor()
+	redactor := r.redactor(commands)
 	steps := r.startStepEvents(ctx, len(commands), redactor)
 	defer steps.close()
 	started := time.Now()
@@ -442,6 +442,9 @@ func (b *tailBuffer) String() string {
 func CleanupCommandsScript(commands []string, nonce string) string {
 	seconds := strconv.Itoa(int(ProjectScriptStepTimeout / time.Second))
 	commands = nonEmptyCommands(commands)
+	// The step lines it prints name each command, redacted: also of the
+	// values its commands assign to secret-named variables.
+	redactor := newScriptRedactor(nil, assignedSecretValues(commands))
 	total := strconv.Itoa(len(commands))
 	marker := scriptMarkerPrefix + nonce + " "
 	var steps strings.Builder
@@ -460,7 +463,7 @@ func CleanupCommandsScript(commands []string, nonce string) string {
 	}
 	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
-		summary, repository := scriptCommandSummary(command, scriptRedactor{})
+		summary, repository := scriptCommandSummary(command, redactor)
 		if repository == "" {
 			repository = scriptMarkerMainRepository
 		}

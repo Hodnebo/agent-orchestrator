@@ -59,6 +59,24 @@ func TestDeletionCarriesTheProjectsCurrentCleanup(t *testing.T) {
 	}
 }
 
+// Delete also receives the Cleanup commands the worker was last given, stored
+// on the sandbox, whether or not the current ones can be read; a sandbox
+// without them gives none.
+func TestDeletionCarriesTheWorkersInstalledCleanup(t *testing.T) {
+	reconciler := New(&cleanupLookupStore{err: errors.New("project deleted")}, lifecycleResolver{},
+		Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	record := domain.Sandbox{OrgID: "org-1", SessionID: "session-1",
+		BootstrapContext: []byte(`{"providerFailureId":"build-1","installedCleanup":["export DEPLOY_TOKEN=x1y2z3w4","make down"]}`)}
+	ctx := reconciler.withCleanupCommands(context.Background(), record)
+	if commands, ok := sandbox.InstalledCleanupCommands(ctx); !ok || strings.Join(commands, "|") != "export DEPLOY_TOKEN=x1y2z3w4|make down" {
+		t.Fatalf("installed Cleanup = %v (%v)", commands, ok)
+	}
+	record.BootstrapContext = []byte(`{"providerFailureId":"build-1"}`)
+	if _, ok := sandbox.InstalledCleanupCommands(reconciler.withCleanupCommands(context.Background(), record)); ok {
+		t.Fatal("a sandbox without stored commands gave some")
+	}
+}
+
 // deadlineDeleteProvider records the Deletes it receives and whether each
 // asked to skip the project's Cleanup.
 type deadlineDeleteProvider struct {

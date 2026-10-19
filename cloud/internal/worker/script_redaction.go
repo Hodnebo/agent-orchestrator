@@ -5,6 +5,44 @@ import (
 	"strings"
 )
 
+// assignmentPattern matches a shell assignment (NAME=value, export NAME=value,
+// declare -x NAME=value, local, readonly or typeset NAME=value, NAME=value
+// before a command) at the start of a word or of a quoted string (echo
+// 'TOKEN=x' > env.sh, which a later step sources): its groups are the name and the
+// value, double-quoted, single-quoted or bare.
+var assignmentPattern = regexp.MustCompile("(?:^|[\\s;&|(`\"'])(?:(?:export|declare|local|readonly|typeset)[ \t]+(?:-[A-Za-z]+[ \t]+)*)?([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|[^\\s;&|)`'\"]*)")
+
+// assignedSecretValues are the values commands assign to secret-named
+// variables (isSecretName) in shell assignments, literally: a value that
+// expands something ($, a backtick) is not known until it runs. A step that
+// sets one prints it with nothing naming it ("$MY_SERVICE_SECRET"), and the
+// steps after it may inherit it, so its run masks it wherever it appears.
+func assignedSecretValues(commands []string) []string {
+	var values []string
+	for _, command := range commands {
+		if !strings.Contains(command, "=") {
+			continue
+		}
+		for _, match := range assignmentPattern.FindAllStringSubmatch(command, -1) {
+			name, value := match[1], match[2]
+			if !isSecretName(name) {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(value, `"`):
+				value = strings.ReplaceAll(strings.TrimSuffix(value[1:], `"`), `\"`, `"`)
+			case strings.HasPrefix(value, "'"):
+				value = strings.TrimSuffix(value[1:], "'")
+			}
+			if value == "" || strings.ContainsAny(value, "$`") {
+				continue
+			}
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
 // The script redaction's passes for credentials a secret-named pair does not
 // name: a YAML block scalar's lines, a password given to a known command in a
 // short flag, a Kubernetes Secret's data, a token used as a URL's user, and a
@@ -112,9 +150,15 @@ func blockLinesEnd(text string, position, keyIndent int) int {
 // lines) with its lines replaced by one masked line at their indentation.
 func maskedBlockScalar(block string) string {
 	header, body, _ := strings.Cut(block, "\n")
+	// A line's end as the block's last line had it (a command's printf \n
+	// is read as \r\n, see redactCommand).
+	end := ""
+	if strings.HasSuffix(block, "\r") {
+		end = "\r"
+	}
 	for _, line := range strings.Split(body, "\n") {
 		if strings.TrimSpace(line) != "" {
-			return header + "\n" + line[:indentation(line)] + redactedMarker
+			return header + "\n" + line[:indentation(line)] + redactedMarker + end
 		}
 	}
 	return header
@@ -152,13 +196,17 @@ const (
 func maskCommandPasswords(text string) string {
 	var out strings.Builder
 	last := 0
+	quoting := quoteCursor{text: text}
 	for position := 0; position < len(text); {
 		match := passwordCommandPattern.FindStringSubmatchIndex(text[position:])
 		if match == nil {
 			break
 		}
 		command := text[position+match[2] : position+match[3]]
-		end := maskCommandArguments(text, position+match[1], command, func(start, stop int, kind valueKind) {
+		// A command written inside a quoted string (echo "mysql -px") ends
+		// with that string: its closing quote is not an argument's.
+		enclosing := quoting.at(position + match[2])
+		end := maskCommandArguments(text, position+match[1], command, enclosing, func(start, stop int, kind valueKind) {
 			masked, ok := maskedArgument(text[start:stop], kind)
 			if ok && start >= last {
 				out.WriteString(text[last:start])
@@ -177,14 +225,15 @@ func maskCommandPasswords(text string) string {
 	return out.String()
 }
 
-// maskCommandArguments reads command's arguments from position and calls
-// mask for each one that is a password, in order. It returns where the
-// command ends.
-func maskCommandArguments(text string, position int, command string, mask func(start, stop int, kind valueKind)) int {
+// maskCommandArguments reads command's arguments from position, up to the end
+// of its shell segment (nextArgument) or of the quoted string it is written in
+// (enclosing, its quote, or 0), and calls mask for each one that is a
+// password, in order. It returns where the command ends.
+func maskCommandArguments(text string, position int, command string, enclosing byte, mask func(start, stop int, kind valueKind)) int {
 	login := false
 	pending, skip := noValue, false
 	for {
-		start, stop, ok := nextArgument(text, position)
+		start, stop, ok := nextArgument(text, position, enclosing)
 		if !ok {
 			return start
 		}
@@ -276,36 +325,96 @@ func maskCommandArguments(text string, position int, command string, mask func(s
 }
 
 // nextArgument reads the shell word at or after position: its start and end,
-// and false at the end of the command (the end of the line, or a command
-// separator). A quoted part is read to its closing quote on the line.
-func nextArgument(text string, position int) (int, int, bool) {
+// and false at the end of the command: the end of its shell segment (a line,
+// or ;, &&, ||, |, $( or a closing parenthesis or backtick outside quotes) or
+// of the quoted string the command is written in (enclosing, the quote of the
+// string its name is in: echo "mysql -px"; echo "ssh -p 22" never reads the
+// second echo as mysql's). A quoted part is read to its closing quote on the
+// line, separators inside it included; one that is not closed there ends the
+// word and the command.
+func nextArgument(text string, position int, enclosing byte) (int, int, bool) {
 	for position < len(text) && (text[position] == ' ' || text[position] == '\t') {
 		position++
 	}
-	if position == len(text) || isCommandEnd(text[position]) {
+	if position == len(text) || isCommandEnd(text, position) || (enclosing != 0 && text[position] == enclosing) {
 		return position, position, false
 	}
 	end := position
-	for end < len(text) && !isCommandEnd(text[end]) && text[end] != ' ' && text[end] != '\t' {
-		if quote := text[end]; quote == '\'' || quote == '"' {
-			closing := strings.IndexAny(text[end+1:], string(quote)+"\n")
+	for end < len(text) && text[end] != ' ' && text[end] != '\t' && !isCommandEnd(text, end) {
+		quote := text[end]
+		if enclosing != 0 && quote == enclosing {
+			break
+		}
+		if quote == '\'' || quote == '"' {
+			closing := quoteEnd(text, end)
 			if closing < 0 {
-				return position, len(text), true
+				break
 			}
-			end += 1 + closing
-			if text[end] == '\n' {
-				return position, end, true
-			}
+			end = closing
 		}
 		end++
+	}
+	if end == position {
+		return position, position, false
 	}
 	return position, end, true
 }
 
-func isCommandEnd(c byte) bool {
-	switch c {
+// quoteEnd is the index of the quote that closes the one at start on its line
+// (a separator inside quotes is part of the argument: mysql -e "select 1;
+// select 2"), past backslash escapes in a double-quoted one, or -1.
+func quoteEnd(text string, start int) int {
+	for index := start + 1; index < len(text); index++ {
+		switch text[index] {
+		case text[start]:
+			return index
+		case '\\':
+			if text[start] == '"' {
+				index++
+			}
+		case '\n', '\r':
+			return -1
+		}
+	}
+	return -1
+}
+
+// quoteCursor tells which quoted string, if any, a position of text is in,
+// reading each line from its start with the shell's rules (a backslash
+// escapes outside single quotes). Positions are looked up in order, so each
+// byte is read once.
+type quoteCursor struct {
+	text     string
+	position int
+	quote    byte
+}
+
+// at returns the quote of the string position is in, or 0.
+func (c *quoteCursor) at(position int) byte {
+	if position < c.position {
+		c.position, c.quote = 0, 0
+	}
+	for ; c.position < position; c.position++ {
+		switch character := c.text[c.position]; {
+		case character == '\n':
+			c.quote = 0
+		case character == '\\' && c.quote != '\'':
+			c.position++
+		case c.quote == 0 && (character == '"' || character == '\''):
+			c.quote = character
+		case character == c.quote:
+			c.quote = 0
+		}
+	}
+	return c.quote
+}
+
+func isCommandEnd(text string, index int) bool {
+	switch text[index] {
 	case '\n', '\r', ';', '|', '&', ')', '`':
 		return true
+	case '$':
+		return index+1 < len(text) && text[index+1] == '('
 	}
 	return false
 }

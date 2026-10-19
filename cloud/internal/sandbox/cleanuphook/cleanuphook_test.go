@@ -2,6 +2,7 @@ package cleanuphook
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -503,5 +504,90 @@ func TestCommandAsRootRunsTheHookAsThePinnedOwner(t *testing.T) {
 	missing := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsRoot, Owner: "no-such-user"})
 	if output := runHookCommand(t, missing, environment); !strings.Contains(output, Marker+":"+Skipped) {
 		t.Fatalf("missing account: output = %q", output)
+	}
+}
+
+// The project's Cleanup changed after the session started, and the hook ran
+// the commands the worker was given at launch (the current ones could not be
+// passed in, or could not be read). One of those old commands sets a secret
+// and prints it with nothing naming it: with the launch-time commands stored
+// on the sandbox (domain.InstalledCleanupKey, carried by the reconciler as
+// sandbox.WithInstalledCleanupCommands), the reported steps and the stage's
+// output mask it.
+func TestCleanupOfCommandsGivenAtLaunchMasksTheirSecrets(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	launched := []string{
+		`export DEPLOY_TOKEN=FAKEVAL98x; printf 'token %s\n' "$DEPLOY_TOKEN"`,
+		`printf '%s\n' "$DEPLOY_TOKEN"; exit 4`,
+	}
+	huge := make([]string, 20)
+	for index := range huge {
+		var step strings.Builder
+		step.WriteString("echo ")
+		for range 256 {
+			step.WriteString(worker.NewScriptMarkerNonce())
+		}
+		huge[index] = step.String()
+	}
+	for name, ctx := range map[string]context.Context{
+		// The project's current Cleanup is too large to pass to the sandbox.
+		"current too large": sandbox.WithCleanupCommands(context.Background(), huge),
+		// It could not be read.
+		"current unknown": context.Background(),
+	} {
+		dataDir, workspace := t.TempDir(), t.TempDir()
+		environment := worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace}
+		if err := worker.WriteCleanupHook(dataDir, launched, workspace, environment); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := json.Marshal(map[string]any{domain.InstalledCleanupKey: launched, "providerFailureId": "build-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		installed, ok := domain.InstalledCleanupCommands(stored)
+		if !ok {
+			t.Fatal("the stored commands were not read back")
+		}
+		plan, ok := NewPlan(sandbox.WithInstalledCleanupCommands(ctx, installed))
+		if !ok || plan.Override != "" || strings.Join(plan.Steps.KnownCommands, "\n") != strings.Join(launched, "\n") {
+			t.Fatalf("%s: plan = %+v", name, plan)
+		}
+		output := runHookCommand(t, Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, plan.Override, Options{}), os.Environ())
+		printed, status, ok := Split(output)
+		if !ok || status != "4" || !strings.Contains(printed, "FAKEVAL98x") {
+			t.Fatalf("%s: the launch-time commands did not run: %q", name, output)
+		}
+		r := &recorder{}
+		reportCtx := r.context()
+		steps := plan.Steps
+		steps.StartedAt = time.Now()
+		Report(reportCtx, sandbox.BeginStage(reportCtx, Stage), map[string]string{}, steps, printed, status, nil, "test")
+		if len(r.events) != 2 || r.events[1].Status != worker.SetupFailed {
+			t.Fatalf("%s: events = %+v", name, r.events)
+		}
+		published := ""
+		for _, event := range r.events {
+			published += event.Command + "\n" + event.Output + "\n" + worker.SanitizeScriptStepEvent(event).Output + "\n"
+		}
+		for _, stage := range r.stages {
+			published += stage.Attrs["output"] + "\n"
+		}
+		if strings.Contains(published, "FAKEVAL98x") || !strings.Contains(published, "token [REDACTED]") {
+			t.Fatalf("%s: published %q", name, published)
+		}
+	}
+
+	// Without the stored commands, the current Cleanup is the best guess
+	// left; one the control plane installs for the run counts too.
+	plan, _ := NewPlan(sandbox.WithCleanupCommands(context.Background(), []string{"make down"}))
+	if strings.Join(plan.Steps.KnownCommands, "|") != "make down" || strings.Join(plan.Steps.Commands, "|") != "make down" {
+		t.Fatalf("current-only plan = %+v", plan.Steps)
+	}
+	plan, _ = NewPlan(sandbox.WithInstalledCleanupCommands(sandbox.WithCleanupCommands(context.Background(), []string{"make down"}), launched))
+	if plan.Override == "" || strings.Join(plan.Steps.Commands, "|") != "make down" || len(plan.Steps.KnownCommands) != 2 {
+		t.Fatalf("current and stored plan = %+v", plan.Steps)
 	}
 }

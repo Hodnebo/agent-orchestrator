@@ -21,6 +21,24 @@ func CleanupCommands(ctx context.Context) ([]string, bool) {
 	return commands, ok
 }
 
+type installedCleanupKey struct{}
+
+// WithInstalledCleanupCommands carries the Cleanup commands the session's
+// worker was last given (domain.InstalledCleanupCommands) to Provider.Delete:
+// what the hook runs when the control plane cannot pass the project's current
+// Cleanup in, so its output is read knowing the values they assign to
+// secret-named variables.
+func WithInstalledCleanupCommands(ctx context.Context, commands []string) context.Context {
+	return context.WithValue(ctx, installedCleanupKey{}, append([]string{}, commands...))
+}
+
+// InstalledCleanupCommands returns the commands WithInstalledCleanupCommands
+// carried, and false when none were stored.
+func InstalledCleanupCommands(ctx context.Context) ([]string, bool) {
+	commands, ok := ctx.Value(installedCleanupKey{}).([]string)
+	return commands, ok
+}
+
 type skipCleanupKey struct{}
 
 // WithoutCleanup tells Provider.Delete to delete at once without running or
