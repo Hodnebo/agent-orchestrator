@@ -117,6 +117,7 @@ type SessionLaunch struct {
 	Attachments     []LaunchAttachment `json:"attachments"`
 }
 
+// LaunchAttachment carries the frozen file bytes for ordinary session creation.
 type LaunchAttachment struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
@@ -185,6 +186,7 @@ type Dependencies struct {
 	Now                 func() time.Time
 }
 
+// Options binds the private helper's data directory and dependencies.
 type Options struct {
 	DataDir string
 	Deps    Dependencies

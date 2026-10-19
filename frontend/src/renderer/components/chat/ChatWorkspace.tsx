@@ -1713,7 +1713,7 @@ function ChatWorkspaceContent({
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
 					{session?.provisionState === "failed" || snapshot.controller.state === "stopped" && snapshot.controller.error || snapshot.threadState?.status === "system_error" ?
-						<TriageReportButton className="border-b border-border px-4 py-3" origin={{ surface: "session-error", sessionId: snapshot.sessionId, hostId: activeRemoteHostId, ...(session ? { session: { ...session } } : {}) }} observation={session?.provisionError || snapshot.controller.error} /> : null}
+						<TriageReportButton className="border-b border-border px-4 py-3" origin={{ surface: "session-error", sessionId: snapshot.sessionId, hostId: activeRemoteHostId, ...(session ? { session: { ...session } } : {}) }} /> : null}
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}

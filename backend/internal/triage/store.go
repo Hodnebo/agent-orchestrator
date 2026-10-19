@@ -100,7 +100,7 @@ func (s *runStore) save(run Run) error {
 	if err != nil {
 		return err
 	}
-	if err = privateDir(dir); err != nil {
+	if err := privateDir(dir); err != nil {
 		return err
 	}
 	run.PendingInput, run.TerminalReplay, run.TerminalSequence = nil, "", 0

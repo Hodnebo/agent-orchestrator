@@ -111,7 +111,7 @@ func buildSessionLaunch(ctx context.Context, run Run, dataDir string) (SessionLa
 		return SessionLaunch{}, err
 	}
 	var snapshot map[string]any
-	if err = json.Unmarshal(raw, &snapshot); err != nil {
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		return SessionLaunch{}, err
 	}
 	snapshot["operationalPaths"] = InvestigationPaths(ctx, dataDir, run.Request.Origin)

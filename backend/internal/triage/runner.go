@@ -12,9 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/google/uuid"
 )
 
 const (
@@ -346,11 +347,8 @@ func approvalPending(event ports.ChatEvent) *PendingInput {
 }
 
 func inputPending(event ports.ChatEvent) *PendingInput {
-	var detail json.RawMessage
-	if event.Input != nil {
-		detail, _ = json.Marshal(map[string]any{"requestId": event.RequestID, "inputMode": event.Input.Mode,
-			"message": event.Input.Message, "schema": event.Input.Schema, "url": event.Input.URL, "elicitationId": event.Input.ElicitationID})
-	}
+	detail, _ := json.Marshal(map[string]any{"requestId": event.RequestID, "inputMode": event.Input.Mode,
+		"message": event.Input.Message, "schema": event.Input.Schema, "url": event.Input.URL, "elicitationId": event.Input.ElicitationID})
 	if !json.Valid(detail) {
 		detail = json.RawMessage(`{}`)
 	}
@@ -358,7 +356,10 @@ func inputPending(event ports.ChatEvent) *PendingInput {
 }
 
 func (i *investigation) dispatchReady() error {
-	if !i.controllerReady || i.pending != nil || i.ctx.Err() != nil {
+	if err := i.ctx.Err(); err != nil {
+		return err
+	}
+	if !i.controllerReady || i.pending != nil {
 		return nil
 	}
 	if !i.initialSent {
@@ -462,7 +463,7 @@ func (i *investigation) terminalInput(cmd Command) error {
 	if i.terminal == nil {
 		return errors.New("the selected agent does not use a native terminal")
 	}
-	if len(cmd.Text) == 0 || len(cmd.Text) > maxTerminalBytes {
+	if cmd.Text == "" || len(cmd.Text) > maxTerminalBytes {
 		return errors.New("terminal input must contain at most 64 KiB")
 	}
 	written, err := i.terminal.Write([]byte(cmd.Text))

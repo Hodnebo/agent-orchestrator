@@ -15,6 +15,7 @@ type TriageDiagnostic struct {
 	Err     error
 }
 
+// TriageWorkspaceRoot is one registered workspace's name and complete path.
 type TriageWorkspaceRoot struct{ Name, Path string }
 
 // ReadTriageSnapshot never enriches, reconciles or writes session state. SQL

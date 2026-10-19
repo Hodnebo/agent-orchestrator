@@ -46,9 +46,13 @@ type TerminalAgent struct {
 
 var _ ports.Stream = (*TerminalAgent)(nil)
 
-func (a *TerminalAgent) Read(p []byte) (int, error)     { return a.stream.Read(p) }
-func (a *TerminalAgent) Write(p []byte) (int, error)    { return a.stream.Write(p) }
+func (a *TerminalAgent) Read(p []byte) (int, error)  { return a.stream.Read(p) }
+func (a *TerminalAgent) Write(p []byte) (int, error) { return a.stream.Write(p) }
+
+// Resize updates the attached native terminal dimensions.
 func (a *TerminalAgent) Resize(rows, cols uint16) error { return a.stream.Resize(rows, cols) }
+
+// Close releases the stream and terminates only this owned agent.
 func (a *TerminalAgent) Close() error {
 	a.once.Do(func() {
 		if a.cancel != nil {
@@ -124,7 +128,9 @@ func deliverInitialPrompt(ctx context.Context, runtime harnessRuntime, agent por
 			if err := runtime.SendMessage(ctx, handle, command); err != nil {
 				return err
 			}
-			if err := waitForModelSelection(ctx, runtime, selector, handle, cfg); err != nil {
+			if err := waitForTerminal(ctx, runtime, handle, 10*time.Second, 100*time.Millisecond, 100, func(output string) bool {
+				return selector.AfterStartCommandApplied(cfg, output)
+			}); err != nil {
 				return err
 			}
 		}
@@ -183,12 +189,6 @@ func waitForAgentPrompt(ctx context.Context, runtime harnessRuntime, agent ports
 			}
 		}
 		return false
-	})
-}
-
-func waitForModelSelection(ctx context.Context, runtime harnessRuntime, selector ports.AgentAfterStartCommand, handle ports.RuntimeHandle, cfg ports.LaunchConfig) error {
-	return waitForTerminal(ctx, runtime, handle, 10*time.Second, 100*time.Millisecond, 100, func(output string) bool {
-		return selector.AfterStartCommandApplied(cfg, output)
 	})
 }
 

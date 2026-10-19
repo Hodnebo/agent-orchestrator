@@ -191,7 +191,7 @@ func (h *host) execute(cmd Command) (response Response, err error) {
 				return response, errors.New("triage configuration is unavailable")
 			}
 			if err = h.deps.Configure(h.ctx, cmd.Choices); err != nil {
-				return
+				return response, err
 			}
 		}
 		response.Type = "catalog"
@@ -238,7 +238,7 @@ func (h *host) execute(cmd Command) (response Response, err error) {
 	default:
 		err = errors.New("unknown triage command")
 	}
-	return
+	return response, err
 }
 
 func (h *host) current(id string) *investigation {

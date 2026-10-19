@@ -54,7 +54,7 @@ func DefaultOptions(dataDir string) Options {
 				}
 			}
 			if selection.Harness == string(domain.HarnessUnreal) {
-				return AgentTransport{}, errors.New("Unreal Agent requires its native Chat transport")
+				return AgentTransport{}, errors.New("unreal agent requires its native Chat transport")
 			}
 			runtime, err := newHarnessRuntime(ctx, dataDir)
 			if err != nil {
@@ -88,7 +88,7 @@ func reconcileDiagnosticHosts(ctx context.Context, dataDir string, reconcile fun
 	return nil
 }
 
-func startDiagnosticConversation(ctx context.Context, dataDir string, driver ports.ChatDriver, run Run, accountEnv map[string]string, paths map[string]string) (ports.ChatConversation, error) {
+func startDiagnosticConversation(ctx context.Context, dataDir string, driver ports.ChatDriver, run Run, accountEnv, paths map[string]string) (ports.ChatConversation, error) {
 	selection := run.Request.Selection
 	workspace, providerRoot, err := diagnosticWorkspace(dataDir, run, paths)
 	if err != nil {

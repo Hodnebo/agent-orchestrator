@@ -142,7 +142,7 @@ func TestCatalogExplicitZeroModelsCannotLaunchNativeDefault(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Available || len(got[0].Models) != 0 || !strings.Contains(got[0].UnavailableReason, "No configured models") {
 		t.Fatalf("zero-model snapshot = %#v, %v", got, err)
 	}
-	if _, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: "codex"}); err == nil {
+	if _, err := catalogLaunchEnv(context.Background(), c, Selection{Harness: "codex"}); err == nil {
 		t.Fatal("zero-model snapshot launched an implicit native default")
 	}
 }
@@ -158,7 +158,7 @@ func TestCatalogMissingAccountMetadataCannotUseNativeLogin(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Available || !strings.Contains(got[0].UnavailableReason, "account information is unavailable") {
 		t.Fatalf("accountless snapshot = %#v, %v", got, err)
 	}
-	if env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: "codex", Model: choice.Models[0].ID}); err == nil || env != nil {
+	if env, err := catalogLaunchEnv(context.Background(), c, Selection{Harness: "codex", Model: choice.Models[0].ID}); err == nil || env != nil {
 		t.Fatalf("missing account metadata used native login: %#v, %v", env, err)
 	}
 }
@@ -219,7 +219,7 @@ func TestCatalogLaunchRequiresExactConfiguredSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := Selection{Harness: "codex", Model: "gpt-6.1-sol", Effort: "xhigh", AccountID: "device-codex"}
-	env, err := catalogLaunchEnv(c, context.Background(), valid)
+	env, err := catalogLaunchEnv(context.Background(), c, valid)
 	if err != nil || len(env) != 0 {
 		t.Fatalf("native launch env = %#v, %v", env, err)
 	}
@@ -232,12 +232,12 @@ func TestCatalogLaunchRequiresExactConfiguredSelection(t *testing.T) {
 		{Harness: "codex", Model: valid.Model, AccountID: "device-claude"},
 		{Harness: "amp", Model: "high"},
 	} {
-		if _, err := catalogLaunchEnv(c, context.Background(), selection); err == nil {
+		if _, err := catalogLaunchEnv(context.Background(), c, selection); err == nil {
 			t.Errorf("selection unexpectedly accepted: %#v", selection)
 		}
 	}
 	c.resolve["codex"] = func(context.Context) (string, error) { return "", errors.New("secret provider diagnostic") }
-	if _, err := catalogLaunchEnv(c, context.Background(), valid); err == nil || strings.Contains(err.Error(), "secret") {
+	if _, err := catalogLaunchEnv(context.Background(), c, valid); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("missing executable error = %v", err)
 	}
 	got, err := c.Choices(context.Background())
@@ -412,7 +412,7 @@ func TestSavedAccountLaunchDoesNotSwitchNativeAccount(t *testing.T) {
 			if err := c.Configure(context.Background(), []Choice{choice}); err != nil {
 				t.Fatal(err)
 			}
-			env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: harness, AccountID: catalogAccountID})
+			env, err := catalogLaunchEnv(context.Background(), c, Selection{Harness: harness, AccountID: catalogAccountID})
 			if err != nil || env[envKey] != home {
 				t.Fatalf("saved launch env = %#v, %v", env, err)
 			}
@@ -428,7 +428,7 @@ func TestSavedAccountLaunchDoesNotSwitchNativeAccount(t *testing.T) {
 			if err := os.RemoveAll(home); err != nil {
 				t.Fatal(err)
 			}
-			if env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: harness, AccountID: catalogAccountID}); err == nil || env != nil {
+			if env, err := catalogLaunchEnv(context.Background(), c, Selection{Harness: harness, AccountID: catalogAccountID}); err == nil || env != nil {
 				t.Fatalf("missing saved credential silently fell back: %#v, %v", env, err)
 			}
 		})
@@ -518,7 +518,7 @@ func catalogWriteFixture(t *testing.T, path, content string) {
 	}
 }
 
-func catalogLaunchEnv(c *Catalog, ctx context.Context, selection Selection) (map[string]string, error) {
+func catalogLaunchEnv(ctx context.Context, c *Catalog, selection Selection) (map[string]string, error) {
 	_, env, err := c.ResolveSelection(ctx, selection)
 	return env, err
 }
