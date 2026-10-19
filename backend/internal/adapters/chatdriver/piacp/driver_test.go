@@ -195,20 +195,41 @@ func TestPiACPFeatureMapping(t *testing.T) {
 
 func TestPromptResponseFailureReportsATurnWithoutAModelCall(t *testing.T) {
 	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
-	if err := promptResponseFailure(empty, ""); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
+	if err := promptResponseFailure(empty, 0, ""); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
 		t.Fatalf("zero-token end_turn = %v, want a reported failure", err)
 	}
 	answered := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}}
-	if err := promptResponseFailure(answered, ""); err != nil {
+	if err := promptResponseFailure(answered, 0, ""); err != nil {
 		t.Fatalf("answered turn = %v, want no failure", err)
 	}
 	for _, response := range []acpsdk.PromptResponse{
 		{StopReason: acpsdk.StopReasonEndTurn},
 		{StopReason: acpsdk.StopReasonCancelled, Usage: &acpsdk.Usage{}},
 	} {
-		if err := promptResponseFailure(response, ""); err != nil {
+		if err := promptResponseFailure(response, 0, ""); err != nil {
 			t.Fatalf("%+v = %v, want no failure without zero usage on end_turn", response, err)
 		}
+	}
+}
+
+func TestPromptResponseFailureReadsPiTotalsAsTheSessions(t *testing.T) {
+	var totals sessionTotals
+	turn := func(total int) acpsdk.PromptResponse {
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{TotalTokens: total}}
+	}
+	if err := promptResponseFailure(turn(15), totals.swap("s1", turn(15)), ""); err != nil {
+		t.Fatalf("first answered turn = %v, want no failure", err)
+	}
+	// A later turn that never reached the model leaves the session's total as it was.
+	if err := promptResponseFailure(turn(15), totals.swap("s1", turn(15)), ""); err == nil {
+		t.Fatal("a turn that added no tokens was taken as answered")
+	}
+	if err := promptResponseFailure(turn(40), totals.swap("s1", turn(40)), ""); err != nil {
+		t.Fatalf("a turn that used tokens = %v, want no failure", err)
+	}
+	// Another session's totals are its own.
+	if err := promptResponseFailure(turn(15), totals.swap("s2", turn(15)), ""); err != nil {
+		t.Fatalf("another session's first turn = %v, want no failure", err)
 	}
 }
 
@@ -232,7 +253,7 @@ func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
 		t.Fatalf("recorded error = %q", recorded)
 	}
 	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
-	err := promptResponseFailure(empty, recorded)
+	err := promptResponseFailure(empty, 0, recorded)
 	if err == nil || !strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "sign-in") {
 		t.Fatalf("failure = %v, want the model's refusal instead of a sign-in guess", err)
 	}

@@ -426,6 +426,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
+	// The thread may have been left on the fast tier, which sticks to it. Its
+	// first turn here says so either way.
+	conv.fastTier = true
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }

@@ -10,7 +10,10 @@ SET user_request = session_terminal_turns.user_request || char(10) || char(10) |
 WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns AS t WHERE t.session_id = sqlc.arg(session_id))
   AND session_terminal_turns.responded_at IS NULL
   AND session_terminal_turns.harness = sqlc.arg(harness)
-  AND (session_terminal_turns.native_session_id IN ('', sqlc.arg(native_session_id)) OR sqlc.arg(native_session_id) = '');
+  AND (session_terminal_turns.native_session_id IN ('', sqlc.arg(native_session_id)) OR sqlc.arg(native_session_id) = '')
+  -- An agent that never reports its stop (Claude Code on an interrupt) would
+  -- grow one turn without end; past this size a request starts its own.
+  AND length(session_terminal_turns.user_request) < 32000;
 
 -- name: CloseTerminalTurn :exec
 -- Answers the session's newest turn. A stop with no open turn changes nothing.

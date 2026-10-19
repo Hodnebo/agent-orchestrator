@@ -1814,3 +1814,26 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexResumedThreadLeavesTheFastTierItMayHaveBeenLeftOn(t *testing.T) {
+	d, srv := newTestDriver(t)
+	resumed, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "fast-resume", WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close() }()
+	if _, err := resumed.SendTurn(context.Background(), ports.ChatUserMessage{Text: "not fast"}); err != nil {
+		t.Fatal(err)
+	}
+	request := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	// The tier sticks to the thread, so leaving it has to be said.
+	if tier, ok := params["serviceTier"]; !ok || string(tier) != "null" {
+		t.Fatalf("serviceTier = %s (sent %v), want an explicit null", tier, ok)
+	}
+}

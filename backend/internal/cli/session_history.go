@@ -80,7 +80,8 @@ func (c *commandContext) printSessionHistory(ctx context.Context, cmd *cobra.Com
 		}
 	}
 	if next := response.Offset + len(response.Turns); next < response.Total {
-		_, err := fmt.Fprintf(out, "%d older turns remain. Run `ao session history --offset %d` to read them.\n", response.Total-next, next)
+		_, err := fmt.Fprintf(out, "%d older turns remain. Run `ao session history %s --offset %d --limit %d` to read them.\n",
+			response.Total-next, id, next, limit)
 		return err
 	}
 	return nil

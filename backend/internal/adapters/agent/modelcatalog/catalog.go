@@ -790,7 +790,12 @@ const discoveryErrorDetailMax = 500
 // summary lands after any progress noise; whitespace is collapsed so the result
 // is a single log-friendly line.
 func discoveryErrorDetail(output []byte) string {
-	cleaned := strings.Join(strings.Fields(ansiPattern.ReplaceAllString(string(output), "")), " ")
+	plain := ansiPattern.ReplaceAllString(string(output), "")
+	// A Node CLI that crashed ends on its stack; the error is the line above it.
+	if line := thrownErrorLine(plain); line != "" {
+		plain = line
+	}
+	cleaned := strings.Join(strings.Fields(plain), " ")
 	if cleaned == "" {
 		return ""
 	}
@@ -798,6 +803,25 @@ func discoveryErrorDetail(output []byte) string {
 		cleaned = "…" + string(runes[len(runes)-discoveryErrorDetailMax:])
 	}
 	return cleaned
+}
+
+// thrownErrorPattern is the line a crashed Node or Python CLI names its error on.
+var thrownErrorPattern = regexp.MustCompile(`(?m)^\s*(?:Uncaught )?(?:[A-Z][A-Za-z]*)?(?:Error|Exception): .+$`)
+
+// stackFramePattern is a line of a stack trace.
+var stackFramePattern = regexp.MustCompile(`(?m)^\s+at \S`)
+
+// thrownErrorLine is the last such line of output that ends on a stack trace,
+// or "" when output is not a crash.
+func thrownErrorLine(output string) string {
+	if !stackFramePattern.MatchString(output) {
+		return ""
+	}
+	matches := thrownErrorPattern.FindAllString(output, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(matches[len(matches)-1])
 }
 
 // BinaryVersion returns a short non-sensitive executable-metadata fingerprint

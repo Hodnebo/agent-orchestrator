@@ -34,7 +34,7 @@ func TestSessionHistory_PrintsTurnsForTheCurrentSession(t *testing.T) {
 	for _, want := range []string{
 		"## Turn 3 of 5", "codex", "second ask", "second answer",
 		"## Turn 2 of 5", "first ask", "(no final response recorded)",
-		"1 older turns remain. Run `ao session history --offset 4`",
+		"1 older turns remain. Run `ao session history demo-1 --offset 4 --limit 2`",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output is missing %q:\n%s", want, out)

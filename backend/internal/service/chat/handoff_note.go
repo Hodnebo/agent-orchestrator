@@ -50,30 +50,44 @@ func (s *Service) SessionTurns(ctx context.Context, id domain.SessionID) ([]doma
 // per completed turn. A request is what a person typed or what was sent to the
 // session through AO; the daemon's own messages are not requests.
 //
-// Each turn is credited to the provider that answered it, read from the markers
-// earlier switches left: a marker names the provider of the branch it opened,
-// and the first marker's source answered everything before it.
+// Each turn is credited to the provider that answered it: the one the newest
+// switch marker before it brought in. Turns before the first marker were the
+// first source's. Sequences are the conversation's, so an edit's new branch,
+// whose turns come after the marker of the agent it runs on, is credited too.
 func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.ConversationMessage, activities []domain.ConversationActivity) []domain.HandoffTurn {
-	branchHarness := make(map[string]domain.AgentHarness)
+	type marker struct {
+		sequence int64
+		target   domain.AgentHarness
+	}
+	var markers []marker
 	var firstSource domain.AgentHarness
 	for _, activity := range activities {
-		var marker providerSwitchActivityDetail
-		if activity.Kind != domain.ActivityKindSystem || json.Unmarshal(activity.Detail, &marker) != nil || marker.Event != "provider_switch" {
+		var detail providerSwitchActivityDetail
+		if activity.Kind != domain.ActivityKindSystem || json.Unmarshal(activity.Detail, &detail) != nil || detail.Event != "provider_switch" {
 			continue
 		}
-		if len(branchHarness) == 0 {
-			firstSource = marker.SourceHarness
+		if len(markers) == 0 {
+			firstSource = detail.SourceHarness
 		}
-		branchHarness[marker.BranchID] = marker.TargetHarness
+		markers = append(markers, marker{sequence: activity.Sequence, target: detail.TargetHarness})
+	}
+	sort.Slice(markers, func(i, j int) bool { return markers[i].sequence < markers[j].sequence })
+	answeredBy := func(sequence int64) domain.AgentHarness {
+		harness := firstSource
+		for _, m := range markers {
+			if m.sequence < sequence {
+				harness = m.target
+			}
+		}
+		return harness
 	}
 	type exchange struct {
 		user, assistant *domain.ConversationMessage
-		harness         domain.AgentHarness
 	}
 	exchanges := make(map[string]*exchange, len(turns))
 	for _, turn := range turns {
 		if turn.State == domain.TurnStateCompleted && turn.RolledBackAt == nil {
-			exchanges[turn.ID] = &exchange{harness: cmp.Or(branchHarness[turn.BranchID], firstSource)}
+			exchanges[turn.ID] = &exchange{}
 		}
 	}
 	for index := range messages {
@@ -103,7 +117,7 @@ func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.Convers
 	sort.Slice(complete, func(i, j int) bool { return complete[i].user.Sequence < complete[j].user.Sequence })
 	out := make([]domain.HandoffTurn, 0, len(complete))
 	for _, pair := range complete {
-		out = append(out, domain.HandoffTurn{UserRequest: pair.user.Text, AgentResponse: pair.assistant.Text, At: pair.user.CreatedAt, Harness: pair.harness})
+		out = append(out, domain.HandoffTurn{UserRequest: pair.user.Text, AgentResponse: pair.assistant.Text, At: pair.user.CreatedAt, Harness: answeredBy(pair.user.Sequence)})
 	}
 	return out
 }

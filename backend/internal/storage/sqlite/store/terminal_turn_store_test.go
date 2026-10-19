@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +143,28 @@ func TestTerminalTurnsJoinOnlyOnTheSameThread(t *testing.T) {
 	}
 	if turns, err := s.ListTerminalTurns(ctx, other.ID); err != nil || len(turns) != 1 || turns[0].AgentResponse != "other answer" {
 		t.Fatalf("other session turns = %+v, %v; want its one answered turn", turns, err)
+	}
+}
+
+func TestTerminalTurnStopsGrowingPastItsCap(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "capped")
+	session, err := s.CreateSession(ctx, sampleRecord("capped"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// An agent that never reports its stop leaves the turn open.
+	for i := range 3 {
+		if err := s.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{
+			SessionID: session.ID, Harness: domain.HarnessClaudeCode,
+			UserRequest: fmt.Sprintf("%d %s", i, strings.Repeat("x", 20_000)), RequestedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("record request %d: %v", i, err)
+		}
+	}
+	turns, err := s.ListTerminalTurns(ctx, session.ID)
+	if err != nil || len(turns) != 2 {
+		t.Fatalf("turns = %d, %v; want the first two joined and the third on its own", len(turns), err)
 	}
 }

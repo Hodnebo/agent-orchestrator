@@ -18,6 +18,9 @@ WHERE session_terminal_turns.id = (SELECT MAX(t.id) FROM session_terminal_turns 
   AND session_terminal_turns.responded_at IS NULL
   AND session_terminal_turns.harness = ?3
   AND (session_terminal_turns.native_session_id IN ('', ?4) OR ?4 = '')
+  -- An agent that never reports its stop (Claude Code on an interrupt) would
+  -- grow one turn without end; past this size a request starts its own.
+  AND length(session_terminal_turns.user_request) < 32000
 `
 
 type AppendTerminalTurnRequestParams struct {

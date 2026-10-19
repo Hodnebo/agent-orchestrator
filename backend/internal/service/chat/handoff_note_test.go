@@ -26,6 +26,8 @@ func TestChatHandoffTurnsCreditEachProviderAndKeepRequestsSentThroughAO(t *testi
 		{ID: "t2", BranchID: "b-claude", State: domain.TurnStateCompleted},
 		{ID: "t3", BranchID: "b-claude", State: domain.TurnStateCompleted},
 		{ID: "t4", BranchID: "b-kimchi", State: domain.TurnStateCompleted},
+		// An edit's branch has no marker of its own.
+		{ID: "t5", BranchID: "b-edited", State: domain.TurnStateCompleted},
 	}
 	messages := []domain.ConversationMessage{
 		message(1, "t1", domain.MessageRoleUser, domain.MessageOriginHuman, "typed in the app"),
@@ -36,6 +38,8 @@ func TestChatHandoffTurnsCreditEachProviderAndKeepRequestsSentThroughAO(t *testi
 		message(7, "t3", domain.MessageRoleAssistant, domain.MessageOriginProvider, "claude handled the review"),
 		message(9, "t4", domain.MessageRoleUser, domain.MessageOriginHuman, "typed after the second switch"),
 		message(10, "t4", domain.MessageRoleAssistant, domain.MessageOriginProvider, "kimchi answered"),
+		message(11, "t5", domain.MessageRoleUser, domain.MessageOriginHuman, "an edited message"),
+		message(12, "t5", domain.MessageRoleAssistant, domain.MessageOriginProvider, "kimchi answered the edit"),
 	}
 	activities := []domain.ConversationActivity{
 		{Sequence: 2, Kind: domain.ActivityKindSystem, Detail: []byte(`{"event":"something_else"}`)},
@@ -48,6 +52,7 @@ func TestChatHandoffTurnsCreditEachProviderAndKeepRequestsSentThroughAO(t *testi
 		{UserRequest: "typed in the app", AgentResponse: "codex answered", Harness: domain.HarnessCodex},
 		{UserRequest: "sent with ao send", AgentResponse: "claude answered", Harness: domain.HarnessClaudeCode},
 		{UserRequest: "typed after the second switch", AgentResponse: "kimchi answered", Harness: domain.HarnessKimchi},
+		{UserRequest: "an edited message", AgentResponse: "kimchi answered the edit", Harness: domain.HarnessKimchi},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("chatHandoffTurns =\n%+v\nwant\n%+v", got, want)

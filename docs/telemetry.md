@@ -183,9 +183,12 @@ in PostHog from earlier events is not deleted retroactively.
 
 ## Turn desktop and daemon telemetry off
 
-The desktop General Settings page includes an **Event reporting** control for
-desktop and daemon product telemetry. The environment-variable controls below
-continue to govern those telemetry paths.
+The desktop General Settings page has a **Share error events** control. It
+covers error diagnostics only: the daemon's Sentry capture of 5xx errors and
+panics. Product telemetry, from the desktop and the daemon, answers to the
+environment variables below. While the daemon is still removing what it had
+captured after the control is turned off, the page says cleanup is pending,
+and if that fails, that it failed; reporting stays off while it retries.
 Set all three variables in the environment used to launch Orchestrator.inc:
 
 ```bash

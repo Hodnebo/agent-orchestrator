@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -45,6 +46,7 @@ func New(plugin piPlugin, log *slog.Logger) ports.ChatDriver {
 }
 
 func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpdriver.Config {
+	totals := &sessionTotals{}
 	return acpdriver.Config{
 		Harness: domain.HarnessPi,
 		Capabilities: ports.ChatCapabilities{
@@ -104,7 +106,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 		SessionMeta:        sessionMeta,
 		SessionOptions:     sessionOptions,
 		SessionPromptResponseFailure: func(sessionID string, response acpsdk.PromptResponse) error {
-			return promptResponseFailure(response, recordedModelError(piAgentDir(), sessionID))
+			return promptResponseFailure(response, totals.swap(sessionID, response), recordedModelError(piAgentDir(), sessionID))
 		},
 		// pi-acp can exit during its first handshake while its background
 		// daemon starts; the next start finds the daemon up.
@@ -112,14 +114,35 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 	}
 }
 
+// sessionTotals is each Pi session's token total as of its last turn. pi-acp
+// reports a session's totals, not a turn's, so a turn's own use is the change.
+type sessionTotals struct {
+	mu     sync.Mutex
+	totals map[string]int
+}
+
+// swap records response's total for sessionID and returns the one before it.
+func (s *sessionTotals) swap(sessionID string, response acpsdk.PromptResponse) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.totals[sessionID]
+	if response.Usage != nil {
+		if s.totals == nil {
+			s.totals = map[string]int{}
+		}
+		s.totals[sessionID] = response.Usage.TotalTokens
+	}
+	return previous
+}
+
 // promptResponseFailure reports a turn Pi ended without an answer from its
-// model. pi-acp answers such a prompt with end_turn, no message and zero tokens,
-// so the chat would show the turn as done with nothing in it. Pi keeps the
-// model's error only in its own session record; recorded is that error, if any.
-func promptResponseFailure(response acpsdk.PromptResponse, recorded string) error {
+// model. pi-acp answers such a prompt with end_turn, no message and no tokens
+// used, so the chat would show the turn as done with nothing in it. previous is
+// the session's token total before the turn. Pi keeps the model's error only
+// in its own session record; recorded is that error, if any.
+func promptResponseFailure(response acpsdk.PromptResponse, previous int, recorded string) error {
 	usage := response.Usage
-	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil ||
-		usage.TotalTokens != 0 || usage.InputTokens != 0 || usage.OutputTokens != 0 {
+	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil || usage.TotalTokens != previous {
 		return nil
 	}
 	if recorded == "" || strings.Contains(recorded, "No API key") {
