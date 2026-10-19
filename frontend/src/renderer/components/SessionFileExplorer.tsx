@@ -12,6 +12,7 @@ import {
 	RefreshCw,
  Columns2,
  Rows3,
+ ListChevronsDownUp,
  ListChevronsUpDown,
 	Search,
 } from "lucide-react";
@@ -272,7 +273,7 @@ export function SessionFileExplorer({
 							type="button"
 							variant="ghost"
 						>
-							<ListChevronsUpDown aria-hidden="true" className="size-icon-base" />
+							{reviewAllCollapsed ? <ListChevronsUpDown aria-hidden="true" className="size-icon-base" /> : <ListChevronsDownUp aria-hidden="true" className="size-icon-base" />}
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent side="bottom">{t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}</TooltipContent>

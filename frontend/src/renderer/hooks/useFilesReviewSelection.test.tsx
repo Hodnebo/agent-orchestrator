@@ -130,6 +130,23 @@ describe("useFilesReviewSelection", () => {
 		]);
 	});
 
+	it("keeps the sole commit selected when its checkbox is clicked", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path.endsWith("/workspace/branches")) return { data: branches };
+			if (path.endsWith("/workspace/history")) return { data: { ...mainHistory, commits: [commit("e")] } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		useUiStore.getState().setFilesSelection(SESSION, { branch: { kind: "branch", name: "main" }, changes: null });
+		const { result } = renderSelection(manifest());
+		await waitFor(() => expect(result.current.changesMenu.commits.state).toBe("ready"));
+		act(() => result.current.changesMenu.commits.onToggle(SHA("e")));
+		expect(result.current.changesMenu.value).toEqual({ kind: "commits", shas: [SHA("e")] });
+		await waitFor(() => expect(result.current.target).toMatchObject({ state: "ready", commitShas: [SHA("e")] }));
+		expect(result.current.changesMenu.value).toEqual({ kind: "commits", shas: [SHA("e")] });
+		act(() => result.current.changesMenu.commits.onToggleAll());
+		expect(result.current.changesMenu.value).toEqual({ kind: "commits", shas: [] });
+	});
+
 	it("reads another branch only through its history and the selection route, fenced by the tip it listed", async () => {
 		const onBranchChange = vi.fn();
 		const { result } = renderSelection(manifest(), { onBranchChange });

@@ -66,8 +66,9 @@ export type ReviewHistory = Pick<WorkspaceHistoryResponse, "commits" | "commitsT
 
 /**
  * The pick as it applies now. An empty scope stays picked; a working scope on
- * another branch, a SHA the loaded history no longer lists, and every listed
- * commit ticked all fall back to All commits.
+ * another branch or a SHA the loaded history no longer lists falls back to
+ * All commits. Explicit commit picks remain selected even if they cover the
+ * complete list, including when the branch has only one commit.
  */
 export function normalizeChanges(selection: FilesSelection, manifest: WorkspaceFilesResponse | undefined, legacy: boolean, history?: ReviewHistory): FilesChanges {
 	const picked = selection.changes ?? defaultChanges(selection.branch, manifest, legacy);
@@ -84,7 +85,6 @@ export function normalizeChanges(selection: FilesSelection, manifest: WorkspaceF
 	}
 	if (legacy) shas = shas.slice(0, 1);
 	if (shas.length === 0) return ALL_COMMITS;
-	if (history && !history.commitsTruncated && shas.length === history.commits.length) return ALL_COMMITS;
 	return sameShas(shas, picked.shas) ? picked : { kind: "commits", shas };
 }
 

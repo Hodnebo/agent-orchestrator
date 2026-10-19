@@ -599,7 +599,7 @@ export function WorkspaceReviewPane({
 							const fileAnnotationTarget = annotation.targets.find((target) => target.surface !== "focused" && target.path === file.path && target.side === "file");
 							const fileAnnotationActive = fileAnnotationTarget != null;
 							return (
-								<Popover onOpenChange={(open) => { if (!open && !isCollapsed && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive && !isCollapsed}>
+								<Popover onOpenChange={(open) => { if (!open && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive}>
 									{/* Lets a code selection in this file's surface find its item. */}
 									<div className="relative bg-background" data-review-item-id={item.id}>
 										{/* The whole row toggles the file (the chevron just rotates);

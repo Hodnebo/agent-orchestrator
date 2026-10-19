@@ -121,10 +121,17 @@ describe("normalizeChanges", () => {
 		expect(normalizeChanges({ branch: CHECKED_OUT_BRANCH, changes: ordered }, manifest(), false, listed)).toBe(ordered);
 	});
 
-	it("reads every listed commit ticked as All commits unless older commits are not listed", () => {
+	it("preserves explicit picks even when every listed commit is selected", () => {
 		const all = { kind: "commits", shas: [SHA_A, SHA_B, SHA_C] } as const;
-		expect(normalizeChanges({ branch: CHECKED_OUT_BRANCH, changes: all }, manifest(), false, listed)).toBe(ALL_COMMITS);
+		expect(normalizeChanges({ branch: CHECKED_OUT_BRANCH, changes: all }, manifest(), false, listed)).toBe(all);
 		expect(normalizeChanges({ branch: CHECKED_OUT_BRANCH, changes: all }, manifest(), false, { ...listed, commitsTruncated: true })).toBe(all);
+	});
+
+	it("selects the only commit without reverting to All commits", () => {
+		const onlyCommit = { commits: [listed.commits[0]], commitsTruncated: false };
+		const picked = toggleCommit(ALL_COMMITS, SHA_A, [SHA_A], false);
+		expect(normalizeChanges({ branch: BRANCH, changes: picked }, manifest(), false, onlyCommit)).toEqual({ kind: "commits", shas: [SHA_A] });
+		expect(toggleCommit(picked, SHA_A, [SHA_A], false)).toBe(ALL_COMMITS);
 	});
 
 	it("reads a working scope on another branch as All commits", () => {

@@ -86,6 +86,7 @@ vi.mock("./diffs/WorkspaceReviewPane", () => ({
 			<span data-testid="review-target">{target.key}</span>
 			<span data-testid="review-collapse">{collapseRequest ? `${collapseRequest.expand ? "expand" : "collapse"}:${collapseRequest.key}` : ""}</span>
 			<button onClick={() => onAllCollapsedChange?.(true)} type="button">Report all collapsed</button>
+			<button onClick={() => onAllCollapsedChange?.(false)} type="button">Report an expanded file</button>
 			<button onClick={onBrowseAll} type="button">Browse all files</button>
 			<button onClick={() => onOpenFile?.("src/App.tsx", { mode: "file" })} type="button">Open full file</button>
 			<button onClick={() => onOpenFile?.("README.md", { mode: "rendered" })} type="button">Render README.md</button>
@@ -423,13 +424,17 @@ describe("SessionFileExplorer", () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-collapse" />);
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
 		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
 
 		// Once the review reports every file collapsed, the menu offers the way back.
 		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
+		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-up-down");
 		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
+		await userEvent.click(screen.getByRole("button", { name: "Report an expanded file" }));
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
 	});
 
 	it("lets the caller toggle between rail and maximized layouts", async () => {

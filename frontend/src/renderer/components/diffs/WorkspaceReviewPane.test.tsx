@@ -503,7 +503,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByRole("textbox", { name: /old line 5/ })).toBeInTheDocument();
 	});
 
-	it("preserves a file feedback draft when that file is collapsed", async () => {
+	it("keeps a file feedback composer mounted when that file is collapsed", async () => {
 		const model = annotation();
 		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed", surface: "review" }];
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
@@ -512,7 +512,22 @@ describe("WorkspaceReviewPane", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
 		expect(model.cancel).not.toHaveBeenCalled();
-  expect(screen.queryByRole("textbox",{name:/Feedback for src\/App\.tsx/})).not.toBeInTheDocument();
+		expect(screen.getByLabelText(/Feedback for src\/App\.tsx/)).toBeInTheDocument();
+	});
+
+	it("opens file feedback from an already collapsed file header", async () => {
+		const model = annotation();
+		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const pane = () => <QueryClientProvider client={queryClient}><TooltipProvider><WorkspaceReviewPane annotation={model} target={reviewTarget(data)} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { rerender } = render(pane());
+		await userEvent.click(await screen.findByRole("button", { name: "Collapse src/App.tsx" }));
+		await userEvent.click(screen.getAllByRole("button", { name: "Add feedback" })[0]);
+		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "src/App.tsx", side: "file", surface: "review" }));
+		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed", surface: "review" }];
+		rerender(pane());
+		expect(screen.getByRole("button", { name: "Expand src/App.tsx" })).toBeInTheDocument();
+		expect(await screen.findByLabelText(/Feedback for src\/App\.tsx/)).toBeInTheDocument();
 	});
 
 	it("routes the gutter plus and file actions without opening an external pane", async () => {
