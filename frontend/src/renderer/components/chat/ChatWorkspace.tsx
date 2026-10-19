@@ -1858,7 +1858,12 @@ function ChatWorkspaceContent({
 										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<>{agentSwitch ? null : <>{composerAction}<ContextMeter usage={snapshot.usage} compactsAt={compactsAt} /></>}{composerSettings}</>}
+										settings={<>
+											{/* The settings bar carries the interface switch; while the agent is stopped it is hidden, and the switch to the terminal is the way out. */}
+											{agentSwitch && composerSettings ? null : composerAction}
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{composerSettings}
+										</>}
 										addMenuItems={agentSwitch ? (
 											<ComposerModeItems
 												configOptions={configOptions ?? []}

@@ -1037,6 +1037,21 @@ describe("SessionChatSurface link routing", () => {
 		expect(screen.queryByText("Conversation unavailable")).not.toBeInTheDocument();
 	});
 
+	it("offers the interface switch when the conversation is unavailable", () => {
+		conversationState.snapshot = undefined;
+		conversationState.unavailable = { message: "Controller is unavailable" };
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={session} interfaceSwitch={{ control: <button type="button">Switch to terminal UI</button> }} />
+			</Wrapper>,
+		);
+		expect(screen.getByText("Conversation unavailable")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
+	});
+
 	it("remounts the chat workspace when switching between chat sessions", () => {
 		const first = { ...session, id: "proj-orchestrator-1", kind: "orchestrator" as const };
 		const second = { ...session, id: "proj-orchestrator-2", kind: "orchestrator" as const };

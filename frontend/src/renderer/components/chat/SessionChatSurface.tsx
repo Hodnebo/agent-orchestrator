@@ -566,6 +566,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					The worktree is untouched. Open a shell from the inspector to work in it directly.
 				</p>
+				{interfaceSwitch?.control}
 			</Centered>
 		);
 	}
