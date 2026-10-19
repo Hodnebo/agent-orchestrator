@@ -645,6 +645,11 @@ func Load() (Config, error) {
 	if cfg.TerminalRelayEnabled && !cfg.TerminalStreamEnabled {
 		return Config{}, errors.New("AO_CLOUD_TERMINAL_RELAY requires AO_CLOUD_TERMINAL_STREAM")
 	}
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACTS")); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return Config{}, errors.New("AO_CLOUD_ARTIFACTS must be 0 or 1")
+		}
+	}
 	if err := cfg.validateArtifacts(); err != nil {
 		return Config{}, err
 	}

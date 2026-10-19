@@ -38,6 +38,7 @@ type Server struct {
 	mu       sync.Mutex
 	objects  map[string][]version
 	puts     int
+	gets     int
 	failPuts bool
 }
 
@@ -76,6 +77,13 @@ func (f *Server) Puts() int {
 	return f.puts
 }
 
+// Gets returns how many GetObject calls it received.
+func (f *Server) Gets() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gets
+}
+
 // Remove deletes every version of key.
 func (f *Server) Remove(key string) {
 	f.mu.Lock()
@@ -101,6 +109,11 @@ func (f *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		f.put(w, r, key)
 	case http.MethodGet, http.MethodHead:
+		if r.Method == http.MethodGet {
+			f.mu.Lock()
+			f.gets++
+			f.mu.Unlock()
+		}
 		f.get(w, r, key, versionID)
 	case http.MethodDelete:
 		f.delete(w, key, versionID)

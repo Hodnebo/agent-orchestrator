@@ -1135,7 +1135,15 @@ const sessionSelect = `
 				  AND review_terminal_run.review_terminal_id = terminal.id
 			)
 		), 0),
-		session.requested_output, session.output_type,
+		session.requested_output,
+		CASE
+			WHEN NOT EXISTS (
+				SELECT 1 FROM ao_pull_requests session_pr
+				WHERE session_pr.org_id = session.org_id AND session_pr.session_id = session.id
+			) THEN session.output_type
+			WHEN session.output_type IN ('artifact', 'pr_artifact') THEN 'pr_artifact'
+			ELSE 'pr'
+		END,
 		session.created_at, session.updated_at
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox

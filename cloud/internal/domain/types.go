@@ -204,8 +204,10 @@ type CreateSession struct {
 	// from a cache, so it stays out of the create's idempotency payload: a
 	// retry after the cache changed still replays the first create.
 	CoderCapability bool `json:"-"`
-	// RequestedOutput is empty or RequestedOutputArtifact.
-	RequestedOutput string
+	// RequestedOutput is empty or RequestedOutputArtifact. It is omitted from
+	// the idempotency payload when empty, so a create stored before the field
+	// existed still replays.
+	RequestedOutput string `json:",omitempty"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to

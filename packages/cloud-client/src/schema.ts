@@ -491,7 +491,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. Request a new prefix after expiresAt. */
+        /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. A prefix lasts ten minutes and stops working when the caller leaves the organization; request a new one before expiresAt. */
         post: operations["createSessionArtifactAccess"];
         delete?: never;
         options?: never;
@@ -2702,7 +2702,9 @@ export interface components {
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
             outputType?: components["schemas"]["SessionOutputType"];
-            /** @description The session's committed artifact files, on the session read and list routes while the deployment keeps artifacts. */
+            /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
+            artifactCount?: number;
+            /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
             artifactFiles?: components["schemas"]["SessionArtifact"][];
             /** Format: date-time */
             createdAt: string;
@@ -2731,7 +2733,7 @@ export interface components {
             sha256: string;
             /**
              * Format: date-time
-             * @description The file's modification time in the sandbox.
+             * @description When the control plane last committed a new version of the file.
              */
             updatedAt: string;
         };

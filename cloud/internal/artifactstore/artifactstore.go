@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"path"
 	"strings"
@@ -110,8 +109,20 @@ func Key(orgID, sessionID, cleanPath string) (string, error) {
 	return key, nil
 }
 
+// reservedNames are file names Windows reserves for devices, with or without
+// an extension.
+var reservedNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
 // CleanPath validates a slash-separated path relative to the session's
-// artifact directory and returns it in Unicode NFC form.
+// artifact directory and returns it in Unicode NFC form. It rejects control
+// and invisible format characters, dot segments, Windows device names, and
+// any path under the versions directory in any letter case.
 func CleanPath(raw string) (string, error) {
 	if raw == "" || !utf8.ValidString(raw) {
 		return "", ErrInvalidPath
@@ -124,7 +135,7 @@ func CleanPath(raw string) (string, error) {
 		return "", ErrInvalidPath
 	}
 	for _, r := range cleaned {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return "", ErrInvalidPath
 		}
 	}
@@ -133,8 +144,12 @@ func CleanPath(raw string) (string, error) {
 		if segment == "" || segment == "." || segment == ".." {
 			return "", ErrInvalidPath
 		}
+		base, _, _ := strings.Cut(segment, ".")
+		if reservedNames[strings.ToUpper(base)] {
+			return "", ErrInvalidPath
+		}
 	}
-	if segments[0] == VersionsDir {
+	if strings.EqualFold(segments[0], VersionsDir) {
 		return "", ErrInvalidPath
 	}
 	return cleaned, nil
@@ -151,7 +166,8 @@ func KindOf(cleanPath string) string {
 	return KindFile
 }
 
-// ContentType returns the Content-Type served for a path.
+// ContentType returns the Content-Type served for a path, from a fixed list so
+// it does not depend on the host's MIME tables.
 func ContentType(cleanPath string) string {
 	ext := strings.ToLower(path.Ext(cleanPath))
 	switch ext {
@@ -179,9 +195,14 @@ func ContentType(cleanPath string) string {
 		return "image/webp"
 	case ".pdf":
 		return "application/pdf"
-	}
-	if contentType := mime.TypeByExtension(ext); contentType != "" {
-		return contentType
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
 	}
 	return "application/octet-stream"
 }

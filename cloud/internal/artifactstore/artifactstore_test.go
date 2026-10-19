@@ -21,6 +21,8 @@ func TestCleanPath(t *testing.T) {
 		"caf\u0065\u0301.md":    "caf\u00e9.md",
 		"nested/.hidden/x.txt":  "nested/.hidden/x.txt",
 		"docs/.versions/a.html": "docs/.versions/a.html",
+		"console.md":            "console.md",
+		"con-notes.md":          "con-notes.md",
 	}
 	for input, want := range valid {
 		got, err := artifactstore.CleanPath(input)
@@ -32,6 +34,8 @@ func TestCleanPath(t *testing.T) {
 		"", "/etc/passwd", "../secret", "a/../../b", "a/./b", "a//b", "a/",
 		`a\b`, `..\..\x`, "C:/x", "c:x", ".versions/report.html", "..", ".",
 		"bad\x00name", "line\nbreak", string([]byte{0xff, 0xfe}),
+		".Versions/report.html", ".VERSIONS/a.md", "evil\u202egnp.html", "zero\u200bwidth.md",
+		"CON", "nul.txt", "docs/com1.md", "LPT9.log",
 	}
 	for _, input := range invalid {
 		if got, err := artifactstore.CleanPath(input); !errors.Is(err, artifactstore.ErrInvalidPath) {
@@ -158,5 +162,22 @@ func exerciseStore(t *testing.T, cfg artifactstore.Config, versions func(string)
 	}
 	if err := store.DeleteVersion(ctx, key, secondVersion); err != nil {
 		t.Fatalf("delete second version: %v", err)
+	}
+}
+
+func TestContentTypeUsesAFixedList(t *testing.T) {
+	cases := map[string]string{
+		"report.HTML":  "text/html; charset=utf-8",
+		"notes.md":     "text/markdown; charset=utf-8",
+		"chart.svg":    "image/svg+xml",
+		"demo.mp4":     "video/mp4",
+		"setup.exe":    "application/octet-stream",
+		"archive.zip":  "application/octet-stream",
+		"no-extension": "application/octet-stream",
+	}
+	for path, want := range cases {
+		if got := artifactstore.ContentType(path); got != want {
+			t.Errorf("ContentType(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

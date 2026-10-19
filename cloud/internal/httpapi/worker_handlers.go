@@ -142,6 +142,7 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 	launchContext, err := launchContextFrom(launch, launchCapabilities{
 		resolvesWorkspacePath: slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder),
 		multiRepo:             slices.Contains(input.Capabilities, worker.CapabilityMultiRepo),
+		artifacts:             s.artifactsEnabled(),
 	})
 	if err != nil {
 		s.logger.Error("build worker launch context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
@@ -237,6 +238,7 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	launchContext, err := launchContextFrom(launch, launchCapabilities{
 		resolvesWorkspacePath: headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder),
 		multiRepo:             headerReportsCapability(r, worker.CapabilityMultiRepo),
+		artifacts:             s.artifactsEnabled(),
 	})
 	if err != nil {
 		s.logger.Error("build worker reconnect context", "error", err, "project_id", launch.ProjectID, "request_id", requestID(r))
@@ -271,6 +273,9 @@ type launchCapabilities struct {
 	resolvesWorkspacePath bool
 	// multiRepo is whether the worker advertised worker.CapabilityMultiRepo.
 	multiRepo bool
+	// artifacts is whether cloud artifacts are on. A session's requested
+	// output reaches the worker only then.
+	artifacts bool
 }
 
 // launchContextFrom projects a stored launch spec onto the wire type shared by
@@ -352,7 +357,7 @@ func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabiliti
 		SystemPrompt:    systemPrompt,
 		PostCreate:      postCreate,
 		PreRemove:       preRemove,
-		RequestedOutput: launch.RequestedOutput,
+		RequestedOutput: requestedOutputFor(launch, capabilities.artifacts),
 	}, nil
 }
 
@@ -1467,4 +1472,13 @@ func (s *Server) patPullRequestCloneURL(ctx context.Context, claims worker.Claim
 		}
 	}
 	return "", postgres.ErrForbidden
+}
+
+// requestedOutputFor is the session's requested output while cloud artifacts
+// are on, and empty otherwise.
+func requestedOutputFor(launch domain.WorkerLaunch, artifacts bool) string {
+	if !artifacts {
+		return ""
+	}
+	return launch.RequestedOutput
 }

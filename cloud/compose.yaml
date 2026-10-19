@@ -20,8 +20,11 @@ services:
     restart: unless-stopped
 
   # S3-compatible store for cloud session artifacts (AO_CLOUD_ARTIFACTS=1).
+  # It runs as the invoking user (set by cloud-local-up.sh), who owns the data
+  # directory; on Linux the image's own user cannot write a root-owned bind.
   minio:
-    image: cgr.dev/chainguard/minio:latest
+    image: cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8
+    user: "${AO_CLOUD_LOCAL_UID:-65532}:${AO_CLOUD_LOCAL_GID:-65532}"
     command: ["server", "/data"]
     environment:
       MINIO_ROOT_USER: ao_cloud_local_minio
@@ -30,14 +33,16 @@ services:
       - "${AO_CLOUD_LOCAL_MINIO_DATA_DIR:-${AO_DATA_DIR:-${HOME}/.ao}/cloud/minio}:/data"
     restart: unless-stopped
 
-  # Creates the artifact bucket with versioning on, then exits.
+  # Creates the artifact bucket with versioning on, then exits. It gives up
+  # after a minute so a MinIO that cannot start fails the bring-up.
   minio-init:
-    image: cgr.dev/chainguard/minio-client:latest-dev
+    image: cgr.dev/chainguard/minio-client@sha256:3b5eb8505b378708e08491bd2b487cb39621cabd0cf99bd90927ae83b7378c9b
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
+        tries=0;
         until mc alias set local http://minio:9000 ao_cloud_local_minio ao_cloud_local_minio_secret;
-        do sleep 1; done &&
+        do tries=$$((tries + 1)); [ "$$tries" -ge 60 ] && exit 1; sleep 1; done &&
         mc mb --ignore-existing local/ao-cloud-local-tenant-artifacts &&
         mc version enable local/ao-cloud-local-tenant-artifacts
     depends_on:

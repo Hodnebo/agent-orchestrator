@@ -728,8 +728,9 @@ paths:
         Returns a short-lived path prefix that serves this session's artifact
         files without a bearer header, for a sandboxed frame. Append a file's
         URL-escaped path to filesPrefix; relative links inside an HTML file
-        resolve against the same prefix. Request a new prefix after
-        expiresAt.
+        resolve against the same prefix. A prefix lasts ten minutes and
+        stops working when the caller leaves the organization; request a new
+        one before expiresAt.
       responses:
         "200":
           description: The file access prefix.
@@ -4976,11 +4977,18 @@ components:
           $ref: "#/components/schemas/RequestedOutput"
         outputType:
           $ref: "#/components/schemas/SessionOutputType"
+        artifactCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many committed artifact files the session has, on the session
+            read and list routes while the deployment keeps artifacts.
         artifactFiles:
           type: array
           description: >-
-            The session's committed artifact files, on the session read and
-            list routes while the deployment keeps artifacts.
+            The session's committed artifact files, on the session read route
+            while the deployment keeps artifacts. The list route sends only
+            artifactCount; listSessionArtifacts returns the files.
           items:
             $ref: "#/components/schemas/SessionArtifact"
         createdAt:
@@ -5024,7 +5032,8 @@ components:
         updatedAt:
           type: string
           format: date-time
-          description: The file's modification time in the sandbox.
+          description: >-
+            When the control plane last committed a new version of the file.
     SessionArtifactList:
       type: object
       additionalProperties: false

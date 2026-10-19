@@ -28,10 +28,14 @@ import (
 // sessions.
 type sessionArtifactStore interface {
 	ChangedSessionArtifacts(ctx context.Context, orgID, sessionID string, manifest []domain.ArtifactManifestEntry) ([]string, error)
-	CommitSessionArtifacts(ctx context.Context, orgID, sessionID string, upserts []domain.SessionArtifact, deletes []string) error
+	ArtifactUploadAllowed(ctx context.Context, orgID, sessionID string, size int64) (bool, error)
+	RecordArtifactUpload(ctx context.Context, orgID, sessionID, s3Key, versionID string, size int64) error
+	CommitSessionArtifacts(ctx context.Context, orgID, sessionID, workerID string, workerEpoch int64, upserts []domain.SessionArtifact, deletes []string) error
 	ListSessionArtifacts(ctx context.Context, principal domain.Principal, orgID, sessionID string) ([]domain.SessionArtifact, error)
+	RequireSessionArtifactAccess(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	SessionArtifactsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.SessionArtifact, error)
-	SessionArtifact(ctx context.Context, orgID, sessionID, path string) (domain.SessionArtifact, error)
+	SessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]int, error)
+	SessionArtifact(ctx context.Context, userID, orgID, sessionID, path string) (domain.SessionArtifact, error)
 }
 
 // ArtifactSHA256Header carries the lowercase hex SHA-256 of an uploaded
@@ -39,7 +43,11 @@ type sessionArtifactStore interface {
 const ArtifactSHA256Header = "X-AO-Artifact-SHA256"
 
 // artifactAccessTTL is how long an artifact file access prefix stays valid.
-const artifactAccessTTL = 30 * time.Minute
+const artifactAccessTTL = 10 * time.Minute
+
+// artifactUploadReadTimeout is how long one artifact blob upload may take to
+// arrive, replacing the server's request read timeout for that route.
+const artifactUploadReadTimeout = 5 * time.Minute
 
 // artifactHeadConcurrency bounds the parallel HeadObject calls of one commit.
 const artifactHeadConcurrency = 8
@@ -49,7 +57,9 @@ const maxArtifactVersionID = 1024
 
 // artifactFileCSP sandboxes every served artifact file: it runs in an opaque
 // origin, can load only its own session's files and inline or data content,
-// and cannot make network requests.
+// and cannot fetch, post forms or open sockets. A page can still navigate
+// itself or open a window, so it can carry data, including its own URL and
+// access token, to another site that way.
 const artifactFileCSP = "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads; " +
 	"default-src 'self' data: blob:; " +
 	"script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; " +
@@ -98,7 +108,7 @@ func toSessionArtifactResponses(artifacts []domain.SessionArtifact) []sessionArt
 			ContentType: artifact.ContentType,
 			Size:        artifact.Size,
 			SHA256:      artifact.SHA256,
-			UpdatedAt:   artifact.MTime.UTC(),
+			UpdatedAt:   artifact.UpdatedAt.UTC(),
 		})
 	}
 	return items
@@ -215,6 +225,18 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_path", "The artifact path is invalid.")
 		return
 	}
+	allowed, err := s.artifactRows.ArtifactUploadAllowed(r.Context(), claims.OrgID, claims.SessionID, r.ContentLength)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !allowed {
+		writeArtifactLimit(w, r)
+		return
+	}
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(artifactUploadReadTimeout)); err != nil {
+		s.logger.WarnContext(r.Context(), "extend artifact upload deadline", "error", err, "request_id", requestID(r))
+	}
 	body := http.MaxBytesReader(w, r.Body, r.ContentLength)
 	versionID, err := s.artifacts.Put(r.Context(), key, body, r.ContentLength, sum)
 	if errors.Is(err, artifactstore.ErrChecksumMismatch) {
@@ -224,6 +246,18 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "store artifact blob", "error", err, "request_id", requestID(r))
 		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be stored.")
+		return
+	}
+	if err := s.artifactRows.RecordArtifactUpload(r.Context(), claims.OrgID, claims.SessionID, key, versionID, r.ContentLength); err != nil {
+		// An unrecorded version would never be collected, so remove it now.
+		if deleteErr := s.artifacts.DeleteVersion(context.WithoutCancel(r.Context()), key, versionID); deleteErr != nil {
+			s.logger.ErrorContext(r.Context(), "delete unrecorded artifact version", "error", deleteErr, "request_id", requestID(r))
+		}
+		if errors.Is(err, postgres.ErrArtifactLimit) {
+			writeArtifactLimit(w, r)
+			return
+		}
+		s.writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, workerArtifactBlobResponse{Path: cleaned, VersionID: versionID})
@@ -308,9 +342,17 @@ func (s *Server) workerCommitArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, code, err.Error())
 		return
 	}
-	err := s.artifactRows.CommitSessionArtifacts(r.Context(), claims.OrgID, claims.SessionID, upserts, deletes)
+	err := s.artifactRows.CommitSessionArtifacts(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, upserts, deletes)
 	if errors.Is(err, postgres.ErrArtifactLimit) {
 		writeArtifactLimit(w, r)
+		return
+	}
+	if errors.Is(err, postgres.ErrStaleWorker) {
+		writeError(w, r, http.StatusUnauthorized, "STALE_WORKER_TOKEN", "The worker credential has been replaced.")
+		return
+	}
+	if errors.Is(err, postgres.ErrArtifactVersionUnknown) {
+		writeError(w, r, http.StatusConflict, "artifact_version_missing", "A version is not an open upload of this session; upload it again.")
 		return
 	}
 	if err != nil {
@@ -426,12 +468,13 @@ func (s *Server) createArtifactAccess(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
 		return
 	}
-	if _, err := s.artifactRows.ListSessionArtifacts(r.Context(), principalFrom(r), orgID, sessionID); err != nil {
+	principal := principalFrom(r)
+	if err := s.artifactRows.RequireSessionArtifactAccess(r.Context(), principal, orgID, sessionID); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
 	expiresAt := time.Now().UTC().Add(artifactAccessTTL).Truncate(time.Second)
-	token := s.signArtifactAccess(artifactAccessClaims{OrgID: orgID, SessionID: sessionID, Expires: expiresAt.Unix()})
+	token := s.signArtifactAccess(artifactAccessClaims{OrgID: orgID, SessionID: sessionID, UserID: principal.UserID, Expires: expiresAt.Unix()})
 	writeJSON(w, http.StatusOK, artifactAccessResponse{
 		FilesPrefix: "/api/cloud/v1/artifact-files/" + token + "/",
 		ExpiresAt:   expiresAt,
@@ -439,7 +482,8 @@ func (s *Server) createArtifactAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveArtifactFile streams the committed version of one artifact file named
-// by an access token and a path.
+// by an access token and a path, while the token's user is still an active
+// member of the organization.
 func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.verifyArtifactAccess(chi.URLParam(r, "token"), time.Now())
 	if !ok {
@@ -456,41 +500,64 @@ func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
 		return
 	}
-	artifact, err := s.artifactRows.SessionArtifact(r.Context(), claims.OrgID, claims.SessionID, cleaned)
+	artifact, err := s.artifactRows.SessionArtifact(r.Context(), claims.UserID, claims.OrgID, claims.SessionID, cleaned)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
 	etag := `"` + artifact.SHA256 + `"`
+	if r.Header.Get("If-None-Match") == etag {
+		setArtifactFileHeaders(w, etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if r.Method == http.MethodHead {
+		head, err := s.artifacts.Head(r.Context(), artifact.S3Key, artifact.VersionID)
+		if !s.artifactObjectReadable(w, r, err) {
+			return
+		}
+		setArtifactFileHeaders(w, etag)
+		w.Header().Set("Content-Type", artifactstore.ContentType(artifact.Path))
+		w.Header().Set("Content-Length", strconv.FormatInt(head.Size, 10))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	object, err := s.artifacts.Get(r.Context(), artifact.S3Key, artifact.VersionID)
+	if !s.artifactObjectReadable(w, r, err) {
+		return
+	}
+	defer object.Body.Close()
+	setArtifactFileHeaders(w, etag)
+	w.Header().Set("Content-Type", artifactstore.ContentType(artifact.Path))
+	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, object.Body); err != nil {
+		s.logger.WarnContext(r.Context(), "stream artifact blob", "error", err, "request_id", requestID(r))
+	}
+}
+
+// artifactObjectReadable writes the error response for a failed object read
+// and returns false, or returns true when err is nil.
+func (s *Server) artifactObjectReadable(w http.ResponseWriter, r *http.Request, err error) bool {
+	if errors.Is(err, artifactstore.ErrNotFound) {
+		writeError(w, r, http.StatusNotFound, "artifact_unavailable", "This artifact file is no longer available.")
+		return false
+	}
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "read artifact blob", "error", err, "request_id", requestID(r))
+		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be read.")
+		return false
+	}
+	return true
+}
+
+// setArtifactFileHeaders sets the headers of a served artifact file.
+func setArtifactFileHeaders(w http.ResponseWriter, etag string) {
 	w.Header().Set("Content-Security-Policy", artifactFileCSP)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	object, err := s.artifacts.Get(r.Context(), artifact.S3Key, artifact.VersionID)
-	if errors.Is(err, artifactstore.ErrNotFound) {
-		writeError(w, r, http.StatusNotFound, "artifact_unavailable", "This artifact file is no longer available.")
-		return
-	}
-	if err != nil {
-		s.logger.ErrorContext(r.Context(), "read artifact blob", "error", err, "request_id", requestID(r))
-		writeError(w, r, http.StatusBadGateway, "artifact_store_unavailable", "The artifact could not be read.")
-		return
-	}
-	defer object.Body.Close()
-	w.Header().Set("Content-Type", artifactstore.ContentType(artifact.Path))
-	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
-	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodHead {
-		return
-	}
-	if _, err := io.Copy(w, object.Body); err != nil {
-		s.logger.WarnContext(r.Context(), "stream artifact blob", "error", err, "request_id", requestID(r))
-	}
 }
 
 // wildcardPath returns the decoded remainder of a route ending in "/*".
@@ -505,6 +572,7 @@ func wildcardPath(r *http.Request) (string, error) {
 type artifactAccessClaims struct {
 	OrgID     string `json:"o"`
 	SessionID string `json:"s"`
+	UserID    string `json:"u"`
 	Expires   int64  `json:"e"`
 }
 
@@ -532,7 +600,7 @@ func (s *Server) verifyArtifactAccess(token string, now time.Time) (artifactAcce
 		return artifactAccessClaims{}, false
 	}
 	if requireUUID(claims.OrgID, "o") != nil || requireUUID(claims.SessionID, "s") != nil ||
-		now.Unix() >= claims.Expires {
+		claims.UserID == "" || now.Unix() >= claims.Expires {
 		return artifactAccessClaims{}, false
 	}
 	return claims, true
@@ -551,4 +619,13 @@ func (s *Server) sessionArtifactFiles(ctx context.Context, orgID string, session
 		return nil, nil
 	}
 	return s.artifactRows.SessionArtifactsBySessions(ctx, orgID, sessionIDs)
+}
+
+// sessionArtifactCounts returns the committed artifact count of each session,
+// or nil when artifacts are off.
+func (s *Server) sessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]int, error) {
+	if !s.artifactsEnabled() {
+		return nil, nil
+	}
+	return s.artifactRows.SessionArtifactCounts(ctx, orgID, sessionIDs)
 }

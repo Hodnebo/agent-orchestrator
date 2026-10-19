@@ -166,8 +166,11 @@ type sessionResponse struct {
 	RequestedOutput string `json:"requestedOutput,omitempty"`
 	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
 	OutputType string `json:"outputType"`
+	// ArtifactCount is the number of the session's committed artifact files,
+	// on the session read and list routes while cloud artifacts are on.
+	ArtifactCount *int `json:"artifactCount,omitempty"`
 	// ArtifactFiles lists the session's committed artifact files on the
-	// session read and list routes while cloud artifacts are on.
+	// session read route while cloud artifacts are on.
 	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
 	CreatedAt     time.Time                 `json:"createdAt"`
 	UpdatedAt     time.Time                 `json:"updatedAt"`
@@ -796,7 +799,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, sessionIDs)
+	artifactCounts, err := s.sessionArtifactCounts(r.Context(), orgID, sessionIDs)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
@@ -805,8 +808,9 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	for _, session := range sessions {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
-		if artifactFiles != nil {
-			response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[session.ID])
+		if artifactCounts != nil {
+			count := artifactCounts[session.ID]
+			response.ArtifactCount = &count
 		}
 		items = append(items, response)
 	}
@@ -975,6 +979,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
 	if artifactFiles != nil {
+		count := len(artifactFiles[sessionID])
+		response.ArtifactCount = &count
 		response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[sessionID])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})

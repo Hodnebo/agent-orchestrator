@@ -18,6 +18,20 @@ const (
 	MaxSessionArtifactBytes = 500 << 20
 )
 
+// Limits on a session's uploaded but uncommitted artifact versions.
+const (
+	MaxPendingArtifactUploads = 2 * MaxSessionArtifactFiles
+	MaxPendingArtifactBytes   = 2 * MaxSessionArtifactBytes
+)
+
+// ArtifactUploadTTL is how long an uncommitted artifact upload can still be
+// committed before the sweeper deletes it.
+const ArtifactUploadTTL = 24 * time.Hour
+
+// ArtifactReplacedGrace is how long a version a commit replaced or deleted
+// stays in the bucket, so a read that started before the commit can finish.
+const ArtifactReplacedGrace = time.Hour
+
 // Session output types.
 const (
 	SessionOutputNone          = "none"
@@ -63,4 +77,10 @@ type ArtifactManifestEntry struct {
 	Path   string
 	Size   int64
 	SHA256 string
+}
+
+// ArtifactObjectVersion is one object version in the artifact bucket.
+type ArtifactObjectVersion struct {
+	S3Key     string
+	VersionID string
 }
