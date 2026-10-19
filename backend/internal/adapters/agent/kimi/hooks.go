@@ -129,10 +129,22 @@ func installKimiConfigHooks(cfg ports.WorkspaceHookConfig) error {
 	return nil
 }
 
+// ShareCredentials gives the Kimi home AO runs Kimi chats in the user's own
+// Kimi login, as a terminal session's hooks do.
+func ShareCredentials(dataDir string) error {
+	if strings.TrimSpace(dataDir) == "" {
+		return nil
+	}
+	return seedKimiCredentials(kimiCodeHomeDir(dataDir))
+}
+
 func seedKimiCredentials(targetHome string) error {
 	sourceHome, ok := kimiCodeHome()
 	if !ok {
 		return nil
+	}
+	if shared, err := shareKimiCredentialStore(sourceHome, targetHome); err != nil || shared {
+		return err
 	}
 	sourceConfigPath := filepath.Join(sourceHome, "config.toml")
 	sourcePaths, err := kimiConfigOAuthCredentialPaths(sourceConfigPath)
@@ -153,12 +165,52 @@ func seedKimiCredentials(targetHome string) error {
 	return nil
 }
 
+// shareKimiCredentialStore links AO's Kimi home's credentials to the user's
+// own. Kimi's access tokens last minutes and are renewed with a refresh token
+// that rotates, so a copy goes stale, and two copies can each sign the other
+// out. Sharing one store keeps AO's Kimi on the login the user keeps current.
+// It reports false where the user has no Kimi login to share, or links cannot
+// be made (Windows without the privilege), leaving the copy below.
+func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
+	source := filepath.Join(sourceHome, "credentials")
+	target := filepath.Join(targetHome, "credentials")
+	if sameKimiConfigPath(source, target) {
+		return true, nil
+	}
+	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+		return false, nil
+	}
+	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
+		return true, nil
+	}
+	if err := os.MkdirAll(targetHome, 0o700); err != nil {
+		return false, fmt.Errorf("create AO Kimi home: %w", err)
+	}
+	// AO's own folder only ever held copies seeded from the user's. It is kept
+	// aside until the link is in place, and restored if it cannot be made.
+	aside := target + ".seeded"
+	_ = os.RemoveAll(aside)
+	if err := os.Rename(target, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("set aside AO's Kimi credentials: %w", err)
+	}
+	if err := os.Symlink(source, target); err != nil {
+		_ = os.Rename(aside, target)
+		return false, nil
+	}
+	_ = os.RemoveAll(aside)
+	return true, nil
+}
+
 func seedKimiCredential(sourcePath, targetPath string) error {
 	if sameKimiConfigPath(sourcePath, targetPath) {
 		return nil
 	}
-	if _, err := os.Stat(targetPath); err == nil {
-		return nil
+	// A copy is replaced by a newer login: one only seeded once went stale as
+	// soon as Kimi renewed its tokens.
+	if target, err := os.Stat(targetPath); err == nil {
+		if source, err := os.Stat(sourcePath); err != nil || !source.ModTime().After(target.ModTime()) {
+			return nil
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target Kimi credentials %s: %w", targetPath, err)
 	}

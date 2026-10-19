@@ -37,6 +37,10 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := kimi.PrepareACPInstructions(ctx, cfg.WorkspacePath, cfg.SystemPrompt); err != nil {
 		return nil, nil, err
 	}
+	// The chat runs in AO's Kimi home, which signs in with the user's own login.
+	if err := kimi.ShareCredentials(cfg.DataDir); err != nil {
+		return nil, nil, err
+	}
 	return []string{"acp"}, nil, nil
 }
 
