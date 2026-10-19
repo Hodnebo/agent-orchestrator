@@ -417,6 +417,58 @@ describe("Executor", () => {
 		expect(fake.captures).toEqual([personal.id, own]);
 	});
 
+	it("applies the site policy to frames, not just the tab", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const contentOps: string[] = [];
+		fake.frames = [
+			{ frameId: 0, parentFrameId: -1, url: "https://shop.test/" },
+			{ frameId: 1, parentFrameId: 0, url: "https://www.paypal.com/checkout" },
+			{ frameId: 2, parentFrameId: 0, url: "https://widgets.test/form" },
+		];
+		fake.frameResponder = (frameId, message) => {
+			if (frameId !== 0) contentOps.push(`${frameId}:${String(message.op)}`);
+			if (message.op === "frameOffset" && frameId === 0 && message.ref === "ePay") return { x: 0, y: 0, src: "https://www.paypal.com/checkout", name: "Pay" };
+			if (message.op === "frameOffset" && frameId === 0 && message.ref === "eWidget") return { x: 0, y: 0, src: "https://widgets.test/form", name: "Widget" };
+			if (message.op === "snapshot") return { snapshot: '- textbox "Card" [ref=e1]', refs: { e1: { role: "textbox", name: "Card" } } };
+			if (message.op === "fill") return { filled: true };
+			return undefined;
+		};
+
+		// An allowed page embedding a denied site cannot select that frame.
+		await expect(run("frame", { target: "ePay" })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
+		expect(contentOps).toEqual([]);
+
+		// A frame that navigates to a denied site after selection is blocked.
+		await run("frame", { target: "eWidget" });
+		expect(await run("snapshot", { interactive: true })).toMatchObject({ text: '- textbox "Card" [ref=e1]' });
+		fake.frames[2]!.url = "https://www.paypal.com/embedded";
+		await expect(run("snapshot", { interactive: true })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
+		await expect(run("fill", { ref: "e1", text: "4111" })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
+		expect(contentOps).toEqual(["2:snapshot"]);
+	});
+
+	it("uses synthetic input when a frame on the way requires it", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await fake.local.set({ [POLICY_KEY]: { ...DEFAULT_SITE_POLICY, syntheticInput: ["widgets.test"] } });
+		fake.frames = [
+			{ frameId: 0, parentFrameId: -1, url: "https://shop.test/" },
+			{ frameId: 2, parentFrameId: 0, url: "https://widgets.test/form" },
+		];
+		fake.frameResponder = (frameId, message) => {
+			if (message.op === "frameOffset" && frameId === 0) return { x: 0, y: 0, src: "https://widgets.test/form", name: "Widget" };
+			if (message.op === "click" && frameId === 2) return { clicked: true };
+			return undefined;
+		};
+		await run("frame", { target: "eWidget" });
+		const attached = fake.attached;
+		expect(await run("click", { ref: "e1" })).toMatchObject({ inputTier: "synthetic" });
+		expect(fake.attached).toBe(attached);
+	});
+
 	it("refuses panel-only actions", async () => {
 		const { run } = setup();
 		await expect(run("devtools-open")).rejects.toMatchObject({ code: "BROWSER_ACTION_UNSUPPORTED_IN_TARGET" });

@@ -212,6 +212,35 @@ export class Executor {
 		if (!decision.allowed) throw new BridgeError("BROWSER_SITE_BLOCKED", decision.reason);
 	}
 
+	/**
+	 * Current URLs of a frame and every frame above it, up to (not including)
+	 * the page itself, which withPage checks. Frames can navigate after they
+	 * are selected, so these are read fresh from Chrome each time.
+	 */
+	private async frameChainUrls(page: ActiveTab, frameId: number): Promise<string[]> {
+		if (frameId === 0) return [];
+		const frames = (await this.deps.chrome.webNavigation.getAllFrames({ tabId: page.tabId })) ?? [];
+		const byId = new Map(frames.map((frame) => [frame.frameId, frame]));
+		const urls: string[] = [];
+		for (let id = frameId; id > 0; ) {
+			const frame = byId.get(id);
+			if (!frame) throw new BridgeError("FRAME_NOT_FOUND", "The selected frame is gone; select it again or use `ao browser frame main`");
+			urls.push(frame.url);
+			id = frame.parentFrameId;
+		}
+		return urls;
+	}
+
+	/** Apply the site policy to a frame's own address and its ancestors'. */
+	private async assertFrameAllowed(ctx: Context, page: ActiveTab, frameId: number): Promise<void> {
+		for (const url of await this.frameChainUrls(page, frameId)) {
+			// about:blank and srcdoc frames inherit their parent, checked in turn.
+			if (inheritsParentOrigin(url)) continue;
+			const decision = evaluateUrl(ctx.policy, url);
+			if (!decision.allowed) throw new BridgeError("BROWSER_SITE_BLOCKED", `${decision.reason} (in a frame on this page)`);
+		}
+	}
+
 	private frameFor(ctx: Context, page: ActiveTab): number {
 		const frame = ctx.extras.frame;
 		return frame && frame.logicalTabId === page.logicalId ? frame.frameId : 0;
@@ -222,6 +251,9 @@ export class Executor {
 		if (dialog) {
 			throw new BridgeError("BROWSER_DIALOG_OPEN", `A ${dialog.type} dialog is open; answer it with \`ao browser dialog accept|dismiss\``);
 		}
+		// The tab's own address is checked by withPage; a selected frame (or an
+		// ancestor of it) may host a site the policy denies.
+		await this.assertFrameAllowed(ctx, page, frameId);
 		const message = { aoBridge: 1, ...request };
 		// A page blocked by a dialog never answers; do not hang the command.
 		const limit = (typeof request.timeoutMs === "number" ? request.timeoutMs : 0) + CONTENT_TIMEOUT_MS;
@@ -271,8 +303,11 @@ export class Executor {
 		ctx.extras.baseline = undefined;
 	}
 
-	private useTrustedInput(ctx: Context, page: ActiveTab): boolean {
-		return ctx.approval.trusted && trustedInputAllowed(ctx.policy, page.tab.url);
+	/** Trusted input only when the tab and every frame on the way allow it. */
+	private async useTrustedInput(ctx: Context, page: ActiveTab): Promise<boolean> {
+		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
+		const urls = await this.frameChainUrls(page, this.frameFor(ctx, page));
+		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));
 	}
 
 	/**
@@ -390,6 +425,8 @@ export class Executor {
 			}
 			const current = ctx.extras.frame && ctx.extras.frame.logicalTabId === page.logicalId ? ctx.extras.frame.chain : [];
 			const frameId = matches[0]!.frameId;
+			// Never select a frame hosting a site the policy denies.
+			await this.assertFrameAllowed(ctx, page, frameId);
 			ctx.extras.frame = { logicalTabId: page.logicalId, frameId, chain: [...current, { frameId, parentFrameId, ref: target }] };
 			ctx.extras.baseline = undefined;
 			return { frame: target, name: info.name, url: sanitizeBrowserURL(matches[0]!.url), target: this.target(page) };
@@ -558,7 +595,7 @@ export class Executor {
 
 	private async elementAction(ctx: Context, action: string, ref: string, args: Record<string, unknown>): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
-			const trusted = this.useTrustedInput(ctx, page);
+			const trusted = await this.useTrustedInput(ctx, page);
 			let value: unknown;
 			switch (action) {
 				case "click":
@@ -603,7 +640,7 @@ export class Executor {
 	private async press(ctx: Context, key: string): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
 			let input = {};
-			if (this.useTrustedInput(ctx, page)) {
+			if (await this.useTrustedInput(ctx, page)) {
 				await this.showTab(ctx, page);
 				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
 			} else await this.content(page, ctx, { op: "press", key });
@@ -613,7 +650,7 @@ export class Executor {
 
 	private async drag(ctx: Context, ref: string, targetRef: string, human: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
-			if (!this.useTrustedInput(ctx, page)) {
+			if (!(await this.useTrustedInput(ctx, page))) {
 				throw new BridgeError("BROWSER_TRUSTED_INPUT_REQUIRED", "Dragging needs trusted input, which is off for this site");
 			}
 			await this.showTab(ctx, page);
@@ -784,6 +821,10 @@ function parsePostcondition(raw: unknown): Postcondition | undefined {
 		throw new BridgeError("INVALID_ARGUMENT", "postcondition.timeoutMs must be an integer between 1 and 55000");
 	}
 	return { kind, ...(value !== undefined ? { value } : {}), timeoutMs };
+}
+
+function inheritsParentOrigin(url: string): boolean {
+	return url === "" || url === "about:blank" || url === "about:srcdoc";
 }
 
 function tabState(page: ActiveTab, active: boolean): Record<string, unknown> {
