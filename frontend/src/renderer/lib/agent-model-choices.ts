@@ -33,8 +33,18 @@ export function modelChoiceLabel(choice: { id: string; label: string }): string 
 	return isDefaultPlaceholderLabel(choice.label) ? choice.id : choice.label || choice.id;
 }
 
-export function agentModelDisplayLabel(agentId: string | undefined, label: string): string {
-	return agentId === "claude-code" ? label.replace(/^Claude\s+/i, "") : label;
+/**
+ * Claude's family aliases name only the family ("Opus"); the description leads with the
+ * model they run ("Opus 5.5 · Best for…"), so a description names the alias by version,
+ * keeping a context variant: "Opus (1M context)" becomes "Opus 5.5 (1M context)".
+ */
+export function agentModelDisplayLabel(agentId: string | undefined, label: string, description = ""): string {
+	if (agentId !== "claude-code") return label;
+	const name = label.replace(/^Claude\s+/i, "");
+	const [family, variant] = name.split(/\s+(?=\()/, 2);
+	const resolved = description.split("·")[0].trim().match(/^(\S+)\s+(\d+(?:\.\d+)?)\b/);
+	if (!resolved || resolved[1].toLowerCase() !== family.toLowerCase()) return name;
+	return [`${family} ${resolved[2]}`, variant].filter(Boolean).join(" ");
 }
 
 const CLAUDE_FAMILIES = ["fable", "opus", "sonnet", "haiku"];

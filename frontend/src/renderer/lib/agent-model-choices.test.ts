@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { agentModelDisplayLabel, claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -94,6 +94,16 @@ describe("claudeChoiceModel", () => {
 		expect(choiceModel("claude-opus-4-9")?.id).toBe("claude-opus-4-9");
 		expect(choiceModel("default")).toBeUndefined();
 		expect(claudeChoiceModel([])).toBeUndefined();
+	});
+});
+
+describe("agentModelDisplayLabel", () => {
+	it("names a Claude alias by the model its description says it runs", () => {
+		expect(agentModelDisplayLabel("claude-code", "Opus", "Opus 5.5 · Best for everyday, complex tasks")).toBe("Opus 5.5");
+		expect(agentModelDisplayLabel("claude-code", "Opus (1M context)", "Opus 5.5 with 1M context · Billed as extra usage")).toBe("Opus 5.5 (1M context)");
+		expect(agentModelDisplayLabel("claude-code", "Claude Opus 5", "Newer version available · select Opus for Opus 5.5")).toBe("Opus 5");
+		expect(agentModelDisplayLabel("claude-code", "Sonnet", "Opus 5.5 · Best for everyday, complex tasks")).toBe("Sonnet");
+		expect(agentModelDisplayLabel("codex", "Opus", "Opus 5.5 · Best for everyday, complex tasks")).toBe("Opus");
 	});
 });
 

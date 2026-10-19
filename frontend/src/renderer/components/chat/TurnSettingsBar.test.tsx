@@ -1021,6 +1021,27 @@ describe("native model selection", () => {
 		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
 	});
 
+	it("names Claude aliases by version and groups older models like the local picker", async () => {
+		const user = userEvent.setup();
+		render(<TurnSettingsBar harness="claude-code" onChange={vi.fn()} settings={{ model: "sonnet" }} models={[
+			{ id: "default", displayName: "Use agent model", default: true },
+			{ id: "sonnet", displayName: "Sonnet", description: "Sonnet 5.5 · Best for everyday tasks", default: false },
+			{ id: "fable", displayName: "Fable", description: "Fable 5.1 · Most capable", default: false },
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Best for complex tasks", default: false },
+			{ id: "haiku", displayName: "Haiku", description: "Haiku 4.5 · Fastest for quick answers", default: false },
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", description: "Newer version available · select Opus for Opus 5.5", default: false },
+			{ id: "claude-opus-4-8", displayName: "Claude Opus 4.8", default: false },
+		]} />);
+		const picker = screen.getByRole("button", { name: "Model and reasoning effort for the next turn" });
+		expect(picker).toHaveTextContent(/^Sonnet 5\.5$/);
+		await user.click(picker);
+		await user.keyboard("{ArrowDown}{ArrowRight}");
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Fable 5.1", "Opus 5.5", "Sonnet 5.5", "Haiku 4.5"]);
+		await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
+		expect(screen.getByRole("menuitemradio", { name: "Opus 5" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: "Opus 4.8" })).toBeInTheDocument();
+	});
+
 	it("lets a saved effort be cleared when the model offers no effort levels", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
