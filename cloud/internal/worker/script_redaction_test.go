@@ -538,3 +538,45 @@ func TestCommandsThatPrintSecretsAreMasked(t *testing.T) {
 		}
 	}
 }
+
+// Commands written inside quoted strings, one after another on a line (the
+// staging re-test's failing step): each is read up to the end of its string
+// or shell segment, so mysql's -p never reads on into sshpass's ssh -p 22,
+// and the curl -u after them is still masked, in the step's command and
+// output, the summary and Cleanup's failed step line alike.
+func TestPasswordCommandsAreReadPerSegment(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ text, want string }{
+		{
+			`echo "mysql -pFAKEVAL3"; echo "sshpass -p FAKEVAL4 ssh -p 22 host"; echo "curl -u admin:FAKEVAL5 https://x"`,
+			`echo "mysql -p[REDACTED]"; echo "sshpass -p [REDACTED] ssh -p 22 host"; echo "curl -u admin:[REDACTED] https://x"`,
+		},
+		{`echo 'run mysql -p FAKEVAL3' && ssh -p 22 host`, `echo 'run mysql -p [REDACTED]' && ssh -p 22 host`},
+		{`mysql -pFAKEVAL3 || ssh -p 22 host | curl --user admin:FAKEVAL5 x`, `mysql -p[REDACTED] || ssh -p 22 host | curl --user admin:[REDACTED] x`},
+		{`x=$(mysql -pFAKEVAL3)$(ssh -p 22 h) curl -sS -u "admin:FAKEVAL5" x`, `x=$(mysql -p[REDACTED])$(ssh -p 22 h) curl -sS -u "admin:[REDACTED]" x`},
+		{`mysql -h db -e "select 1" -pFAKEVAL3`, `mysql -h db -e "select 1" -p[REDACTED]`},
+	} {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("RedactScriptOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
+		}
+	}
+}
+
+func TestStagingFailedStepCommandsAreMasked(t *testing.T) {
+	combined := `echo "== summary step =="; echo "docker login -p FAKEVAL2 registry.example.com || true"; echo "mysql -pFAKEVAL3"; ` +
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"; echo "curl -u admin:FAKEVAL5 https://x"; echo "docker run -p 8080:80 nginx"; exit 3`
+	published := publishedByRuns(t, []string{combined})
+	for _, secret := range []string{"FAKEVAL2", "FAKEVAL3", "FAKEVAL4", "FAKEVAL5"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	for _, kept := range []string{"ssh -p 22 host", "docker run -p 8080:80 nginx", "cleanup step 1: echo"} {
+		if !strings.Contains(published, kept) {
+			t.Errorf("%q is not shown:\n%s", kept, published)
+		}
+	}
+	if strings.Contains(published, "ssh -p [REDACTED]") {
+		t.Errorf("ssh's port is masked:\n%s", published)
+	}
+}

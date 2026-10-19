@@ -202,7 +202,13 @@ func maskCommandPasswords(text string) string {
 			break
 		}
 		command := text[position+match[2] : position+match[3]]
-		end := maskCommandArguments(text, position+match[1], command, func(start, stop int, kind valueKind) {
+		// A command written inside a quoted string (echo "mysql -px") ends
+		// with that string: its closing quote is not an argument's.
+		var enclosing byte
+		if boundary := position + match[0]; boundary < position+match[2] && (text[boundary] == '"' || text[boundary] == '\'') {
+			enclosing = text[boundary]
+		}
+		end := maskCommandArguments(text, position+match[1], command, enclosing, func(start, stop int, kind valueKind) {
 			masked, ok := maskedArgument(text[start:stop], kind)
 			if ok && start >= last {
 				out.WriteString(text[last:start])
@@ -221,14 +227,15 @@ func maskCommandPasswords(text string) string {
 	return out.String()
 }
 
-// maskCommandArguments reads command's arguments from position and calls
-// mask for each one that is a password, in order. It returns where the
-// command ends.
-func maskCommandArguments(text string, position int, command string, mask func(start, stop int, kind valueKind)) int {
+// maskCommandArguments reads command's arguments from position, up to the end
+// of its shell segment (nextArgument) or of the quoted string it is written in
+// (enclosing, its quote, or 0), and calls mask for each one that is a
+// password, in order. It returns where the command ends.
+func maskCommandArguments(text string, position int, command string, enclosing byte, mask func(start, stop int, kind valueKind)) int {
 	login := false
 	pending, skip := noValue, false
 	for {
-		start, stop, ok := nextArgument(text, position)
+		start, stop, ok := nextArgument(text, position, enclosing)
 		if !ok {
 			return start
 		}
@@ -320,36 +327,61 @@ func maskCommandArguments(text string, position int, command string, mask func(s
 }
 
 // nextArgument reads the shell word at or after position: its start and end,
-// and false at the end of the command (the end of the line, or a command
-// separator). A quoted part is read to its closing quote on the line.
-func nextArgument(text string, position int) (int, int, bool) {
+// and false at the end of the command: the end of its shell segment (a line,
+// ;, &&, ||, |, $( or a closing parenthesis or backtick) or of the quoted
+// string the command is written in (enclosing). A quoted part is read to its
+// closing quote within the segment; a quote that is not closed there closes a
+// string the command is written in, so the word, and the command, end before
+// it (echo "mysql -px"; echo "ssh -p 22" never reads the second echo as
+// mysql's).
+func nextArgument(text string, position int, enclosing byte) (int, int, bool) {
 	for position < len(text) && (text[position] == ' ' || text[position] == '\t') {
 		position++
 	}
-	if position == len(text) || isCommandEnd(text[position]) {
+	if position == len(text) || isCommandEnd(text, position) || (enclosing != 0 && text[position] == enclosing) {
 		return position, position, false
 	}
 	end := position
-	for end < len(text) && !isCommandEnd(text[end]) && text[end] != ' ' && text[end] != '\t' {
-		if quote := text[end]; quote == '\'' || quote == '"' {
-			closing := strings.IndexAny(text[end+1:], string(quote)+"\n")
+	for end < len(text) && text[end] != ' ' && text[end] != '\t' && !isCommandEnd(text, end) {
+		quote := text[end]
+		if enclosing != 0 && quote == enclosing {
+			break
+		}
+		if quote == '\'' || quote == '"' {
+			closing := quoteEnd(text, end)
 			if closing < 0 {
-				return position, len(text), true
+				break
 			}
-			end += 1 + closing
-			if text[end] == '\n' {
-				return position, end, true
-			}
+			end = closing
 		}
 		end++
+	}
+	if end == position {
+		return position, position, false
 	}
 	return position, end, true
 }
 
-func isCommandEnd(c byte) bool {
-	switch c {
+// quoteEnd is the index of the quote that closes the one at start within its
+// shell segment, or -1.
+func quoteEnd(text string, start int) int {
+	for index := start + 1; index < len(text); index++ {
+		switch text[index] {
+		case text[start]:
+			return index
+		case '\n', '\r', ';', '|', '&':
+			return -1
+		}
+	}
+	return -1
+}
+
+func isCommandEnd(text string, index int) bool {
+	switch text[index] {
 	case '\n', '\r', ';', '|', '&', ')', '`':
 		return true
+	case '$':
+		return index+1 < len(text) && text[index+1] == '('
 	}
 	return false
 }
