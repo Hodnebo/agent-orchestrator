@@ -62,7 +62,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		case domain.ProviderSwitchRefusalUnavailable:
 			status, category = http.StatusServiceUnavailable, "unavailable"
 		}
-		envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), nil)
+		envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), providerSwitchRefusalDetails(refusal))
 	} else if err != nil {
 		writeConversationError(w, r, err)
 	} else if req.Message == nil {
@@ -82,6 +82,25 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		response := sendConversationMessageResponse(turn)
 		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok", Message: &response})
 	}
+}
+
+// providerSwitchRefusalDetails names, for an agent that cannot run under the
+// chat's permission mode (Pi asks nothing before acting), what it lacks and the
+// modes it runs in, as a new task's refusal does, so the client can offer one.
+func providerSwitchRefusalDetails(refusal *domain.ProviderSwitchError) map[string]any {
+	var capabilityErr *ports.ChatCapabilityError
+	if !errors.As(refusal, &capabilityErr) {
+		return nil
+	}
+	missing := make([]string, 0, len(capabilityErr.Missing))
+	for _, capability := range capabilityErr.Missing {
+		missing = append(missing, string(capability))
+	}
+	allowed := make([]string, 0, len(capabilityErr.AllowedPermissionModes))
+	for _, mode := range capabilityErr.AllowedPermissionModes {
+		allowed = append(allowed, string(mode))
+	}
+	return map[string]any{"missingCapabilities": missing, "allowedApprovalModes": allowed}
 }
 
 // providerSwitchedHeader marks an error response to a switch that carried a

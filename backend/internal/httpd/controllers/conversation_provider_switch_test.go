@@ -70,6 +70,32 @@ func TestProviderSwitchRouteMapsRefusalsToStatusAndCode(t *testing.T) {
 	}
 }
 
+func TestProviderSwitchRouteNamesTheModeAnAgentNeeds(t *testing.T) {
+	refusal := &domain.ProviderSwitchError{
+		Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "pi lacks approvals",
+		Cause: &ports.ChatCapabilityError{
+			Harness: domain.HarnessPi, Missing: []ports.ChatCapability{ports.ChatCapabilityApprovals},
+			AllowedPermissionModes: []ports.PermissionMode{ports.PermissionModeBypassPermissions},
+		},
+	}
+	status, body := providerSwitchRouteRequest(t, &fakeConversationService{switchErr: refusal},
+		http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"pi"}`)
+	var got struct {
+		Details struct {
+			MissingCapabilities  []string `json:"missingCapabilities"`
+			AllowedApprovalModes []string `json:"allowedApprovalModes"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if status != http.StatusBadRequest ||
+		fmt.Sprint(got.Details.MissingCapabilities) != "[approvals]" ||
+		fmt.Sprint(got.Details.AllowedApprovalModes) != "[bypass-permissions]" {
+		t.Fatalf("refusal = %d %s, want 400 naming approvals and bypass-permissions", status, body)
+	}
+}
+
 func TestSessionHistoryRoutePagesAndValidates(t *testing.T) {
 	at := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	svc := &fakeConversationService{historyTotal: 7, history: []domain.HandoffTurn{
