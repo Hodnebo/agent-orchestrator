@@ -55,6 +55,102 @@ describe("FileContentPane", () => {
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
+	it("opens a historical file through the snapshot API and keeps it read-only even with editable metadata", async () => {
+		const source = { kind: "snapshot" as const, view: { branch: "feature", expectedTipSha: "a".repeat(40) }, commitShas: [], label: "feature · aaaaaaa" };
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "snapshot content",
+				size: 16,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: true,
+				fileFingerprint: "old",
+			},
+		});
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" initialEditing source={source} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		expect(await screen.findByText("snapshot content")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/workspace/file",
+			expect.objectContaining({
+				params: { path: { sessionId: "sess-1" }, query: expect.objectContaining({ path: "src/App.tsx", snapshot: true, branch: "feature", expectedTipSha: "a".repeat(40) }) },
+			}),
+		);
+		expect(subscribeMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("opens a deleted snapshot file's previous content without reading the live file", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "removed.txt",
+				status: "deleted",
+				content: "previous content",
+				size: 16,
+				binary: false,
+				deleted: true,
+				contentTruncated: false,
+				diff: "deleted patch",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(
+			<FileContentPane
+				annotation={noopAnnotation()}
+				initialMode="file"
+				source={{ kind: "snapshot", view: { branch: "feature" }, label: "feature" }}
+				path="removed.txt"
+				sessionId="sess-1"
+				split={false}
+			/>,
+		);
+		expect(await screen.findByText("previous content")).toBeInTheDocument();
+		expect(getMock.mock.calls.every(([route]) => route.endsWith("/workspace/file"))).toBe(true);
+	});
+
+	it("renders snapshot images through revision-aware blobs rather than live preview URLs", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "logo.png",
+				status: "modified",
+				content: "",
+				size: 100,
+				binary: true,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(
+			<FileContentPane
+				annotation={noopAnnotation()}
+				initialMode="file"
+				source={{ kind: "snapshot", view: { prNumber: 42, sourceUrl: "https://github.com/o/r/pull/42", expectedTipSha: "b".repeat(40) }, label: "PR #42" }}
+				path="logo.png"
+				sessionId="sess-1"
+				split={false}
+			/>,
+		);
+		const image = await screen.findByAltText("logo.png");
+		const url = new URL(image.getAttribute("src")!, "http://localhost");
+		expect(url.pathname).toBe("/api/v1/sessions/sess-1/workspace/file/blob");
+		expect(url.searchParams.get("snapshot")).toBe("true");
+		expect(url.searchParams.get("prNumber")).toBe("42");
+		expect(url.searchParams.get("expectedTipSha")).toBe("b".repeat(40));
+	});
+
 	it.each(["recording.mp4", "voice.mp3"])("streams a current workspace media file %s in the Files view", async (path) => {
 		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path, status: "added", additions: 0, deletions: 0, size: 100_000_000, binary: true, deleted: false, content: "", contentTruncated: true, diff: "", diffTruncated: false } });
 		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);

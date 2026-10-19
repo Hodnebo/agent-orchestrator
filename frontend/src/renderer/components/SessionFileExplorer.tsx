@@ -1,3 +1,4 @@
+import { branchKey } from "../lib/files-review-selection";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,11 +9,14 @@ import {
 	GitCompareArrows,
 	Maximize2,
 	Minimize2,
-	MoreHorizontal,
+	RefreshCw,
+ Columns2,
+ Rows3,
+ ListChevronsUpDown,
 	Search,
 } from "lucide-react";
 import {
-	sessionWorkspaceFileQueryOptions,
+	sessionSourceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	type FilesBranchTarget,
 	type FilesSource,
@@ -30,17 +34,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./ui/resizable";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuRadioGroup,
-	DropdownMenuRadioItem,
-	DropdownMenuSub,
-	DropdownMenuSubContent,
-	DropdownMenuSubTrigger,
-	DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+
 import { useFilesActionsHost, useFilesTopbarHost } from "./files-topbar-host";
 import { FileTree } from "./FileTree";
 import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
@@ -96,6 +90,7 @@ export function SessionFileExplorer({
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
 	const [filter, setFilter] = useState("");
+ const filtersBySource=useRef(new Map<string,string>());
 	const [internalSplit, setInternalSplit] = useState(() => window.localStorage.getItem("ao.files.diffStyle") === "split");
 	const split = controlledSplit ?? internalSplit;
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -104,8 +99,7 @@ export function SessionFileExplorer({
 	const [previewRequest, setPreviewRequest] = useState<(FileOpenOptions & { key: number }) | null>(null);
 	const filesTopbarHost = useFilesTopbarHost();
 	const filesActionsHost = useFilesActionsHost();
-	// The review owns which files are collapsed; the ⋯ menu asks it to collapse
-	// or expand them all and reads back which of the two to offer.
+	// The review owns collapsed paths; the toolbar requests a toggle-all action.
 	const [reviewAllCollapsed, setReviewAllCollapsed] = useState(false);
 	const [collapseRequest, setCollapseRequest] = useState<{ expand: boolean; key: number }>();
 	const [treeOpen, setTreeOpen] = useState(true);
@@ -137,8 +131,9 @@ export function SessionFileExplorer({
 		},
 	});
 	const branch = review.target.branch;
-	// Another branch or a PR only has the review: the file tree, the centre
-	// pane and file previews all read the worktree.
+ const filterKey=`${uiKey}:${branchKey(branch)}`;
+ useEffect(()=>setFilter(filtersBySource.current.get(filterKey) ?? ""),[filterKey]);
+	// Browsing and file opening preserve this review source.
 	const onOtherBranch = branch.kind !== "checked_out";
 	const annotation = useFileAnnotation(sessionId, { hostId, source: annotationSource(branch) });
 	const changedOnlyData = useMemo(
@@ -146,7 +141,8 @@ export function SessionFileExplorer({
 		[filesData],
 	);
 	const hasChanges = filesData ? hasReviewableChanges(filesData) : false;
-	const showChanges = onOtherBranch || (changedOnly && (!filesData || hasChanges));
+	const showChanges = changedOnly && (!filesData || hasChanges || onOtherBranch);
+ const source = review.target.source ?? WORKSPACE_SOURCE;
 	const splitView = !showChanges && isMaximized;
 	const showChangesTrigger = Boolean(filesData) && (hasChanges || onOtherBranch);
 	const branchMenu = review.branchMenu;
@@ -175,16 +171,16 @@ export function SessionFileExplorer({
 			if (prefetchBusy.current) return;
 			prefetchBusy.current = true;
 			const request = node.type === "dir"
-				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId), staleTime: 5_000 })
-				: queryClient.prefetchQuery({ ...sessionWorkspaceFileQueryOptions(sessionId, node.path, undefined, "combined", undefined, hostId), staleTime: 5_000 });
+				? queryClient.prefetchQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, node.path, undefined, hostId,source), staleTime: 5_000 })
+				: queryClient.prefetchQuery({ ...sessionSourceFileQueryOptions(sessionId,source,node.path,undefined,"combined",undefined,"",hostId), staleTime: 5_000 });
 			void request.finally(() => { prefetchBusy.current = false; });
 		}, 100);
-	}, [queryClient, sessionId, hostId]);
+	}, [queryClient, sessionId, hostId,source]);
 
 	const handleSelectPath = (node: TreeNode) => {
 		setPreviewRequest(null);
 		setSelectedPath(node.path);
-		if (!isMaximized) onOpenFile?.(node.path, { mode: isSvgPath(node.path) ? "rendered" : "file" });
+		if (!isMaximized) onOpenFile?.(node.path, { ...(source.kind === "snapshot" ? {source}:{}), mode: isSvgPath(node.path) ? "rendered" : "file" });
 	};
 	const handleViewChange = (next: boolean) => {
 		setPreviewRequest(null);
@@ -199,8 +195,8 @@ export function SessionFileExplorer({
 	const treeSelectedPath = selectedPath;
 	const selectedPreviousPath = filesData?.files.find((file) => file.path === selectedPath)?.previousPath;
 
-	// The file tree only shows the worktree, so another branch has no Files view to switch to.
-	const hasViewTabs = hasChanges && !onOtherBranch;
+	// Both live and historical sources support complete repository browsing.
+	const hasViewTabs = hasChanges || onOtherBranch;
 	const showTreeToggle = splitView && !hasViewTabs;
 	// With the filter and actions in a top bar, the header holds only the pickers
 	// and view tabs, so it is dropped when there are none. The pickers wait for
@@ -211,7 +207,7 @@ export function SessionFileExplorer({
 	};
 	// Unified/split applies wherever a diff shows: the Changes review and the
 	// preview beside the tree.
-	const showLayout = showChanges || splitView;
+	const showLayout = showChanges || splitView || Boolean(onOpenFile);
 	const showCollapse = showChanges && Boolean(filesData);
 	// With the filter and maximize in a top bar, the header holds only the
 	// pickers, the ⋯ menu and the view tabs, so it is dropped when there are
@@ -228,48 +224,51 @@ export function SessionFileExplorer({
 			<Input
 				aria-label={t("files.explorer.filter")}
 				className="inspector-field-input pl-8"
-				onChange={(event) => setFilter(event.target.value)}
+				onChange={(event) => {setFilter(event.target.value);filtersBySource.current.set(filterKey,event.target.value);}}
 				placeholder={t("files.explorer.filterPlaceholder")}
 				value={filter}
 			/>
 		</label>
 	);
 
-	const viewMenu = showLayout || showCollapse ? (
-		<DropdownMenu>
+const viewMenu = (
+	<>
+		{showLayout ? (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<DropdownMenuTrigger asChild>
-						<Button aria-label={t("files.viewOptions")} className="shrink-0 data-[state=open]:bg-interactive-active" size="icon-sm" type="button" variant="ghost">
-							<MoreHorizontal className="size-icon-base" aria-hidden="true" />
-						</Button>
-					</DropdownMenuTrigger>
+					<Button
+						aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
+						aria-pressed={split}
+						onClick={() => setLayout(!split)}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						{split ? <Columns2 aria-hidden="true" className="size-icon-base" /> : <Rows3 aria-hidden="true" className="size-icon-base" />}
+					</Button>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("files.viewOptions")}</TooltipContent>
+				<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
 			</Tooltip>
-			<DropdownMenuContent align="end" className="w-56">
-				{showLayout ? (
-					<DropdownMenuSub>
-						<DropdownMenuSubTrigger>
-							<span className="min-w-0 flex-1 truncate">{t("files.layout")}</span>
-							<span className="shrink-0 text-caption text-passive">{split ? t("files.layoutSplit") : t("files.layoutUnified")}</span>
-						</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent className="w-40">
-							<DropdownMenuRadioGroup onValueChange={(value) => setLayout(value === "split")} value={split ? "split" : "unified"}>
-								<DropdownMenuRadioItem value="unified">{t("files.layoutUnified")}</DropdownMenuRadioItem>
-								<DropdownMenuRadioItem value="split">{t("files.layoutSplit")}</DropdownMenuRadioItem>
-							</DropdownMenuRadioGroup>
-						</DropdownMenuSubContent>
-					</DropdownMenuSub>
-				) : null}
-				{showCollapse ? (
-					<DropdownMenuItem onSelect={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}>
-						{reviewAllCollapsed ? t("files.expandAll") : t("files.collapseAll")}
-					</DropdownMenuItem>
-				) : null}
-			</DropdownMenuContent>
-		</DropdownMenu>
-	) : null;
+		) : null}
+		{showCollapse ? (
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button
+						aria-label={t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}
+						onClick={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						<ListChevronsUpDown aria-hidden="true" className="size-icon-base" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}</TooltipContent>
+			</Tooltip>
+		) : null}
+	</>
+);
+
 	const maximizeButton = onToggleMaximized ? (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -319,7 +318,8 @@ export function SessionFileExplorer({
 					{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
 					{filesTopbarHost ? null : filterField}
 					<span aria-hidden="true" className="flex-1" />
-					{viewMenu}
+     {source.kind === "snapshot" ? <Tooltip><TooltipTrigger asChild><Button aria-label={t("files.snapshotRefresh")} onClick={review.refreshSource} size="icon-sm" type="button" variant="ghost"><RefreshCw aria-hidden="true" className="size-icon-base"/></Button></TooltipTrigger><TooltipContent side="bottom">{t("files.snapshotRefresh")}</TooltipContent></Tooltip> : null}
+     {viewMenu}
 					{hasViewTabs ? (
 						<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
 							<Tooltip>
@@ -382,7 +382,7 @@ export function SessionFileExplorer({
 					{review.notice}
 				</p>
 			) : null}
-			{showChanges ? (
+   {!showChanges && source.kind === "snapshot" && review.target.state === "pending" ? <PanelMessage>{t("files.loading")}</PanelMessage> : showChanges ? (
 				filesQuery.isPending ? (
 					<PanelMessage>{t("files.loading")}</PanelMessage>
 				) : filesQuery.isError ? (
@@ -396,9 +396,12 @@ export function SessionFileExplorer({
 						onRetry={review.retryTarget}
 						hostId={hostId}
 						filter={filter}
-						onBrowseAll={onOtherBranch ? undefined : () => handleViewChange(false)}
-						canOpenInCenter={!isMaximized && Boolean(onOpenFile)}
-						onOpenFile={isMaximized ? openInMaximizedPreview : onOpenFile}
+						onBrowseAll={() => handleViewChange(false)}
+						canOpenInCenter={Boolean(onOpenFile)}
+						onOpenFile={(path,options)=>{
+       if(isMaximized && !options?.center) openInMaximizedPreview(path,options);
+       else {if(isMaximized) onToggleMaximized?.(false);onOpenFile?.(path,options);}
+      }}
 						onIncludeCommitsBetween={review.includeCommitsBetween}
 						onShowAllCommits={review.showAllCommits}
 						sessionId={sessionId}
@@ -413,7 +416,7 @@ export function SessionFileExplorer({
 				<ResizablePanelGroup className="min-h-0 flex-1 border-t border-border">
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
-							<FileContentPane annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={WORKSPACE_SOURCE} split={split} toolbar="compact" />
+							<FileContentPane annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />
 						</ContentScrollArea>
 					</ResizablePanel>
 					{treeOpen ? (
@@ -421,6 +424,7 @@ export function SessionFileExplorer({
 							<ResizableHandle />
 							<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">
 								<FileTree
+ source={source}
 									hostId={hostId}
 									changedOnly={false}
 									changedOnlyData={changedOnlyData}
@@ -438,6 +442,7 @@ export function SessionFileExplorer({
 				// The right rail remains a persistent navigator. File contents open
 				// in center tabs so expanding folders and scrolling the tree survive.
 				<FileTree
+ source={source}
 					hostId={hostId}
 					changedOnly={false}
 					changedOnlyData={changedOnlyData}

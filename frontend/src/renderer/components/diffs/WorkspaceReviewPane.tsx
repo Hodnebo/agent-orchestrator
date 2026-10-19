@@ -121,9 +121,7 @@ function isDeferredByDefault(file: WorkspaceFileSummary) {
 	return file.size > 512 * 1024 || /^(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|go\.sum|cargo\.lock)$/.test(name);
 }
 
-function canOpenRendered(file: WorkspaceFileSummary) {
-	return !file.binary && file.status !== "deleted" && /\.(md|markdown)$/i.test(file.path);
-}
+
 
 type ViewedRecord = Record<string, string>;
 
@@ -192,12 +190,11 @@ export function WorkspaceReviewPane({
 	filter: string;
 	/** Offered when there is nothing to review; omitted where the file tree can't show the change. */
 	onBrowseAll?: () => void;
-	/** Ignored for a target the centre pane can't open (another branch, several commits). */
+	/** Opens the file at the selected review source, including historical targets. */
 	onOpenFile?: (path: string, options?: FileOpenOptions) => void;
 	/**
-	 * False when no center pane is reachable (the maximized Files overlay covers
-	 * it): Edit and rich preview still go through onOpenFile, but "Open diff in
-	 * center" is hidden since it could only re-show the diff in place.
+	 * False only when the host has no center navigation callback. A maximized
+	 * host closes its overlay before handing the file to the center.
 	 */
 	canOpenInCenter?: boolean;
 	/** Ways out of commits that can't be combined. */
@@ -206,9 +203,9 @@ export function WorkspaceReviewPane({
 	sessionId: string;
 	hostId?: string;
 	split: boolean;
-	/** From the Files ⋯ menu: collapse (or expand) every file; a new key asks again. */
+	/** From the Files toolbar: collapse (or expand) every file; a new key asks again. */
 	collapseRequest?: { expand: boolean; key: number };
-	/** Tells the ⋯ menu whether every file is collapsed, so it offers the other action. */
+	/** Tells the toolbar whether every file is collapsed, so it offers the other action. */
 	onAllCollapsedChange?: (allCollapsed: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -225,9 +222,8 @@ export function WorkspaceReviewPane({
 	const fileMenuHandoffRef = useRef(false);
 
 	const { scope, selectionKey, workspaceVersion } = target;
-	// The centre pane opens the worktree or one of its commits; anything else
-	// only has the diff shown here.
-	const onOpenFile = target.openable ? onOpenFileProp : undefined;
+	// Reads and navigation share the selected source and revision.
+	const onOpenFile = onOpenFileProp;
 	const allFiles = useMemo(() => target.files ?? [], [target.files]);
 	const filesKnown = target.files !== undefined;
 	const reviewSelectionKey = target.key;
@@ -458,31 +454,28 @@ export function WorkspaceReviewPane({
 		});
 	}, [annotation, workspaceVersion, scope, summaryById]);
 	const toggleCollapsed = useCallback((path: string) => {
-		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsedPaths((current) => {
 			const next = new Set(current);
 			if (next.has(path)) next.delete(path);
 			else next.add(path);
 			return next;
 		});
-	}, [annotation]);
+	}, []);
 	const collapsePath = useCallback((path: string) => {
-		cancelFileAnnotations(annotation, (target) => target.surface === "review" && target.path === path);
 		setCollapsedPaths((current) => {
 			if (current.has(path)) return current;
 			const next = new Set(current);
 			next.add(path);
 			return next;
 		});
-	}, [annotation]);
+	}, []);
 	const markViewed = useCallback((file: WorkspaceFileSummary, checked: boolean) => {
 		toggleViewed(file);
 		if (checked) collapsePath(file.path);
 	}, [collapsePath, toggleViewed]);
 	const collapseAll = useCallback(() => {
-		cancelFileAnnotations(annotation, (target) => target.surface === "review");
 		setCollapsedPaths(new Set(files.map((file) => file.path)));
-	}, [annotation, files]);
+	}, [files]);
 	const expandAll = useCallback(() => {
 		setLoadedDeferredPaths(new Set(files.filter(isDeferredByDefault).map((file) => file.path)));
 		setCollapsedPaths(new Set());
@@ -506,7 +499,7 @@ export function WorkspaceReviewPane({
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
 	const loading = patchQueries.some((query) => query.isPending);
-	const fileOpenContext = target.sha ? { commitSha: target.sha, scope } : { scope };
+	const fileOpenContext: FileOpenOptions = {...(target.source ? {source:target.source} : target.sha ? {commitSha:target.sha}:{}),scope};
 	const changes = target.changes;
 	const emptyMessage = changes.kind === "uncommitted" || changes.kind === "staged" || changes.kind === "unstaged"
 		? t(`files.changes.empty.${changes.kind}`)
@@ -602,11 +595,11 @@ export function WorkspaceReviewPane({
 							if (!file) return null;
 							const isViewed = viewed.has(file.path);
 							const isCollapsed = collapsedPaths.has(file.path);
-							const renderedAvailable = canOpenRendered(file);
+
 							const fileAnnotationTarget = annotation.targets.find((target) => target.surface !== "focused" && target.path === file.path && target.side === "file");
 							const fileAnnotationActive = fileAnnotationTarget != null;
 							return (
-								<Popover onOpenChange={(open) => { if (!open && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive}>
+								<Popover onOpenChange={(open) => { if (!open && !isCollapsed && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationActive && !isCollapsed}>
 									{/* Lets a code selection in this file's surface find its item. */}
 									<div className="relative bg-background" data-review-item-id={item.id}>
 										{/* The whole row toggles the file (the chevron just rotates);
@@ -629,7 +622,7 @@ export function WorkspaceReviewPane({
 													</button>
 													<span className="flex shrink-0 items-baseline gap-2.5 text-xs tabular-nums">
 														<span className={cn("font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
-														<span className="flex items-baseline gap-1.5">
+														<span className="flex items-baseline gap-1.5 @max-[25rem]/review:hidden">
 															<span className="text-success">+{file.additions}</span>
 															<span className="text-error">−{file.deletions}</span>
 														</span>
@@ -640,24 +633,25 @@ export function WorkspaceReviewPane({
 												    controls) and the extra lead-in goes, so the file name keeps its
 												    room; the row's own gap still separates it from the stats. */}
 												<div className="ml-auto flex shrink-0 items-center gap-1 pl-2 @max-[25rem]/review:pl-0" onClick={(event) => event.stopPropagation()}>
-													<div className="flex items-center gap-1 @max-[25rem]/review:hidden">
-														{onOpenFile && file.editable && file.fileFingerprint ? (
+													<div className="flex items-center gap-1">
+              {onOpenFile && target.source?.kind === "snapshot" ? <HeaderActionTooltip label={t("files.readOnlySnapshot")}><span className="@max-[25rem]/review:hidden" tabIndex={0}><Button aria-label={t("files.editFile")} disabled className="size-6" size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></HeaderActionTooltip> : null}
+														{onOpenFile && !target.source && file.editable && file.fileFingerprint ? (
 															<HeaderActionTooltip label={t("files.editFile")}>
-																<Button aria-label={t("files.editFile")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { editing: true, mode: "file", scope })} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.editFile")} className="@max-[25rem]/review:hidden size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { editing: true, mode: "file", scope })} size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														{onOpenFile ? (
-															<HeaderActionTooltip label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}>
-																<Button aria-label={renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+															<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
+																<Button aria-label={t("files.openFullFileGeneric")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														{onOpenFile && canOpenInCenter ? (
 															<HeaderActionTooltip label={t("files.openDiffInCenter")}>
-																<Button aria-label={t("files.openDiffInCenter")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff" })} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.openDiffInCenter")} className="size-6 text-muted-foreground hover:text-foreground" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff", center:true })} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														<HeaderActionTooltip label={t("files.addFeedback")}>
-															<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationActive} className={cn("size-6 text-muted-foreground hover:text-foreground", fileAnnotationActive && "bg-interactive-active text-foreground")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" type="button" variant="ghost"><MessageSquarePlus aria-hidden="true" className="size-icon-sm" /></Button>
+															<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationActive} className={cn("@max-[25rem]/review:hidden size-6 text-muted-foreground hover:text-foreground", fileAnnotationActive && "bg-interactive-active text-foreground")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" type="button" variant="ghost"><MessageSquarePlus aria-hidden="true" className="size-icon-sm" /></Button>
 														</HeaderActionTooltip>
 													</div>
 													<DropdownMenu>
@@ -673,24 +667,14 @@ export function WorkspaceReviewPane({
 																fileMenuHandoffRef.current = false;
 															}}
 														>
-															{onOpenFile && file.editable && file.fileFingerprint ? (
+															{onOpenFile && !target.source && file.editable && file.fileFingerprint ? (
 																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile?.(file.path, { editing: true, mode: "file", scope }); }}>
 																	<Pencil aria-hidden="true" className="size-icon-sm text-passive" />
 																	{t("files.editFile")}
 																</DropdownMenuItem>
 															) : null}
-															{onOpenFile ? (
-																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile(file.path, { ...fileOpenContext, mode: renderedAvailable ? "rendered" : "file" }); }}>
-																	<FileCode2 aria-hidden="true" className="size-icon-sm text-passive" />
-																	{renderedAvailable ? t("files.openRichPreview") : t("files.openFullFileGeneric")}
-																</DropdownMenuItem>
-															) : null}
-															{onOpenFile && canOpenInCenter ? (
-																<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; onOpenFile(file.path, { ...fileOpenContext, mode: "diff" }); }}>
-																	<VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm text-passive" />
-																	{t("files.openDiffInCenter")}
-																</DropdownMenuItem>
-															) : null}
+
+
 															<DropdownMenuItem className="gap-2" onSelect={() => { fileMenuHandoffRef.current = true; annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint }); }}>
 																<MessageSquarePlus aria-hidden="true" className="size-icon-sm text-passive" />
 																{t("files.addFeedback")}
@@ -743,7 +727,7 @@ export function WorkspaceReviewPane({
 					const pending = pendingDiffPaths.has(file.path);
 					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
 					// The image preview reads the worktree and its base, so it only fits targets the centre pane can open.
-					const image = file.binary && target.openable && isWorkspaceImagePath(file.path);
+					const image = file.binary && !target.source && target.openable && isWorkspaceImagePath(file.path);
 					return (
 					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
 						{image ? (

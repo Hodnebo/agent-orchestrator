@@ -3261,5 +3261,9 @@
 	"settings.agentAccounts.stopAndMove": "Parar e mover",
 	"settings.agentAccounts.switching": "Trocando para {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Trocando de conta",
-	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior."
+	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior.",
+	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
+	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
+	"files.snapshotRefresh": "Reload selected revision",
+	"files.branches.showMore": "Show more branches"
 }

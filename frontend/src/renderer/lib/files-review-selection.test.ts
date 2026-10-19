@@ -243,7 +243,7 @@ describe("buildReviewTarget", () => {
 		const listed = history([commit(SHA_A), commit(SHA_B), commit(SHA_C)]);
 		const input = { branch: CHECKED_OUT_BRANCH, changes, manifest: manifest(), legacy: false, history: listed };
 		const pending = buildReviewTarget({ ...input, selection: { pending: true } });
-		expect(pending).toMatchObject({ state: "pending", openable: false });
+		expect(pending).toMatchObject({ state: "pending", openable: true });
 		expect(pending.files).toBeUndefined();
 		const conflict = { commitSha: SHA_A, paths: ["a.ts"], reason: "conflict" as const };
 		expect(buildReviewTarget({ ...input, selection: { pending: false, data: { sessionId: "sess-1", tipSha: SHA_A, contiguous: false, combinable: false, conflict, files: [], summary: { files: 0, additions: 0, deletions: 0 }, truncated: false } } }))
@@ -252,7 +252,7 @@ describe("buildReviewTarget", () => {
 		expect(buildReviewTarget({ ...input, selection: { pending: false, error } })).toMatchObject({ state: "error", error });
 	});
 
-	it("reads another branch through its view, fenced by its history, and never opens it in the centre", () => {
+	it("reads another branch through its view, fenced by its history, and preserves it when opening in the centre", () => {
 		const viewHistory = history([commit(SHA_A)], { view: { kind: "branch", name: "feature/login", rangeMode: "since_base", tipSha: SHA_A, baseSha: SHA_C } });
 		expect(buildReviewTarget({ branch: BRANCH, changes: ALL_COMMITS, manifest: manifest(), legacy: false })).toMatchObject({ state: "pending" });
 		const target = buildReviewTarget({
@@ -270,7 +270,7 @@ describe("buildReviewTarget", () => {
 			workspaceVersion: undefined,
 			selectionKey: `branch:feature/login@${SHA_A}:${SHA_C}|`,
 			files: [file("x.ts")],
-			openable: false,
+			openable: true,
 			state: "ready",
 		});
 		const historyError = new Error("gone");

@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { markFileMenuPainted, markFileViewerPerformance } from "../../lib/file-viewer-performance";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { GitBranch, GitPullRequest } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -16,7 +17,7 @@ import {
 export type ReviewBranchRow = {
 	id: string;
 	/** A `pull_request` row is a PR whose source branch is not local. */
-	kind: "local" | "pull_request";
+	kind: "local" | "remote" | "pull_request";
 	/** The branch name, a PR's source branch, or "" for a detached HEAD. */
 	name: string;
 	prNumber?: number;
@@ -52,7 +53,10 @@ const SEARCH_THRESHOLD = 8;
 
 export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, onRetry, onOpenChange, className }: ReviewBranchMenuProps) {
 	const { t } = useTranslation();
-	const [search, setSearch] = useState("");
+	const [menuOpen,setMenuOpen]=useState(false);
+ const [search, setSearch] = useState("");
+ const [visibleCount,setVisibleCount]=useState(50);
+ useLayoutEffect(()=>{if(menuOpen) markFileMenuPainted();},[menuOpen]);
 	const listRef = useRef<HTMLDivElement>(null);
 
 	let triggerLabel: string;
@@ -60,12 +64,12 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 	if (trigger.kind === "pull_request") {
 		triggerLabel = t("files.branches.prLabel", { number: trigger.number, branch: trigger.branch });
 	} else if (trigger.kind === "branch") {
-		triggerLabel = trigger.name;
+		triggerLabel = trigger.name.replace(/^refs\/remotes\//, "");
 	} else if (trigger.detached) {
 		triggerLabel = t("files.branches.detached");
 		monoLabel = false;
 	} else if (trigger.name) {
-		triggerLabel = trigger.name;
+		triggerLabel = trigger.name.replace(/^refs\/remotes\//, "");
 	} else {
 		// The checked-out branch's name arrives with the list.
 		triggerLabel = t("files.branches.checkedOut");
@@ -92,7 +96,8 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {
-				if (!open) setSearch("");
+    setMenuOpen(open);
+				if (!open) {setSearch("");setVisibleCount(50);} else markFileViewerPerformance("file-menu-open-requested");
 				onOpenChange?.(open);
 			}}
 		>
@@ -140,7 +145,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 								<input
 									aria-label={t("files.branches.search")}
 									className="menu-search-input"
-									onChange={(event) => setSearch(event.target.value)}
+									onChange={(event) => {setSearch(event.target.value);setVisibleCount(50);}}
 									placeholder={t("files.branches.search")}
 									type="search"
 									value={search}
@@ -152,7 +157,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 							ref={listRef}
 							value={selectedId}
 						>
-							{visibleRows.map((row) => {
+							{visibleRows.slice(0,visibleCount).map((row) => {
 								const Icon = row.kind === "pull_request" ? GitPullRequest : GitBranch;
 								const caption = rowCaption(row);
 								return (
@@ -172,6 +177,7 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 								);
 							})}
 						</DropdownMenuRadioGroup>
+      {visibleRows.length>visibleCount ? <DropdownMenuItem onSelect={event=>{event.preventDefault();setVisibleCount(count=>count+50);}}>{t("files.branches.showMore")}</DropdownMenuItem> : null}
 						{query && visibleRows.length === 0 ? (
 							<DropdownMenuItem disabled>{t("files.branches.noMatches")}</DropdownMenuItem>
 						) : null}

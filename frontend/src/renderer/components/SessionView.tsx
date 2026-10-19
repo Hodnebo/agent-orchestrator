@@ -93,6 +93,7 @@ import {
 	closeSessionFile,
 	EMPTY_SESSION_FILE_TABS,
 	openSessionFile,
+ sessionFileTabKey,
 	type SessionFileTabState,
 } from "../lib/session-file-tabs";
 import { isMacPlatform } from "../lib/platform";
@@ -110,7 +111,7 @@ import {
 	inspectorMaxWidthCss,
 } from "../lib/inspector-width";
 
-type CenterFileOpenRequest = { commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
+type CenterFileOpenRequest = { path?: string; source?: FileOpenOptions["source"]; previousPath?: string; commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
@@ -1017,18 +1018,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
-	const openCenterFile = useCallback((path: string, options?: FileOpenOptions) => {
+const openCenterFile = useCallback(
+	(path: string, options?: FileOpenOptions) => {
+		const filePath = path;
+		// Live paths retain their existing identities; snapshots coexist with them.
+		path = sessionFileTabKey(path, options?.source);
 		setReviewerChatId(null);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
 		const key = nextCenterFileRequestKey();
 		setCenterFileRequestsBySession((current) => {
 			const sessionRequests = current[uiSessionId] ?? {};
+			if (dirtyFiles[path] && sessionRequests[path]) return current;
 			return {
 				...current,
 				[uiSessionId]: {
 					...sessionRequests,
 					[path]: {
+						path: filePath,
+						source: options?.source,
+						previousPath: options?.previousPath,
 						commitSha: options?.commitSha,
 						editing: options?.editing ?? false,
 						key,
@@ -1043,7 +1052,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...current,
 			[uiSessionId]: openSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
-	}, [setActiveShellTerminal, uiSessionId]);
+	},
+	[setActiveShellTerminal, uiSessionId, dirtyFiles],
+);
+
 	const markCenterFileEditingConsumed = useCallback((path: string, requestKey: number) => {
 		consumedCenterEditingRequestsRef.current.add(`${uiSessionId}:${path}:${requestKey}`);
 	}, [uiSessionId]);
@@ -1286,24 +1298,30 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		await cloudCpClient.sendSessionMessage(orgId, sessionId, { text: message });
 	}, [cloudCpClient, session?.cloud?.orgId, sessionId, t]);
 	const fileAnnotation = useFileAnnotation(sessionId, { hostId, sendMessage: session?.cloud ? sendCloudFileAnnotation : undefined });
-	const centerFileTabs = useMemo(
-		() =>
-			fileTabs.openPaths.map((path) => ({
-				key: `file:${path}`,
-				content: (
-					<SessionFileTab
-						active={fileTabs.activePath === path}
-						dirty={Boolean(dirtyFiles[path])}
-						onActivate={() => activateCenterFile(path)}
-						onClose={() => closeCenterFile(path)}
-						path={path}
-					/>
-				),
-				onSelect: () => activateCenterFile(path),
-				onClose: () => closeCenterFile(path),
-			})),
-		[activateCenterFile, closeCenterFile, dirtyFiles, fileTabs.activePath, fileTabs.openPaths],
-	);
+const centerFileTabs = useMemo(
+	() =>
+		fileTabs.openPaths.map((path) => ({
+			key: `file:${path}`,
+			content: (
+				<SessionFileTab
+					active={fileTabs.activePath === path}
+					dirty={Boolean(dirtyFiles[path])}
+					onActivate={() => activateCenterFile(path)}
+					onClose={() => closeCenterFile(path)}
+					path={centerFileRequestsBySession[uiSessionId]?.[path]?.path ?? path}
+					sourceLabel={
+						centerFileRequestsBySession[uiSessionId]?.[path]?.source?.kind === "snapshot"
+							? (centerFileRequestsBySession[uiSessionId]?.[path]?.source as { label?: string })?.label
+							: undefined
+					}
+				/>
+			),
+			onSelect: () => activateCenterFile(path),
+			onClose: () => closeCenterFile(path),
+		})),
+	[activateCenterFile, closeCenterFile, dirtyFiles, fileTabs.activePath, fileTabs.openPaths, centerFileRequestsBySession, uiSessionId],
+);
+
 	const activeWorkspaceTabKey = fileTabs.activePath ? `file:${fileTabs.activePath}` : undefined;
 	const previewUrl = session?.previewUrl?.trim() || undefined;
 	const previewRevision = session?.previewRevision;
@@ -1812,7 +1830,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		"reopen-closed-tab",
 		() => {
 			const path = closedFilePathsRef.current[uiSessionId]?.pop();
-			if (path) openCenterFile(path, { mode: "file" });
+			if (path) {const request=centerFileRequestsBySession[uiSessionId]?.[path];openCenterFile(request?.path ?? path, { ...request, editing:false, mode: "file" });}
 		},
 		hasInspector,
 	);
@@ -2071,8 +2089,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 							)}
 							</div>
-							{fileTabs.activePath ? (
-								<div className="absolute inset-0">
+							{(session?.cloud ? Boolean(fileTabs.activePath) : fileTabs.openPaths.length > 0) ? (
+								<div className={cn("absolute inset-0",!fileTabs.activePath && "invisible pointer-events-none")} inert={!fileTabs.activePath ? true:undefined}>
 					{session?.cloud ? (
 						<CloudFileContentPane
 							annotation={fileAnnotation}
@@ -2082,30 +2100,46 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							initialMode={activeCenterFileRequest?.mode ?? "file"}
 							initialRequestKey={activeCenterFileRequest?.key ?? 0}
 							onDirtyChange={setCenterFileDirty}
-							path={fileTabs.activePath}
+							path={fileTabs.activePath!}
 							// Uncommitted is local-only; a cloud review's nearest scope is combined.
 							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
 							session={session}
 							split={filesSplit}
 						/>
 									) : (
-										<SessionFileWorkspace
-											hostId={hostId}
-											annotation={fileAnnotation}
-											commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-											initialMode={activeCenterFileRequest?.mode ?? "file"}
-											initialRequestKey={activeCenterFileRequest?.key ?? 0}
-											onDirtyChange={setCenterFileDirty}
-							onInitialEditingConsumed={markCenterFileEditingConsumed}
-							onInitialLineConsumed={markCenterFileLineConsumed}
-											path={fileTabs.activePath}
-											sessionId={sessionId}
-											split={filesSplit}
-											scope={activeCenterFileRequest?.scope}
-										/>
-									)}
+										<>
+											{fileTabs.openPaths.map((fileKey) => {
+												const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
+												const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
+												return (
+													<div
+														key={fileKey}
+														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none")}
+														inert={fileTabs.activePath !== fileKey ? true : undefined}
+													>
+														<SessionFileWorkspace
+															fileKey={fileKey}
+															hostId={hostId}
+															source={request?.source}
+															previousPath={request?.previousPath}
+															annotation={fileAnnotation}
+															commitSha={request?.commitSha}
+															initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+															initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+															initialMode={request?.mode ?? "file"}
+															initialRequestKey={request?.key ?? 0}
+															onDirtyChange={setCenterFileDirty}
+															onInitialEditingConsumed={markCenterFileEditingConsumed}
+															onInitialLineConsumed={markCenterFileLineConsumed}
+															path={request?.path ?? fileKey}
+															sessionId={sessionId}
+															split={filesSplit}
+															scope={request?.scope}
+														/>
+													</div>
+												);
+											})}
+										</>									)}
 								</div>
 							) : null}
 							{interfaceUi.notice}
@@ -2237,6 +2271,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									<CloudWorkspaceDiff annotation={fileAnnotation} isMaximized onOpenFile={openCenterFile} onSplitChange={setFilesSplit} onToggleMaximized={handleToggleFilesPopOut} session={session} split={filesSplit} />
 								) : (
 									<SessionFileExplorer
+ onOpenFile={openCenterFile}
 										hostId={hostId}
 										isMaximized
 										onSplitChange={setFilesSplit}

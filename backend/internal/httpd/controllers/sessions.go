@@ -139,6 +139,9 @@ type SessionService interface {
 	GetWorkspaceDiffs(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceDiffInput) (sessionsvc.WorkspaceDiffs, error)
 	GetWorkspaceFileRevision(ctx context.Context, id domain.SessionID, path string, scope sessionsvc.WorkspaceDiffScope, side sessionsvc.WorkspaceFileBlobSide, workspaceVersion, expectedRevision string) (sessionsvc.WorkspaceFileRevision, error)
 	GetWorkspaceSelectionFileRevision(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileRevision, error)
+	GetWorkspaceSnapshotBlob(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileBlob, error)
+	GetWorkspaceSnapshotFile(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileDetail, error)
+	ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error)
 	GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
@@ -1068,7 +1071,14 @@ func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Req
 	commitSHA := strings.TrimSpace(r.URL.Query().Get("commitSha"))
 	var file sessionsvc.WorkspaceFileDetail
 	var err error
-	if commitSHA != "" {
+	if r.URL.Query().Get("snapshot") == "true" {
+		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
+		if parseErr != nil {
+			envelope.WriteError(w, r, parseErr)
+			return
+		}
+		file, err = c.Svc.GetWorkspaceSnapshotFile(r.Context(), sessionID(r), input)
+	} else if commitSHA != "" {
 		file, err = c.Svc.GetWorkspaceFileAtCommit(r.Context(), sessionID(r), relPath, commitSHA)
 	} else {
 		file, err = c.Svc.GetWorkspaceFile(r.Context(), sessionID(r), relPath, section)
@@ -1253,9 +1263,9 @@ func (c *SessionsController) getWorkspaceFileRevision(w http.ResponseWriter, r *
 	var revision sessionsvc.WorkspaceFileRevision
 	// A branch or pull request view, or ticked commits, read a commit
 	// selection; anything else reads the checked-out comparison as before.
-	if view.Branch != "" || view.PRNumber != 0 || view.SourceURL != "" || commitSHA != "" || len(commitSHAs) > 0 {
+	if query.Get("snapshot") == "true" || view.Branch != "" || view.PRNumber != 0 || view.SourceURL != "" || commitSHA != "" || len(commitSHAs) > 0 {
 		revision, err = c.Svc.GetWorkspaceSelectionFileRevision(r.Context(), sessionID(r), sessionsvc.WorkspaceSelectionRevisionInput{
-			Path: relPath, Side: side, Scope: scope, View: view, CommitSHA: commitSHA, CommitSHAs: commitSHAs, WorkspaceVersion: workspaceVersion, ExpectedRevision: expectedRevision,
+			Snapshot: query.Get("snapshot") == "true", Path: relPath, Side: side, Scope: scope, View: view, CommitSHA: commitSHA, CommitSHAs: commitSHAs, WorkspaceVersion: workspaceVersion, ExpectedRevision: expectedRevision,
 		})
 	} else {
 		revision, err = c.Svc.GetWorkspaceFileRevision(r.Context(), sessionID(r), relPath, scope, side, workspaceVersion, expectedRevision)
@@ -1322,7 +1332,18 @@ func (c *SessionsController) listWorkspaceTree(w http.ResponseWriter, r *http.Re
 		return
 	}
 	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	tree, err := c.Svc.ListWorkspaceTree(r.Context(), sessionID(r), relPath)
+	var tree sessionsvc.WorkspaceTree
+	var err error
+	if r.URL.Query().Get("snapshot") == "true" {
+		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
+		if parseErr != nil {
+			envelope.WriteError(w, r, parseErr)
+			return
+		}
+		tree, err = c.Svc.ListWorkspaceSnapshotTree(r.Context(), sessionID(r), input, r.URL.Query().Get("filter"))
+	} else {
+		tree, err = c.Svc.ListWorkspaceTree(r.Context(), sessionID(r), relPath)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1347,7 +1368,19 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	if side == "" {
 		side = sessionsvc.WorkspaceBlobAfter
 	}
-	blob, err := c.Svc.GetWorkspaceFileBlob(r.Context(), sessionID(r), relPath, side)
+	var blob sessionsvc.WorkspaceFileBlob
+	var err error
+	if r.URL.Query().Get("snapshot") == "true" {
+		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
+		if parseErr != nil {
+			envelope.WriteError(w, r, parseErr)
+			return
+		}
+		input.Side = side
+		blob, err = c.Svc.GetWorkspaceSnapshotBlob(r.Context(), sessionID(r), input)
+	} else {
+		blob, err = c.Svc.GetWorkspaceFileBlob(r.Context(), sessionID(r), relPath, side)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -3124,7 +3157,7 @@ func workspaceCommitsResponse(commits []sessionsvc.CommitSummary) []WorkspaceCom
 }
 
 func workspaceFileResponse(file sessionsvc.WorkspaceFileDetail) WorkspaceFileResponse {
-	return WorkspaceFileResponse{
+	return WorkspaceFileResponse{Historical: file.Historical,
 		SessionID:        file.SessionID,
 		Path:             file.Path,
 		PreviousPath:     file.PreviousPath,
@@ -3211,7 +3244,7 @@ func workspaceTreeResponse(tree sessionsvc.WorkspaceTree) ListWorkspaceTreeRespo
 			Binary:     entry.Binary,
 		})
 	}
-	return ListWorkspaceTreeResponse{
+	return ListWorkspaceTreeResponse{Snapshot: tree.Snapshot,
 		SessionID: tree.SessionID,
 		Path:      tree.Path,
 		Entries:   out,
@@ -3237,4 +3270,13 @@ func nonNilSessionIDs(ids []domain.SessionID) []domain.SessionID {
 		return []domain.SessionID{}
 	}
 	return ids
+}
+
+// workspaceSnapshotQuery shares the review's source and selection validation.
+func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevisionInput, error) {
+	view, err := workspaceViewQuery(query)
+	if err != nil {
+		return sessionsvc.WorkspaceSelectionRevisionInput{}, err
+	}
+	return sessionsvc.WorkspaceSelectionRevisionInput{Path: query.Get("path"), View: view, CommitSHA: query.Get("commitSha"), CommitSHAs: strings.FieldsFunc(query.Get("commitShas"), func(r rune) bool { return r == ',' })}, nil
 }

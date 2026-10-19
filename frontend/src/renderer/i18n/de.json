@@ -3213,5 +3213,9 @@
 	"settings.agentAccounts.stopAndMove": "Beenden und verschieben",
 	"settings.agentAccounts.switching": "Wechsel zu {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Konto wird gewechselt",
-	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto."
+	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto.",
+	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
+	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
+	"files.snapshotRefresh": "Reload selected revision",
+	"files.branches.showMore": "Show more branches"
 }

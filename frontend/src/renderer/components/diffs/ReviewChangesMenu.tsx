@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { markFileMenuPainted, markFileViewerPerformance } from "../../lib/file-viewer-performance";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 // Aliased: @pierre/diffs also exports a FileDiff the review pane imports.
-import { Check, FileDiff as FileDiffIcon, FilePen, GitCommitHorizontal, History, ListChecks, type LucideIcon } from "lucide-react";
+import { FileDiff as FileDiffIcon, FilePen, GitCommitHorizontal, History, ListChecks, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import {
@@ -12,9 +13,6 @@ import {
 	DropdownMenuRadioGroup,
 	DropdownMenuRadioItem,
 	DropdownMenuSeparator,
-	DropdownMenuSub,
-	DropdownMenuSubContent,
-	DropdownMenuSubTrigger,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -89,6 +87,7 @@ const keepMenuOpen = (event: Event) => event.preventDefault();
 export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable = true, onSelectScope, commits, className }: ReviewChangesMenuProps) {
 	const { t } = useTranslation();
 	const [menuOpen, setMenuOpen] = useState(false);
+ useLayoutEffect(()=>{if(menuOpen) markFileMenuPainted();},[menuOpen]);
 	const [visibleCount, setVisibleCount] = useState(COMMIT_PAGE);
 	// Whether the rows were last reached by pointer or keyboard; capture-phase
 	// listeners record it before a row's own handlers move focus.
@@ -198,7 +197,6 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 		</>
 	);
 
-	const commitsActive = value.kind === "commits";
 	// Tracked across the whole menu: keyboard focus can reach the first commit
 	// row from All commits, outside the rows' own list.
 	const modalityHandlers = {
@@ -213,7 +211,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 		<DropdownMenu
 			onOpenChange={(open) => {
 				setMenuOpen(open);
-				if (open) pointerModality.current = false;
+				if (open) {pointerModality.current = false;markFileViewerPerformance("file-menu-open-requested");}
 				else setVisibleCount(COMMIT_PAGE);
 			}}
 			open={menuOpen}
@@ -250,16 +248,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 					{commitsAvailable ? (
 						<>
 							<DropdownMenuSeparator />
-							<DropdownMenuSub>
-								<DropdownMenuSubTrigger className={cn(commitsActive && "text-foreground")}>
-									<GitCommitHorizontal aria-hidden="true" />
-									<span className="min-w-0 flex-1 truncate">{t("files.commits")}</span>
-									<span className="flex size-4 shrink-0 items-center justify-center">
-										{commitsActive ? <Check aria-hidden="true" className="text-logo-accent!" /> : null}
-									</span>
-								</DropdownMenuSubTrigger>
-								<DropdownMenuSubContent className="w-[min(26rem,calc(100vw-2rem))]" {...modalityHandlers}>{commitBlock}</DropdownMenuSubContent>
-							</DropdownMenuSub>
+<div role="group" aria-label={t("files.commits")}>{commitBlock}</div>
 						</>
 					) : null}
 				</DropdownMenuContent>

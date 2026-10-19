@@ -292,3 +292,12 @@ describe("FileTree", () => {
 		expect(screen.getByTestId("workspace-file-tree")).not.toHaveAttribute("data-pointer-focus");
 	});
 });
+
+
+it("browses a snapshot tree through its source and never accepts a live-tree fallback",async()=>{
+ const source={kind:"snapshot" as const,view:{branch:"feature",expectedTipSha:"a".repeat(40)},label:"feature"};
+ getMock.mockResolvedValue({data:{sessionId:"snapshot-tree",path:"",entries:[],truncated:false}});
+ renderWithQuery(<FileTree sessionId="snapshot-tree" source={source} changedOnly={false} changedOnlyData={[]} filterText="" selectedPath={null} onSelectPath={vi.fn()}/>);
+ expect(await screen.findByText(/does not support snapshot tree browsing/)).toBeInTheDocument();
+ expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/tree",expect.objectContaining({params:expect.objectContaining({query:expect.objectContaining({snapshot:true,branch:"feature",expectedTipSha:"a".repeat(40)})})}));
+});

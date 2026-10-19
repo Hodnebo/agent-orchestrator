@@ -573,7 +573,7 @@ vi.mock("./SessionFileExplorer", () => ({
 		split,
 	}: {
 		isMaximized?: boolean;
-		onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void;
+		onOpenFile?: (path: string, options?: import("./FileContentPane").FileOpenOptions) => void;
 		onSplitChange?: (split: boolean) => void;
 		onToggleMaximized?: (next: boolean) => void;
 		split?: boolean;
@@ -590,6 +590,7 @@ vi.mock("./SessionFileExplorer", () => ({
 			{!isMaximized && onOpenFile ? (
 				<>
 					<span>file tree</span>
+ <button type="button" onClick={()=>onOpenFile("src/App.tsx",{mode:"file",source:{kind:"snapshot",view:{branch:"feature",expectedTipSha:"a".repeat(40)},label:"feature · aaaaaaa"}})}>open historical src/App.tsx</button>
 					<button type="button" onClick={() => onOpenFile("src/App.tsx", { mode: "file" })}>
 						select src/App.tsx
 					</button>
@@ -2056,7 +2057,7 @@ describe("SessionView", () => {
 		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("src/panel.tsx");
 
 		fireEvent.click(screen.getByRole("button", { name: "New terminal" }));
-		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("pending-shell:1");
 		finishCreate(0, shell, view);
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("sh-after-file");
@@ -2144,7 +2145,7 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
 		expect(await screen.findByTestId("session-file-workspace")).toBeInTheDocument();
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
-		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
 	});
 
@@ -2319,13 +2320,13 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
 		await screen.findByTestId("session-file-workspace");
 		fireEvent.click(screen.getByRole("button", { name: "select agent tab" }));
-		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull());
 
 		view.rerender(<SessionView sessionId="sess-2" />);
 		view.rerender(<SessionView sessionId="sess-1" />);
 
 		await act(async () => {});
-		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 		expect(screen.getByRole("button", { name: "Close panel.tsx" })).toBeInTheDocument();
 	});
 
@@ -5245,9 +5246,24 @@ describe("SessionView", () => {
 		expect(screen.getByText("terminal center")).toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("button", { name: "select agent tab" }));
-		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
 		expect(screen.getByRole("tab", { name: "App.tsx" })).toHaveAttribute("aria-selected", "false");
 	});
+
+ it("keeps a workspace file mounted when opening the same path from a historical source",()=>{
+  act(()=>useUiStore.getState().setInspectorOpen("sess-1",true));
+  render(<SessionView sessionId="sess-1"/>);
+  fireEvent.click(screen.getByRole("button",{name:"open files"}));
+  fireEvent.click(screen.getByRole("button",{name:"select src/App.tsx"}));
+  const livePane=screen.getByTestId("session-file-workspace");
+  fireEvent.click(screen.getByRole("button",{name:"open historical src/App.tsx"}));
+  expect(screen.getByRole("tab",{name:"App.tsx · feature · aaaaaaa"})).toHaveAttribute("aria-selected","true");
+  expect(screen.getByRole("tab",{name:"App.tsx"})).toHaveAttribute("aria-selected","false");
+  expect(livePane).toBeInTheDocument();expect(livePane.closest("[inert]")).not.toBeNull();
+  fireEvent.click(screen.getByRole("tab",{name:"App.tsx"}));
+  expect(livePane.closest("[inert]")).toBeNull();
+  expect(screen.getAllByTestId("session-file-workspace")).toHaveLength(2);
+ });
 
 	it("toggles the header whole-file feedback composer on repeat", async () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));

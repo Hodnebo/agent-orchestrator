@@ -5848,6 +5848,8 @@ export interface components {
             entries: components["schemas"]["WorkspaceTreeEntry"][];
             path: string;
             sessionId: string;
+            /** @description True only when the tree was read from the requested immutable snapshot. */
+            snapshot?: boolean;
             truncated: boolean;
         };
         MarkAllNotificationsReadRequest: {
@@ -7266,7 +7268,7 @@ export interface components {
              * @description local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view.
              * @enum {string}
              */
-            kind: "local" | "pull_request";
+            kind: "local" | "remote" | "pull_request";
             /** @description Branch name, the pull request's source branch, or empty for a detached HEAD. */
             name: string;
             prNumber?: number;
@@ -7392,6 +7394,8 @@ export interface components {
             diffTruncated: boolean;
             editable: boolean;
             fileFingerprint: string;
+            /** @description True only for a read-only revision, never a live worktree file. */
+            historical?: boolean;
             imageMediaType?: string;
             path: string;
             previousPath?: string;
@@ -20773,6 +20777,20 @@ export interface operations {
     getSessionWorkspaceFile: {
         parameters: {
             query?: {
+                /** @description Read the immutable review snapshot instead of the live worktree. */
+                snapshot?: boolean;
+                /** @description Local or remote-tracking branch to read without checkout. */
+                branch?: string;
+                /** @description Associated pull request number. */
+                prNumber?: number;
+                /** @description Associated pull request URL. */
+                sourceUrl?: string;
+                /** @description Pinned source tip for snapshot reads. Must remain reachable from the selected source. */
+                expectedTipSha?: string;
+                /** @description Pinned comparison base for snapshot reads. */
+                expectedBaseSha?: string;
+                /** @description Comma-separated selected commit SHAs. */
+                commitShas?: string;
                 /** @description Session-worktree-relative file path. */
                 path?: string;
                 /** @description Git-state section the file was opened from (see WorkspaceFileSections). uncommitted diffs the worktree against HEAD; staged diffs the index against HEAD; unstaged diffs the worktree against the index; omitted/committed/untracked diff the worktree against the compare base. */
@@ -20809,6 +20827,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20911,6 +20938,22 @@ export interface operations {
     getSessionWorkspaceFileBlob: {
         parameters: {
             query: {
+                /** @description Read the immutable review snapshot instead of the live worktree. */
+                snapshot?: boolean;
+                /** @description Local or remote-tracking branch to read without checkout. */
+                branch?: string;
+                /** @description Associated pull request number. */
+                prNumber?: number;
+                /** @description Associated pull request URL. */
+                sourceUrl?: string;
+                /** @description Pinned source tip for snapshot reads. Must remain reachable from the selected source. */
+                expectedTipSha?: string;
+                /** @description Pinned comparison base for snapshot reads. */
+                expectedBaseSha?: string;
+                /** @description Comma-separated selected commit SHAs. */
+                commitShas?: string;
+                /** @description Selected commit SHA. */
+                commitSha?: string;
                 /** @description Session-worktree-relative file path. */
                 path: string;
                 /** @description Which revision to read: the compare base (before) or the session worktree (after). Defaults to after. */
@@ -20954,6 +20997,15 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Internal Server Error */
             500: {
                 headers: {
@@ -20977,6 +21029,8 @@ export interface operations {
     getSessionWorkspaceFileRevision: {
         parameters: {
             query: {
+                /** @description Read the selected immutable comparison, including an empty commit range. */
+                snapshot?: boolean;
                 /** @description Session-worktree-relative file path. */
                 path: string;
                 /** @description Comparison scope. Defaults to combined. */
@@ -21436,6 +21490,24 @@ export interface operations {
     listSessionWorkspaceTree: {
         parameters: {
             query?: {
+                /** @description Case-insensitive path search across the selected snapshot. */
+                filter?: string;
+                /** @description Selected commit SHA. */
+                commitSha?: string;
+                /** @description Read the immutable review snapshot instead of the live worktree. */
+                snapshot?: boolean;
+                /** @description Local or remote-tracking branch to read without checkout. */
+                branch?: string;
+                /** @description Associated pull request number. */
+                prNumber?: number;
+                /** @description Associated pull request URL. */
+                sourceUrl?: string;
+                /** @description Pinned source tip for snapshot reads. Must remain reachable from the selected source. */
+                expectedTipSha?: string;
+                /** @description Pinned comparison base for snapshot reads. */
+                expectedBaseSha?: string;
+                /** @description Comma-separated selected commit SHAs. */
+                commitShas?: string;
                 /** @description Directory path relative to the session workspace root. Empty or omitted lists the root. */
                 path?: string;
             };
@@ -21468,6 +21540,15 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -90,7 +90,7 @@ vi.mock("./diffs/WorkspaceReviewPane", () => ({
 			<button onClick={() => onOpenFile?.("src/App.tsx", { mode: "file" })} type="button">Open full file</button>
 			<button onClick={() => onOpenFile?.("README.md", { mode: "rendered" })} type="button">Render README.md</button>
 			<button onClick={() => onOpenFile?.("src/App.tsx", { editing: true, mode: "file" })} type="button">Edit src/App.tsx</button>
-			{canOpenInCenter ? <button onClick={() => onOpenFile?.("src/App.tsx", { mode: "diff" })} type="button">Open diff in center</button> : null}
+			{canOpenInCenter ? <button onClick={() => onOpenFile?.("src/App.tsx", { mode: "diff", center:true } as never)} type="button">Open diff in center</button> : null}
 		</div>
 	),
 }));
@@ -260,7 +260,7 @@ describe("SessionFileExplorer", () => {
 		expect(titlebar).toContainElement(filter);
 		// With no actions slot, minimize follows the filter into the titlebar; the ⋯ menu stays in the header.
 		expect(titlebar).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
-		expect(screen.getByRole("button", { name: "View options" }).closest("header")).not.toBeNull();
+		expect(screen.getByRole("button", { name: "Split diff view" }).closest("header")).not.toBeNull();
 		titlebar.remove();
 	});
 
@@ -279,7 +279,7 @@ describe("SessionFileExplorer", () => {
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 		expect(filterHost).toContainElement(screen.getByRole("textbox", { name: "Filter files" }));
 		expect(actionsHost).toContainElement(screen.getByRole("button", { name: "Maximize files" }));
-		const viewOptions = screen.getByRole("button", { name: "View options" });
+		const viewOptions = screen.getByRole("button", { name: "Split diff view" });
 		expect(actionsHost).not.toContainElement(viewOptions);
 		const header = viewOptions.closest("header");
 		expect(header).not.toBeNull();
@@ -339,7 +339,7 @@ describe("SessionFileExplorer", () => {
 		renderWithQuery(<SessionFileExplorer onOpenFile={onOpenFile} sessionId="sess-review-center" />);
 
 		await userEvent.click(await screen.findByRole("button", { name: "Open diff in center" }));
-		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { mode: "diff" });
+		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { mode: "diff", center:true });
 	});
 
 	it("opens a review diff action in the syntax-aware file editor", async () => {
@@ -371,11 +371,14 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).not.toHaveBeenCalled();
 	});
 
-	it("hides open-in-center when maximized, since the overlay covers the center pane", async () => {
-		renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={vi.fn()} sessionId="sess-review-center-maximized" />);
+	it("opens in the center and closes the maximized overlay in one action", async () => {
+  const onOpenFile=vi.fn();const onToggleMaximized=vi.fn();
+  renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onToggleMaximized={onToggleMaximized} sessionId="sess-review-center-maximized" />);
 
 		expect(await screen.findByRole("button", { name: "Edit src/App.tsx" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", {name:"Open diff in center"}));
+  expect(onToggleMaximized).toHaveBeenCalledWith(false);
+  expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx",expect.objectContaining({mode:"diff"}));
 	});
 
 	it("opens the rich preview in place when maximized", async () => {
@@ -394,35 +397,28 @@ describe("SessionFileExplorer", () => {
 		expect(screen.queryByRole("button", { name: "Wrap lines" })).not.toBeInTheDocument();
 	});
 
-	it("switches the diff layout from the ⋯ menu's Layout submenu", async () => {
+	it("switches the diff layout directly", async () => {
 		window.localStorage.setItem("ao.files.diffStyle", "unified");
 		const onSplitChange = vi.fn();
 		renderWithQuery(<SessionFileExplorer onSplitChange={onSplitChange} sessionId="sess-explorer-3" />);
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
-		// The old one-button toggle is gone; Layout lives in the menu.
-		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
-
-		await userEvent.click(screen.getByRole("button", { name: "View options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /Layout/ }));
-		expect(await screen.findByRole("menuitemradio", { name: "Unified" })).toHaveAttribute("aria-checked", "true");
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Split" }));
+  await userEvent.click(screen.getByRole("button",{name:"Split diff view"}));
+  expect(screen.getByRole("button",{name:"Unified diff view"})).toHaveAttribute("aria-pressed","true");
 
 		expect(onSplitChange).toHaveBeenCalledWith(true);
 		expect(window.localStorage.getItem("ao.files.diffStyle")).toBe("split");
 	});
 
-	it("asks the review to collapse or expand every file from the ⋯ menu", async () => {
+	it("collapses and expands all files with one click", async () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-collapse" />);
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("button", { name: "View options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
 
 		// Once the review reports every file collapsed, the menu offers the way back.
 		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
-		await userEvent.click(screen.getByRole("button", { name: "View options" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
 	});
 
@@ -533,7 +529,7 @@ describe("SessionFileExplorer review pickers", () => {
 
 		expect(await screen.findByRole("button", { name: "Branch to review: main" })).toBeInTheDocument();
 		await waitFor(() => expect(changesTrigger()).toHaveAccessibleName("Changes to review: All commits"));
-		expect(screen.queryByRole("tablist", { name: "File view" })).not.toBeInTheDocument();
+		expect(screen.getByRole("tablist", { name: "File view" })).toBeInTheDocument();
 		expect(screen.getByTestId("review-target")).toHaveTextContent("branch:main:all");
 		expect(useUiStore.getState().inspectorSessions[sessionId]?.filesSelection).toEqual({ branch: { kind: "branch", name: "main", tipSha: SHA("2") }, changes: null });
 
@@ -563,7 +559,6 @@ describe("SessionFileExplorer review pickers", () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-ticks" />);
 
 		await userEvent.click(await screen.findByRole("button", { name: "Changes to review: Uncommitted" }));
-		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
 		await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: /^Commit a/ }));
 		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /^Commit c/ }));
 		expect(screen.getAllByRole("menu").length).toBeGreaterThan(0);

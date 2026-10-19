@@ -20,6 +20,8 @@ const maxWorkspaceBranches = 200
 type WorkspaceBranchKind string
 
 const (
+	// WorkspaceBranchRemote is a known remote-tracking ref, read without fetching or checkout.
+	WorkspaceBranchRemote WorkspaceBranchKind = "remote"
 	// WorkspaceBranchLocal is a local branch, read as a branch view (or as the
 	// checked-out worktree when it is checked out).
 	WorkspaceBranchLocal WorkspaceBranchKind = "local"
@@ -83,6 +85,7 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 	root := rec.Metadata.WorkspacePath
 	checkedOut := WorkspaceBranch{Kind: WorkspaceBranchLocal, Name: rec.Metadata.Branch, CheckedOut: true}
 	var locals []WorkspaceBranch
+	var localsTruncated bool
 	var detachedAt time.Time
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -102,7 +105,7 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 			})
 		}
 		g.Go(func() (err error) {
-			locals, err = listLocalBranches(gctx, root, checkedOut.Name, prs)
+			locals, localsTruncated, err = listLocalBranches(gctx, root, checkedOut.Name, prs)
 			return err
 		})
 	}
@@ -112,6 +115,7 @@ func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID
 	checkedOut.UpdatedAt = detachedAt
 	owners := prBranchOwners(ctx, root, checkedOut, locals, prs)
 	result.Branches, result.Truncated = workspaceBranchRows(checkedOut, locals, prs, owners, result.DefaultBranch)
+	result.Truncated = result.Truncated || localsTruncated
 	return result, nil
 }
 
@@ -123,6 +127,9 @@ func prBranchOwners(ctx context.Context, root string, checkedOut WorkspaceBranch
 	owners := map[string]bool{}
 	tips := make(map[string]string, len(locals)+1)
 	for _, row := range locals {
+		if row.Kind != WorkspaceBranchLocal {
+			continue
+		}
 		tips[row.Name] = row.TipSHA
 	}
 	if !checkedOut.Detached && checkedOut.TipSHA != "" {
@@ -225,13 +232,16 @@ func pullRequestUpdatedAt(pr domain.PullRequest) time.Time {
 // a longer list is known to be truncated. When it is, the checked-out branch
 // and the PR source branches that were left out are looked up by exact name
 // in one more process, so a local PR branch never gets a pull request row.
-func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domain.PullRequest) ([]WorkspaceBranch, error) {
-	locals, err := readLocalBranches(ctx, root, "--sort=-committerdate", "--count="+strconv.Itoa(maxWorkspaceBranches+1), "refs/heads/")
-	if err != nil || len(locals) <= maxWorkspaceBranches {
-		return locals, err
+func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domain.PullRequest) ([]WorkspaceBranch, bool, error) {
+	locals, truncated, err := readLocalBranches(ctx, root, "--sort=-committerdate", "--count="+strconv.Itoa(maxWorkspaceBranches+1), "refs/heads/", "refs/remotes/")
+	if err != nil || !truncated {
+		return locals, truncated, err
 	}
 	listed := make(map[string]bool, len(locals))
 	for _, row := range locals {
+		if row.Kind != WorkspaceBranchLocal {
+			continue
+		}
 		listed[row.Name] = true
 	}
 	names := []string{checkedOut}
@@ -249,40 +259,56 @@ func listLocalBranches(ctx context.Context, root, checkedOut string, prs []domai
 		}
 	}
 	if len(patterns) == 0 {
-		return locals, nil
+		return locals, truncated, nil
 	}
-	found, err := readLocalBranches(ctx, root, patterns...)
+	found, _, err := readLocalBranches(ctx, root, patterns...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, row := range found {
 		if want[row.Name] {
 			locals = append(locals, row)
 		}
 	}
-	return locals, nil
+	return locals, truncated, nil
 }
 
 // readLocalBranches runs for-each-ref over refs/heads with args and parses
 // each branch's name, tip and committer time.
-func readLocalBranches(ctx context.Context, root string, args ...string) ([]WorkspaceBranch, error) {
+func readLocalBranches(ctx context.Context, root string, args ...string) ([]WorkspaceBranch, bool, error) {
 	out, err := gitWorkspaceOutput(ctx, root, append([]string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(committerdate:unix)"}, args...)...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var rows []WorkspaceBranch
+	rawCount := 0
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(line, "\x00")
 		if len(fields) != 3 {
 			continue
 		}
+		rawCount++
+		kind := WorkspaceBranchLocal
 		name, ok := strings.CutPrefix(fields[0], "refs/heads/")
+		if !ok {
+			name, ok = strings.CutPrefix(fields[0], "refs/remotes/")
+			kind = WorkspaceBranchRemote
+			if strings.HasSuffix(name, "/HEAD") {
+				continue
+			}
+		}
 		if !ok || name == "" {
 			continue
 		}
-		rows = append(rows, WorkspaceBranch{Kind: WorkspaceBranchLocal, Name: name, TipSHA: fields[1], UpdatedAt: unixTime(fields[2])})
+		rows = append(rows, WorkspaceBranch{Kind: kind, Name: name, TipSHA: fields[1], UpdatedAt: unixTime(fields[2])})
 	}
-	return rows, nil
+	limit := 0
+	for _, arg := range args {
+		if raw, ok := strings.CutPrefix(arg, "--count="); ok {
+			limit, _ = strconv.Atoi(raw)
+		}
+	}
+	return rows, limit > 0 && rawCount >= limit, nil
 }
 
 // gitCommitTime is a commit's committer time, or zero when it cannot be read.
@@ -317,6 +343,10 @@ func workspaceBranchRows(checkedOut WorkspaceBranch, locals []WorkspaceBranch, p
 		byName[checkedOut.Name] = 0
 	}
 	for _, row := range locals {
+		if row.Kind == WorkspaceBranchRemote {
+			rows = append(rows, row)
+			continue
+		}
 		if _, ok := byName[row.Name]; ok {
 			// The checked-out branch keeps its first row, now with its tip.
 			if row.Name == checkedOut.Name {

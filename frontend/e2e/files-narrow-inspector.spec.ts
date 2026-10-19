@@ -83,10 +83,13 @@ async function expectNarrowLayout(page: Page) {
 	expect(await filterOverlapsATab(page)).toBe(false);
 	await expect(inspector.getByRole("button", { name: "Edit file" })).toBeHidden();
 	await expect(inspector.getByRole("button", { name: "More actions" })).toBeVisible();
+ await expect(inspector.getByRole("button", {name:"Open full file"})).toBeVisible();
+ await expect(inspector.getByRole("button", {name:"Open diff in center"})).toBeVisible();
 	await expectFileNameUntruncated(page);
 }
 
 test("@P0 files filter and review rows stay clear of each other in a narrow inspector", async ({ page }) => {
+ await page.setViewportSize({width:1800,height:900});
 	await stubWorkspaceFiles(page);
 	await page.goto(`/#/projects/ao-demo/sessions/${sessionId}`);
 	const inspector = await openInspector(page);

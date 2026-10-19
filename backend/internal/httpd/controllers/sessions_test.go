@@ -44,6 +44,8 @@ import (
 )
 
 type fakeSessionService struct {
+	workspaceSnapshotInput     sessionsvc.WorkspaceSelectionRevisionInput
+	workspaceSnapshotFilter    string
 	cleanupPending             bool
 	artifactsDeleted           []domain.SessionID
 	deleteArtifactsErr         error
@@ -5359,5 +5361,57 @@ func TestSessionsAPI_KillReportsAcceptedCleanup(t *testing.T) {
 	}
 	if status != http.StatusOK || !result.CleanupPending || result.Freed || !svc.sessions["ao-1"].IsTerminated {
 		t.Fatalf("accepted cleanup response = %d %s", status, body)
+	}
+}
+
+func (f *fakeSessionService) GetWorkspaceSnapshotFile(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileDetail, error) {
+	f.workspaceSnapshotInput = input
+	file, err := f.GetWorkspaceFile(ctx, id, input.Path, "")
+	file.Historical = true
+	return file, err
+}
+func (f *fakeSessionService) ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error) {
+	f.workspaceSnapshotInput = input
+	f.workspaceSnapshotFilter = filter
+	tree, err := f.ListWorkspaceTree(ctx, id, input.Path)
+	tree.Snapshot = true
+	return tree, err
+}
+
+func (f *fakeSessionService) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput) (sessionsvc.WorkspaceFileBlob, error) {
+	f.workspaceSnapshotInput = input
+	return f.GetWorkspaceFileBlob(ctx, id, input.Path, input.Side)
+}
+
+func TestSessionsAPI_SnapshotReadsCarrySourceAndSelection(t *testing.T) {
+	for _, route := range []string{"file", "tree", "file/blob"} {
+		t.Run(route, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			sha := strings.Repeat("a", 40)
+			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/"+route+"?snapshot=true&path=src&branch=feature&expectedTipSha="+sha+"&commitShas="+sha+"&filter=needle", "")
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			got := svc.workspaceSnapshotInput
+			if got.Path != "src" || got.View.Branch != "feature" || got.View.ExpectedTipSHA != sha || len(got.CommitSHAs) != 1 || got.CommitSHAs[0] != sha {
+				t.Fatalf("snapshot input=%+v", got)
+			}
+			if route == "tree" && (svc.workspaceSnapshotFilter != "needle" || !strings.Contains(string(body), `"snapshot":true`)) {
+				t.Fatalf("tree=%s filter=%s", body, svc.workspaceSnapshotFilter)
+			}
+			if route == "file" && !strings.Contains(string(body), `"historical":true`) {
+				t.Fatalf("snapshot file missing its marker: %s", body)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_SnapshotRejectsMalformedSource(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/file?snapshot=true&path=src&prNumber=invalid", "")
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_WORKSPACE_VIEW") {
+		t.Fatalf("response=%d %s", status, body)
 	}
 }

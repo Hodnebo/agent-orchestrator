@@ -79,6 +79,7 @@ type WorkspaceCommitSelection struct {
 // WorkspaceSelectionRevisionInput reads one side of a file in a commit
 // selection. CommitSHA is the legacy single-commit alias for CommitSHAs.
 type WorkspaceSelectionRevisionInput struct {
+	Snapshot         bool
 	Path             string
 	Side             WorkspaceFileBlobSide
 	Scope            WorkspaceDiffScope
@@ -133,7 +134,14 @@ func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id doma
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
-	selection, version, err := s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
+	var selection WorkspaceCommitSelection
+	var version string
+	if input.Snapshot {
+		selection, err = s.snapshotSelection(ctx, id, input)
+		version = hashWorkspaceReviewValue(selection.root, selection.before, selection.after)
+	} else {
+		selection, version, err = s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
+	}
 	if err != nil {
 		return WorkspaceFileRevision{}, err
 	}
@@ -141,7 +149,13 @@ func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id doma
 		return WorkspaceFileRevision{}, commitsNotCombinable(selection.Conflict)
 	}
 	result := WorkspaceFileRevision{SessionID: id, Path: rel, Side: input.Side, WorkspaceVersion: version, Encoding: "utf-8"}
+	if selection.after == "" {
+		selection.after = selection.View.TipSHA
+	}
 	if selection.before == "" {
+		selection.before = selection.after
+	}
+	if selection.after == "" {
 		return result, nil
 	}
 	// A path outside the selection's files is unchanged, so both sides read

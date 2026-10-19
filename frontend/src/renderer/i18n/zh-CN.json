@@ -3195,5 +3195,9 @@
 	"settings.agentAccounts.stopAndMove": "停止并移动",
 	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
 	"settings.agentAccounts.switchingAccount": "正在切换账号",
-	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。"
+	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。",
+	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
+	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
+	"files.snapshotRefresh": "Reload selected revision",
+	"files.branches.showMore": "Show more branches"
 }

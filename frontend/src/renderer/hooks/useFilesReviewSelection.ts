@@ -52,6 +52,7 @@ export type FilesReviewSelection = {
 	target: ReviewTarget;
 	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
 	retryTarget: () => void;
+ refreshSource: () => void;
 	/** Explains a fall back to the checked-out branch; "" otherwise. */
 	notice: string;
 	/** Ticks every listed commit between the oldest and newest tick, which always combine. */
@@ -133,8 +134,9 @@ export function useFilesReviewSelection({
 	});
 
 	const settledKey = changesKey(settledChanges);
-	const target = useMemo(
-		() => buildReviewTarget({
+const target = useMemo(
+	() => {
+		const built = buildReviewTarget({
 			branch,
 			changes: settledChanges,
 			manifest,
@@ -142,10 +144,14 @@ export function useFilesReviewSelection({
 			history,
 			historyError: historyQuery.error,
 			selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
-		}),
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
-		[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
-	);
+		});
+		return settledChanges.kind === "commits" && !history
+			? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
+			: built;
+	},
+	// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
+	[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
+);
 
 	// A moved tip or base fails the read it fenced; the new one arrives under new keys.
 	const selectionErrorCode = workspaceErrorCode(selectionQuery.error);
@@ -271,6 +277,7 @@ export function useFilesReviewSelection({
 		changesMenu,
 		branchMenu,
 		target,
+		refreshSource: () => {invalidateWorkspaceViews(queryClient,sessionId,hostId);void branchesQuery.refetch();void historyQuery.refetch();},
 		retryTarget: () => {
 			if (historyQuery.isError) void historyQuery.refetch();
 			if (selectionQuery.isError) void selectionQuery.refetch();

@@ -503,7 +503,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByRole("textbox", { name: /old line 5/ })).toBeInTheDocument();
 	});
 
-	it("closes a file's feedback composer when that file is collapsed", async () => {
+	it("preserves a file feedback draft when that file is collapsed", async () => {
 		const model = annotation();
 		model.targets = [{ path: "src/App.tsx", side: "file", scope: "committed", surface: "review" }];
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
@@ -511,7 +511,8 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByRole("textbox", { name: /Feedback for src\/App\.tsx/ })).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
-		expect(model.cancel).toHaveBeenCalledOnce();
+		expect(model.cancel).not.toHaveBeenCalled();
+  expect(screen.queryByRole("textbox",{name:/Feedback for src\/App\.tsx/})).not.toBeInTheDocument();
 	});
 
 	it("routes the gutter plus and file actions without opening an external pane", async () => {
@@ -533,8 +534,8 @@ describe("WorkspaceReviewPane", () => {
 		expect(inlineFeedback).not.toHaveClass("opacity-0");
 		await userEvent.click(inlineFeedback);
 		expect(model.begin).toHaveBeenCalledWith(expect.objectContaining({ path: "README.md", side: "new", line: 7 }));
-		await userEvent.click(screen.getByRole("button", { name: "Open rich preview" }));
-		expect(onOpenFile).toHaveBeenCalledWith("README.md", { commitSha: "commit-1", mode: "rendered", scope: "committed" });
+		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
+		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
 	});
 
 	it("opens a file diff in the center pane through the dedicated action", async () => {
@@ -544,7 +545,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Open diff in center" }));
-		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", { commitSha: "commit-1", mode: "diff", scope: "committed" });
+		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"diff",center:true,scope:"committed"}));
 	});
 
 	it("hides the open-in-center action when no center pane is reachable", async () => {
@@ -559,7 +560,7 @@ describe("WorkspaceReviewPane", () => {
 	it("opens a changed diff directly in syntax-aware edit mode", async () => {
 		const onOpenFile = vi.fn();
 		const data = committedWorkspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" }]);
-		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={commitTarget(data)} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={{...commitTarget(data),source:undefined}} filter="" onBrowseAll={vi.fn()} onOpenFile={onOpenFile} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
@@ -603,7 +604,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
-		expect(onOpenFile).toHaveBeenCalledWith("README.md", { commitSha: "commit-1", mode: "file", scope: "committed" });
+		expect(onOpenFile).toHaveBeenCalledWith("README.md", expect.objectContaining({source:expect.objectContaining({kind:"snapshot",commitShas:["commit-1"]}),mode:"file",scope:"committed"}));
 	});
 
 	it("offers the full file browser when there are no changes", async () => {
@@ -734,17 +735,17 @@ describe("WorkspaceReviewPane", () => {
 		expect(onRetry).toHaveBeenCalledOnce();
 	});
 
-	it("hides open and edit actions for non-openable targets", async () => {
+	it("keeps open actions available for historical targets", async () => {
 		const image = { path: "logo.png", status: "modified" as const, additions: 0, deletions: 0, size: 128, binary: true };
 		const file = { path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: "file-1" };
 		const data = committedWorkspace([file, image]);
-		const target: ReviewTarget = { ...commitTarget(data), view: { branch: "feature/menus" }, openable: false };
+		const target: ReviewTarget = { ...commitTarget(data), view: { branch: "feature/menus" }, source:{kind:"snapshot",view:{branch:"feature/menus"},label:"feature/menus"}, openable: true };
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} onOpenFile={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Open full file" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open diff in center" })).toBeInTheDocument();
 		expect(screen.getAllByRole("button", { name: "Add feedback" }).length).toBeGreaterThan(0);
 		// The image preview reads the worktree, so another branch's image falls back to the placeholder.
 		expect(screen.getByText("Binary file preview is not available.")).toBeInTheDocument();

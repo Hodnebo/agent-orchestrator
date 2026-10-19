@@ -83,12 +83,11 @@ describe("ReviewChangesMenu", () => {
 		expect(props.onSelectScope).toHaveBeenCalledWith("uncommitted");
 	});
 
-	it("puts commits in a submenu with All commits checked when commits are picked", async () => {
+	it("shows commits immediately with All commits checked when commits are picked", async () => {
 		renderMenu({ value: { kind: "commits", shas: [] }, stats: { additions: 12, deletions: 4 } });
 		expect(screen.getByRole("button", { name: "Changes to review: All commits" })).toBeInTheDocument();
 		await openMenu();
 		expect(screen.getAllByRole("menuitemradio").every((item) => item.getAttribute("aria-checked") === "false")).toBe(true);
-		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
 		const all = await screen.findByRole("menuitemcheckbox", { name: /^All commits/ });
 		expect(all).toHaveAttribute("aria-checked", "true");
 		expect(all).toHaveTextContent("All commits+12−4");

@@ -69,6 +69,7 @@ export type WorkspaceFileRevision = components["schemas"]["WorkspaceFileRevision
 export type WorkspaceFileSearchResponse = components["schemas"]["WorkspaceFileSearchResponse"];
 export type FilesSource =
 	| { kind: "workspace" }
+ | { kind: "snapshot"; view?: WorkspaceViewParams; commitShas?: readonly string[]; label: string }
 	| { kind: "pull_request"; number: number; url: string; label: string; snapshot?: string }
 	/** `readOnly` hides the edit action, as for a cloud session's artifacts. */
 	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean };
@@ -117,8 +118,9 @@ export type ReviewTarget = {
 	/** Set when exactly one commit is picked. */
 	sha?: string;
 	subject?: string;
-	/** False for other branches and for several commits: the centre pane only opens the worktree or one of its commits. */
+	/** Historical targets carry their source when opening a file. */
 	openable: boolean;
+	source?: FilesSource;
 	state: "ready" | "pending" | "error" | "not_combinable";
 	conflict?: WorkspaceCommitConflict & { subject?: string };
 	error?: Error;
@@ -406,13 +408,44 @@ export function sessionWorkspaceFileQueryOptions(sessionId: string, path: string
 	};
 }
 
-export function sessionSourceFileQueryOptions(sessionId: string, source: FilesSource, path: string, errorMessage = "Unable to load file", scope: WorkspaceDiffScope = "combined", commitSha?: string, previousPath = "", hostId?: string): UseQueryOptions<WorkspaceFileDetail> {
+export function sessionSourceFileQueryOptions(
+	sessionId: string,
+	source: FilesSource,
+	path: string,
+	errorMessage = "Unable to load file",
+	scope: WorkspaceDiffScope = "combined",
+	commitSha?: string,
+	previousPath = "",
+	hostId?: string,
+): UseQueryOptions<WorkspaceFileDetail> {
+	if (source.kind === "snapshot")
+		return {
+			queryKey: ["session-snapshot-file", hostId ?? "local", sessionId, JSON.stringify(source), path],
+			queryFn: async ({ signal }) => {
+				const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/file", {
+					signal,
+					params: { path: { sessionId }, query: { path, ...snapshotQuery(source) } },
+				});
+				if (error) throw workspaceRequestError(error, response, errorMessage);
+				if (!data) throw new Error(errorMessage);
+    if (!data.historical) throw new WorkspaceRequestError("This host does not support snapshot file browsing. Update its daemon to open this revision.","WORKSPACE_SNAPSHOT_UNSUPPORTED",400);
+				return data as WorkspaceFileDetail;
+			},
+			retry: retryWorkspaceRead,
+			staleTime: Infinity,
+		};
 	if (source.kind === "workspace") return sessionWorkspaceFileQueryOptions(sessionId, path, errorMessage, scope, commitSha, hostId);
 	if (source.kind === "artifact") return sessionArtifactFileQueryOptions(sessionId, path, source.rawUrl, errorMessage);
-	return { queryKey: hostId ? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path] : ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path], queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId) };
+	return {
+		queryKey: hostId
+			? ["session-source-file", hostId, sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path]
+			: ["session-source-file", sessionId, "pull_request", source.url, source.snapshot ?? "", commitSha ?? "", path],
+		queryFn: () => fetchSessionPRFile(sessionId, source.number, source.url, path, previousPath, errorMessage, commitSha, hostId),
+	};
 }
 
 /** `selectionKey` names the view and commits read (workspaceSelectionKey); "" is the worktree's own scope or range. */
+
 export const sessionWorkspaceDiffsQueryKey = (
 	sessionId: string,
 	scope: WorkspaceDiffScope,
@@ -501,7 +534,7 @@ export async function fetchWorkspaceFileRevision({
 		signal,
 		params: {
 			path: { sessionId },
-			query: { path, scope, side, workspaceVersion, expectedRevision, ...view, commitSha: commits.commitSha, commitShas: commits.commitShas?.join(",") },
+			query: { path, scope, side, workspaceVersion, expectedRevision, ...view, commitSha: commits.commitSha, commitShas: commits.commitShas?.join(","), snapshot: scope === "committed" && (view !== undefined || commitShas !== undefined) ? true : undefined },
 		},
 	});
 	if (error) throw workspaceRequestError(error, response, errorMessage);
@@ -577,6 +610,7 @@ export function sessionSourceFileRevisionQueryOptions({
 	commitSha?: string;
 	hostId?: string;
 }): UseQueryOptions<WorkspaceFileRevision> {
+ if(source.kind === "snapshot") return sessionWorkspaceFileRevisionQueryOptions({path,scope:"committed",sessionId,side,view:source.view,commitShas:source.commitShas,hostId});
 	if (source.kind === "workspace") return sessionWorkspaceFileRevisionQueryOptions({ path, scope, sessionId, side, workspaceVersion, commitSha, hostId });
 	if (source.kind === "pull_request") {
 		return {
@@ -905,4 +939,15 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 		const cacheKey = sessionUiKey(sessionId, hostId);
 		if (lastPrefetchedReview.get(cacheKey) === token) lastPrefetchedReview.delete(cacheKey);
 	}
+}
+
+/** Shared by file, directory and passive-media reads: no live-worktree fallback. */
+export function snapshotQuery(source: Extract<FilesSource, { kind: "snapshot" }>) {
+	return { snapshot: true as const, ...source.view, commitShas: source.commitShas?.join(",") };
+}
+
+export function snapshotBlobUrl(base: string, sessionId: string, path: string, source: Extract<FilesSource, { kind: "snapshot" }>, side: "before" | "after" = "after") {
+	const params = new URLSearchParams({ path, side });
+	for (const [key, value] of Object.entries(snapshotQuery(source))) if (value !== undefined) params.set(key, String(value));
+	return `${base.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${params}`;
 }

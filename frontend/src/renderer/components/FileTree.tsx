@@ -10,8 +10,11 @@ import {
 	type WorkspaceTreeEntry,
 } from "../hooks/useSessionWorkspaceTree";
 import { sessionUiKey } from "../lib/hosts";
-import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { type FilesSource, sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+
+type DirectoryState = { key:string; requested:string[]; open:Set<string> };
+
 
 const ROW_HEIGHT = 28;
 
@@ -210,6 +213,7 @@ function treeFromDirectories(entries: WorkspaceTreeEntry[], directories: Map<str
 }
 
 export function FileTree({
+ source,
 	filterText,
 	sessionId,
 	hostId,
@@ -222,6 +226,7 @@ export function FileTree({
 }: {
 	/** Start the first row at the top edge (the Files split view's divider). */
 	flushTop?: boolean;
+ source?: FilesSource;
 	filterText: string;
 	sessionId: string;
 	hostId?: string;
@@ -247,6 +252,7 @@ export function FileTree({
 
 	return (
 		<WorkspaceFileTree
+ source={source}
 			filterText={filterText}
 			flushTop={flushTop}
 			hostId={hostId}
@@ -259,6 +265,7 @@ export function FileTree({
 }
 
 function WorkspaceFileTree({
+ source,
 	filterText,
 	hostId,
 	sessionId,
@@ -267,6 +274,7 @@ function WorkspaceFileTree({
 	onPrefetchPath,
 	flushTop,
 }: {
+ source?: FilesSource;
 	filterText: string;
 	hostId?: string;
 	sessionId: string;
@@ -276,8 +284,15 @@ function WorkspaceFileTree({
 	flushTop: boolean;
 }) {
 	const { t } = useTranslation();
-	const uiKey = sessionUiKey(sessionId, hostId);
-	const [directories, setDirectories] = useState({ key: uiKey, requested: [] as string[], open: new Set<string>() });
+	const uiKey = `${sessionUiKey(sessionId, hostId)}:${JSON.stringify(source ?? {kind:"workspace"})}`;
+ const snapshot = source?.kind === "snapshot";
+	const savedDirectories=useRef(new Map<string,DirectoryState>());
+ const [directories, setDirectories] = useState<DirectoryState>(()=>savedDirectories.current.get(uiKey) ?? {key:uiKey,requested:[],open:new Set()});
+ useEffect(()=>setDirectories(savedDirectories.current.get(uiKey) ?? {key:uiKey,requested:[],open:new Set()}),[uiKey]);
+ useEffect(()=>{
+  savedDirectories.current.set(directories.key,directories);
+  if(savedDirectories.current.size>64) savedDirectories.current.delete(savedDirectories.current.keys().next().value!);
+ },[directories]);
 	const normalizedFilter = filterText.trim();
 	const [search, setSearch] = useState({ key: uiKey, value: normalizedFilter });
 	useEffect(() => {
@@ -286,16 +301,16 @@ function WorkspaceFileTree({
 	}, [normalizedFilter, uiKey]);
 	const searchFilter = normalizedFilter === "" ? "" : search.key === uiKey ? search.value : normalizedFilter;
 
-	const rootQuery = useQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId), enabled: normalizedFilter.length === 0 });
+	const rootQuery = useQuery({ ...sessionWorkspaceTreeQueryOptions(sessionId, "", "Unable to load workspace tree", hostId,source,searchFilter), enabled: snapshot || normalizedFilter.length === 0 });
 	const searchQuery = useQuery({
 		...sessionWorkspaceSearchQueryOptions(sessionId, searchFilter, t("files.error.searchWorkspace"), hostId),
-		enabled: searchFilter.length > 0,
+		enabled: !snapshot && searchFilter.length > 0,
 	});
 
 	const requested = directories.key === uiKey ? directories.requested : [];
 	const directoryQueries = useQueries({
 		queries: requested.map((dir) => ({
-			...sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId),
+			...sessionWorkspaceTreeQueryOptions(sessionId, dir, t("files.error.loadWorkspaceTree"), hostId,source),
 			enabled: normalizedFilter.length === 0 && directories.open.has(dir),
 		})),
 	});
@@ -316,10 +331,10 @@ function WorkspaceFileTree({
 		});
 	}, [uiKey]);
 
-	const searchData = buildWorkspaceFileTree(searchQuery.data?.results ?? []);
+	const searchData = buildWorkspaceFileTree(snapshot ? rootQuery.data?.entries.filter(entry=>entry.type==="file").map(entry=>({...entry,status:entry.status ?? "unmodified",binary:entry.binary ?? false})) ?? [] : searchQuery.data?.results ?? []);
 	const data = normalizedFilter ? searchData : lazyData;
-	const isPending = normalizedFilter ? searchQuery.isPending : rootQuery.isPending;
-	const activeError = normalizedFilter ? searchQuery.error : rootQuery.error;
+	const isPending = normalizedFilter && !snapshot ? searchQuery.isPending : rootQuery.isPending;
+	const activeError = normalizedFilter && !snapshot ? searchQuery.error : rootQuery.error;
 	const isEmpty = data.length === 0 && !isPending && !activeError;
 
 	return (
@@ -330,7 +345,8 @@ function WorkspaceFileTree({
 			{activeError ? (
 				<p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
 			) : null}
-			{isEmpty ? <p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p> : null}
+			{(rootQuery.data?.truncated || directoryQueries.some(query=>query.data?.truncated)) ? <p className="p-3 text-xs text-muted-foreground">{t("files.treeTruncated")}</p> : null}
+   {isEmpty ? <p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p> : null}
 			{!isPending && !activeError && !isEmpty ? (
 				<PierreTreeSurface
 					data={data}
@@ -524,6 +540,7 @@ function ChangedFileTree({
 }: {
 	onPrefetchPath?: (node: TreeNode) => void;
 	data: TreeNode[];
+ source?: FilesSource;
 	filterText: string;
 	flushTop: boolean;
 	onSelectPath: (node: TreeNode) => void;

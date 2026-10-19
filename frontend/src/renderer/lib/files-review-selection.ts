@@ -225,7 +225,8 @@ export function buildReviewTarget({
 		view,
 		workspaceVersion: branch.kind === "checked_out" ? manifest?.workspaceVersion : undefined,
 		selectionKey: workspaceSelectionKey(view, shas),
-		openable: branch.kind === "checked_out" && shas.length <= 1,
+		openable: true,
+  source: changes.kind === "commits" ? { kind: "snapshot" as const, view: { ...view, expectedTipSha: history?.view?.tipSha ?? view?.expectedTipSha, expectedBaseSha: history?.view?.baseSha || undefined }, commitShas: [...shas], label: `${branch.kind === "branch" ? branch.name.replace(/^refs\/remotes\//, "") : branch.kind === "pull_request" ? `PR #${branch.number}` : "Committed"} · ${shas.length===1 ? shas[0].slice(0,7) : shas.length>1 ? `${shas.length} commits` : history?.view?.tipSha?.slice(0,7) ?? "all"}` } : undefined,
 	};
 	const awaitingHistory = (): ReviewTarget => (historyError ? { ...base, state: "error", error: historyError } : { ...base, state: "pending" });
 
@@ -276,14 +277,14 @@ export function scopeFiles(manifest: WorkspaceFilesResponse, scope: ScopeKind, l
 /** A branch menu row's id; the checked-out row (a detached HEAD has no name) is always "checked_out". */
 export function branchRowId(row: WorkspaceBranch): string {
 	if (row.checkedOut) return "checked_out";
-	return row.kind === "pull_request" ? `pr:${row.prUrl || `#${row.prNumber ?? 0}`}` : `branch:${row.name}`;
+	return row.kind === "pull_request" ? `pr:${row.prUrl || `#${row.prNumber ?? 0}`}` : `${row.kind === "remote" ? "remote" : "branch"}:${row.name}`;
 }
 
 /** What picking a branch menu row reads: the worktree, a local branch, or a PR whose branch is not local. */
 export function branchTargetOf(row: WorkspaceBranch): FilesBranchTarget {
 	if (row.checkedOut) return CHECKED_OUT_BRANCH;
 	if (row.kind === "pull_request") return { kind: "pull_request", number: row.prNumber ?? 0, url: row.prUrl ?? "", branch: row.name, tipSha: row.tipSha };
-	return { kind: "branch", name: row.name, tipSha: row.tipSha };
+	return { kind: "branch", name: row.kind === "remote" ? `refs/remotes/${row.name}` : row.name, tipSha: row.tipSha };
 }
 
 /**
@@ -296,7 +297,7 @@ export function findBranchRow(rows: readonly WorkspaceBranch[], branch: FilesBra
 		case "checked_out":
 			return rows.find((row) => row.checkedOut);
 		case "branch":
-			return rows.find((row) => row.kind === "local" && row.name === branch.name);
+			return rows.find((row) => (row.kind === "local" && row.name === branch.name) || (row.kind === "remote" && `refs/remotes/${row.name}` === branch.name));
 		case "pull_request": {
 			const isPR = (row: WorkspaceBranch) => (branch.url ? row.prUrl === branch.url : row.prNumber === branch.number);
 			return rows.find((row) => row.kind === "pull_request" && isPR(row)) ?? rows.find((row) => row.kind === "local" && isPR(row));

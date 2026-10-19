@@ -3005,6 +3005,7 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.WorkspaceFileResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -3115,6 +3116,7 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, ""},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -3128,6 +3130,7 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListWorkspaceTreeResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

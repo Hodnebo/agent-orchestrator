@@ -3213,5 +3213,9 @@
 	"settings.agentAccounts.stopAndMove": "멈추고 이동",
 	"settings.agentAccounts.switching": "{{email}}(으)로 전환 중…",
 	"settings.agentAccounts.switchingAccount": "계정 전환 중",
-	"settings.agentAccounts.switchFailed": "전환하지 못했습니다. 에이전트는 이전 계정에 그대로 있습니다."
+	"settings.agentAccounts.switchFailed": "전환하지 못했습니다. 에이전트는 이전 계정에 그대로 있습니다.",
+	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
+	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
+	"files.snapshotRefresh": "Reload selected revision",
+	"files.branches.showMore": "Show more branches"
 }

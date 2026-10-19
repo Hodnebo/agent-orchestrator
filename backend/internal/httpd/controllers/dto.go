@@ -263,6 +263,14 @@ type ArtifactFileResponse struct {
 
 // WorkspaceFileQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileQuery struct {
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
 	Path string `query:"path" description:"Session-worktree-relative file path."`
 	// Section scopes the diff to one git-state section (see WorkspaceFileSections):
 	// uncommitted compares the worktree against HEAD, staged compares the index
@@ -284,6 +292,15 @@ type UpdateWorkspaceFileRequest struct {
 
 // WorkspaceFileBlobQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/file/blob.
 type WorkspaceFileBlobQuery struct {
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
+	CommitSHA string `query:"commitSha,omitempty" description:"Selected commit SHA."`
 	// The handler rejects a missing path with WORKSPACE_PATH_REQUIRED, so mark it
 	// required: query params carry no json tag, and requiredFromJSONTag only
 	// derives `required` from those.
@@ -294,6 +311,7 @@ type WorkspaceFileBlobQuery struct {
 
 // WorkspaceFileRevisionQuery selects one text-capable comparison side.
 type WorkspaceFileRevisionQuery struct {
+	Snapshot         bool   `query:"snapshot,omitempty" description:"Read the selected immutable comparison, including an empty commit range."`
 	Path             string `query:"path" required:"true" description:"Session-worktree-relative file path."`
 	Scope            string `query:"scope,omitempty" enum:"combined,uncommitted,committed,staged,unstaged,untracked" description:"Comparison scope. Defaults to combined."`
 	Side             string `query:"side,omitempty" enum:"before,after" description:"Comparison side. Defaults to after."`
@@ -353,6 +371,16 @@ type WorkspaceResolveQuery struct {
 
 // WorkspaceTreeQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/tree.
 type WorkspaceTreeQuery struct {
+	Filter          string `query:"filter,omitempty" description:"Case-insensitive path search across the selected snapshot."`
+	CommitSHA       string `query:"commitSha,omitempty" description:"Selected commit SHA."`
+	Snapshot        bool   `query:"snapshot,omitempty" description:"Read the immutable review snapshot instead of the live worktree."`
+	Branch          string `query:"branch,omitempty" description:"Local or remote-tracking branch to read without checkout."`
+	PRNumber        int    `query:"prNumber,omitempty" description:"Associated pull request number."`
+	SourceURL       string `query:"sourceUrl,omitempty" description:"Associated pull request URL."`
+	ExpectedTipSHA  string `query:"expectedTipSha,omitempty" description:"Pinned source tip for snapshot reads. Must remain reachable from the selected source."`
+	ExpectedBaseSHA string `query:"expectedBaseSha,omitempty" description:"Pinned comparison base for snapshot reads."`
+	CommitSHAs      string `query:"commitShas,omitempty" description:"Comma-separated selected commit SHAs."`
+
 	Path string `query:"path,omitempty" description:"Directory path relative to the session workspace root. Empty or omitted lists the root."`
 }
 
@@ -361,6 +389,7 @@ type WorkspaceTreeQuery struct {
 // is one directory level of the full worktree — tracked and
 // untracked-but-not-ignored — for lazily expanding a file explorer.
 type ListWorkspaceTreeResponse struct {
+	Snapshot  bool                 `json:"snapshot,omitempty" description:"True only when the tree was read from the requested immutable snapshot."`
 	SessionID domain.SessionID     `json:"sessionId"`
 	Path      string               `json:"path"`
 	Entries   []WorkspaceTreeEntry `json:"entries"`
@@ -662,7 +691,7 @@ type WorkspaceBranchesResponse struct {
 // with a pull request is only annotated with it; a pull request whose source
 // branch is not local gets a row of its own.
 type WorkspaceBranchResponse struct {
-	Kind       sessionsvc.WorkspaceBranchKind `json:"kind" enum:"local,pull_request" description:"local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view."`
+	Kind       sessionsvc.WorkspaceBranchKind `json:"kind" enum:"local,remote,pull_request" description:"local reads as a branch view (or the checked-out worktree); pull_request reads as a pull request view."`
 	Name       string                         `json:"name" description:"Branch name, the pull request's source branch, or empty for a detached HEAD."`
 	TipSHA     string                         `json:"tipSha,omitempty"`
 	UpdatedAt  *time.Time                     `json:"updatedAt,omitempty" description:"The tip's committer time, or the pull request's last update."`
@@ -731,6 +760,7 @@ type WorkspaceFileSummary struct {
 
 // WorkspaceFileResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/file.
 type WorkspaceFileResponse struct {
+	Historical       bool                            `json:"historical,omitempty" description:"True only for a read-only revision, never a live worktree file."`
 	SessionID        domain.SessionID                `json:"sessionId"`
 	Path             string                          `json:"path"`
 	PreviousPath     string                          `json:"previousPath,omitempty"`

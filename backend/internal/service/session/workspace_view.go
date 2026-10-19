@@ -105,7 +105,11 @@ func (s *Service) resolveWorkspaceView(ctx context.Context, id domain.SessionID,
 	}
 	singleRepo := !isStandaloneScratchWorkspace(rec) && (!projectOK || project.Kind.WithDefault() == domain.ProjectKindSingleRepo)
 	if v.Branch == "" {
-		return s.resolveCheckedOutView(ctx, rec, project, projectOK, singleRepo)
+		view, err := s.resolveCheckedOutView(ctx, rec, project, projectOK, singleRepo)
+		if err != nil {
+			return resolvedWorkspaceView{}, err
+		}
+		return view, fenceWorkspaceView(view, v)
 	}
 	if !singleRepo {
 		return resolvedWorkspaceView{}, apierr.Invalid("WORKSPACE_VIEW_UNSUPPORTED", "Only single-repository sessions can review another branch", nil)
@@ -204,7 +208,11 @@ func (s *Service) resolveCheckedOutView(ctx context.Context, rec domain.SessionR
 // Every Git argument after the tip lookup is a SHA.
 func resolveBranchView(ctx context.Context, root, name string, project domain.ProjectRecord, projectOK bool) (resolvedWorkspaceView, error) {
 	// The argument starts with refs/, so Git can never read it as an option.
-	out, err := gitWorkspaceOutput(ctx, root, "rev-parse", "--verify", "--quiet", "refs/heads/"+name+"^{commit}")
+	ref := "refs/heads/" + name
+	if strings.HasPrefix(name, "refs/remotes/") {
+		ref = name
+	}
+	out, err := gitWorkspaceOutput(ctx, root, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
 	if err != nil && (errors.Is(err, ports.ErrWorkspaceRepoUnavailable) || ctx.Err() != nil) {
 		return resolvedWorkspaceView{}, err
 	}
