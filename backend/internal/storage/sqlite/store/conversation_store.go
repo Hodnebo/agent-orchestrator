@@ -1121,6 +1121,21 @@ func (s *Store) LatestPrimaryTurn(ctx context.Context, conversationID, providerC
 	return turnToDomain(row), true, nil
 }
 
+// TurnByProviderID is the conversation's turn the provider knows as
+// providerTurnID.
+func (s *Store) TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+		ConversationID: conversationID, ProviderTurnID: providerTurnID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("select turn by provider id %s: %w", providerTurnID, err)
+	}
+	return turnToDomain(row), nil
+}
+
 // LatestVisibleUserTurnSettled checks the current branch's latest user prompt
 // without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
