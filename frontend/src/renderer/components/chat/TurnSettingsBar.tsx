@@ -18,7 +18,7 @@
  */
 
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
-import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, Shuffle, SlidersHorizontal, Zap, type LucideIcon } from "lucide-react";
+import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, Shuffle, SlidersHorizontal, TriangleAlert, Zap, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	OptionMenu,
@@ -204,6 +204,17 @@ export function TurnSettingsBar({
 	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
+	// The agent picked for the next message may not run in the chat's mode (Kimi
+	// only in its default, Pi only with permissions bypassed). The switch then
+	// starts it in the strictest mode it runs in; the control says so beforehand.
+	const pendingHarness = agentSwitch?.pending?.harness;
+	const pendingModes = pendingHarness ? agentSwitch?.pendingPermissionModes : undefined;
+	const pendingAgent = pendingHarness ? agentLabel(pendingHarness) : "";
+	const pendingRuns = (mode: ApprovalMode) => !pendingModes || pendingModes.includes(mode);
+	const startsIn = pendingModes?.length && !pendingRuns(settings.approvalMode ?? "default") ? pendingModes[0] : undefined;
+	const startsInNote = startsIn
+		? t("agentSwitch.startsInMode", { agent: pendingAgent, mode: approvalLabel, target: APPROVAL_COPY[startsIn].label })
+		: undefined;
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
@@ -470,18 +481,26 @@ export function TurnSettingsBar({
 						) : showApprovalMode && onChange ? (
 							<Picker
 								label={approvalLabel}
-													title="Approval policy for the next turn"
+													title={startsInNote ?? "Approval policy for the next turn"}
 													disabled={optionDisabled}
 								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
+								alert={Boolean(startsInNote)}
 							>
+								{startsInNote ? (
+									<p role="note" className="flex items-start gap-2 px-3 py-2 text-[11px] leading-snug text-destructive">
+										<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+										<span>{startsInNote}</span>
+									</p>
+								) : null}
 								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
 									unified ? (
 										<PermissionRow
 											key={mode}
 											mode={permissionLook(harness, mode)}
 											title={approvalCopy[mode].label}
-											description={approvalCopy[mode].description}
+											description={pendingRuns(mode) ? approvalCopy[mode].description : t("agentSwitch.modeUnsupported", { agent: pendingAgent })}
 											active={mode === (settings.approvalMode ?? "default")}
+											disabled={!pendingRuns(mode)}
 											onSelect={() => onChange({ ...settings, approvalMode: mode })}
 										/>
 									) : (
@@ -489,6 +508,8 @@ export function TurnSettingsBar({
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
+										disabled={!pendingRuns(mode)}
+										title={pendingRuns(mode) ? undefined : t("agentSwitch.modeUnsupported", { agent: pendingAgent })}
 										onSelect={() => onChange({ ...settings, approvalMode: mode })}
 										className={cn("text-xs")}
 									>
@@ -1279,18 +1300,21 @@ function PermissionRow({
 	title,
 	description,
 	active,
+	disabled,
 	onSelect,
 }: {
 	mode?: ApprovalMode;
 	title: string;
 	description?: string;
 	active: boolean;
+	/** The agent picked for the next message cannot run in this mode. */
+	disabled?: boolean;
 	onSelect: () => void;
 }) {
 	const Icon = permissionIcon(mode);
 	const unrestricted = mode === "bypass-permissions";
 	return (
-		<OptionMenuItem active={active} radio onSelect={onSelect} className="items-start gap-3 whitespace-normal px-3 py-2">
+		<OptionMenuItem active={active} radio disabled={disabled} onSelect={onSelect} className="items-start gap-3 whitespace-normal px-3 py-2">
 			<Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", unrestricted ? "text-warning" : "text-muted-foreground")} />
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className={cn("text-xs", unrestricted ? "text-warning" : "text-foreground")}>{title}</span>
@@ -1417,10 +1441,13 @@ function Picker({
 	children,
 	onFocus,
 	leadIcon: LeadIcon,
+	alert,
 }: {
 	label: string;
 	title: string;
 	disabled?: boolean;
+	/** The current choice will not hold for the next message: marked red. */
+	alert?: boolean;
 	/** Set on the permission control when it leads the row: marked with this, with a caret, opening rightwards. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
@@ -1435,9 +1462,10 @@ function Picker({
 					aria-label={title}
 					title={title}
 					disabled={disabled}
-					className={cn(TRIGGER_CLASS, LeadIcon ? "px-2" : undefined)}
+					className={cn(TRIGGER_CLASS, LeadIcon ? "px-2" : undefined, alert ? "text-destructive" : undefined)}
 				>
-					{LeadIcon ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
+					{alert ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0 text-destructive" />
+						: LeadIcon ? <LeadIcon aria-hidden="true" className="size-3.5 shrink-0" /> : null}
 					<span className="min-w-0 max-w-[16ch] truncate">{label}</span>
 					{badge}
 				</OptionMenuTrigger>

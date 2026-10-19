@@ -127,6 +127,8 @@
 	"agentSwitch.switching": "切り替え中",
 	"agentSwitch.switchedFromTo": "{{from}} から {{to}} に切り替えました",
 	"agentSwitch.modelsUnavailable": "{{agent}} のモデルを読み込めませんでした: {{error}}",
+	"agentSwitch.modeUnsupported": "{{agent}} はこのモードでは実行できません",
+	"agentSwitch.startsInMode": "{{agent}} は {{mode}} では実行できません。{{target}} で起動します。",
 	"session.statusChecking": "確認中…",
 	"session.statusUnavailable": "確認できません",
 	"artifactLink.unavailable": "アーティファクトを利用できません",

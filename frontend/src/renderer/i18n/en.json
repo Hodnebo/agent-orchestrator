@@ -127,6 +127,8 @@
 	"agentSwitch.switching": "Switching",
 	"agentSwitch.switchedFromTo": "Switched from {{from}} to {{to}}",
 	"agentSwitch.modelsUnavailable": "Couldn't load {{agent}}'s models: {{error}}",
+	"agentSwitch.modeUnsupported": "{{agent}} can't run in this mode",
+	"agentSwitch.startsInMode": "{{agent}} can't run in {{mode}}. It will start in {{target}}.",
 	"session.statusChecking": "Checking…",
 	"session.statusUnavailable": "Unable to verify",
 	"artifactLink.unavailable": "Artifact unavailable",

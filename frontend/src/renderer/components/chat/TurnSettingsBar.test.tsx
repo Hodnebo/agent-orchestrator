@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatConfigOption } from "../../types/conversation";
 import { hasProviderPermissionMode, TurnSettingsBar } from "./TurnSettingsBar";
 
+// The agent picker is tested on its own; here only the permission control matters.
+vi.mock("./AgentSwitchPicker", async (original) => ({ ...await original<typeof import("./AgentSwitchPicker")>(), AgentModelPicker: () => null }));
+
 const OPTIONS: ChatConfigOption[] = [
 	{
 		id: "model",
@@ -1751,4 +1754,37 @@ it("presents Antigravity model variants as Codex-style model and effort choices 
 	await user.click(screen.getByRole("menuitemradio", { name: "Auto-approve" }));
 	expect(onChangeConfigOption).toHaveBeenCalledWith("mode", { value: "yolo" });
 	expect(options[0].choices).toHaveLength(4);
+});
+
+describe("permissions for the agent picked for the next message", () => {
+	it("marks a mode the pending agent cannot run in and names the one it starts in", async () => {
+		const user = userEvent.setup();
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ approvalMode: "auto" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "pi" }, pendingPermissionModes: ["bypass-permissions"], onPendingChange: vi.fn() }}
+			/>,
+		);
+		const note = "Pi can't run in Auto-approve. It will start in Bypass permissions.";
+		await user.click(screen.getByRole("button", { name: note }));
+		expect(screen.getByRole("note")).toHaveTextContent(note);
+		expect(screen.getByRole("menuitemradio", { name: /Auto-approve/ })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitemradio", { name: /Bypass permissions/ })).not.toHaveAttribute("aria-disabled");
+	});
+
+	it("leaves the control as it is when the pending agent runs in the chat's mode", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{ approvalMode: "default" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "kimi" }, pendingPermissionModes: ["default"], onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeInTheDocument();
+	});
 });

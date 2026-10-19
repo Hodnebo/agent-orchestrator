@@ -13,10 +13,12 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
 
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import {
+	conversationQueryKey,
 	ProviderSwitchFailed,
 	useConversation,
 	useConversationCommands,
@@ -229,6 +231,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// next message, so the handoff note is written when it is needed.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const queryClient = useQueryClient();
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
@@ -263,11 +266,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
 	);
 	const switchBlocked = agentBusy || providerSwitch.isPending;
+	const permissionModes = useChatPermissionModes(hostId, Boolean(pendingSwitch));
+	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, onPendingChange: setChosenSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, onPendingChange: setChosenSwitch, disabled: switchBlocked, ultracode, autoCompact }
 			: undefined,
-		[autoCompact, currentHarness, hostId, newWorkDisabled, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[autoCompact, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -643,7 +648,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						: undefined;
 					// Nothing was sent if the switch fails, so the draft must stay editable
 					// instead of being held as a delivery that might have gone through.
-					const switchFailed = (error: unknown) => Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+					const switchFailed = (error: unknown) => {
+						// The daemon keeps the previous agent and puts its settings back, so
+						// the composer shows that agent and its permission mode again.
+						setChosenSwitch(undefined);
+						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
+						return Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
+					};
 					const switched = () => {
 						setChosenSwitch(undefined);
 						// Ultracode picked with the switch stays on for the messages after it.

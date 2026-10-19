@@ -127,6 +127,8 @@
 	"agentSwitch.switching": "전환 중",
 	"agentSwitch.switchedFromTo": "{{from}}에서 {{to}}(으)로 전환됨",
 	"agentSwitch.modelsUnavailable": "{{agent}} 모델을 불러오지 못했습니다: {{error}}",
+	"agentSwitch.modeUnsupported": "{{agent}}은(는) 이 모드에서 실행할 수 없습니다",
+	"agentSwitch.startsInMode": "{{agent}}은(는) {{mode}}에서 실행할 수 없습니다. {{target}}(으)로 시작합니다.",
 	"session.statusChecking": "확인 중…",
 	"session.statusUnavailable": "확인할 수 없음",
 	"artifactLink.unavailable": "아티팩트를 사용할 수 없음",

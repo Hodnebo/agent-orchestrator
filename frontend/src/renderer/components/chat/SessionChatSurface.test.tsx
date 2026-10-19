@@ -312,6 +312,8 @@ describe("SessionChatSurface pending switch effort", () => {
 		});
 		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
 		expect(await screen.findByText("Couldn't switch agent")).toBeInTheDocument();
+		// The previous agent keeps the chat, so the composer shows it again.
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
 	it("shows a message with attachments while the switch runs, and takes it back when the switch fails", async () => {

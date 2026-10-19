@@ -34,7 +34,7 @@ import {
 	type ModelVariant,
 } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
-import type { TurnSettings } from "../../types/conversation";
+import type { ApprovalMode, TurnSettings } from "../../types/conversation";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import {
 	OptionMenu,
@@ -74,6 +74,8 @@ export interface AgentSwitchProps {
 	projectId: string;
 	hostId?: string;
 	pending?: PendingAgentSwitch;
+	/** The permission modes the pending agent runs in, strictest first, once known. */
+	pendingPermissionModes?: ApprovalMode[];
 	onPendingChange: (next: PendingAgentSwitch | undefined) => void;
 	/** Switching is refused while the agent is working. */
 	disabled?: boolean;
