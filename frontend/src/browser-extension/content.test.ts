@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleContentRequest } from "./content";
 import { RefRegistry } from "./snapshot";
 
@@ -79,6 +79,38 @@ describe("content operations", () => {
 		await expect(
 			handleContentRequest(document, registry, request("wait", { kind: "selector", value: "#missing", timeoutMs: 150 })) as Promise<unknown>,
 		).resolves.toEqual({ satisfied: false });
+	});
+
+	it("waits for a selector to be visible, not merely attached", async () => {
+		const box = (width: number, height: number) => ({ left: 0, top: 0, width, height, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+		document.body.insertAdjacentHTML("beforeend", `<div id="panel" style="display:none">Ready</div><div id="ghost" style="visibility:hidden">Boo</div>`);
+		const panel = document.getElementById("panel")!;
+		const ghost = document.getElementById("ghost")!;
+		// jsdom has no layout; give elements a box only when they are displayed.
+		const rects = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+			return getComputedStyle(this).display === "none" ? box(0, 0) : box(100, 20);
+		});
+		try {
+			const wait = (kind: string, value: string, timeoutMs = 150) =>
+				handleContentRequest(document, registry, request("wait", { kind, value, timeoutMs })) as Promise<{ satisfied: boolean }>;
+			// Attached but display:none, or visibility:hidden: not satisfied.
+			await expect(wait("selector", "#panel")).resolves.toEqual({ satisfied: false });
+			await expect(wait("selector", "#ghost")).resolves.toEqual({ satisfied: false });
+			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: true });
+
+			const shown = wait("selector", "#panel", 2_000);
+			setTimeout(() => (panel.style.display = "block"), 20);
+			await expect(shown).resolves.toEqual({ satisfied: true });
+			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: false });
+
+			const hidden = wait("selector-gone", "#panel", 2_000);
+			setTimeout(() => (panel.style.display = "none"), 20);
+			await expect(hidden).resolves.toEqual({ satisfied: true });
+			ghost.style.visibility = "visible";
+			await expect(wait("selector", "#ghost")).resolves.toEqual({ satisfied: true });
+		} finally {
+			rects.mockRestore();
+		}
 	});
 
 	it("rejects stale refs and unknown operations", () => {
