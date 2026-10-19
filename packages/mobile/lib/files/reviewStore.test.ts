@@ -8,7 +8,7 @@ describe("review comments", () => {
 		const key = reviewKey("host", "store-test");
 		const first = addReviewComment(key, { label: "a.ts · Line 3", feedback: "rename", target, anchor: { side: "new", line: 3 } });
 		const second = addReviewComment(key, { label: "a.ts · Line 9", feedback: "why?", target });
-		expect(first).toMatchObject({ status: "queued", kind: "comment" });
+		expect(first).toMatchObject({ status: "queued" });
 
 		markReviewCommentsSent(key, [first.id]);
 		expect(reviewComments(key).map((comment) => comment.status)).toEqual(["sent", "queued"]);
@@ -18,9 +18,9 @@ describe("review comments", () => {
 		expect(reviewComments(key)).toEqual([]);
 	});
 
-	it("records an immediate ask as already sent", () => {
-		const key = reviewKey(undefined, "store-ask");
-		expect(addReviewComment(key, { label: "x", feedback: "Explain", target, status: "sent", kind: "explain" })).toMatchObject({ status: "sent", kind: "explain" });
+	it("records a comment sent straight away as already sent", () => {
+		const key = reviewKey(undefined, "store-sent");
+		expect(addReviewComment(key, { label: "x", feedback: "now", target, status: "sent" })).toMatchObject({ status: "sent" });
 		expect(queuedComments(reviewComments(key))).toEqual([]);
 	});
 });

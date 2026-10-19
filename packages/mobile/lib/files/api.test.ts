@@ -18,7 +18,7 @@ vi.mock("../config", () => ({
 	}),
 }));
 
-import { fitSelectionMessage, MAX_SEND_LENGTH, sendFileFeedback, sendSelectionRequest, workspaceImageSource } from "./api";
+import { sendFileFeedback, workspaceImageSource } from "./api";
 import { changedPathCount } from "./navigation";
 
 const cfg = { host: "mac.local", httpPort: 3001, password: "pw", hostId: "h1" } as never;
@@ -51,16 +51,6 @@ describe("sending review feedback", () => {
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]).toBeGreaterThan(0);
 		expect(delivered[0]).toBeLessThan(4);
-	});
-
-	it("keeps a selection request under the daemon's send limit", async () => {
-		const lines = Array.from({ length: 200 }, (_, index) => ({ kind: "add" as const, oldNo: null, newNo: index + 1, text: "y".repeat(80) }));
-		const message = fitSelectionMessage({ instruction: "Explain what these lines do and why.", filePath: "a.ts", lines });
-		expect(message.length).toBeLessThanOrEqual(MAX_SEND_LENGTH);
-		expect(message).toContain("Selected lines 1-");
-		await sendSelectionRequest(cfg, "s", { instruction: "Tidy", filePath: "a.ts", lines: lines.slice(0, 2) });
-		expect(sent.bodies[0].body).toMatchObject({ userAuthored: true });
-		expect(sent.bodies[0].body.message).toContain("Instruction:\nTidy");
 	});
 });
 

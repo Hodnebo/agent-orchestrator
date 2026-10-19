@@ -7,8 +7,7 @@ export type CommentAnchor = { side: "old" | "new"; line: number };
 /**
  * A note written against a file. `queued` ones wait to go with the rest of the
  * review; `sent` ones stay on the line, GitHub-style, so the reader still sees
- * what was asked where. `kind` names what was sent: a comment, or an immediate
- * Explain / Make change request.
+ * what was asked where.
  */
 export type ReviewComment = {
 	id: string;
@@ -18,7 +17,6 @@ export type ReviewComment = {
 	target: FileAnnotationTarget;
 	anchor?: CommentAnchor;
 	status: "queued" | "sent";
-	kind: "comment" | "explain" | "change";
 };
 
 const EMPTY: readonly ReviewComment[] = [];
@@ -49,8 +47,8 @@ export function queuedComments(all: readonly ReviewComment[]): readonly ReviewCo
 	return all.filter((comment) => comment.status === "queued");
 }
 
-export function addReviewComment(key: string, comment: Omit<ReviewComment, "id" | "status" | "kind"> & Partial<Pick<ReviewComment, "status" | "kind">>): ReviewComment {
-	const created: ReviewComment = { status: "queued", kind: "comment", ...comment, id: `c${++nextId}` };
+export function addReviewComment(key: string, comment: Omit<ReviewComment, "id" | "status"> & Partial<Pick<ReviewComment, "status">>): ReviewComment {
+	const created: ReviewComment = { status: "queued", ...comment, id: `c${++nextId}` };
 	emit(key, [...reviewComments(key), created]);
 	return created;
 }

@@ -1,6 +1,5 @@
 import { apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
-import { formatDiffSelectionMessage, type DiffSelectionPayload } from "../../../shared/files/diff-selection";
 import { formatFileAnnotationMessages, type FileAnnotationComment } from "../../../shared/files/file-annotations";
 
 const API = "/api/v1";
@@ -128,9 +127,6 @@ export function workspaceImageSource(cfg: ServerConfig, sessionId: string, path:
 	return { uri: `${httpBase(cfg)}${sessionPath(sessionId, "workspace/file/blob")}?${query}`, headers: authHeaders(cfg) };
 }
 
-/** The daemon's `/send` limit (`SendSessionMessageRequest.message` maxLength). */
-export const MAX_SEND_LENGTH = 4096;
-
 /**
  * Feedback the user typed while reviewing, relayed the way desktop does it:
  * `userAuthored` tells the daemon this is the user's own words, not automation.
@@ -160,24 +156,4 @@ export async function sendFileFeedback(
 		onSent?.(count);
 	}
 	return sent;
-}
-
-/** An immediate ask about selected lines (Explain, Make changes), as desktop's selection menu sends it. */
-export async function sendSelectionRequest(cfg: ServerConfig, sessionId: string, payload: DiffSelectionPayload): Promise<void> {
-	await sendUserAuthored(cfg, sessionId, fitSelectionMessage(payload));
-}
-
-/**
- * The shared formatter allows 8 KiB, but `/send` refuses anything over 4 KiB.
- * Drop selected lines from the end until the message fits rather than letting
- * the daemon reject the whole request.
- */
-export function fitSelectionMessage(payload: DiffSelectionPayload): string {
-	let lines = payload.lines;
-	let message = formatDiffSelectionMessage(payload);
-	while (message.length > MAX_SEND_LENGTH && lines.length > 1) {
-		lines = lines.slice(0, Math.max(1, Math.floor(lines.length * 0.75)));
-		message = formatDiffSelectionMessage({ ...payload, lines });
-	}
-	return message.length > MAX_SEND_LENGTH ? `${message.slice(0, MAX_SEND_LENGTH - 12).trimEnd()}\n[truncated]` : message;
 }

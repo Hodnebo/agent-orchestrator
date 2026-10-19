@@ -16,8 +16,8 @@ import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
-import { getWorkspaceFile, sendFileFeedback, sendSelectionRequest, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, StatusGlyph, type ComposerAction } from "../../../lib/files/components";
+import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
+import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, FileTypeIcon, type ComposerAction } from "../../../lib/files/components";
 import {
 	annotationTarget,
 	changeGroups,
@@ -33,7 +33,6 @@ import {
 	orderedChanges,
 	selectedLines,
 	selectionLabel,
-	selectionPayloadLines,
 	splitPath,
 	statusLabel,
 	withInlineComments,
@@ -49,9 +48,6 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoun
 type Mode = "diff" | "file";
 type Selection = { anchor: number; focus: number };
 
-/** Desktop's Explain instruction, word for word, so the agent sees one request shape. */
-const EXPLAIN_INSTRUCTION = "Explain what these lines do and why.";
-
 export default function SessionFileScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
 	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionFileContent /></HostScope> : <SessionFileContent />;
@@ -63,7 +59,7 @@ function SessionFileContent() {
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection } = useApp();
+	const { config, currentHostId, connection, loading: appLoading } = useApp();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -250,21 +246,9 @@ function SessionFileContent() {
 		setBusy(true);
 		setActionError(undefined);
 		try {
-			if (action === "send") {
-				await sendFileFeedback(config, id, [{ target, feedback }]);
-			} else {
-				await sendSelectionRequest(config, id, {
-					instruction: action === "explain" ? (feedback ? `${EXPLAIN_INSTRUCTION}\n\n${feedback}` : EXPLAIN_INSTRUCTION) : feedback,
-					filePath: path,
-					lines: selectionPayloadLines(chosen),
-					scope: effectiveMode === "diff" ? "combined" : undefined,
-					workspaceVersion: detail.workspaceVersion || undefined,
-					fileFingerprint: detail.fileFingerprint || undefined,
-				});
-			}
-			// What was asked stays on the line, like a posted review comment.
-			const asked = action === "explain" ? (feedback || EXPLAIN_INSTRUCTION) : feedback;
-			addReviewComment(key, { label: `${name} · ${label}`, feedback: asked, target, anchor, status: "sent", kind: action === "send" ? "comment" : action });
+			await sendFileFeedback(config, id, [{ target, feedback }]);
+			// What was sent stays on the line, like a posted review comment.
+			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
 			haptics.success();
 			setSelection(null);
 			setNotice("Sent. The agent's reply appears in the session.");
@@ -274,7 +258,7 @@ function SessionFileContent() {
 		} finally {
 			setBusy(false);
 		}
-	}, [chosen, config, detail, effectiveMode, id, key, label, name, path]);
+	}, [chosen, config, detail, id, key, label, name, path]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
@@ -282,6 +266,9 @@ function SessionFileContent() {
 	}, [chosen, label]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	// A cold start (a deep link, a notification) lands before the saved pairing
+	// loads; that is not "offline" yet.
+	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	const pathBar = (
@@ -293,7 +280,7 @@ function SessionFileContent() {
 				onPress={() => { void Clipboard.setStringAsync(path); haptics.success(); setNotice("Path copied."); }}
 				style={styles.pathPress}
 			>
-				{detail && changed ? <StatusGlyph status={detail.status} /> : <Feather name="file" size={iconSize.sm} color={t.textTertiary} />}
+				<FileTypeIcon path={path} status={detail && changed ? detail.status : undefined} size={18} />
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="head" style={styles.pathText}>
 					{dir ? <Text style={styles.pathDir}>{`${dir}/`}</Text> : null}
 					<Text style={styles.pathName}>{name}</Text>

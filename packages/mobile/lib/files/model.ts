@@ -1,5 +1,4 @@
 import type { DiffRow } from "../../../shared/files/diff-parser";
-import type { DiffSelectionLine } from "../../../shared/files/diff-selection";
 import type { FileAnnotationTarget } from "../../../shared/files/file-annotations";
 import type { WorkspaceFileStatus, WorkspaceFileSummary, WorkspaceManifest, WorkspaceSection } from "./api";
 
@@ -279,10 +278,6 @@ export function selectionLabel(lines: LineRow[]): string {
 	const end = Math.max(...numbers);
 	if (start !== end) return `${prefix}s ${start}–${end}`;
 	return lines.length > 1 && !onlyRemoved ? `${prefix} ${start} (before and after)` : `${prefix} ${start}`;
-}
-
-export function selectionPayloadLines(lines: LineRow[]): DiffSelectionLine[] {
-	return lines.map(({ kind, oldNo, newNo, text }) => ({ kind, oldNo, newNo, text }));
 }
 
 /**

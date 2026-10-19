@@ -12,7 +12,7 @@ import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { getWorkspaceTree, searchWorkspaceFiles, type WorkspaceSearchResult, type WorkspaceTreeEntry } from "../../../lib/files/api";
-import { ChangeRow, LineCounts, ReviewTray, SegmentedTabs, StatusGlyph } from "../../../lib/files/components";
+import { ChangeRow, FileTypeIcon, FolderTypeIcon, LineCounts, ReviewTray, SegmentedTabs } from "../../../lib/files/components";
 import { changeGroups, plural, splitPath, type ChangeEntry } from "../../../lib/files/model";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
@@ -33,7 +33,7 @@ function SessionFilesContent() {
 	const id = String(sessionId ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection } = useApp();
+	const { config, currentHostId, connection, loading: appLoading } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -58,6 +58,9 @@ function SessionFilesContent() {
 	const openChange = useCallback((file: ChangeEntry) => openFile(file.path, "diff", file.previousPath), [openFile]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	// A cold start (a deep link, a notification) lands before the saved pairing
+	// loads; that is not "offline" yet.
+	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const summary = manifest?.summary;
@@ -256,7 +259,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 					onPress={() => { haptics.tap(); setDir(item.path); }}
 					style={({ pressed }) => [styles.entry, pressed && { backgroundColor: t.bgElevatedHover }]}
 				>
-					<Feather name="folder" size={iconSize.md} color={t.textSecondary} />
+					<FolderTypeIcon name={item.name} />
 					<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.entryName}>{item.name}</Text>
 					{item.hasChanges ? <View style={styles.changeDot} /> : null}
 					<Feather name="chevron-right" size={iconSize.sm} color={t.textFaint} />
@@ -289,7 +292,7 @@ function PathRow({ path, name, status, onPress }: { path: string; name?: string;
 			onPress={() => { haptics.tap(); onPress(); }}
 			style={({ pressed }) => [styles.entry, pressed && { backgroundColor: t.bgElevatedHover }]}
 		>
-			{changed ? <StatusGlyph status={status} /> : <Feather name="file" size={iconSize.md} color={t.textTertiary} />}
+			<FileTypeIcon path={path} status={changed ? status : undefined} />
 			<View style={{ flex: 1, minWidth: 0 }}>
 				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.pathName}>{name ?? parts.name}</Text>
 				{!name && parts.dir ? <Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} ellipsizeMode="head" style={styles.entryDir}>{parts.dir}</Text> : null}
