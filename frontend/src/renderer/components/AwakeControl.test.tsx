@@ -152,6 +152,41 @@ describe("shared Stay Awake controls", () => {
 		await waitFor(() => expect(state.active).toBe(true));
 		expect(test.post.mock.calls.map(([path]) => path)).toEqual(["/api/v1/awake/resume", "/api/v1/awake/sessions"]);
 	});
+	it("refreshes a safety stop that happened after the last poll without parsing the error wording", async () => {
+		const post = test.post.getMockImplementation()!;
+		let attempts = 0;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/awake/sessions" && attempts++ === 0) {
+				state.paused = true;
+				return { error: "A completely reworded daemon error" };
+			}
+			return post(path, options);
+		});
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(state.active).toBe(true));
+		expect(test.post.mock.calls.map(([path]) => path)).toEqual(["/api/v1/awake/sessions", "/api/v1/awake/resume", "/api/v1/awake/sessions"]);
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+	it("does not resume or retry an unrelated failure even when its text mentions safety stop", async () => {
+		test.post.mockResolvedValue({ error: "unrelated failure mentioning safety stop" });
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("unrelated failure"));
+		expect(test.post).toHaveBeenCalledTimes(1);
+		expect(state.paused).toBe(false);
+	});
+	it("preserves the start failure without resuming when refreshed state is unavailable", async () => {
+		await show();
+		test.post.mockImplementation(async () => {
+			test.get.mockRejectedValue(new Error("status unavailable"));
+			return { error: "start refused" };
+		});
+		fireEvent.click(coffee());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("start refused"));
+		expect(test.post).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not arm mobile wake when the sidebar starts desktop wake", async () => {
 		await show();
 		fireEvent.click(coffee());

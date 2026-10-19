@@ -2,7 +2,7 @@ import { useIsMutating, useMutation, useMutationState, useQuery, useQueryClient 
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
-import { awakeCapability, useAwake } from "./useAwake";
+import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
 type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean };
@@ -52,7 +52,11 @@ export function useStayAwake(enabled = true) {
 				try {
 					await start();
 				} catch (e) {
-					if (!(e instanceof Error) || !e.message.includes("safety stop")) throw e;
+					// A safety stop can happen after the last poll. Re-read the daemon's
+					// structured pause state rather than interpreting its error wording.
+					await cache.cancelQueries({ queryKey: awakeQueryKey });
+					const latest = await cache.fetchQuery<AwakeState>({ queryKey: awakeQueryKey, staleTime: 0 }).catch(() => undefined);
+					if (!latest?.paused) throw e;
 					await awake.actAsync({ kind: "resume" });
 					await start();
 				}
