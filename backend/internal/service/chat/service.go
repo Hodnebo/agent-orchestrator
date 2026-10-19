@@ -675,6 +675,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
 	waking := s.isWaking(cfg.SessionID)
+	if owner.Kind == domain.ConversationOwnerSession && sessionFound {
+		pending, err := s.launchRefreshPending(ctx, cfg.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("read provider launch refresh intent: %w", err)
+		}
+		waking = waking || pending
+	}
 	// A session whose move to a new harness release failed kept its queued
 	// messages for this start, the way a wake does (see versionSwitchFailed).
 	if sessionFound && sessionRecord.StaleBinary != nil && sessionRecord.StaleBinary.SwitchFailedAt != nil {
@@ -1123,6 +1130,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.ExpectedControllerOwner.ProviderConversationID = controller.ProviderConversationID()
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
 	}
+	if owner.Kind == domain.ConversationOwnerSession && !providerNeedsLaunchRefresh(controller) {
+		if marker, ok := s.sessions.(launchRefreshStore); ok {
+			if err := marker.ClearSessionLaunchRefresh(ctx, cfg.SessionID); err != nil {
+				s.log.Warn("could not clear completed provider launch refresh", "session", cfg.SessionID, "err", err)
+			}
+		}
+	}
 	s.mu.Lock()
 	s.ownerControllers[owner] = controller
 	if owner.Kind == domain.ConversationOwnerSession {
@@ -1261,6 +1275,17 @@ func (s *Service) Send(
 	if s.switchBeforeSend(ctx, record) {
 		// The provider stopped on its old release. The hibernated path below
 		// queues this message and wakes the session on the installed one.
+		if record, err = s.requireChatSession(ctx, id); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
+	if refreshed, refreshErr := s.refreshProviderLaunch(ctx, id, true); refreshed || refreshErr != nil {
+		if refreshErr != nil {
+			// An inconclusive check preserves the old process. A failed shutdown
+			// may already have recorded hibernation; re-read that durable boundary
+			// so this message still enters the correct live or cold queue.
+			s.log.Warn("could not refresh provider launch before send", "session", id, "err", refreshErr)
+		}
 		if record, err = s.requireChatSession(ctx, id); err != nil {
 			return domain.ConversationTurn{}, err
 		}
