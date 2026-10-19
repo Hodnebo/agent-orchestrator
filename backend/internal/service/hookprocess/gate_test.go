@@ -2,6 +2,7 @@ package hookprocess
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -242,5 +243,75 @@ func TestGateKeepsAnotherClaudeFromTheSession(t *testing.T) {
 		got.Metadata.AgentSessionID != "511e68be" {
 		t.Fatalf("session = %+v / transcript %q / native %q, want the terminal's turn still active on its transcript",
 			got.Activity, got.Metadata.NativeTranscriptPath, got.Metadata.AgentSessionID)
+	}
+}
+
+// Through the real lifecycle and store: a Stop from another Claude process,
+// even a malformed one with no prompt id, never reaches the session's native
+// checkpoint evidence, so it cannot invalidate a later Chat switch. The same
+// promptless Stop from the terminal's own process still fails the journal
+// closed: that is the terminal itself misreporting its turn.
+func TestGateKeepsForeignStopsOutOfTheNativeCheckpointEvidence(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	at := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "gate", Path: t.TempDir(), RegisteredAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "gate", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: at}, CreatedAt: at, UpdatedAt: at,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Metadata.RuntimeHandleID, session.Metadata.RuntimeLaunchID = "handle-1", "launch-1"
+	if err := store.UpdateSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	gate := New(lifecycle.New(store, nil), store, &fakeRuntime{roots: []int{10, 11}},
+		func(context.Context) (*procmem.Table, error) { return procmem.Parse(processTable) }, nil)
+	apply := func(pid int, signal ports.ActivitySignal, offset time.Duration) {
+		t.Helper()
+		signal.Valid, signal.LaunchID, signal.ProcessID, signal.Timestamp = true, "launch-1", pid, at.Add(offset)
+		if err := gate.ApplyActivitySignal(ctx, session.ID, signal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evidence := func() domain.NativeCheckpointEvidence {
+		t.Helper()
+		got, ok, err := store.GetSession(ctx, session.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetSession: ok=%v err=%v", ok, err)
+		}
+		var journal domain.NativeCheckpointEvidence
+		if err := json.Unmarshal([]byte(got.Metadata.NativeCheckpointEvidence), &journal); err != nil {
+			t.Fatalf("evidence %q: %v", got.Metadata.NativeCheckpointEvidence, err)
+		}
+		return journal
+	}
+	apply(20, ports.ActivitySignal{
+		State: domain.ActivityActive, Event: "user-prompt-submit", AgentSessionID: "511e68be",
+		ProviderTurnID: "prompt-1", SubmissionID: "submission-1", LatestUserPrompt: "run it",
+	}, time.Second)
+	if journal := evidence(); journal.Invalid || len(journal.Events) != 1 {
+		t.Fatalf("evidence after the terminal's prompt = %+v", journal)
+	}
+	// A nested claude, another pane's claude, one outside the session, and a
+	// process gone before its hook arrived, each posting the session's launch id
+	// and nothing else, as a hand-made hook does.
+	for i, pid := range []int{40, 50, 70, 999} {
+		apply(pid, ports.ActivitySignal{State: domain.ActivityIdle, Event: "stop"}, time.Duration(2+i)*time.Second)
+	}
+	if journal := evidence(); journal.Invalid || len(journal.Events) != 1 {
+		t.Fatalf("a foreign Stop changed the evidence: %+v", journal)
+	}
+	apply(20, ports.ActivitySignal{State: domain.ActivityIdle, Event: "stop"}, 10*time.Second)
+	if journal := evidence(); !journal.Invalid {
+		t.Fatalf("the terminal's own promptless Stop was accepted as a checkpoint: %+v", journal)
 	}
 }

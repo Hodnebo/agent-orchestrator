@@ -386,3 +386,79 @@ func TestMayStartTurn(t *testing.T) {
 		}
 	}
 }
+
+// A Chat switch drains a terminal only on a stop proof newer than its latest
+// input. Esc while Claude runs a tool (the turn's tool_use may get a rejected
+// result) must leave that proof, so the switch is not held by the turn Esc
+// ended; a tool use still running must not.
+func TestClaudeTerminalToolInterruptLetsAChatSwitchDrain(t *testing.T) {
+	previous := terminalTurnPollInterval
+	terminalTurnPollInterval = 20 * time.Millisecond
+	defer func() { terminalTurnPollInterval = previous }()
+	const toolUse = `{"parentUuid":"c777b312-76d9-4292-b9d2-b81f4db98933","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1792384368818","name":"Bash","input":{"command":"sleep 60"}}],"stop_reason":"tool_use"},"uuid":"4b4c6e72-bddc-48d9-9c82-3e26e0a8ff09","timestamp":"2026-10-19T04:33:01.000Z"}` + "\n"
+	for _, test := range []struct {
+		name      string
+		escape    bool
+		after     string
+		wantDrain bool
+	}{
+		{name: "interrupted with a rejected tool result", escape: true, after: claudeToolRejected + claudeToolInterrupted, wantDrain: true},
+		{name: "interrupted with no tool result", escape: true, after: claudeToolInterrupted, wantDrain: true},
+		{name: "tool still running", after: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			configDir, dataDir := t.TempDir(), t.TempDir()
+			terminalID := "00000000-0000-0000-0000-000000000073"
+			control := &codexActivityControl{got: make(chan struct{}, 1)}
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), DataDir: dataDir, Harness: "claude-code",
+				AgentTerminalID: terminalID,
+				AgentCommand: workerexec.Command{
+					Path: "/bin/sh", Args: []string{"-c", "cat"},
+					Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir},
+				},
+				terminals: make(map[string]*terminalProcess),
+			}
+			supervisor.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+			defer supervisor.closeAllTerminals()
+			if err := supervisor.openTerminal(ctx, worker.TerminalCommand{TerminalID: terminalID, Kind: "agent"}); err != nil {
+				t.Fatal(err)
+			}
+			supervisor.iface.current = InterfaceTUI
+			supervisor.mu.Lock()
+			supervisor.noteAgentTerminalInput([]byte("run it\r"))
+			supervisor.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
+			path := writeClaudeTranscript(t, configDir, "e92256a1-81f1-58ff-9b18-277dc6f2026b.jsonl", claudePrompt+toolUse)
+			if test.escape {
+				supervisor.mu.Lock()
+				supervisor.noteAgentTerminalInput([]byte{0x1b})
+				supervisor.mu.Unlock()
+				now := time.Now().UTC().Format(time.RFC3339Nano)
+				appendRollout(t, path, strings.ReplaceAll(test.after, "2026-10-19T04:33:02.854Z", now))
+				// A second Esc after the turn ended does not start one.
+				time.Sleep(5 * time.Millisecond)
+				supervisor.mu.Lock()
+				supervisor.noteAgentTerminalInput([]byte{0x1b})
+				supervisor.mu.Unlock()
+				select {
+				case <-control.got:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the interrupted tool use was not reported")
+				}
+			} else {
+				time.Sleep(10 * terminalTurnPollInterval)
+			}
+			result, err := supervisor.inspectInterface()
+			if err != nil {
+				t.Fatal(err)
+			}
+			inspection := result.(interfaceInspectResult)
+			if inspection.Idle != test.wantDrain || inspection.QuiescenceUnverified == test.wantDrain {
+				t.Fatalf("inspection = %+v, want drainable %v", inspection, test.wantDrain)
+			}
+		})
+	}
+}

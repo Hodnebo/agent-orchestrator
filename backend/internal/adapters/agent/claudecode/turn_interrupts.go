@@ -98,7 +98,7 @@ func claudeUserRecord(line []byte) (interrupt ports.TurnFailure, user bool) {
 	if json.Unmarshal(line, &record) != nil || record.Type != "user" || record.IsSidechain {
 		return ports.TurnFailure{}, false
 	}
-	if !claudeInterruptMarker(record.Message.Content) {
+	if !IsInterruptMarker(record.Message.Content) {
 		return ports.TurnFailure{}, true
 	}
 	at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
@@ -108,13 +108,13 @@ func claudeUserRecord(line []byte) (interrupt ports.TurnFailure, user bool) {
 	return ports.TurnFailure{At: at, Interrupted: true}, true
 }
 
-// claudeInterruptMarker reports whether a user message's content is exactly
-// an interrupt marker. Claude Code writes the marker as a one-element text
+// IsInterruptMarker reports whether a user message's content is exactly an
+// interrupt marker. Claude Code writes the marker as a one-element text
 // block array; a typed prompt is recorded as a plain string, so a prompt that
 // is exactly the marker text is not an interrupt. The marker's
 // interruptedMessageId cannot be required: Claude sets it only when Esc
 // cancelled a known API message (2.1.302 omits it before the first response).
-func claudeInterruptMarker(content json.RawMessage) bool {
+func IsInterruptMarker(content json.RawMessage) bool {
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
