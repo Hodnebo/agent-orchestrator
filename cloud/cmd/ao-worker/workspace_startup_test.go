@@ -211,7 +211,7 @@ func TestStagingRetestStartupErrorNeverReportsASecret(t *testing.T) {
 		`echo "mysql -pFAKEVAL3"`,
 		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
 		`echo "curl -u admin:FAKEVAL5 https://x"`,
-		`echo "https://ghp_FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://` + "gh" + "p_" + `FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
 		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
 		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
 		`echo '["--token","FAKEVAL9"]'`,

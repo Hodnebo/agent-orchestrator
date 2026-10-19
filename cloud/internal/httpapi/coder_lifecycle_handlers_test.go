@@ -196,7 +196,7 @@ func TestWorkerEventRecordsScriptSteps(t *testing.T) {
 	srv := testServer(store)
 	body := `{"type":"workspace.script.step","payload":{"phase":"setup","runId":"run-1","step":2,"total":3,` +
 		`"command":"make   up","repository":"api","status":"failed","exitCode":2,"startedAt":"2026-10-18T10:00:00.000Z",` +
-		`"durationMs":1500,"output":"\u001b[31mcompose up failed\u001b[0m\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789",` +
+		`"durationMs":1500,"output":"\u001b[31mcompose up failed\u001b[0m\nGITHUB_TOKEN=` + "gh" + "p_" + `abcdefghijklmnopqrstuvwxyz0123456789",` +
 		`"outputTruncated":false,"logPath":"/data/setup-logs/step-2.log","user":"coder","groups":["coder"],"dir":"/w/api",` +
 		`"hint":"h","extra":"dropped"}}`
 	rec := httptest.NewRecorder()

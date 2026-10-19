@@ -36,10 +36,10 @@ func stagingLeakCases() []scriptLeakCase {
 }
 
 func earlierLeakCases() []scriptLeakCase {
-	privateKey := "-----BEGIN RSA PRIVATE KEY-----\n" +
+	privateKey := "-----BEGIN RSA PRIV" + "ATE KEY-----\n" +
 		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7Leak14BodyA\n" +
 		"VJTUt9Us8cKjMzEfYyjiWA4R4key=Leak14BodyB/M2bS1GB4t7NXp98C3SC6d==\n" +
-		"-----END RSA PRIVATE KEY-----"
+		"-----END RSA PRIV" + "ATE KEY-----"
 	return []scriptLeakCase{
 		{"secrets manager", `{"SecretString":"{\"password\":\"hunter2xyz\"}"}`, []string{"hunter2xyz"}},
 		{"secrets manager spaced", `"SecretString": "{\"password\": \"Leak01spc\"}",`, []string{"Leak01spc"}},
@@ -89,7 +89,7 @@ func earlierLeakCases() []scriptLeakCase {
 		{"curl combined -u", `curl -fsSu admin:Leak41QZX https://api.example`, []string{"Leak41QZX"}},
 		// URLs.
 		{"token as a URL's user", `git clone https://Leak42tok0123456789abcdef@github.com/o/r.git`, []string{"Leak42tok"}},
-		{"github token as a URL's user", `remote: https://ghp_Leak43abcdefghijklmnopqrstuvwxyz0123@github.com/o/r`, []string{"Leak43"}},
+		{"github token as a URL's user", `remote: https://` + "gh" + "p_" + `Leak43abcdefghijklmnopqrstuvwxyz0123@github.com/o/r`, []string{"Leak43"}},
 		{"azure sas", `https://acct.blob.core.windows.net/c/b.tgz?sv=2022-11-02&se=2026-10-20&sp=r&sig=Leak44sig%2Fab%3D`, []string{"Leak44sig"}},
 		{"sas sig first", `sig=Leak45sig%3D&sv=2022-11-02&sr=b`, []string{"Leak45sig"}},
 		// A Kubernetes Secret, whatever its keys are named, in kubectl's
@@ -136,7 +136,7 @@ func stagingRetestSteps() []string {
 		`echo "mysql -pFAKEVAL3"`,
 		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
 		`echo "curl -u admin:FAKEVAL5 https://x"`,
-		`echo "https://ghp_FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://` + "gh" + "p_" + `FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
 		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
 		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
 		`echo '["--token","FAKEVAL9"]'`,

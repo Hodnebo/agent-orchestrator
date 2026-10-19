@@ -522,7 +522,7 @@ func TestDeleteRecordsCleanupStepsOnTheSession(t *testing.T) {
 	events := run("3", "@@ao-step-{nonce} log /home/ubuntu/.ao/worker/cleanup-state/output\n"+
 		"@@ao-step-{nonce} 1 3 start 1792344586000 / make down\nstopped\n@@ao-step-{nonce} 1 3 end 0 120\n"+
 		"@@ao-step-{nonce} 2 3 start 1792344586120 / docker compose down\n"+
-		"@@ao-step-0123456789abcdef 2 3 end 0 1\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n"+
+		"@@ao-step-0123456789abcdef 2 3 end 0 1\nGITHUB_TOKEN=gh"+"p_abcdefghijklmnopqrstuvwxyz0123456789\n"+
 		"cleanup step 2 failed: exit status 3\nran as ubuntu (groups: ubuntu) in /home/ubuntu/app\n"+
 		"@@ao-step-{nonce} 2 3 end 3 900\nfull cleanup output: /home/ubuntu/.ao/worker/cleanup-state/output", current)
 	if len(events) != 3 {
