@@ -225,16 +225,16 @@ Another Orchestrator.inc desktop can also connect to this computer as a remote h
 
 ## Plans
 
-Local use is free: unlimited local agents with any supported harness, plus the orchestrator, workers and PR reviews. Plan limits apply only to cloud agents in AO Cloud.
+Local use is free: unlimited local agents with any supported harness, plus the orchestrator, workers and PR reviews. Local agents have no plan limits. Paid plans add AO Cloud agents and cross-device connectivity.
 
-| Plan | Includes |
-| --- | --- |
-| **Free** | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. No cloud agents. |
-| **Starter** | Everything in Free. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
-| **Pro** | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
-| **Enterprise** | Custom pricing. Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
+| Plan | Price | Includes |
+| --- | --- | --- |
+| **Free** | $0 | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. 2 devices logged in at once, with same-network connectivity (no cloud relay). No cloud agents. |
+| **Starter** | $20/month | Everything in Free, plus a cloud relay for connectivity across devices and unlimited devices, including mobile. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
+| **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
+| **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
 
-Starter and Pro prices appear in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud#plans).
+Choose or change a plan in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. For Enterprise, use **Talk to founder** on the same page. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud#plans).
 
 ## FAQ
 
@@ -258,9 +258,9 @@ The desktop app runs on macOS (Apple silicon and Intel), Windows and Linux (AppI
 
 Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile/id6792552173) for iPhone and iPad and on [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) for Android. The app pairs with your desktop over your local network or a managed HTTPS tunnel. Tailscale addresses are also offered, but iPhone and iPad cannot use them and Android has not been verified on a device yet. See [Mobile and cross-device](#mobile-and-cross-device).
 
-### How much does it cost?
+### Is it free?
 
-The desktop app, CLI and mobile apps are free, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. AO Cloud, which runs agents in hosted sandboxes, is generally available with paid Starter, Pro and Enterprise plans; plan limits apply only to cloud agents. See [Plans](#plans).
+Yes. The local app is free: the desktop app, CLI and mobile apps cost nothing, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. Paid AO Cloud plans start at $20/month (Starter); Pro is $40/month and Enterprise has custom pricing. See [Plans](#plans).
 
 ### Is this the same project as `ComposioHQ/agent-orchestrator`?
 
