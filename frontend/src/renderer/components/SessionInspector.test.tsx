@@ -1501,7 +1501,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
 
     live.unmount();
@@ -1562,7 +1562,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
   });
 

@@ -440,9 +440,12 @@ export interface SystemEventDetail {
 		| "render"
 		| "artifact"
 		| "workspace.setup"
-		| "workspace.script.run";
+		| "workspace.script.run"
+		| "account.switched";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
+	/** account.switched: the account a stopped turn's conversation continues on. */
+	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
