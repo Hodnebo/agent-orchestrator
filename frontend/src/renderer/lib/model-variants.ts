@@ -76,7 +76,9 @@ function parseVariantId(id: string): { base: string; effort?: string; thinking: 
 		} else if (effort === undefined && last === "high" && tokens[tokens.length - 2]?.toLowerCase() === "extra") {
 			effort = "xhigh";
 			tokens.pop();
-		} else if (effort === undefined && EFFORT_ORDER.includes(last)) {
+		} else if (effort === undefined && EFFORT_ORDER.includes(last) &&
+			// "codex-max" is a model of its own, not GPT Codex at Max effort.
+			!(last === "max" && tokens[tokens.length - 2]?.toLowerCase() === "codex")) {
 			effort = last;
 		} else {
 			break;

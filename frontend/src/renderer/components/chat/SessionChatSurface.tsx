@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -194,6 +195,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
+	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
 	const {
 		snapshot: queriedSnapshot,
@@ -731,7 +733,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				composerAction={interfaceSwitch?.control}
 				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
-						title="Couldn't switch agent"
+						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
 						onDismiss={() => {
 							providerSwitch.reset();

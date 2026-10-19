@@ -325,7 +325,7 @@ export function AgentModelPicker({
 	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const modelValue = pending
-		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? "Default"
+		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? t("agentSwitch.defaultModel")
 		: source.modelLabel;
 	// Claude Code only compacts early on its larger-window models.
 	const offersAutoCompact = pending?.harness === "claude-code" && !/haiku|opus-4-5/.test(pending.model ?? "");
@@ -371,7 +371,7 @@ export function AgentModelPicker({
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
 				}}
 			>
-				<ModelMenuChoices models={searchRows} searchable searchPlaceholder="Search agents and models">
+				<ModelMenuChoices models={searchRows} searchable searchPlaceholder={t("agentSwitch.search")}>
 					{(matches, searchActiveID, optionID, query) => query ? matches.map((row) => (
 						<SearchRow
 							key={row.id}
@@ -403,7 +403,7 @@ export function AgentModelPicker({
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
 								<OptionMenuSub>
-									<OptionMenuSubTrigger label="Agent" value={agentLabel(shownHarness)} />
+									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 											{agents.map((agent) => (
@@ -432,7 +432,7 @@ export function AgentModelPicker({
 								</OptionMenuSub>
 								{settable && source.models.length > 0 ? (
 									<OptionMenuSub>
-										<OptionMenuSubTrigger label="Model" value={modelValue} />
+										<OptionMenuSubTrigger label={t("agentSwitch.model")} value={modelValue} />
 										<OptionMenuSubContent scrollable className={SUB_CLASS}>
 											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(source.models) } : source} harness={shownHarness} />
 										</OptionMenuSubContent>
@@ -454,7 +454,7 @@ export function AgentModelPicker({
 								) : null}
 								{settable && !(loading && !pending) && source.efforts.length > 0 ? (
 									<OptionMenuSub>
-										<OptionMenuSubTrigger label="Effort" value={source.efforts.find((choice) => choice.value === source.effort)?.label} />
+										<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label} />
 										<OptionMenuSubContent className={SUB_CLASS}>
 											{source.efforts.map((choice) => (
 												<OptionMenuItem
@@ -721,8 +721,9 @@ export function DismissButton({ label, onClick, disabled, className }: { label: 
 
 /** An error from a switch, shown as a strip on top of the chat box. */
 export function ComposerErrorNotice(
-	{ title, message, onDismiss, dismissLabel = "Dismiss" }: { title: string; message: string; onDismiss: () => void; dismissLabel?: string },
+	{ title, message, onDismiss, dismissLabel }: { title: string; message: string; onDismiss: () => void; dismissLabel?: string },
 ) {
+	const { t } = useTranslation();
 	return (
 		<div
 			role="alert"
@@ -733,7 +734,7 @@ export function ComposerErrorNotice(
 				<p className="font-medium text-foreground">{title}</p>
 				<p className="break-words text-muted-foreground">{message}</p>
 			</div>
-			<DismissButton label={dismissLabel} onClick={onDismiss} />
+			<DismissButton label={dismissLabel ?? t("agentSwitch.dismiss")} onClick={onDismiss} />
 		</div>
 	);
 }

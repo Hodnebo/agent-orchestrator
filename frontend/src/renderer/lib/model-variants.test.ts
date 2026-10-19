@@ -53,6 +53,17 @@ describe("collapseModelVariants", () => {
 		expect(family("gpt-5.3-codex")?.defaultVariant.id).toBe("gpt-5.3-codex");
 	});
 
+	it("keeps Codex Max apart from Codex", () => {
+		const models = collapseModelVariants([
+			{ id: "gpt-5.1-codex", label: "GPT-5.1 Codex" },
+			{ id: "gpt-5.1-codex-max", label: "GPT-5.1 Codex Max" },
+			{ id: "gpt-5.1-codex-max-high", label: "GPT-5.1 Codex Max High" },
+		]);
+		expect(models.map((entry) => entry.id)).toEqual(["gpt-5.1-codex", "gpt-5.1-codex-max"]);
+		expect(models[0]?.efforts).not.toContain("max");
+		expect(models[1]?.variants.map((variant) => variant.id)).toEqual(["gpt-5.1-codex-max", "gpt-5.1-codex-max-high"]);
+	});
+
 	it("finds a variant and the nearest one to a wanted setting", () => {
 		const found = findModelVariant(families, "claude-opus-4-7-thinking-high-fast");
 		expect(found?.family.id).toBe("claude-opus-4-7");

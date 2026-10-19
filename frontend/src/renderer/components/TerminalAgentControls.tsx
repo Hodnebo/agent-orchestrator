@@ -51,7 +51,7 @@ export function TerminalSessionMenu({
 		const effort = pending.effort ?? (listsModelVariants(targetHarness) ? undefined : pending.shownEffort);
 		void providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, ultracode, autoCompactWindow })
 			.then(() => { setPending(undefined); setOpen(false); })
-			.catch((error) => showGlobalToast("Agent switch failed", apiErrorMessage(error), "error"));
+			.catch((error) => showGlobalToast(t("agentSwitch.switchFailed"), apiErrorMessage(error), "error"));
 	};
 	const target = pending ? [agentLabel(pending.harness), pending.modelLabel].filter(Boolean).join(" · ") : "";
 	// One bordered bar under the picked agent's settings: what it switches to, Switch, cancel.
@@ -68,9 +68,9 @@ export function TerminalSessionMenu({
 					onClick={switchNow}
 					className="shrink-0 rounded-md bg-primary px-2 py-px text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{providerSwitch.isPending ? "Switching…" : "Switch"}
+					{providerSwitch.isPending ? t("agentSwitch.switchingNow") : t("agentSwitch.switchAction")}
 				</button>
-				<DismissButton label="Cancel" disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
+				<DismissButton label={t("agentSwitch.cancel")} disabled={providerSwitch.isPending} onClick={() => setPending(undefined)} />
 			</div>
 		</div>
 	) : null;
