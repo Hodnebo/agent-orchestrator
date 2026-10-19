@@ -3,11 +3,11 @@ title: Cloud sessions
 description: Set up a hosted project and work on a remote session from the desktop app.
 ---
 
-Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud is available in the desktop app's nightly channel, labeled an early preview. Sessions run in remote sandboxes that can be slow to start, lose uncommitted work, or break without notice, so commit and push often. The local product works the same with or without Cloud.
+Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Cloud is available in current desktop builds, stable and nightly, as an early preview that you turn on in Developer mode. Sessions run in remote sandboxes that can be slow to start, lose uncommitted work, or break without notice, so commit and push often. The local product works the same with or without Cloud.
 
 ## Before you start
 
-1. Use the nightly channel. Install a nightly build from the [download page](https://orchestrator.inc/download/), or switch an existing install in **Settings → Updates → Updates channel** to **Nightly (Pre-release)**. Nightly builds update daily.
+1. Use a current desktop build. Install or update from the [download page](https://orchestrator.inc/download/). Stable and nightly builds both include Cloud; nightly (**Settings → Updates → Updates channel → Nightly (Pre-release)**) gets Cloud fixes first.
 2. Turn on Cloud. Open **Settings → General**, turn on **Developer mode**, then turn on **Cloud** and confirm **Enable Cloud**.
 3. Sign in. Choose **Sign in to AO Cloud** in the sidebar and complete the browser sign-in. Signing in creates an organization for your account if it has none. A local GitHub or `gh` sign-in does not sign you in to Cloud.
 4. Connect a harness. In **Settings → Harness**, switch to **Cloud** and log in to a coding agent for cloud sessions: Claude Code, Codex, Cursor, or OpenCode. Each login is personal to you. The Cloud worker picker offers an agent only when its Cloud connection is valid. A local agent installation or CLI login does not supply a Cloud credential. The same page shows the organization's **Cloud sandbox provider**.
@@ -40,7 +40,7 @@ Cloud also has a configurable concurrent-sandbox limit. A provider can have a lo
 
 ## If access stops working
 
-- **Cloud option missing:** check that you are on a nightly build, that **Developer mode** and **Cloud** are on in **Settings → General**, and that you are signed in to AO Cloud. A local project remains available.
+- **Cloud option missing:** check that you are on a current build, that **Developer mode** and **Cloud** are on in **Settings → General**, and that you are signed in to AO Cloud. A local project remains available.
 - **Repository missing:** reconnect GitHub or check installation and repository grants for the organization shown in the desktop.
 - **Agent unavailable:** reconnect its Cloud credential in **Settings → Harness → Cloud**. Local harness readiness is a separate check.
 - **Session stuck or disconnected:** reopen the session and check its state. A sleeping or replacing remote worker can need time to reconnect; retry a failed action only after checking whether it already completed.
