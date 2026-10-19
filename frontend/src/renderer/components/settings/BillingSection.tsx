@@ -229,7 +229,6 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						amount={t("settings.billing.enterprisePrice")}
 						features={[
 							t("settings.billing.enterpriseCollaborate"),
-							t("settings.billing.enterpriseCoder"),
 							t("settings.billing.enterpriseSso"),
 							t("settings.billing.enterpriseSupport"),
 						]}
@@ -568,7 +567,9 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 			t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"),
 			t("settings.billing.starterRelay"), t("settings.billing.starterDevices"),
 		]
-		: [];
+		: pro
+			? [t("settings.billing.proCoder")]
+			: [];
 	const cloudLimits = [
 		t("settings.billing.featureProjects", { count: limits.orchestratorSlots }),
 		// Agents run in the plan's running slots; each cloud project's orchestrator is on top.
