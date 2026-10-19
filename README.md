@@ -13,6 +13,8 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
+Agent Orchestrator (AO) by Orchestrator Inc is an open-source (Apache-2.0) orchestrator for Claude Code, Codex and 30+ coding agents. It runs agents in parallel, each in its own isolated git worktree and branch. A project orchestrator agent plans larger outcomes and spawns focused worker agents. An autonomous pull-request loop routes CI failures and review comments back to the agent that owns the change. AO ships as a desktop app for macOS, Windows and Linux, with companion apps for iPhone, iPad and Android so you can follow and steer agents from your phone.
+
 Give every coding task its own agent, workspace, and feedback loop.<br />
 Plan and delegate larger outcomes with a project-aware orchestrator.<br />
 Follow every worker, pull request, CI run, and review in a live Kanban.
@@ -127,6 +129,29 @@ Orchestrator.inc works with the coding agents and source-control workflow you al
   </tr>
 </table>
 
+## Mobile and cross-device
+
+Orchestrator.inc has companion apps for iPhone, iPad and Android:
+
+- [Download on the App Store](https://apps.apple.com/app/ao-mobile/id6792552173) (iPhone and iPad)
+- [Get it on Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) (Android)
+
+The phone is a remote control for the desktop app. Your repositories, worktrees and coding agents keep running on your own computer, and the phone connects to that computer instead of to a hosted copy of your code. To pair, open **Settings → Connect Mobile** in the desktop app, choose **Generate**, and scan the QR code with the mobile app. If scanning is not an option, enter the address, port and connection password by hand.
+
+How the phone reaches your computer:
+
+- **Same network (LAN):** works out of the box on a trusted home or office Wi-Fi. This connection is plain HTTP protected by the connection password, so keep it off untrusted networks.
+- **Tailscale:** when the computer is on a tailnet, the QR code also carries its Tailscale address, so the phone can connect from anywhere on that tailnet. Android can use this address. iPhone and iPad currently cannot, because iOS blocks unencrypted connections to Tailscale addresses. Use the HTTPS option below instead.
+- **Managed HTTPS tunnel:** Connect Mobile can install and run `cloudflared` to add an HTTPS address for use away from home on any device. Cloudflare terminates TLS on that route.
+
+The phone tries every address in the QR code and uses the first one that answers. The desktop's main API never leaves `127.0.0.1`. Connect Mobile is a separate listener that is off by default, needs the connection password, and can be switched off or given a new password at any time.
+
+From the phone you can open any project and worker, use structured Chat or the agent's terminal UI, start new sessions, answer approvals and questions, switch agents and models, dictate by voice, attach files, follow pull requests, reviews and reviewer runs, and get push notifications.
+
+Another Orchestrator.inc desktop can also connect to this computer as a remote host (`ao remote-host`, then **Settings → Remote hosts → Add host** on the other machine). See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
+
+AO Cloud is a separate hosted service that runs workers in remote workspaces instead of on your computer. Access is limited for now; join the waitlist at [orchestrator.inc](https://orchestrator.inc).
+
 ## Supported agents
 
 **Coding agent harnesses in one supervised workflow.** Worker, Chat, and reviewer support differ; see the capability catalog linked below for the current matrix.
@@ -198,6 +223,36 @@ Orchestrator.inc works with the coding agents and source-control workflow you al
 
 **Use the interface that fits the moment: structured Chat or the agent's native terminal UI.**
 
+## FAQ
+
+### What is Agent Orchestrator (AO)?
+
+An open-source desktop app and CLI from Orchestrator Inc. It runs and supervises Claude Code, Codex and other coding agents in parallel, each in its own git worktree. It also tracks their pull requests, CI and reviews.
+
+### What license is it under?
+
+Apache-2.0. See [LICENSE](LICENSE).
+
+### Which coding agents are supported?
+
+33 coding agent harnesses (30+), including Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode, Aider, Amp, Droid, Goose, Cline and Kimi. See the [Supported agents](#supported-agents) table above. Worker, Chat and reviewer support differ by agent.
+
+### Which platforms does it run on?
+
+The desktop app runs on macOS (Apple silicon and Intel), Windows and Linux (AppImage, `.deb` and `.rpm`).
+
+### Is there a mobile app?
+
+Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile/id6792552173) for iPhone and iPad and on [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) for Android. The app pairs with your desktop over your local network, Tailscale (Android) or a managed HTTPS tunnel. See [Mobile and cross-device](#mobile-and-cross-device).
+
+### How much does it cost?
+
+The desktop app, CLI and mobile apps are free, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. AO Cloud, for hosted workspaces, has a waitlist at [orchestrator.inc](https://orchestrator.inc).
+
+### Is this the same project as `ComposioHQ/agent-orchestrator`?
+
+Yes. The project was formerly at `github.com/ComposioHQ/agent-orchestrator` and now lives at [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator). It is licensed under Apache-2.0.
+
 ## Report a bug
 
 [Open a bug report](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml) from your own GitHub account. A few sentences in your own words about what you did and what went wrong are enough. Add what you expected, reproduction steps, your Orchestrator.inc version and OS, or a screenshot if you have them; these are helpful, not prerequisites.
@@ -240,4 +295,4 @@ Orchestrator.inc collects limited usage and reliability telemetry to improve the
 
 ## License
 
-Orchestrator.inc is available under the [Apache License 2.0](LICENSE).
+Orchestrator.inc is open source under the [Apache License 2.0](LICENSE) (Apache-2.0).
