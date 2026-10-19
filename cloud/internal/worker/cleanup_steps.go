@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 )
 
 // A Cleanup run's step events. The control plane runs the Cleanup hook
@@ -176,7 +179,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				current.event.Repository = parts[1]
 			}
 			if len(parts) > 2 {
-				current.event.Command = boundScriptCommand(redactor.redact(parts[2]))
+				current.event.Command = boundScriptCommand(redactor.redact(activity.StripControl(parts[2])))
 			}
 			steps[step] = current
 		case "end":
@@ -292,7 +295,13 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	default:
 		event.finish(SetupFailed, run.ExitCode, run.Duration)
 	}
-	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, false)
+	// The hook prints only the tail of a long output (CleanupHookOutputLimit):
+	// one that long may start part way through a line, which is dropped, as a
+	// secret cut in half there is not recognized. The tail may also have
+	// started inside a character, whose bytes CleanupStepEvents dropped
+	// (strings.ToValidUTF8), so a tail up to utf8.UTFMax bytes shorter is
+	// one too.
+	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, len(output) >= CleanupHookOutputLimit-utf8.UTFMax)
 	if match := cleanupLogPattern.FindStringSubmatch(event.Output); match != nil {
 		event.LogPath = strings.TrimSpace(match[1])
 	}

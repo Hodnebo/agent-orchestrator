@@ -256,7 +256,8 @@ func (r SetupRunner) Run(
 	if err := os.MkdirAll(logs, 0o700); err != nil {
 		logs = ""
 	}
-	steps := r.startStepEvents(ctx, len(commands))
+	redactor := r.redactor()
+	steps := r.startStepEvents(ctx, len(commands), redactor)
 	defer steps.close()
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
@@ -271,9 +272,15 @@ func (r SetupRunner) Run(
 		// startup screen shows to fix the step. Each step's own events carry
 		// its redacted output (setupStepEvents).
 		if step.Status != SetupSucceeded {
+			// The summary (and the startup error made from it) carries the
+			// output as the step's events do: carriage-return overwrites
+			// collapsed, escapes stripped, and the values of the secret-named
+			// environment variables and the worker's token masked before the
+			// patterns run.
+			step.Output, _ = redactor.scriptStepOutput(step.Output, false)
 			step.Step = index + 1
 			step.DurationMS = time.Since(started).Milliseconds()
-			step.Command, step.Repository = scriptCommandSummary(command)
+			step.Command, step.Repository = scriptCommandSummary(command, redactor)
 			step.Dir = dir
 			if step.Repository != "" {
 				step.Dir = filepath.Join(filepath.Dir(dir), step.Repository)
@@ -399,19 +406,30 @@ func mergeEnvironment(base []string, overrides map[string]string) []string {
 
 // tailBuffer keeps the last limit bytes written to it.
 type tailBuffer struct {
-	limit int
-	data  bytes.Buffer
+	limit   int
+	data    bytes.Buffer
+	dropped bool
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
 	b.data.Write(p)
 	if over := b.data.Len() - b.limit; over > 0 {
 		b.data.Next(over)
+		b.dropped = true
 	}
 	return len(p), nil
 }
 
-func (b *tailBuffer) String() string { return b.data.String() }
+// String is the kept output. Once its beginning was dropped, what it then
+// starts with that may be cut short is dropped too (dropPartialHead): a secret
+// cut in half there is not recognized by any redaction pattern.
+func (b *tailBuffer) String() string {
+	text := b.data.String()
+	if b.dropped {
+		return dropPartialHead(text)
+	}
+	return text
+}
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
 // command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
@@ -442,7 +460,7 @@ func CleanupCommandsScript(commands []string, nonce string) string {
 	}
 	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
-		summary, repository := scriptCommandSummary(command)
+		summary, repository := scriptCommandSummary(command, scriptRedactor{})
 		if repository == "" {
 			repository = scriptMarkerMainRepository
 		}

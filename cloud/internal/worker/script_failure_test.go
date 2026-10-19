@@ -99,7 +99,7 @@ func TestScriptCommandSummaryRedactsBeforeItCuts(t *testing.T) {
 	t.Parallel()
 	token := "ghp_" + strings.Repeat("A", 36)
 	command := strings.Repeat("x", scriptCommandLimit-10) + " " + token + " && make"
-	summary, _ := scriptCommandSummary(command)
+	summary, _ := scriptCommandSummary(command, scriptRedactor{})
 	if strings.Contains(summary, "ghp_") || strings.Contains(summary, "AAAA") {
 		t.Fatalf("summary leaks part of the token: %q", summary)
 	}

@@ -86,10 +86,17 @@ func runProjectSetup(
 		return nil
 	}
 	logger.Info("project setup: ran", "workspace", workspace, "steps", len(commands))
-	event.Command = activity.Redact(event.Command)
+	// The run already masked a failure's output and command as its step
+	// events are (the secret environment values and the worker's token, then
+	// the patterns); the script redaction again here keeps that true of
+	// anything else the outcome carries. activity.Redact alone masks a quoted
+	// value only up to an escaped quote, which leaves a SecretString's
+	// password in place.
+	event.Command = worker.RedactScriptOutput(event.Command)
+	event.Output = worker.RedactScriptOutput(event.Output)
 	attrs := []any{
 		"status", event.Status, "step", event.Step, "exit_code", event.ExitCode,
-		"duration_ms", event.DurationMS, "output", activity.Redact(event.Output),
+		"duration_ms", event.DurationMS, "output", event.Output,
 	}
 	if event.Status != worker.SetupSucceeded {
 		attrs = append(attrs, "command", event.Command, "repository", event.Repository, "dir", event.Dir,

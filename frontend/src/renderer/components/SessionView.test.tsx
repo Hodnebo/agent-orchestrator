@@ -79,6 +79,7 @@ const cloudSessionQueryState = vi.hoisted(() => ({
 	isError: false,
 }));
 const cloudSessionLookup = vi.hoisted(() => vi.fn());
+const cloudSessionPoll = vi.hoisted(() => vi.fn());
 const cloudGateState = vi.hoisted(() => ({ cloudEnabled: true }));
 const workspaceSessionLookup = vi.hoisted(() => vi.fn());
 const resumeAgentPostMock = vi.hoisted(() => vi.fn());
@@ -773,8 +774,10 @@ vi.mock("../lib/shell-context", () => ({
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
-	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean) => {
+	refetchCloudProjectsForUnknownSessions: vi.fn(),
+	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean, poll?: boolean) => {
 		cloudSessionLookup(orgId, sessionId, enabled);
+		cloudSessionPoll(poll);
 		return cloudSessionQueryState;
 	},
 	cloudSessionsQueryKey: ["cloud-sessions"],
@@ -1147,6 +1150,26 @@ describe("SessionView", () => {
 		expect(screen.queryByRole("button", { name: "Switch to chat UI" })).not.toBeInTheDocument();
 		expect(workspaceSessionLookup).toHaveBeenCalledWith("cloud-session", undefined, false);
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("polls the direct Cloud lookup only while the session list does not have it", () => {
+		// Opened before the list has it (created through the API, or in a project
+		// the list has not fetched yet), the view shows the direct lookup, which
+		// must keep refreshing or its lifecycle stays where it was at open.
+		workspaceQueryState.data = [];
+		cloudSessionPoll.mockClear();
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(cloudSessionPoll).toHaveBeenLastCalledWith(true);
+
+		workspaceQueryState.data = [
+			...workspaces,
+			{
+				id: "cloud-project", name: "Cloud project", kind: "cloud", path: "",
+				sessions: [{ ...workerSession("sess-1"), workspaceId: "cloud-project", cloud: { orgId: "cloud-org" } }],
+			},
+		];
+		view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(cloudSessionPoll).toHaveBeenLastCalledWith(false);
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -1851,6 +1874,47 @@ describe("SessionView", () => {
 
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
+	});
+
+	it("never covers a restored Chat-mode cloud session with the terminal reconnect loader", () => {
+		// Restore marks the session reconnecting; only its terminal pane clears
+		// that, and a Chat-mode session never mounts one.
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "freestyle",
+			desiredState: "running",
+			observedState: "running",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		// The flag is kept: a later switch to the terminal still waits for the
+		// fresh worker's terminal.
+		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
+	});
+
+	it("keeps the restored Chat-mode session's loader while its workspace comes back", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "freestyle",
+			desiredState: "running",
+			observedState: "restoring",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
 	});
 
 	it("does not skip agent preparation just because the worker reports running", async () => {
