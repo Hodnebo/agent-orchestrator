@@ -12,7 +12,7 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  */
 
 import { AlertTriangle, Loader2 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
@@ -266,13 +266,20 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
 	);
 	const switchBlocked = agentBusy || providerSwitch.isPending;
-	const permissionModes = useChatPermissionModes(hostId, Boolean(pendingSwitch));
+	// Picking a model for the pending agent replaces the choice; the permission mode
+	// picked for that agent stays with it.
+	const choosePendingSwitch = useCallback((next: PendingAgentSwitch | undefined) => {
+		setChosenSwitch((current) => next && current?.approvalMode && current.harness === next.harness && !next.approvalMode
+			? { ...next, approvalMode: current.approvalMode }
+			: next);
+	}, []);
+	const permissionModes = useChatPermissionModes(hostId, pendingSwitch?.harness);
 	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, onPendingChange: setChosenSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
 			: undefined,
-		[autoCompact, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[autoCompact, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -641,7 +648,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Match the displayed effort, as the terminal switch does. Cursor's
 					// variant model id already carries its effort.
 					const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
-					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow };
+					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow, permissionMode: pendingSwitch.approvalMode };
 					// The transcript draws the "Switched" line from this while the daemon works.
 					const switchDisplay = currentHarness
 						? { sourceHarness: currentHarness, sourceModel: snapshot?.settings?.model, targetModel: model, targetEffort: effort }

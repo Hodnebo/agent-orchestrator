@@ -67,6 +67,8 @@ export interface PendingAgentSwitch {
 	ultracode?: boolean;
 	/** Terminal only: where Claude Code compacts on its own, "200k" or "1m". */
 	autoCompactWindow?: TurnSettings["autoCompactWindow"];
+	/** The permission mode picked for the agent. Unset starts it in the chat's, or its strictest. */
+	approvalMode?: ApprovalMode;
 }
 
 /** What the chat surface passes down to turn the model control into this one. */

@@ -1785,6 +1785,32 @@ describe("permissions for the agent picked for the next message", () => {
 				agentSwitch={{ projectId: "p", pending: { harness: "kimi" }, pendingPermissionModes: ["default"], onPendingChange: vi.fn() }}
 			/>,
 		);
-		expect(screen.getByRole("button", { name: "Approval policy for the next turn" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Approval policy for Kimi" })).toHaveTextContent("Use agent permissions");
+	});
+
+	it("shows the pending agent's modes in place of the running agent's own mode option", async () => {
+		const user = userEvent.setup();
+		const onPendingChange = vi.fn();
+		const pending = { harness: "kimi" };
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				onChange={vi.fn()}
+				configOptions={[{
+					id: "mode", name: "Permission mode", category: "mode", type: "select", currentValue: "bypass",
+					choices: [{ value: "manual", name: "Manual", permissionMode: "default" }, { value: "bypass", name: "Bypass Permissions", permissionMode: "bypass-permissions" }],
+				}]}
+				onChangeConfigOption={vi.fn()}
+				agentSwitch={{ projectId: "p", pending, pendingPermissionModes: ["default"], onPendingChange }}
+			/>,
+		);
+		// Claude Code's own option is gone; the control is Kimi's, and Kimi cannot bypass.
+		expect(screen.queryByRole("button", { name: /Permission mode/ })).not.toBeInTheDocument();
+		const note = "Kimi can't run in Bypass permissions. It will start in Use agent permissions.";
+		await user.click(screen.getByRole("button", { name: note }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Use agent permissions/ }));
+		expect(onPendingChange).toHaveBeenCalledWith({ harness: "kimi", approvalMode: "default" });
 	});
 });

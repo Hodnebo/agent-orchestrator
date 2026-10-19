@@ -8,7 +8,7 @@ import type { ApprovalMode } from "../types/conversation";
  * reports them without starting anything. A switch to an agent from a chat in
  * another mode starts it in the first of its modes.
  */
-export function useChatPermissionModes(hostId: string | undefined, enabled: boolean) {
+export function useChatPermissionModes(hostId: string | undefined, pendingHarness: string | undefined) {
 	return useQuery({
 		queryKey: ["chat-permission-modes", hostId ?? ""],
 		queryFn: async () => {
@@ -18,7 +18,10 @@ export function useChatPermissionModes(hostId: string | undefined, enabled: bool
 			if (error) throw error;
 			return new Map(data.agents.map((entry) => [entry.agent, entry.modes as ApprovalMode[]]));
 		},
-		enabled,
-		staleTime: 5 * 60_000,
+		enabled: Boolean(pendingHarness),
+		staleTime: 60_000,
+		// An agent whose check had not finished yet (just after the daemon starts)
+		// is left out; ask again until the picked one is there.
+		refetchInterval: (query) => pendingHarness && query.state.data && !query.state.data.has(pendingHarness) ? 3_000 : false,
 	}).data;
 }
