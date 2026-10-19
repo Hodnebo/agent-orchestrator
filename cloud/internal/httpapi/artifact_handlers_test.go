@@ -625,7 +625,7 @@ type artifactOfferingStore struct {
 }
 
 func TestLaunchContextCarriesRequestedOutput(t *testing.T) {
-	launch, err := launchContextFrom(domain.WorkerLaunch{SessionID: artifactSessionA, Kind: "worker", RequestedOutput: domain.RequestedOutputArtifact}, true)
+	launch, err := launchContextFrom(domain.WorkerLaunch{SessionID: artifactSessionA, Kind: "worker", RequestedOutput: domain.RequestedOutputArtifact}, launchCapabilities{resolvesWorkspacePath: true})
 	if err != nil || launch.RequestedOutput != domain.RequestedOutputArtifact {
 		t.Fatalf("launch = %+v, %v", launch, err)
 	}

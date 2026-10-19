@@ -132,3 +132,5 @@ services:
     build:
       context: .
       target: worker
+      args:
+        AGENT_BROWSER: "1"

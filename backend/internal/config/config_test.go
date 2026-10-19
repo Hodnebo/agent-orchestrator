@@ -3,7 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -527,6 +530,53 @@ func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
 	}
 }
 
+// The daemon proxies desktop requests to the agent browser, so it may only
+// ever point at this host.
+func TestLoadAgentBrowserURL(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{" http://localhost:8080/ ", "http://localhost:8080"},
+		{"http://10.0.0.5:8080", ""},
+		{"http://example.com:8080", ""},
+		{"https://127.0.0.1:8080", ""},
+		{"http://user:pw@127.0.0.1:8080", ""},
+		{"http://127.0.0.1:8080/?token=x", ""},
+	} {
+		t.Setenv("AO_AGENT_BROWSER_URL", tc.raw)
+		t.Setenv("AO_AGENT_BROWSER_TOKEN", "rb-secret")
+		cfg, err := Load()
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("%q: loaded, want an error", tc.raw)
+			}
+			continue
+		}
+		if err != nil || cfg.AgentBrowserURL != tc.want || cfg.AgentBrowserToken != "rb-secret" {
+			t.Errorf("%q: got %q, %q, %v; want %q", tc.raw, cfg.AgentBrowserURL, cfg.AgentBrowserToken, err, tc.want)
+		}
+	}
+}
+
+// The agent browser refuses every request without its exact token: a padded
+// one would never match, and a missing one must stop the daemon with a reason
+// rather than leave the agent tab silently empty.
+func TestLoadAgentBrowserToken(t *testing.T) {
+	t.Setenv("AO_AGENT_BROWSER_URL", "http://127.0.0.1:8080")
+	t.Setenv("AO_AGENT_BROWSER_TOKEN", " rb-secret\n")
+	if cfg, err := Load(); err != nil || cfg.AgentBrowserToken != "rb-secret" {
+		t.Errorf("padded token: got %q, %v; want rb-secret", cfg.AgentBrowserToken, err)
+	}
+	for _, token := range []string{"", " \t"} {
+		t.Setenv("AO_AGENT_BROWSER_TOKEN", token)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AO_AGENT_BROWSER_TOKEN") {
+			t.Errorf("token %q: got %v, want an error naming AO_AGENT_BROWSER_TOKEN", token, err)
+		}
+	}
+}
+
 func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_CHECKS", "")
 	cfg, err := Load()
@@ -562,4 +612,67 @@ func TestLoadHarnessUpdateInterval(t *testing.T) {
 			t.Fatalf("AO_HARNESS_UPDATE_INTERVAL=%q was accepted", raw)
 		}
 	}
+}
+
+func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
+	t.Setenv("AO_TELEMETRY_EVENTS", "on")
+	t.Setenv("AO_TELEMETRY_REMOTE", "posthog")
+	t.Setenv("AO_TELEMETRY_POSTHOG_KEY", "phc_test")
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.13.7")
+	t.Setenv("AO_SENTRY_DSN", "https://k@o.ingest.sentry.io/1")
+	t.Setenv("AO_PORT", "3123")
+	// Desktop-only, documented opt-out the daemon never reads: must survive.
+	t.Setenv("AO_TELEMETRY_RENDERER", "off")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ScrubTelemetryEnv()
+
+	if cfg.Telemetry.Remote != TelemetryRemotePostHog || cfg.Telemetry.AppVersion != "0.13.7" || cfg.Telemetry.PostHogKey != "phc_test" || cfg.Telemetry.SentryDSN == "" {
+		t.Fatalf("loaded config lost telemetry settings: %+v", cfg.Telemetry)
+	}
+	for _, key := range telemetryEnvKeys {
+		if _, present := os.LookupEnv(key); present {
+			t.Fatalf("%s still set in process env after scrub", key)
+		}
+	}
+	// A child started from os.Environ() after the scrub sees none of the
+	// scrubbed keys, and still sees everything else.
+	for _, entry := range os.Environ() {
+		if isScrubbedTelemetryEntry(entry) {
+			t.Fatalf("child environment would inherit %q", entry)
+		}
+	}
+	if os.Getenv("AO_PORT") != "3123" || os.Getenv("AO_TELEMETRY_RENDERER") != "off" {
+		t.Fatal("scrub must leave variables outside telemetryEnvKeys alone")
+	}
+	// The real check: a child process started the way the daemon starts every
+	// child (exec with the inherited environment) must not see the settings.
+	if runtime.GOOS == "windows" {
+		return
+	}
+	out, err := exec.Command("env").Output()
+	if err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if isScrubbedTelemetryEntry(line) {
+			t.Fatalf("child process inherited %q after scrub", line)
+		}
+	}
+	if !strings.Contains(string(out), "AO_PORT=3123\n") || !strings.Contains(string(out), "AO_TELEMETRY_RENDERER=off\n") {
+		t.Fatal("child process should still inherit variables outside telemetryEnvKeys")
+	}
+}
+
+func isScrubbedTelemetryEntry(entry string) bool {
+	key, _, _ := strings.Cut(entry, "=")
+	for _, scrubbed := range telemetryEnvKeys {
+		if key == scrubbed {
+			return true
+		}
+	}
+	return false
 }

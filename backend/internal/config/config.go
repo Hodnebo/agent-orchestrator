@@ -186,6 +186,14 @@ type Config struct {
 	// (AO_CLOUD_CONTROL_PLANE_URL). When set it must be an http(s) URL; empty
 	// means no control plane is configured, which keeps the cloud offering off.
 	CloudControlPlaneURL string
+	// AgentBrowserURL is the host's agent browser (AO_AGENT_BROWSER_URL): the
+	// Chromium its sessions' agents drive, which clients show as the agent's
+	// tab through /sessions/{id}/agent-browser. A loopback http URL; empty
+	// means this host has none.
+	AgentBrowserURL string
+	// AgentBrowserToken is the agent browser's own credential
+	// (AO_AGENT_BROWSER_TOKEN). The daemon adds it; clients never see it.
+	AgentBrowserToken string
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -220,6 +228,8 @@ func (c Config) Addr() string {
 //	AO_CLOUD_OFFERING          cloud offering flag off|on (default off)
 //	AO_LOCAL_OFFERING          local offering off|on (default on)
 //	AO_CLOUD_CONTROL_PLANE_URL cloud control plane base URL (trimmed, must be http(s))
+//	AO_AGENT_BROWSER_URL       the host's agent browser (loopback http URL, default none)
+//	AO_AGENT_BROWSER_TOKEN     that browser's credential (trimmed, required with AO_AGENT_BROWSER_URL)
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
@@ -411,6 +421,18 @@ func Load() (Config, error) {
 		cfg.CloudControlPlaneURL = u
 	}
 
+	if raw := strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_URL")); raw != "" {
+		u, err := parseAgentBrowserURL(raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.AgentBrowserURL = u
+		cfg.AgentBrowserToken = strings.TrimSpace(os.Getenv("AO_AGENT_BROWSER_TOKEN"))
+		if cfg.AgentBrowserToken == "" {
+			return Config{}, fmt.Errorf("AO_AGENT_BROWSER_URL is set but AO_AGENT_BROWSER_TOKEN is empty: the agent browser refuses every request without its token")
+		}
+	}
+
 	runFile, err := resolveRunFilePath()
 	if err != nil {
 		return Config{}, err
@@ -429,6 +451,33 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// telemetryEnvKeys are the variables the desktop stamps on the daemon so it
+// exports product telemetry. Load reads them once; nothing else in the daemon
+// does.
+var telemetryEnvKeys = []string{
+	"AO_TELEMETRY_EVENTS",
+	"AO_TELEMETRY_METRICS",
+	"AO_TELEMETRY_REMOTE",
+	"AO_TELEMETRY_POSTHOG_KEY",
+	"AO_TELEMETRY_POSTHOG_HOST",
+	"AO_TELEMETRY_DISABLED_EVENTS",
+	"AO_TELEMETRY_APP_VERSION",
+	"AO_SENTRY_DSN",
+}
+
+// ScrubTelemetryEnv removes the telemetry export variables from the process
+// environment after Load has consumed them. Every child the daemon starts
+// (tmux and pty shells, ACP agents, git) inherits os.Environ(), so without this
+// an agent working on the AO repo that boots a test daemon with a scratch
+// AO_DATA_DIR inherits the export settings and the host app's version, mints a
+// fresh install id, and reports to the production PostHog project as a new
+// install. The daemon keeps its own copy of the settings in Config.
+func ScrubTelemetryEnv() {
+	for _, key := range telemetryEnvKeys {
+		_ = os.Unsetenv(key)
+	}
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {
@@ -513,6 +562,22 @@ func parseCloudControlPlaneURL(raw string) (string, error) {
 		return "", fmt.Errorf("invalid AO_CLOUD_CONTROL_PLANE_URL %q: must be an http(s) URL", raw)
 	}
 	return trimmed, nil
+}
+
+// parseAgentBrowserURL accepts only a loopback http URL: the daemon proxies
+// to it with clients' requests, so it must never reach another machine.
+func parseAgentBrowserURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: %w", raw, err)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	loopback := strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
+	if u.Scheme != "http" || u.User != nil || u.RawQuery != "" || !loopback {
+		return "", fmt.Errorf("invalid AO_AGENT_BROWSER_URL %q: must be a loopback http URL without credentials or query", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 // parsePositiveDuration rejects zero and negative durations: a zero
