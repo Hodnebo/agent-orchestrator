@@ -53,10 +53,11 @@ const maxArtifactVersionID = 1024
 
 // artifactFileCSP sandboxes every served artifact file: it runs in an opaque
 // origin, can load only its own session's files and inline or data content,
-// and cannot fetch, post forms or open sockets. A page can still navigate
-// itself or open a window, so it can carry data, including its own URL and
-// access token, to another site that way.
-const artifactFileCSP = "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads; " +
+// and cannot fetch, post forms, open sockets or open windows. A page can still
+// navigate itself, so it can carry data, including its own URL and access
+// token, to another site that way; the desktop holds its frame to the
+// session's access prefix.
+const artifactFileCSP = "sandbox allow-scripts allow-forms allow-downloads; " +
 	"default-src 'self' data: blob:; " +
 	"script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; " +
 	"style-src 'self' 'unsafe-inline' data:; " +
