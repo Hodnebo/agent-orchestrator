@@ -4,6 +4,7 @@ import { useStayAwake } from "../hooks/useStayAwake";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { Button } from "./ui/button";
 
 type AwakeControlProps = { className?: string; tabIndex?: number };
 
@@ -19,7 +20,9 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	const title = t("awake.title", "Stay Awake");
 	return (
 		<>
-			<button
+			<Button
+				variant="ghost"
+				size="icon-sm"
 				type="button"
 				tabIndex={tabIndex}
 				aria-label={title}
@@ -29,19 +32,20 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 				data-testid="awake-button"
 				onClick={() => void stay.set(!stay.on)}
 				className={cn(
-					"relative grid size-9 shrink-0 place-items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 [&_svg]:size-icon-md",
-					// On: filled with the selected-row fill, so it reads as engaged without glaring. Off: the Settings row's hover pill.
+					NAV_ROW_HIGHLIGHT_HOST_CLASS,
+					"size-9 rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",
+					// The shared navigation highlight owns both the selected fill and hover pill.
 					stay.on
-						? "bg-interactive-active text-foreground"
-						: cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, stay.error ? "text-error" : "text-muted-foreground hover:text-foreground"),
+						? "text-foreground"
+						: stay.error ? "text-error" : "text-muted-foreground",
 					className,
 				)}
 			>
-				<NavRowHighlight disabled={!stay.supported || stay.busy || stay.on} />
+				<NavRowHighlight active={stay.on} disabled={!stay.supported || stay.busy} />
 				<span className="relative z-[1] grid place-items-center">
-					<Coffee aria-hidden="true" />
+					<Coffee className="size-icon-md" aria-hidden="true" />
 				</span>
-			</button>
+			</Button>
 			{stay.error ? (
 				<span className="sr-only" role="alert">
 					{stay.error}
