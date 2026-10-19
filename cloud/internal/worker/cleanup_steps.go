@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 )
@@ -296,8 +297,11 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	}
 	// The hook prints only the tail of a long output (CleanupHookOutputLimit):
 	// one that long may start part way through a line, which is dropped, as a
-	// secret cut in half there is not recognized.
-	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, len(output) >= CleanupHookOutputLimit)
+	// secret cut in half there is not recognized. The tail may also have
+	// started inside a character, whose bytes CleanupStepEvents dropped
+	// (strings.ToValidUTF8), so a tail up to utf8.UTFMax bytes shorter is
+	// one too.
+	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, len(output) >= CleanupHookOutputLimit-utf8.UTFMax)
 	if match := cleanupLogPattern.FindStringSubmatch(event.Output); match != nil {
 		event.LogPath = strings.TrimSpace(match[1])
 	}

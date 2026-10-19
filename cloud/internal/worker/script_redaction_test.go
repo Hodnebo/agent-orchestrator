@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 )
@@ -277,6 +278,32 @@ func TestScriptOutputCutNeverSplitsASecret(t *testing.T) {
 		events := CleanupStepEvents(hookOutput, CleanupRun{RunID: "r", ExitCode: 1, StartedAt: time.Now()})
 		if len(events) != 1 || leaksPart(events[0].Output, secret) {
 			t.Fatalf("shift %d: cleanup hook tail published part of the secret", shift)
+		}
+	}
+}
+
+// The Cleanup hook's tail that began inside a multi-byte character (its first
+// bytes dropped as invalid UTF-8, so it is a few bytes short of the hook's
+// limit) is still read as cut: its partial first line, the end of a secret,
+// is not published, even when what follows it is mostly escapes the
+// redaction strips, so that line would be within the event's tail.
+func TestCleanupHookTailCutInsideACharacter(t *testing.T) {
+	t.Parallel()
+	const secret = "Leak72QZX"
+	for split := 1; split < utf8.UTFMax; split++ {
+		// The hook printed the last CleanupHookOutputLimit bytes, starting
+		// split bytes into a 4-byte character just before the secret's end.
+		head := "\U0001F600"[split:] + secret + "\n"
+		end := "\nthe end"
+		escapes := strings.Repeat("\x1b[0m", (CleanupHookOutputLimit-len(head)-len(end))/4)
+		output := head + escapes + strings.Repeat("f", CleanupHookOutputLimit-len(head)-len(escapes)-len(end)) + end
+		if len(output) != CleanupHookOutputLimit {
+			t.Fatalf("output is %d bytes", len(output))
+		}
+		events := CleanupStepEvents(output, CleanupRun{RunID: "r", ExitCode: 1, StartedAt: time.Now()})
+		if len(events) != 1 || leaksPart(events[0].Output, secret) || !events[0].OutputTruncated ||
+			!strings.HasSuffix(events[0].Output, "the end") {
+			t.Fatalf("split %d: events = %+v", split, events)
 		}
 	}
 }
