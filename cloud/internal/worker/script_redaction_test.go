@@ -281,6 +281,35 @@ func TestScriptOutputCutNeverSplitsASecret(t *testing.T) {
 	}
 }
 
+// A tail that lost its beginning and holds no newline (one long line) still
+// publishes its end, without the word it starts with, which may be the end of
+// a secret: in the Setup summary's tail and in a step's events.
+func TestOutputTailWithoutANewlineKeepsItsEnd(t *testing.T) {
+	t.Parallel()
+	redactor := newScriptRedactor(nil, nil)
+	const secret = "Leak70QZX"
+	line := "x DB_PASSWORD=" + secret + " " + strings.Repeat("z", ProjectScriptOutputLimit) + " the end"
+	for shift := 1; shift < len("DB_PASSWORD="+secret); shift++ {
+		// The kept tail starts shift bytes into the pair.
+		buffer := &tailBuffer{limit: len(line) - len("x ") - shift}
+		_, _ = buffer.Write([]byte(line))
+		summary := buffer.String()
+		if !strings.HasSuffix(summary, "zzz the end") || leaksPart(summary, secret) {
+			t.Fatalf("shift %d: setup summary tail = %q...%q", shift, summary[:min(len(summary), 20)], summary[max(0, len(summary)-20):])
+		}
+		output, truncated := redactor.scriptStepOutput(line[len("x ")+shift:], true)
+		if !truncated || !strings.HasSuffix(output, "zzz the end") || leaksPart(output, secret) {
+			t.Fatalf("shift %d: event output = %q...", shift, output[:min(len(output), 20)])
+		}
+	}
+	// A tail that is all one word is kept: only its end is published.
+	buffer := &tailBuffer{limit: 64}
+	_, _ = buffer.Write([]byte(strings.Repeat("w", 100)))
+	if buffer.String() != strings.Repeat("w", 64) {
+		t.Fatalf("one word tail = %q", buffer.String())
+	}
+}
+
 // A secret printed across two live snapshots (the step wrote part of the line,
 // then the rest) is never published in part: an unfinished line waits for its
 // newline, and the whole line is then masked.

@@ -479,15 +479,14 @@ func (r scriptRedactor) redact(text string) string {
 // carries: carriage-return overwrites (progress bars) collapsed to their last
 // state, terminal escapes and control characters removed, credentials masked,
 // and the tail of at most ScriptStepOutputLimit bytes. headDropped says the
-// raw output already lost its beginning; its partial first line is dropped, so
-// a secret cut in half there is never published. An unfinished last line (the
+// raw output already lost its beginning; its partial first line (or word, in
+// one long line) is dropped (dropPartialHead), so a secret cut in half there
+// is never published. An unfinished last line (the
 // step ended mid-line) is published, but its end is masked when it may be the
 // start of a credential (maskTrailingFragment).
 func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, bool) {
 	if headDropped {
-		if index := strings.IndexByte(raw, '\n'); index >= 0 {
-			raw = raw[index+1:]
-		}
+		raw = dropPartialHead(raw)
 	}
 	text := collapseCarriageReturns(raw)
 	// Only stripped here: redact masks secret pairs before activity.Redact's
@@ -498,6 +497,21 @@ func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, 
 		text = r.maskTrailingFragment(text)
 	}
 	return scriptOutputTail(text, headDropped)
+}
+
+// dropPartialHead drops the start of an output tail that lost its beginning,
+// which may be the end of a credential the redaction no longer recognizes:
+// its first line when it has more than one, and otherwise (one long line, of
+// which only the end was kept) its first word. A tail that is all one word is
+// kept whole rather than dropped, so a long line's end is still published.
+func dropPartialHead(text string) string {
+	if index := strings.IndexByte(text, '\n'); index >= 0 {
+		return text[index+1:]
+	}
+	if index := strings.IndexAny(text, " \t"); index >= 0 {
+		return text[index+1:]
+	}
+	return text
 }
 
 // liveStepOutput is scriptStepOutput for a step still running: only its

@@ -420,16 +420,13 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String is the kept output. Once its beginning was dropped, the partial line
-// it then starts with is dropped too: a secret cut in half there is not
-// recognized by any redaction pattern.
+// String is the kept output. Once its beginning was dropped, what it then
+// starts with that may be cut short is dropped too (dropPartialHead): a secret
+// cut in half there is not recognized by any redaction pattern.
 func (b *tailBuffer) String() string {
 	text := b.data.String()
 	if b.dropped {
-		if index := strings.IndexByte(text, '\n'); index >= 0 {
-			return text[index+1:]
-		}
-		return ""
+		return dropPartialHead(text)
 	}
 	return text
 }
