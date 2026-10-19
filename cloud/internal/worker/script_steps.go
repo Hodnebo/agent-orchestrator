@@ -392,14 +392,48 @@ func secretValue(text string, start int) (int, string) {
 }
 
 // bareWordEnd is the length of the bare value text starts with: up to a
-// blank. A separator or quote does not end it, as a secret may hold one
-// (PASSWORD=ab;cd, TOKEN=ab"cd); masking what follows it up to the blank
-// (the rest of a JSON member or a query string) is the lesser harm.
+// blank. A separator or quote inside it is part of it, as a secret may hold
+// one (PASSWORD=ab;cd, TOKEN=ab"cd), except where it plainly ends the value:
+// a ; or & before a blank, the end, or the next name=value (API_KEY=x;next=1,
+// ?token=x&page=2), and a quote before a blank, the end or a separator, which
+// closes a string the pair is written in (echo "API_KEY=x").
 func bareWordEnd(text string) int {
-	if end := strings.IndexAny(text, " \t\n\r"); end >= 0 {
-		return end
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case ' ', '\t', '\n', '\r':
+			return index
+		case ';', '&':
+			if index+1 == len(text) || isBlank(text[index+1]) || startsWithAssignment(text[index+1:]) {
+				return index
+			}
+		case '"', '\'':
+			if index+1 == len(text) || isBlank(text[index+1]) || strings.IndexByte(";,)]}&|<>", text[index+1]) >= 0 {
+				return index
+			}
+		}
 	}
 	return len(text)
+}
+
+func isBlank(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// startsWithAssignment reports whether text starts with name= (a letter or
+// underscore, then letters, digits, _, . or -).
+func startsWithAssignment(text string) bool {
+	for index := 0; index < len(text); index++ {
+		c := text[index]
+		switch {
+		case c == '_' || (c|0x20 >= 'a' && c|0x20 <= 'z'):
+		case index > 0 && ((c >= '0' && c <= '9') || c == '.' || c == '-'):
+		case index > 0 && c == '=':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // stringPrefixLength is the length of a Python string prefix (u, b, r, f,

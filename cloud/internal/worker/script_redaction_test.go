@@ -580,3 +580,32 @@ func TestStagingFailedStepCommandsAreMasked(t *testing.T) {
 		t.Errorf("ssh's port is masked:\n%s", published)
 	}
 }
+
+// A bare secret value is masked up to where it plainly ends, not past it: a ;
+// or & before the next name=value or a blank, and a quote that closes the
+// string the pair is written in (the staging re-test's case 12 lost ;next=1
+// and its closing quote). A separator or quote inside the value is still part
+// of it.
+func TestBareSecretValueEnds(t *testing.T) {
+	for _, test := range []struct{ text, want string }{
+		{`API_KEY=FAKEVAL12;next=1`, `API_KEY=[REDACTED];next=1`},
+		{`echo "API_KEY=FAKEVAL12;next=1"`, `echo "API_KEY=[REDACTED];next=1"`},
+		{`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`, `export MY_SERVICE_SECRET=[REDACTED]; printf '%s\n' "$MY_SERVICE_SECRET"`},
+		{`echo 'DEPLOY_TOKEN=abc123' >/dev/null`, `echo 'DEPLOY_TOKEN=[REDACTED]' >/dev/null`},
+		{`curl "https://x/?token=abc123&page=2"`, `curl "https://x/?token=[REDACTED]&page=2"`},
+		{`["PASSWORD=abc123","HOME=/root"]`, `["PASSWORD=[REDACTED]","HOME=/root"]`},
+		// Still part of the value.
+		{`PASSWORD=ab;cd next`, `PASSWORD=[REDACTED] next`},
+		{`PASSWORD=ab"cd next`, `PASSWORD=[REDACTED] next`},
+		{`client_secret=ab&cd`, `client_secret=[REDACTED]`},
+	} {
+		if got := RedactScriptOutput(test.text); got != test.want {
+			t.Errorf("RedactScriptOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
+		}
+	}
+	published := publishedByRuns(t, []string{`echo "API_KEY=FAKEVAL12;next=1"; exit 3`})
+	if strings.Contains(published, "FAKEVAL12") || !strings.Contains(published, `echo "API_KEY=[REDACTED];next=1"; exit 3`) ||
+		!strings.Contains(published, "API_KEY=[REDACTED];next=1\n") {
+		t.Errorf("case 12 published:\n%s", published)
+	}
+}
