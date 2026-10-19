@@ -83,7 +83,7 @@ it("keeps ordinary text editable in the normal Chat composer and Stop calls canc
 	await user.keyboard("{Enter}");
 	await waitFor(() => expect(mock.reply).toHaveBeenCalledWith(current.id, "The sidebar is blank", undefined));
 	act(() => useTriageStore.getState().receive({ ...current, updatedAt: "2026-10-19T10:01:00Z", state: "working" }));
-	fireEvent.click(await screen.findByRole("button", { name: "Stop", exact: true }));
+	fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
 	await waitFor(() => expect(mock.cancel).toHaveBeenCalledWith(current.id));
 });
 
@@ -106,7 +106,7 @@ it("renders native questions through the existing form dock", async () => {
 	useTriageStore.getState().receive(current);
 	render(<SessionTopbarProvider><TriageConversation runId={current.id} /></SessionTopbarProvider>);
 	fireEvent.click(await screen.findByRole("radio", { name: "Blank window" }));
-	fireEvent.click(screen.getByRole("button", { name: "Continue", exact: true }));
+	fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 	await waitFor(() => expect(mock.reply).toHaveBeenCalledWith(current.id, "", { requestId: "question", action: "accept", content: { symptom: "blank" } }));
 });
 

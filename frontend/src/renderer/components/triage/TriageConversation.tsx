@@ -52,7 +52,7 @@ function NativeChat({ run }: { run: TriageRun }) {
 
 function NativeTerminal({ run }: { run: TriageRun }) {
 	const { t } = useTranslation();
-	const theme = useUiStore((state) => state.theme);
+	const theme = useUiStore((state) => state.resolvedTheme);
 	const stream = useMemo(() => new TriageTerminalStream(), [run.id]);
 	const inputSubscription = useRef<{ dispose: () => void } | undefined>(undefined);
 	const [error, setError] = useState<string>();

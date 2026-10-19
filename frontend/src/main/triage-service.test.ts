@@ -294,7 +294,7 @@ describe("support origin and configured choices", () => {
 	it("routes terminal bytes and dimensions without a semantic answer protocol", async () => {
 		const { service, child } = setup();
 		const output = vi.fn();
-		const dispose = service.subscribeTerminal("run-1", output);
+		const dispose = service.subscribeTerminal(output);
 		const input = service.terminalInput("run-1", "\r");
 		expect(child.commands[0]).toMatchObject({ type: "terminal-input", runId: "run-1", text: "\r" });
 		child.respond(child.commands[0], "ack");
@@ -305,8 +305,10 @@ describe("support origin and configured choices", () => {
 		await resize;
 		const data = Buffer.from("hello").toString("base64");
 		child.stdout.write(JSON.stringify({ version: 1, type: "terminal-output", runId: "run-1", data, sequence: 5 }) + "\n");
-		expect(output).toHaveBeenCalledExactlyOnceWith(data, 5);
+		expect(output).toHaveBeenCalledExactlyOnceWith({ runId: "run-1", data, sequence: 5 });
 		dispose();
+		child.stdout.write(JSON.stringify({ version: 1, type: "terminal-output", runId: "run-1", data, sequence: 10 }) + "\n");
+		expect(output).toHaveBeenCalledTimes(1);
 		await expect(service.terminalResize("run-1", 0, 80)).rejects.toThrow("Invalid terminal size");
 	});
 

@@ -105,10 +105,10 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
-		triage: { ...window.ao.triage, catalog: triageCatalog, start: triageStart },
+		triage: { ...window.ao!.triage, catalog: triageCatalog, start: triageStart },
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
-		daemon: { ...window.ao.daemon, getStatus: getDaemonStatus },
+		daemon: { ...window.ao!.daemon, getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
 		cliLink: {
 			setEnabled: vi.fn(async () => undefined),

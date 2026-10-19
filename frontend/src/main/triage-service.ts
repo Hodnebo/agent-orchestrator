@@ -205,7 +205,7 @@ function terminateHelper(child: ChildProcessWithoutNullStreams): void {
 }
 
 /** One lazy process per desktop app. Unsubscribing never cancels its work. */
-export class TriageService implements TriageBridge {
+export class TriageService implements Omit<TriageBridge, "subscribeTerminal"> {
 	private child: ChildProcessWithoutNullStreams | null = null;
 	private failure: Error | null = null;
 	private closing = false;
@@ -465,11 +465,9 @@ export class TriageService implements TriageBridge {
 		this.listeners.add(listener);
 		return () => { this.listeners.delete(listener); };
 	}
-	subscribeTerminal(runId: string, listener: (data: string, sequence: number) => void): () => void {
-		const id = text(runId, 128, true);
-		const wrapped = (output: TriageTerminalOutput) => { if (output.runId === id) listener(output.data, output.sequence); };
-		this.terminalListeners.add(wrapped);
-		return () => { this.terminalListeners.delete(wrapped); };
+	subscribeTerminal(listener: (output: TriageTerminalOutput) => void): () => void {
+		this.terminalListeners.add(listener);
+		return () => { this.terminalListeners.delete(listener); };
 	}
 
 	shutdown(): Promise<void> {

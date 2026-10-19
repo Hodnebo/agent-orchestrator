@@ -17,9 +17,9 @@ export function TriageRuntime() {
 		const sync = () => {
 			writes = writes.then(async () => {
 				if (!active || !queryClient.getQueryData(["settings"]) || !queryClient.getQueryData(["agent-readiness"])) return;
-				native ??= await aoBridge.triage.catalog();
+				const catalog = native ??= await aoBridge.triage.catalog();
 				if (!active) return;
-				const choices = configuredTriageSnapshot(queryClient, native);
+				const choices = configuredTriageSnapshot(queryClient, catalog);
 				if (!choices) return;
 				const fingerprint = JSON.stringify(choices);
 				if (fingerprint === saved) return;
