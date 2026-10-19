@@ -3102,7 +3102,6 @@
 	"settings.billing.starterRelay": "Cloud relay for seamless connectivity across devices",
 	"settings.billing.starterDevices": "Unlimited devices, including mobile (bring your own)",
 	"settings.billing.cloudAway": "Agents keep working when your computer sleeps",
-	"settings.billing.cloudSandboxes": "Instant cloud VMs",
 	"settings.billing.cloudGithub": "Pull requests, CI fixes and reviews in the cloud",
 	"settings.billing.everythingInFree": "Everything in Free",
 	"settings.billing.everythingInStarter": "Everything in Starter",

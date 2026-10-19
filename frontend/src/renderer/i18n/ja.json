@@ -3121,7 +3121,6 @@
 	"settings.billing.starterRelay": "クラウドリレーでデバイス間をシームレスに接続",
 	"settings.billing.starterDevices": "デバイス数無制限（モバイル含む、手持ちのデバイスを利用）",
 	"settings.billing.cloudAway": "コンピューターがスリープしてもエージェントは作業を継続",
-	"settings.billing.cloudSandboxes": "すぐに使えるクラウド VM",
 	"settings.billing.cloudGithub": "クラウドでのプルリクエスト、CI 修正、レビュー",
 	"settings.billing.everythingInFree": "Freeのすべて",
 	"settings.billing.everythingInStarter": "Starter のすべて",

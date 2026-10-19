@@ -572,7 +572,7 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 	const pro = plan === "pro";
 	const included = starter
 		? [
-			t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"),
+			t("settings.billing.cloudAway"), t("settings.billing.cloudGithub"),
 			t("settings.billing.starterRelay"), t("settings.billing.starterDevices"),
 		]
 		: pro

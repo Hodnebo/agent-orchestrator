@@ -3103,7 +3103,6 @@
 	"settings.billing.starterRelay": "云端中继，跨设备无缝连接",
 	"settings.billing.starterDevices": "设备数量不限，包括移动设备（自带设备）",
 	"settings.billing.cloudAway": "电脑休眠时代理仍继续工作",
-	"settings.billing.cloudSandboxes": "即时云端虚拟机",
 	"settings.billing.cloudGithub": "在云端处理拉取请求、CI 修复和审查",
 	"settings.billing.everythingInFree": "包含 Free 的全部功能",
 	"settings.billing.everythingInStarter": "包含 Starter 的全部内容",

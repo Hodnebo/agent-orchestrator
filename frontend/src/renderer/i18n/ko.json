@@ -3121,7 +3121,6 @@
 	"settings.billing.starterRelay": "기기 간 원활한 연결을 위한 클라우드 릴레이",
 	"settings.billing.starterDevices": "기기 무제한, 모바일 포함 (보유 기기 사용)",
 	"settings.billing.cloudAway": "컴퓨터가 잠자기 상태여도 에이전트가 계속 작업",
-	"settings.billing.cloudSandboxes": "인스턴트 클라우드 VM",
 	"settings.billing.cloudGithub": "클라우드에서 풀 리퀘스트, CI 수정, 리뷰",
 	"settings.billing.everythingInFree": "Free의 모든 기능",
 	"settings.billing.everythingInStarter": "Starter의 모든 기능",

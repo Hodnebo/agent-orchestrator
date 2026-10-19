@@ -3165,7 +3165,6 @@
 	"settings.billing.starterRelay": "Relay en la nube para conectar tus dispositivos sin interrupciones",
 	"settings.billing.starterDevices": "Dispositivos ilimitados, incluidos móviles (usa los tuyos)",
 	"settings.billing.cloudAway": "Los agentes siguen trabajando cuando tu equipo se suspende",
-	"settings.billing.cloudSandboxes": "VM en la nube instantáneas",
 	"settings.billing.cloudGithub": "Pull requests, correcciones de CI y revisiones en la nube",
 	"settings.billing.everythingInFree": "Todo lo de Free",
 	"settings.billing.everythingInStarter": "Todo lo de Starter",

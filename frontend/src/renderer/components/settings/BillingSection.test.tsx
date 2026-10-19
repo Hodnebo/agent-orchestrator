@@ -121,10 +121,10 @@ describe("BillingSection", () => {
 		expect(within(enterpriseCloud).getByText("Unlimited cloud projects")).toBeInTheDocument();
 		expect(within(enterpriseCloud).getByText("Unlimited simultaneous cloud agents")).toBeInTheDocument();
 		expect(within(card("enterprise")).getByText("Collaborate on cloud agents")).toBeInTheDocument();
-		// Bring-your-own Coder is a Pro feature; Starter offers AO's cloud VMs.
+		// Bring-your-own Coder is a Pro feature.
 		expect(within(card("pro")).getByText("Bring your own Coder deployment")).toBeInTheDocument();
 		expect(within(card("enterprise")).queryByText("Bring your own Coder deployment")).not.toBeInTheDocument();
-		expect(within(card("starter")).getByText("Instant cloud VMs")).toBeInTheDocument();
+		expect(within(card("starter")).queryByText(/Coder/)).not.toBeInTheDocument();
 		expect(within(card("pro")).getByText("Everything in Starter")).toBeInTheDocument();
 		expect(within(card("pro")).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
 		const enterprise = card("enterprise");
