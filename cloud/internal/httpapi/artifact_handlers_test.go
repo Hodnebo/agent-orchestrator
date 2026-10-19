@@ -468,6 +468,7 @@ func TestArtifactSyncListAndServe(t *testing.T) {
 		headers.Get("ETag") != `"`+hexSHA(html)+`"` ||
 		!strings.HasPrefix(headers.Get("Content-Security-Policy"), "sandbox ") ||
 		strings.Contains(headers.Get("Content-Security-Policy"), "allow-same-origin") ||
+		strings.Contains(headers.Get("Content-Security-Policy"), "allow-popups") ||
 		headers.Get("Content-Length") != strconv.Itoa(len(html)) {
 		t.Fatalf("headers = %v", headers)
 	}
