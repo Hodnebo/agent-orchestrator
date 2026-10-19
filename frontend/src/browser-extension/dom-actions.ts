@@ -195,6 +195,19 @@ export function elementChecked(element: Element): boolean {
 
 export type WaitKind = "text" | "text-gone" | "selector" | "selector-gone" | "dom-stable";
 
+/**
+ * Playwright's visibility rule, which the panel's agent-browser runtime uses:
+ * a non-empty bounding box (so display:none and detached elements fail) and
+ * not visibility:hidden/collapse.
+ */
+export function isVisible(element: Element): boolean {
+	if (!element.isConnected) return false;
+	const rect = element.getBoundingClientRect();
+	if (rect.width <= 0 || rect.height <= 0) return false;
+	const style = element.ownerDocument.defaultView?.getComputedStyle(element);
+	return style?.visibility !== "hidden" && style?.visibility !== "collapse";
+}
+
 /** Whether a wait condition holds right now (dom-stable is handled by waitFor). */
 export function conditionHolds(document: Document, kind: WaitKind, value: string): boolean {
 	switch (kind) {
@@ -210,8 +223,10 @@ export function conditionHolds(document: Document, kind: WaitKind, value: string
 			} catch {
 				throw new BridgeError("INVALID_ARGUMENT", `Invalid selector: ${value}`);
 			}
-			const visible = Boolean(found) && found!.getClientRects().length > 0;
-			return kind === "selector" ? Boolean(found) && (visible || found!.isConnected) : !found;
+			// Same rule as the panel's runtime: a selector wait means usable on
+			// screen, and "gone" means removed or hidden.
+			const visible = found !== null && isVisible(found);
+			return kind === "selector" ? visible : !visible;
 		}
 		default:
 			return false;
