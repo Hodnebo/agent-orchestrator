@@ -35,6 +35,9 @@ func (d *checkpointDriver) Reconnect(ctx context.Context, cfg ports.ChatResumeCo
 
 // Embedding ChatDriver otherwise hides the shared ACP driver's optional fork.
 func (d *checkpointDriver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+	if cfg.ReadOnly || cfg.DisableNetwork {
+		return nil, fmt.Errorf("%w: Claude diagnostics must start a fresh session", ports.ErrChatCapabilityUnavailable)
+	}
 	forker, ok := d.ChatDriver.(ports.ChatIsolatedForker)
 	if !ok {
 		return nil, ports.ErrChatCapabilityUnavailable

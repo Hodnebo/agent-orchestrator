@@ -1350,6 +1350,66 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	}
 }
 
+func TestACPDriverForwardsDiagnosticLaunchPolicy(t *testing.T) {
+	agent := &fakeAgent{}
+	var launched, metadata LaunchConfig
+	driver := New(Config{
+		Launch: func(_ context.Context, cfg LaunchConfig) (Launch, error) {
+			launched = cfg
+			return Launch{Command: "fake"}, nil
+		},
+		SessionMeta: func(cfg LaunchConfig) map[string]any {
+			metadata = cfg
+			return map[string]any{"readOnly": cfg.ReadOnly, "disableNetwork": cfg.DisableNetwork}
+		},
+	}, nil)
+	driver.useTestProcess(fakeSpawn(agent))
+	conversation, err := driver.Start(t.Context(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), ReadOnly: true, DisableNetwork: true,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conversation.Close()
+	if !launched.ReadOnly || !launched.DisableNetwork || !metadata.ReadOnly || !metadata.DisableNetwork {
+		t.Fatalf("diagnostic launch policy was lost: launch=%+v metadata=%+v", launched, metadata)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.newParams.Meta["readOnly"] != true || agent.newParams.Meta["disableNetwork"] != true {
+		t.Fatalf("session/new metadata = %#v", agent.newParams.Meta)
+	}
+}
+
+func TestACPRestrictedLaunchCannotAdoptOrdinaryHost(t *testing.T) {
+	var fingerprints []string
+	driver := New(Config{Harness: domain.HarnessClaudeCode}, nil)
+	stopped := errors.New("stop before connecting")
+	driver.connectHost = func(_ context.Context, cfg persistenthost.Config) (*persistenthost.Transport, error) {
+		fingerprints = append(fingerprints, cfg.OwnershipFingerprint)
+		return nil, stopped
+	}
+	workspace := t.TempDir()
+	for _, policy := range []LaunchConfig{
+		{}, {}, {ReadOnly: true}, {ReadOnly: true, DisableNetwork: true}, {DisableNetwork: true},
+	} {
+		policy.WorkspacePath = workspace
+		if _, err := driver.connectProcess(t.Context(), policy, nil); !errors.Is(err, stopped) {
+			t.Fatalf("connectProcess = %v", err)
+		}
+	}
+	if fingerprints[0] != fingerprints[1] {
+		t.Fatal("ordinary host ownership is not stable")
+	}
+	for i := 2; i < len(fingerprints); i++ {
+		for j := 0; j < i; j++ {
+			if fingerprints[i] == fingerprints[j] {
+				t.Fatalf("restricted policy %d shares host ownership with policy %d", i, j)
+			}
+		}
+	}
+}
+
 func TestACPDriverValidatesHandshakeIdentityBeforeOpeningSession(t *testing.T) {
 	agent := &fakeAgent{}
 	validated := false

@@ -64,11 +64,17 @@ var _ ports.ChatProviderTerminator = (*conversation)(nil)
 var _ ports.ChatLiveReconnector = (*conversation)(nil)
 var _ ports.ChatProviderEventAcknowledger = (*conversation)(nil)
 
-func (c *conversation) ProviderConversationID() string     { return c.cfg.ProviderConversationID }
-func (*conversation) Capabilities() ports.ChatCapabilities { return capabilities() }
-func (c *conversation) Events() <-chan ports.ChatEvent     { return c.events }
-func (*conversation) PreservesProviderOnClose() bool       { return true }
-func (c *conversation) ReconnectedLive() bool              { return c.reconnected }
+func (c *conversation) ProviderConversationID() string { return c.cfg.ProviderConversationID }
+func (c *conversation) Capabilities() ports.ChatCapabilities {
+	caps := capabilities()
+	if c.cfg.ReadOnly {
+		delete(caps, ports.ChatCapabilityTools)
+	}
+	return caps
+}
+func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }
+func (*conversation) PreservesProviderOnClose() bool   { return true }
+func (c *conversation) ReconnectedLive() bool          { return c.reconnected }
 
 func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	if len(msg.Content) != 0 {
@@ -77,8 +83,10 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if model := strings.TrimSpace(msg.Settings.Model); model != "" && model != c.cfg.Model {
 		return ports.ChatTurnRef{}, errors.New("unreal agent cannot change model inside a running conversation")
 	}
-	if approval := msg.Settings.Approval; approval != "" && ports.NormalizePermissionMode(approval) != ports.PermissionModeBypassPermissions {
-		return ports.ChatTurnRef{}, errors.New("unreal agent turns require bypass-permissions")
+	if approval := msg.Settings.Approval; approval != "" {
+		if err := validatePermissions(approval, c.cfg.ReadOnly); err != nil {
+			return ports.ChatTurnRef{}, err
+		}
 	}
 	effort := strings.TrimSpace(msg.Settings.Effort)
 	if effort != "" && normalizeEffort(effort) != effort {

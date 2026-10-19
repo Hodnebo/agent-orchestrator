@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -39,7 +38,6 @@ type Service struct {
 	clientID     string
 	clientSecret string
 	now          func() time.Time
-	mu           sync.Mutex
 }
 
 // New returns a Service rooted at dataDir. GitHub App user tokens expire (8h by
@@ -63,6 +61,16 @@ func (s *Service) patPath() string {
 	return filepath.Join(s.dataDir, "github-pat.json")
 }
 
+func (s *Service) lock(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating data dir: %w", err)
+	}
+	return lockCredentialFile(ctx, s.patPath()+".lock")
+}
+
 func (s *Service) clock() time.Time {
 	if s.now != nil {
 		return s.now().UTC()
@@ -83,18 +91,24 @@ type storedPAT struct {
 
 // StorePAT persists a GitHub personal access token (or a non-expiring OAuth
 // token) with no refresh material.
-func (s *Service) StorePAT(_ context.Context, token string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Service) StorePAT(ctx context.Context, token string) error {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.writeLocked(storedPAT{Token: token, CreatedAt: s.clock()})
 }
 
 // StoreOAuthToken persists an expiring GitHub App OAuth token together with the
 // refresh token and expiries needed to renew it without user interaction. A zero
 // expiresAt means the token does not expire (behaves like StorePAT).
-func (s *Service) StoreOAuthToken(_ context.Context, token, refreshToken string, expiresAt, refreshTokenExpiresAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Service) StoreOAuthToken(ctx context.Context, token, refreshToken string, expiresAt, refreshTokenExpiresAt time.Time) error {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.writeLocked(storedPAT{
 		Token:                 token,
 		CreatedAt:             s.clock(),
@@ -104,7 +118,7 @@ func (s *Service) StoreOAuthToken(_ context.Context, token, refreshToken string,
 	})
 }
 
-// writeLocked persists a record. The caller must hold s.mu.
+// writeLocked persists a record. The caller must hold the credential file lock.
 func (s *Service) writeLocked(rec storedPAT) error {
 	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
@@ -113,13 +127,32 @@ func (s *Service) writeLocked(rec storedPAT) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.patPath(), data, 0o600)
+	file, err := os.CreateTemp(s.dataDir, ".github-pat-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return replaceCredentialFile(file.Name(), s.patPath())
 }
 
 // HasPAT reports whether a GitHub PAT is stored locally.
-func (s *Service) HasPAT(_ context.Context) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Service) HasPAT(ctx context.Context) bool {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return false
+	}
+	defer unlock()
 	data, err := os.ReadFile(s.patPath())
 	if err != nil {
 		return false
@@ -129,10 +162,13 @@ func (s *Service) HasPAT(_ context.Context) bool {
 }
 
 // DeletePAT removes the stored GitHub PAT.
-func (s *Service) DeletePAT(_ context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	err := os.Remove(s.patPath())
+func (s *Service) DeletePAT(ctx context.Context) error {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	err = os.Remove(s.patPath())
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -159,8 +195,11 @@ func (s *Service) loadStoredLocked() (storedPAT, error) {
 // because a refresh could not be attempted: it falls back to the stored token,
 // letting the live GitHub call be the source of truth on validity.
 func (s *Service) accessToken(ctx context.Context) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	stored, err := s.loadStoredLocked()
 	if err != nil {
 		return "", err
@@ -168,6 +207,9 @@ func (s *Service) accessToken(ctx context.Context) (string, error) {
 	if s.shouldRefresh(stored) {
 		if refreshed, rerr := s.refreshLocked(ctx, stored); rerr == nil {
 			return refreshed.Token, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		// Refresh failed (network, refresh token expired/revoked); use the stored
 		// token and let the GitHub call decide. A 401 there triggers a forced
@@ -178,12 +220,20 @@ func (s *Service) accessToken(ctx context.Context) (string, error) {
 
 // forceRefresh renews the token regardless of its deadline, used after GitHub
 // unexpectedly rejects a token that had not yet reached expires_at.
-func (s *Service) forceRefresh(ctx context.Context) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Service) forceRefresh(ctx context.Context, rejectedToken string) (string, error) {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	stored, err := s.loadStoredLocked()
 	if err != nil {
 		return "", err
+	}
+	// A login or another process may have replaced the rejected token while
+	// the API request was in flight. Never refresh or overwrite that new login.
+	if stored.Token != rejectedToken {
+		return stored.Token, nil
 	}
 	if !s.canRefresh(stored) {
 		return "", ErrInvalidCredentials
@@ -218,9 +268,9 @@ func (s *Service) canRefresh(stored storedPAT) bool {
 }
 
 // refreshLocked exchanges the refresh token for a fresh access token (and a
-// rotated refresh token) and persists the result. The caller must hold s.mu.
+// rotated refresh token) and persists the result. The caller must hold the credential file lock.
 func (s *Service) refreshLocked(ctx context.Context, stored storedPAT) (storedPAT, error) {
-	// Bound the refresh so a hung GitHub OAuth endpoint cannot hold s.mu (and
+	// Bound the refresh so a hung GitHub OAuth endpoint cannot hold the file lock (and
 	// thus stall concurrent ListRepos/HasPAT) for the whole request lifetime.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -245,6 +295,9 @@ func (s *Service) refreshLocked(ctx context.Context, stored storedPAT) (storedPA
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized {
+			return storedPAT{}, ErrInvalidCredentials
+		}
 		return storedPAT{}, fmt.Errorf("github token refresh: status %d", resp.StatusCode)
 	}
 	var out struct {
@@ -259,7 +312,12 @@ func (s *Service) refreshLocked(ctx context.Context, stored storedPAT) (storedPA
 		return storedPAT{}, fmt.Errorf("github token refresh: decode: %w", err)
 	}
 	if out.Error != "" {
-		return storedPAT{}, fmt.Errorf("github token refresh: %s", out.Error)
+		switch out.Error {
+		case "bad_refresh_token", "invalid_grant", "expired_token", "incorrect_client_credentials":
+			return storedPAT{}, ErrInvalidCredentials
+		default:
+			return storedPAT{}, fmt.Errorf("github token refresh failed")
+		}
 	}
 	if out.AccessToken == "" {
 		return storedPAT{}, fmt.Errorf("github token refresh: no access token returned")
@@ -312,9 +370,9 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 		// server-side rotation). Try exactly one forced refresh + retry before
 		// surfacing the reconnect prompt. Do NOT delete the stored token on 401:
 		// a transient failure must not wipe a still-valid credential.
-		newToken, rerr := s.forceRefresh(ctx)
+		newToken, rerr := s.forceRefresh(ctx, token)
 		if rerr != nil {
-			return nil, ErrInvalidCredentials
+			return nil, rerr
 		}
 		repos, status, err = s.fetchRepos(ctx, newToken)
 		if err != nil {

@@ -44,6 +44,8 @@ type LaunchConfig struct {
 	Env             map[string]string
 	Model           string
 	Permissions     ports.PermissionMode
+	ReadOnly        bool
+	DisableNetwork  bool
 	SystemPrompt    string
 	ProviderScopeID string
 }
@@ -248,6 +250,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		ReadOnly: cfg.ReadOnly, DisableNetwork: cfg.DisableNetwork,
 		ProviderScopeID: cfg.ProviderScopeID,
 	}
 	connectStarted := time.Now()
@@ -412,6 +415,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
 	}
@@ -715,7 +719,13 @@ func (d *Driver) connectProcess(
 	// Ownership is stable across app upgrades and mutable model/approval choices.
 	// An adopted provider keeps its original launch environment and instructions;
 	// changes to those take effect only when the provider is explicitly replaced.
-	owner, _ := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(d.cfg.Harness), cfg.ProviderScopeID})
+	ownership := []string{filepath.Clean(cfg.WorkspacePath), string(d.cfg.Harness), cfg.ProviderScopeID}
+	if cfg.ReadOnly || cfg.DisableNetwork {
+		// Restricted launches must never adopt a provider started without the
+		// same policy. Preserve existing ownership for ordinary conversations.
+		ownership = append(ownership, fmt.Sprintf("read-only=%t;disable-network=%t", cfg.ReadOnly, cfg.DisableNetwork))
+	}
+	owner, _ := json.Marshal(ownership)
 	identity := fmt.Sprintf("%x", sha256.Sum256(owner))
 	hostConfig := persistenthost.Config{
 		SessionID: string(cfg.SessionID), DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,

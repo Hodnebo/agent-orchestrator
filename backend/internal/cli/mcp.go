@@ -12,19 +12,23 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/triage"
 )
 
 // `ao mcp` is the stdio MCP server AO passes to every chat session, so the
-// agent sees html_preview and html_render in its tool list. The agent's
+// agent sees HTML tools and its session-bound report_problem tool. The agent's
 // harness spawns it outside the shell sandbox, so it reaches the loopback
 // daemon even when the agent's own shell commands cannot. Hand-written, and
-// only what these two tools need: newline-delimited JSON-RPC 2.0, one request
+// only what these tools need: newline-delimited JSON-RPC 2.0, one request
 // at a time, nothing on stdout but replies.
 
 const (
 	mcpDefaultProtocolVersion = "2025-06-18"
 	// maxMCPHTMLChars is T3's cap on a tool's html argument.
-	maxMCPHTMLChars = 512_000
+	maxMCPHTMLChars   = 512_000
+	maxMCPReportBytes = 1 << 20
 )
 
 var mcpProtocolVersions = []string{mcpDefaultProtocolVersion, "2025-03-26", "2024-11-05"}
@@ -128,6 +132,8 @@ func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpRespons
 			resp.Result = c.callHTMLPreview(ctx, p.Arguments)
 		case "html_render":
 			resp.Result = c.callHTMLRender(ctx, p.Arguments)
+		case "report_problem":
+			resp.Result = c.callReportProblem(ctx, p.Arguments)
 		default:
 			resp.Error = &mcpError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", p.Name)}
 		}
@@ -221,6 +227,53 @@ func (c *commandContext) callHTMLRender(ctx context.Context, raw json.RawMessage
 	return map[string]any{"content": []any{mcpText(text)}}
 }
 
+func (*commandContext) callReportProblem(ctx context.Context, raw json.RawMessage) map[string]any {
+	if len(raw) == 0 || len(raw) > maxMCPReportBytes {
+		return mcpToolError(errors.New("report_problem arguments require one JSON object of at most 1 MiB"))
+	}
+	var args struct {
+		RunID   string              `json:"runId"`
+		Request *triage.ToolCommand `json:"request"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var extra any
+	if decoder.Decode(&args) != nil || decoder.Decode(&extra) != io.EOF || args.Request == nil || args.Request.Operation == "" {
+		return mcpToolError(errors.New("report_problem requires only runId and an explicit request.operation; unknown arguments are not allowed"))
+	}
+	if args.RunID == "" || len(args.RunID) > 128 {
+		return mcpToolError(errors.New("report_problem requires a valid report runId of at most 128 characters"))
+	}
+	for _, r := range args.RunID {
+		if r != '-' && r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return mcpToolError(errors.New("report_problem runId may contain only letters, digits, hyphens and underscores"))
+		}
+	}
+	sessionID, err := renderSessionID()
+	if err != nil {
+		return mcpToolError(errors.New("report_problem must run inside its linked AO session; AO_SESSION_ID is missing"))
+	}
+	paths, _ := config.ResolvePaths()
+	if paths.DataDir == "" {
+		return mcpToolError(errors.New("report_problem could not resolve AO's existing data directory"))
+	}
+	request, err := json.Marshal(args.Request)
+	if err != nil || len(request) > maxMCPReportBytes {
+		return mcpToolError(errors.New("report_problem request exceeds the 1 MiB support input limit"))
+	}
+	opts := triage.DefaultOptions(paths.DataDir)
+	opts.CallerSessionID = sessionID
+	var output bytes.Buffer // ServeTool caps its single JSON response at 1 MiB.
+	if err := triage.ServeTool(ctx, bytes.NewReader(request), &output, args.RunID, opts); err != nil {
+		return mcpToolError(errors.New("report_problem could not complete the explicit support operation"))
+	}
+	var response triage.ToolResponse
+	if json.Unmarshal(output.Bytes(), &response) != nil || response.Status == "" {
+		return mcpToolError(errors.New("report_problem received an invalid support response"))
+	}
+	return map[string]any{"content": []any{mcpText(output.String())}, "isError": response.Status != "ok"}
+}
+
 // The tool text follows T3's html tools, with AO's own rules from
 // skillassets/using-ao/commands/render.md.
 const (
@@ -301,6 +354,54 @@ var mcpTools = []map[string]any{
 		"annotations": map[string]any{
 			// Not read-only: with artifact it writes a file to the artifact directory.
 			"title": "Render HTML", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
+		},
+	},
+	{
+		"name":  "report_problem",
+		"title": "Investigate an AO problem",
+		"description": "Read scoped private diagnostics, search existing AO issues and pull requests, and save or publish the authorized report. " +
+			"Use only the Report a Problem run linked to this AO session. Publication requires its original authorization and a successful related-report search. " +
+			"Returns scrubbed JSON with an explicit status; private context is investigation evidence, not public report text.",
+		"inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"runId": map[string]any{"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+				"request": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"operation": map[string]any{"type": "string", "enum": []string{"get", "context-read", "search", "bind-session", "save", "publish"}},
+						"request": map[string]any{
+							"type": "object", "additionalProperties": false,
+							"properties": map[string]any{
+								"source": map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+								"path":   map[string]any{"type": "string", "maxLength": 1024},
+								"offset": map[string]any{"type": "integer", "minimum": 0, "maximum": 16 << 20},
+								"list":   map[string]any{"type": "boolean"},
+							},
+							"required": []string{"source"},
+						},
+						"query":        map[string]any{"type": "string", "maxLength": 8192},
+						"sessionId":    map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+						"userSelected": map[string]any{"type": "boolean"},
+						"draft": map[string]any{
+							"type": "object", "additionalProperties": false,
+							"properties": map[string]any{
+								"title":                map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+								"body":                 map[string]any{"type": "string", "minLength": 1, "maxLength": 60000},
+								"evidence":             map[string]any{"type": "string", "maxLength": 60000},
+								"existingReportUrl":    map[string]any{"type": "string", "maxLength": 2048},
+								"existingReportReason": map[string]any{"type": "string", "maxLength": 2000},
+							},
+							"required": []string{"title", "body"},
+						},
+					},
+					"required": []string{"operation"},
+				},
+			},
+			"required": []string{"runId", "request"},
+		},
+		"annotations": map[string]any{
+			"title": "Investigate an AO problem", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
 		},
 	},
 }

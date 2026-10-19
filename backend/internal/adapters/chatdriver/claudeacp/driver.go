@@ -122,6 +122,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
+			if (cfg.ReadOnly || cfg.DisableNetwork) && !runtimeLaunch.diagnosticPolicy {
+				return acpdriver.Launch{}, fmt.Errorf("%w: Claude diagnostics require AO's pinned claude-agent-acp %s runtime", ports.ErrChatCapabilityUnavailable, diagnosticACPVersion)
+			}
 			claudeBinary, err := plugin.ResolveBinary(ctx)
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
@@ -363,6 +366,7 @@ func validateClaudeACPExecutable(binary, goos string) error {
 }
 
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
+	meta := make(map[string]any)
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
@@ -370,16 +374,31 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		}
 		standing += claudePlanGuidance
 	}
-	if standing == "" {
+	if standing != "" {
+		// Append AO's standing instructions without replacing Claude's preset.
+		meta["systemPrompt"] = map[string]any{
+			"type": "preset", "preset": "claude_code", "append": standing,
+		}
+	}
+	if cfg.ReadOnly || cfg.DisableNetwork {
+		// The pinned bridge forwards these native Agent SDK options. `tools`
+		// removes every builtin except local reads; allowedTools alone only
+		// changes approvals. Modes and per-turn settings cannot restore tools.
+		meta["claudeCode"] = map[string]any{"options": map[string]any{
+			"tools":           []string{"Read", "Glob", "Grep"},
+			"allowedTools":    []string{"Read", "Glob", "Grep"},
+			"disallowedTools": []string{"Bash", "Write", "Edit", "NotebookEdit", "Agent", "Task", "Skill", "WebFetch", "WebSearch", "mcp__*"},
+			"settingSources":  []string{},
+			"strictMcpConfig": true,
+			"mcpServers":      map[string]any{},
+			"skills":          []string{},
+			"settings":        map[string]any{"disableAllHooks": true},
+		}}
+	}
+	if len(meta) == 0 {
 		return nil
 	}
-	// Append AO's standing instructions to Claude Code's own prompt. Replacing
-	// the preset would discard Claude's native coding/tool instructions.
-	return map[string]any{
-		"systemPrompt": map[string]any{
-			"type": "preset", "preset": "claude_code", "append": standing,
-		},
-	}
+	return meta
 }
 
 func claudeSessionMode(permission ports.PermissionMode) string {
@@ -407,9 +426,12 @@ func claudeSessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOp
 }
 
 type runtimeLaunch struct {
-	command string
-	args    []string
+	command          string
+	args             []string
+	diagnosticPolicy bool
 }
+
+const diagnosticACPVersion = "0.70.0"
 
 // resolveRuntime finds AO's packaged ACP runtime. Explicit command and path
 // overrides keep headless development/test installs usable without coupling the
@@ -447,7 +469,22 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 	if err := requireNodeVersion(ctx, node); err != nil {
 		return runtimeLaunch{}, err
 	}
-	return runtimeLaunch{command: node, args: []string{entry}}, nil
+	// Command overrides and other bridge versions remain available to ordinary
+	// Chat. Diagnostic sessions require the exact SDK forwarding we inspected.
+	var adapter struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	diagnosticPolicy := false
+	if manifest, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(entry)), "package.json")); err == nil {
+		if err := json.Unmarshal(manifest, &adapter); err == nil {
+			diagnosticPolicy = adapter.Name == "@agentclientprotocol/claude-agent-acp" && adapter.Version == diagnosticACPVersion
+		}
+	}
+	return runtimeLaunch{
+		command: node, args: []string{entry},
+		diagnosticPolicy: diagnosticPolicy,
+	}, nil
 }
 
 func runtimeDirectoryBesideExecutable() string {

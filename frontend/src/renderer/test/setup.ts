@@ -177,7 +177,20 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
-		daemon: {
+			triage: {
+				catalog: async () => [], configure: async () => undefined, getPreference: async () => null, setPreference: async () => undefined,
+				list: async () => [],
+				get: async () => { throw new Error("No support report in this test"); },
+				prepare: async () => { throw new Error("Support is unavailable in this test"); },
+				start: async () => { throw new Error("Support is unavailable in this test"); },
+				reply: async () => { throw new Error("No support report in this test"); },
+				cancel: async () => { throw new Error("No support report in this test"); },
+				publish: async () => { throw new Error("No support report in this test"); },
+				signInGitHub: async () => { throw new Error("No support report in this test"); },
+				nativeInput: async () => { throw new Error("No support report in this test"); },
+				subscribe: () => () => undefined,
+			},
+			daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
 			stop: async () => ({ state: "stopped" }),

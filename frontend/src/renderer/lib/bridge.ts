@@ -6,6 +6,22 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		triage: {
+			catalog: async () => { throw new Error("Support investigations require the AO desktop app. You can copy your report and file it on GitHub."); },
+			configure: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			getPreference: async () => null,
+			setPreference: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			list: async () => [],
+			get: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			prepare: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			start: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			reply: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			cancel: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			publish: async () => { throw new Error("Support investigations require the AO desktop app."); },
+			signInGitHub: async () => { throw new Error("GitHub sign-in requires the AO desktop app."); },
+			nativeInput: async () => { throw new Error("Native agent input requires the AO desktop app."); },
+			subscribe: () => () => undefined,
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,

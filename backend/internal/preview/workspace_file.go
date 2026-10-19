@@ -32,15 +32,22 @@ func CleanWorkspacePath(raw string) (string, bool) {
 // that escape it, so callers can safely serve the returned handle without a
 // second path lookup. Anything but a regular file is fs.ErrNotExist.
 func OpenWorkspaceFile(workspacePath, assetPath string) (*os.File, fs.FileInfo, string, error) {
-	clean, ok := CleanWorkspacePath(assetPath)
-	if !ok {
-		return nil, nil, "", fs.ErrNotExist
-	}
 	root, err := os.OpenRoot(workspacePath)
 	if err != nil {
 		return nil, nil, "", err
 	}
 	defer func() { _ = root.Close() }()
+	return OpenRootFile(root, assetPath)
+}
+
+// OpenRootFile applies workspace-file confinement to an already pinned root.
+// Callers that validate directory identity can retain that same handle through
+// validation and opening instead of resolving the workspace path again.
+func OpenRootFile(root *os.Root, assetPath string) (*os.File, fs.FileInfo, string, error) {
+	clean, ok := CleanWorkspacePath(assetPath)
+	if !ok {
+		return nil, nil, "", fs.ErrNotExist
+	}
 
 	// O_NONBLOCK: opening a FIFO would otherwise block until a writer appears,
 	// and the path can be swapped for one at any time. A regular file's reads

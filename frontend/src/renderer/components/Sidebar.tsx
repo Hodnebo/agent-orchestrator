@@ -77,6 +77,9 @@ import {
 import { getSessionStatusDotView } from "../lib/session-presentation";
 import { deriveSessionAgentSwitchPresentation } from "../lib/agent-switch-presentation";
 import { aoBridge } from "../lib/bridge";
+import { mergeAgentRows } from "../lib/triage";
+import { useTriageStore } from "../stores/triage-store";
+import { TriageAgentRows } from "./triage/TriageAgentRows";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
@@ -619,6 +622,7 @@ export function Sidebar({
 }: SidebarProps) {
 	const { t } = useTranslation();
 	const remoteNavigate = useNavigate();
+	const hasTriageRuns = useTriageStore((state) => state.runs.length > 0);
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
@@ -799,9 +803,10 @@ export function Sidebar({
 		() => orderedWorkspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND),
 		[orderedWorkspaces],
 	);
-	const standaloneWorkspace = useMemo(
-		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND),
-		[workspaces],
+	const standaloneWorkspace = useMemo<WorkspaceSummary | undefined>(
+		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND)
+			?? (hasTriageRuns ? { id: STANDALONE_WORKSPACE_ID, name: t("standalone.workspaceName"), kind: STANDALONE_PROJECT_KIND, path: "", sessions: [] } : undefined),
+		[workspaces, hasTriageRuns, t],
 	);
 	const {
 		listed: visibleWorkspaces,
@@ -1194,7 +1199,7 @@ export function Sidebar({
 								) : null}
 							</AnimatedSectionBody>
 						) : null}
-						{!workspaceError && standaloneWorkspace ? (
+						{standaloneWorkspace && (!workspaceError || hasTriageRuns) ? (
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
 								selection={selection}
@@ -1992,6 +1997,7 @@ function ScratchpadSection({
 	onToggle: () => void;
 }) {
 	const { t } = useTranslation();
+	const triageRuns = useTriageStore((state) => state.runs);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	// Mirrors the project tree: only termination removes an agent from the
 	// sidebar, so a completed PR session stays reachable.
@@ -2019,6 +2025,7 @@ function ScratchpadSection({
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
+	const agentRows = useMemo(() => mergeAgentRows(listedSessions, triageRuns), [listedSessions, triageRuns]);
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -2102,12 +2109,13 @@ function ScratchpadSection({
 					</div>
 				}
 			/>
-			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
+			<AnimatedSectionBody open={open && agentRows.length > 0} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
 					wrapperClassName="flex flex-col flex-1"
 				>
+					<TriageAgentRows rows={agentRows} />
 					<SessionReorderList
 						dndId={sessionDndId(STANDALONE_WORKSPACE_ID)}
 						testId={`session-list-${STANDALONE_WORKSPACE_ID}`}

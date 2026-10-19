@@ -106,7 +106,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		AOSessionID: string(cfg.SessionID), ProviderConversationID: providerID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Model: strings.TrimSpace(cfg.Model), Effort: normalizeEffort(cfg.Effort),
-		SystemPrompt: cfg.SystemPrompt,
+		SystemPrompt: cfg.SystemPrompt, ReadOnly: cfg.ReadOnly,
 	}, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		AOSessionID: string(cfg.SessionID), ProviderConversationID: cfg.ProviderConversationID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Model: strings.TrimSpace(cfg.Model), Effort: normalizeEffort(cfg.Effort),
-		SystemPrompt: cfg.SystemPrompt,
+		SystemPrompt: cfg.SystemPrompt, ReadOnly: cfg.ReadOnly,
 	}, cfg.Env, cfg.PrepareEnv, cfg.ProviderScopeID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
@@ -145,17 +145,25 @@ func validateStart(workspace string, permissions ports.PermissionMode, readOnly 
 	if !filepath.IsAbs(workspace) {
 		return fmt.Errorf("workspace path must be absolute, got %q", workspace)
 	}
-	if ports.NormalizePermissionMode(permissions) != ports.PermissionModeBypassPermissions {
-		return errors.New("unreal agent currently requires bypass-permissions because its harness has no interactive approval channel")
-	}
-	if readOnly {
-		return errors.New("unreal agent does not provide a read-only sandbox")
+	if err := validatePermissions(permissions, readOnly); err != nil {
+		return err
 	}
 	if len(additional) != 0 {
 		return errors.New("unreal agent does not support additional workspace directories")
 	}
 	if len(mcp) != 0 {
 		return errors.New("unreal agent does not support AO-supplied MCP servers")
+	}
+	return nil
+}
+
+func validatePermissions(permissions ports.PermissionMode, readOnly bool) error {
+	mode := ports.NormalizePermissionMode(permissions)
+	if readOnly && mode == ports.PermissionModeDefault {
+		return nil
+	}
+	if mode != ports.PermissionModeBypassPermissions {
+		return errors.New("unreal agent currently requires bypass-permissions because its harness has no interactive approval channel")
 	}
 	return nil
 }
@@ -192,7 +200,13 @@ func (d *Driver) connect(
 	prepareEnv func(context.Context) (map[string]string, error),
 	providerScopeID string,
 ) (*conversation, error) {
-	owner, _ := json.Marshal([]string{filepath.Clean(cfg.WorkspacePath), string(domain.HarnessUnreal), providerScopeID})
+	ownership := []string{filepath.Clean(cfg.WorkspacePath), string(domain.HarnessUnreal), providerScopeID}
+	if cfg.ReadOnly {
+		// A no-tools conversation must never attach to an existing mutable host.
+		// Keep the mutable fingerprint compatible with existing hosts.
+		ownership = append(ownership, "read-only")
+	}
+	owner, _ := json.Marshal(ownership)
 	fingerprint := sha256.Sum256(owner)
 	hostConfig := persistenthost.Config{
 		SessionID: cfg.AOSessionID, DataDir: cfg.DataDir, Workdir: cfg.WorkspacePath,
