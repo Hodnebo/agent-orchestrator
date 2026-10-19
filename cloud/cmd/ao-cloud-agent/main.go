@@ -166,6 +166,14 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 		// handoff fence on its own.
 		_ = worker.RecordTUIStop(strings.TrimSpace(os.Getenv("AO_DATA_DIR")), hookAt)
 	}
+	if activity.Harness == "claude-code" && activity.SourceInterface == "tui" && activity.AgentSessionID != "" {
+		// The worker follows the terminal Claude's transcript for interrupts.
+		// /clear or /resume moves that process to another conversation, and
+		// CLAUDE_PID tells the terminal's process from a headless claude the
+		// agent runs from a tool (it shares this environment and these hooks).
+		_ = worker.RecordClaudeConversation(strings.TrimSpace(os.Getenv("AO_DATA_DIR")),
+			strings.TrimSpace(os.Getenv("CLAUDE_PID")), activity.AgentSessionID, hookAt)
+	}
 	if activity.Harness == "codex" && activity.Event == "stop" && activity.LatestAssistantUpdate == "" {
 		activity.LatestAssistantUpdate = latestCodexAssistantMessage(
 			strings.TrimSpace(os.Getenv("CODEX_HOME")), activity.AgentSessionID,

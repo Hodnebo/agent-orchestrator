@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 )
 
@@ -23,20 +24,62 @@ var claudeInterruptMarkers = []string{
 // With the conversation's id known (the terminal launches Claude with
 // --session-id or --resume), only that transcript is the terminal's: a
 // headless claude the agent runs from a tool shares the config directory, and
-// its transcript is often the newest. Without it, the newest conversation
-// transcript is. Subagent transcripts live a level deeper (or, in older
-// releases, as agent-*.jsonl beside the conversation) and are never the
-// terminal's own turn. Reviewers run with their own config directory, and
-// Chat never runs beside the terminal agent. Call it before the agent starts.
-func newClaudeTranscriptTail(configDir, conversationID string, started time.Time) *transcriptTail {
-	conversationID = strings.TrimSpace(conversationID)
+// its transcript is often the newest. /clear, /resume or a conversation switch
+// inside the TUI moves the terminal's Claude to another transcript; its hooks
+// record the new conversation in dataDir (worker.RecordClaudeConversation)
+// and the tail follows it from then on. Without a known id, the newest
+// conversation transcript is the terminal's. Subagent transcripts live a
+// level deeper (or, in older releases, as agent-*.jsonl beside the
+// conversation) and are never the terminal's own turn. Reviewers run with
+// their own config directory, and Chat never runs beside the terminal agent.
+// Call it before the agent starts.
+func newClaudeTranscriptTail(configDir, conversationID, dataDir string, started time.Time) *transcriptTail {
+	conversation := &claudeConversation{dataDir: dataDir, current: strings.TrimSpace(conversationID)}
 	owns := func(_, name string) (bool, bool) {
-		if conversationID != "" {
-			return strings.TrimSuffix(name, ".jsonl") == conversationID, true
+		if conversation.current != "" {
+			return strings.TrimSuffix(name, ".jsonl") == conversation.current, true
 		}
 		return !strings.HasPrefix(name, "agent-"), true
 	}
-	return newTranscriptTail(filepath.Join(configDir, "projects"), 2, started, owns, claudeTurnRecord)
+	tail := newTranscriptTail(filepath.Join(configDir, "projects"), 2, started, owns, claudeTurnRecord)
+	if conversation.current != "" && dataDir != "" {
+		conversation.launch = conversation.current
+		tail.refresh = func() {
+			if since, changed := conversation.refresh(); changed {
+				tail.retarget(since)
+			}
+		}
+	}
+	return tail
+}
+
+// claudeConversation tracks which conversation the terminal's Claude Code
+// process is in.
+type claudeConversation struct {
+	dataDir string
+	// launch is the conversation the terminal launched into, current the one
+	// it is in now.
+	launch, current string
+}
+
+// refresh reads the conversations hooks recorded. The terminal's process is
+// the one whose first conversation was the launch's: the latest started, as
+// an earlier Claude resumed into it may have left a record. A headless claude
+// starts its own conversation. It reports whether the terminal's conversation
+// changed, and since when.
+func (c *claudeConversation) refresh() (time.Time, bool) {
+	var record worker.ClaudeConversation
+	found := false
+	for _, candidate := range worker.ReadClaudeConversations(c.dataDir) {
+		if candidate.First == c.launch && (!found || candidate.Started > record.Started) {
+			record, found = candidate, true
+		}
+	}
+	if !found || record.Current == c.current {
+		return time.Time{}, false
+	}
+	c.current = record.Current
+	return time.Unix(0, record.Since), true
 }
 
 // claudeTerminalConversationID is the conversation a terminal Claude Code

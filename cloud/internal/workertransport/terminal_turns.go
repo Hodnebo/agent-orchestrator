@@ -97,6 +97,11 @@ type transcriptTail struct {
 	// opens each at most once.
 	owned map[string]bool
 	scans int
+	// refresh, if set, runs before each poll and may retarget the tail.
+	refresh func()
+	// notBefore drops turn ends older than the latest retarget: a
+	// conversation the agent switched back to holds turns from before.
+	notBefore time.Time
 }
 
 // newTranscriptTail records where every existing transcript ends. Call it
@@ -149,6 +154,9 @@ func (t *transcriptTail) depth(path string) int {
 // poll returns each turn end since the previous poll that no later turn start
 // in the same read superseded.
 func (t *transcriptTail) poll() []turnEnd {
+	if t.refresh != nil {
+		t.refresh()
+	}
 	if t.path == "" || t.scans%transcriptScanEvery == 0 {
 		t.follow(t.newestOwnedTranscript())
 	}
@@ -209,10 +217,21 @@ func (t *transcriptTail) poll() []turnEnd {
 		case turnRecordStart:
 			ends = ends[:0]
 		case turnRecordEnd:
-			ends = append(ends, end)
+			if !end.at.Before(t.notBefore) {
+				ends = append(ends, end)
+			}
 		}
 	}
 	return ends
+}
+
+// retarget forgets the followed transcript and which transcripts are the
+// agent's, after the rule deciding that changed at since. The transcript left
+// behind is no longer read, so nothing written to it later counts.
+func (t *transcriptTail) retarget(since time.Time) {
+	t.path, t.partial, t.skipping = "", nil, false
+	t.owned = make(map[string]bool)
+	t.notBefore = since
 }
 
 // follow switches to path, read from where the watcher left it: a transcript

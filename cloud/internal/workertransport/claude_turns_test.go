@@ -89,7 +89,7 @@ func TestClaudeTranscriptTailReportsOnlyNewInterrupts(t *testing.T) {
 	configDir := t.TempDir()
 	// An interrupt from before the terminal started is history.
 	path := writeClaudeTranscript(t, configDir, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", claudePrompt+claudeAssistant+claudeInterrupted)
-	tail := newClaudeTranscriptTail(configDir, "511e68be-f634-4b26-b7c7-7f4d258144c6", time.Now().Add(-time.Second))
+	tail := newClaudeTranscriptTail(configDir, "511e68be-f634-4b26-b7c7-7f4d258144c6", "", time.Now().Add(-time.Second))
 	// The terminal resumed that conversation and started a new turn.
 	appendRollout(t, path, claudePrompt)
 	if ends := tail.poll(); len(ends) != 0 {
@@ -111,7 +111,7 @@ func TestClaudeTranscriptTailReportsOnlyNewInterrupts(t *testing.T) {
 // the terminal's own turn.
 func TestClaudeTranscriptTailIgnoresSubagentTranscripts(t *testing.T) {
 	configDir := t.TempDir()
-	tail := newClaudeTranscriptTail(configDir, "", time.Now().Add(-time.Second))
+	tail := newClaudeTranscriptTail(configDir, "", "", time.Now().Add(-time.Second))
 	main := writeClaudeTranscript(t, configDir, "s1.jsonl", claudePrompt)
 	if ends := tail.poll(); len(ends) != 0 {
 		t.Fatalf("ends = %v", ends)
@@ -136,7 +136,7 @@ func TestClaudeTranscriptTailIgnoresSubagentTranscripts(t *testing.T) {
 func TestClaudeTranscriptTailFollowsTheTerminalConversation(t *testing.T) {
 	configDir := t.TempDir()
 	const id = "511e68be-f634-4b26-b7c7-7f4d258144c6"
-	tail := newClaudeTranscriptTail(configDir, id, time.Now().Add(-time.Second))
+	tail := newClaudeTranscriptTail(configDir, id, "", time.Now().Add(-time.Second))
 	main := writeClaudeTranscript(t, configDir, id+".jsonl", claudePrompt)
 	if ends := tail.poll(); len(ends) != 0 {
 		t.Fatalf("ends = %v", ends)
@@ -151,6 +151,68 @@ func TestClaudeTranscriptTailFollowsTheTerminalConversation(t *testing.T) {
 	tail.scans = 0
 	if ends := tail.poll(); len(ends) != 1 || !ends[0].interrupted {
 		t.Fatalf("ends = %v, want the terminal conversation's interrupt", ends)
+	}
+}
+
+// /clear, /resume or a conversation switch inside the TUI moves the
+// terminal's Claude to another transcript. Its hooks record the new
+// conversation for its process (CLAUDE_PID), and the tail follows it; the
+// conversation left behind, and a headless claude's, no longer count.
+func TestClaudeTranscriptTailFollowsAConversationSwitch(t *testing.T) {
+	configDir, dataDir := t.TempDir(), t.TempDir()
+	const launch, cleared, headless = "511e68be-f634-4b26-b7c7-7f4d258144c6", "7d0c1b2a-3948-4576-8a9b-0c1d2e3f4a5b", "0f1e2d3c-4b5a-4968-8776-655443322110"
+	start := time.Now().Add(-time.Minute)
+	tail := newClaudeTranscriptTail(configDir, launch, dataDir, start.Add(-time.Second))
+	record := func(pid, session string, at time.Time) {
+		t.Helper()
+		if err := worker.RecordClaudeConversation(dataDir, pid, session, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	poll := func() []turnEnd {
+		tail.scans = 0
+		return tail.poll()
+	}
+	record("100", launch, start)
+	main := writeClaudeTranscript(t, configDir, launch+".jsonl", claudePrompt)
+	if ends := poll(); len(ends) != 0 {
+		t.Fatalf("ends = %v", ends)
+	}
+
+	// A headless claude the agent runs is its own process and conversation.
+	record("200", headless, start.Add(time.Second))
+	writeClaudeTranscript(t, configDir, headless+".jsonl", claudePrompt+claudeInterruptedAt(start.Add(2*time.Second)))
+	if ends := poll(); len(ends) != 0 {
+		t.Fatalf("a headless claude's interrupt was reported: %v", ends)
+	}
+
+	// /clear, then a prompt in the new conversation.
+	clearedAt := start.Add(10 * time.Second)
+	record("100", cleared, clearedAt)
+	next := writeClaudeTranscript(t, configDir, cleared+".jsonl", claudePrompt)
+	if ends := poll(); len(ends) != 0 {
+		t.Fatalf("ends = %v", ends)
+	}
+	// The conversation left behind no longer counts.
+	appendRollout(t, main, claudeInterruptedAt(start.Add(11*time.Second)))
+	if ends := poll(); len(ends) != 0 {
+		t.Fatalf("the left conversation's interrupt was reported: %v", ends)
+	}
+	appendRollout(t, next, claudeInterruptedAt(start.Add(12*time.Second)))
+	if ends := poll(); len(ends) != 1 || !ends[0].interrupted {
+		t.Fatalf("ends = %v, want the new conversation's interrupt", ends)
+	}
+
+	// /resume back to the launch conversation: what it holds from before the
+	// switch is history, an interrupt after it is the turn's end.
+	resumedAt := start.Add(20 * time.Second)
+	record("100", launch, resumedAt)
+	if ends := poll(); len(ends) != 0 {
+		t.Fatalf("history of the resumed conversation was reported: %v", ends)
+	}
+	appendRollout(t, main, claudePrompt+claudeInterruptedAt(start.Add(21*time.Second)))
+	if ends := poll(); len(ends) != 1 || !ends[0].at.Equal(start.Add(21*time.Second).Truncate(0)) {
+		t.Fatalf("ends = %v, want the resumed conversation's new interrupt", ends)
 	}
 }
 

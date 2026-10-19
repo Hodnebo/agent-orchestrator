@@ -79,7 +79,10 @@ func newInterruptHarness(t *testing.T, harness domain.AgentHarness, transcriptNa
 
 func (h *interruptHarness) hook(t *testing.T, signal ports.ActivitySignal) {
 	t.Helper()
-	signal.Valid, signal.LaunchID, signal.TranscriptPath = true, "launch-1", h.transcript
+	signal.Valid, signal.LaunchID = true, "launch-1"
+	if signal.TranscriptPath == "" {
+		signal.TranscriptPath = h.transcript
+	}
 	if err := h.manager.ApplyActivitySignal(h.ctx, h.session.ID, signal); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +90,12 @@ func (h *interruptHarness) hook(t *testing.T, signal ports.ActivitySignal) {
 
 func (h *interruptHarness) write(t *testing.T, records ...string) {
 	t.Helper()
-	file, err := os.OpenFile(h.transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+	appendTranscript(t, h.transcript, records...)
+}
+
+func appendTranscript(t *testing.T, path string, records ...string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,5 +319,40 @@ func TestTurnFailureObserverIdlesAClaudeTurnInterruptedDuringASubagent(t *testin
 				t.Fatalf("after Esc: state = %q, want idle", got.Activity.State)
 			}
 		})
+	}
+}
+
+// /clear (or /resume, or a conversation switch) inside the TUI moves Claude to
+// another transcript without a restart. The next hook carries the new session
+// id and transcript path, so the observer reads the new conversation, and the
+// one left behind no longer counts.
+func TestTurnFailureObserverFollowsAClaudeConversationSwitch(t *testing.T) {
+	promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	h := newInterruptHarness(t, domain.HarnessClaudeCode, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", promptAt.Add(-time.Minute))
+	h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt, Event: "user-prompt-submit",
+		AgentSessionID: "511e68be-f634-4b26-b7c7-7f4d258144c6", LatestUserPrompt: "first"})
+	h.write(t, claudeUserRecord(promptAt, `"first"`))
+	h.hook(t, ports.ActivitySignal{State: domain.ActivityIdle, Timestamp: promptAt.Add(time.Second), Event: "stop",
+		AgentSessionID: "511e68be-f634-4b26-b7c7-7f4d258144c6"})
+
+	// /clear, then a prompt in the new conversation.
+	cleared := filepath.Join(filepath.Dir(h.transcript), "7d0c1b2a-3948-4576-8a9b-0c1d2e3f4a5b.jsonl")
+	nextAt := promptAt.Add(10 * time.Second)
+	h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: nextAt, Event: "user-prompt-submit",
+		AgentSessionID: "7d0c1b2a-3948-4576-8a9b-0c1d2e3f4a5b", TranscriptPath: cleared, LatestUserPrompt: "second"})
+	appendTranscript(t, cleared, claudeUserRecord(nextAt, `"second"`))
+	got := h.poll(t)
+	if got.Activity.State != domain.ActivityActive || got.Metadata.NativeTranscriptPath != cleared {
+		t.Fatalf("after the switch: state %q transcript %q, want active on %q", got.Activity.State, got.Metadata.NativeTranscriptPath, cleared)
+	}
+	// The conversation left behind no longer counts.
+	h.write(t, claudeInterrupt(nextAt.Add(time.Second)))
+	if got := h.poll(t); got.Activity.State != domain.ActivityActive {
+		t.Fatalf("the left conversation's interrupt idled the session: %q", got.Activity.State)
+	}
+	escAt := nextAt.Add(2 * time.Second)
+	appendTranscript(t, cleared, claudeInterrupt(escAt))
+	if got := h.poll(t); got.Activity.State != domain.ActivityIdle || !got.Activity.LastActivityAt.Equal(escAt) {
+		t.Fatalf("after Esc: activity = %+v, want idle at %v", got.Activity, escAt)
 	}
 }

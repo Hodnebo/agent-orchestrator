@@ -755,7 +755,7 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 				s.mu.Lock()
 				conversationID := claudeTerminalConversationID(s.AgentCommand)
 				s.mu.Unlock()
-				turnEnds = newClaudeTranscriptTail(configDir, conversationID, time.Now())
+				turnEnds = newClaudeTranscriptTail(configDir, conversationID, s.DataDir, time.Now())
 			}
 		}
 	}
