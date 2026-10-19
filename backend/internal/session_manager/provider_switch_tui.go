@@ -91,6 +91,12 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	// write failing half way would leave the session with no provider at all.
 	ctx, cancelSwitch := context.WithTimeout(context.WithoutCancel(ctx), tuiSwitchAfterStopLimit)
 	defer cancelSwitch()
+	// The rows written from here are whole. A rename, pin or preview change made
+	// while the source stopped is the user's, so it is kept.
+	if current, found, err := m.store.GetSession(ctx, id); err == nil && found {
+		rec.DisplayName, rec.IsPinned, rec.PinnedAt = current.DisplayName, current.IsPinned, current.PinnedAt
+		rec.Metadata.PreviewURL, rec.Metadata.PreviewRevision = current.Metadata.PreviewURL, current.Metadata.PreviewRevision
+	}
 
 	source := rec
 	source.Metadata.RuntimeHandleID = ""
@@ -105,6 +111,11 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	// the target starts, and put back if the source has to be restored.
 	launchStore, _ := m.store.(launchOptionsStore)
 	sourceLaunch := m.sessionLaunchOptions(ctx, id)
+	// The picker shows Codex's fast mode off unless it was turned on, so that is how it starts.
+	targetLaunch := domain.AgentLaunchOptions{
+		FastMode: request.FastMode, FastModeOff: !request.FastMode && target == domain.HarnessCodex,
+		Ultracode: request.Ultracode, AutoCompactWindow: request.AutoCompactWindow,
+	}
 	restoreSource := func(cause error, what string) error {
 		// A target that used up the switch's time still leaves the restore its own.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*interfaceTransitionStepLimit)
@@ -145,11 +156,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return restoreSource(err, "could not publish target provider ownership")
 	}
 	if launchStore != nil {
-		// The picker shows Codex's fast mode off unless it was turned on, so that is how it starts.
-		targetLaunch := domain.AgentLaunchOptions{
-			FastMode: request.FastMode, FastModeOff: !request.FastMode && target == domain.HarnessCodex,
-			Ultracode: request.Ultracode, AutoCompactWindow: request.AutoCompactWindow,
-		}
+		// The note is saved with them until the target has it, so a relaunch after
+		// a crash in between still hands over instead of replaying the task.
+		targetLaunch.HandoffNote = request.HandoffNote
 		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
 			return restoreSource(err, "could not save the target's launch options")
 		}
@@ -159,6 +168,12 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		true, false, "", domain.SessionInterfaceTransitionHistoryStrict, &request.HandoffNote)
 	if err != nil {
 		return restoreSource(err, "target provider failed to start")
+	}
+	if launchStore != nil {
+		targetLaunch.HandoffNote = ""
+		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
+			m.logger.Warn("clear delivered handoff note", "session", id, "error", err)
+		}
 	}
 	if err := m.confirmTUISwitchTargetAlive(ctx, started.Session); err != nil {
 		// The target's terminal outlives it to keep its last output. It has to

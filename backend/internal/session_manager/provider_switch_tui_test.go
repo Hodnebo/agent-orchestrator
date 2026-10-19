@@ -41,3 +41,43 @@ func TestSwitchTargetThatExitsAtOnceIsReportedWithItsLastLine(t *testing.T) {
 		t.Fatalf("a runtime without the probe failed the switch: %v", err)
 	}
 }
+
+// launchOptionsFakeStore keeps a session's launch options, as the real store does.
+type launchOptionsFakeStore struct {
+	*fakeStore
+	options domain.AgentLaunchOptions
+}
+
+func (s *launchOptionsFakeStore) SessionLaunchOptions(context.Context, domain.SessionID) (domain.AgentLaunchOptions, error) {
+	return s.options, nil
+}
+
+func (s *launchOptionsFakeStore) SetSessionLaunchOptions(_ context.Context, _ domain.SessionID, options domain.AgentLaunchOptions) error {
+	s.options = options
+	return nil
+}
+
+func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	// The row as a switch leaves it before its target starts: the target owns the
+	// session with no native session yet, and its note is saved.
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", Prompt: "ORIGINAL TASK"})
+	store := &launchOptionsFakeStore{fakeStore: st, options: domain.AgentLaunchOptions{HandoffNote: "HANDOFF NOTE"}}
+	agent := &recordingAgent{}
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: store,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, err := m.RestoreWithMode(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if agent.lastLaunch.Prompt != "HANDOFF NOTE" {
+		t.Fatalf("relaunched prompt = %q, want the handoff note", agent.lastLaunch.Prompt)
+	}
+	if agent.lastLaunch.Config.Launch.HandoffNote != "" {
+		t.Fatal("the note reached the agent's launch options")
+	}
+	if got := st.sessions["mer-1"].Metadata.Prompt; got != "ORIGINAL TASK" {
+		t.Fatalf("session prompt = %q, want the task kept", got)
+	}
+}

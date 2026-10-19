@@ -52,6 +52,10 @@ type AgentLaunchOptions struct {
 	Ultracode bool `json:"ultracode,omitempty"`
 	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or "1m".
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
+	// HandoffNote is a terminal switch target's note, kept until the target has
+	// started. A relaunch that finds it follows a switch cut short by a daemon
+	// stop or crash, and delivers the note in place of the session's task.
+	HandoffNote string `json:"handoffNote,omitempty"`
 }
 
 // AutoCompactTokens is each compaction window choice as a token count.

@@ -3479,6 +3479,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		agentConfig.Effort = effort
 	}
 	agentConfig.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	// A switch target that has not started yet: its note goes in place of the task.
+	if note := agentConfig.Launch.HandoffNote; note != "" && promptOverride == nil && rec.Metadata.AgentSessionID == "" {
+		promptOverride = &note
+	}
+	agentConfig.Launch.HandoffNote = ""
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
 	}
