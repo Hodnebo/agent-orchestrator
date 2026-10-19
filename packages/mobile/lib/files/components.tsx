@@ -70,11 +70,14 @@ export function statusColor(status: WorkspaceFileStatus, t: Theme): string {
 	}
 }
 
+/** Desktop's status letters (lib/workspace-file-status.ts), so a status reads the same in both apps. */
+const STATUS_LETTER: Record<WorkspaceFileStatus, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", unmodified: "" };
+
 /**
- * A file as code hosts and editors show it: the logo of its type (the same
- * Symbols icons desktop draws), with a small badge at the bottom right for how
- * it changed — plus, minus, a dot for an edit, an arrow for a rename. Decorative:
- * every row that uses it already names the file and its status.
+ * A file as editors show it: the logo of its type (the same Symbols icons
+ * desktop draws), with desktop's status letter — A, M, D, R in its colour — at
+ * the bottom right. Decorative: every row that uses it already names the file
+ * and its status.
  */
 export const FileTypeIcon = memo(function FileTypeIcon({ path, status, size = 22 }: { path: string; status?: WorkspaceFileStatus; size?: number }) {
 	const t = useTheme();
@@ -82,15 +85,9 @@ export const FileTypeIcon = memo(function FileTypeIcon({ path, status, size = 22
 	const xml = useMemo(() => fileIconSvg(path), [path]);
 	const badge = status && status !== "unmodified" ? status : undefined;
 	return (
-		<View accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.typeIcon, { width: size + 4, height: size + 4 }]}>
+		<View accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.typeIcon, { width: size + 6, height: size + 4 }]}>
 			<SvgXml xml={xml} width={size} height={size} opacity={status === "deleted" ? 0.55 : 1} />
-			{badge ? (
-				<View style={[styles.statusBadge, { backgroundColor: statusColor(badge, t), borderColor: t.bgBase }]}>
-					{badge === "modified"
-						? <View style={[styles.statusDot, { backgroundColor: t.bgBase }]} />
-						: <Feather name={badge === "added" ? "plus" : badge === "deleted" ? "minus" : "chevron-right"} size={9} color={t.bgBase} strokeWidth={3} />}
-				</View>
-			) : null}
+			{badge ? <Text maxFontSizeMultiplier={1} style={[styles.statusLetter, { color: statusColor(badge, t) }]}>{STATUS_LETTER[badge]}</Text> : null}
 		</View>
 	);
 });
@@ -504,8 +501,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	segmentBadge: { fontFamily: font.medium, fontSize: type.caption2.fontSize, color: t.textSecondary, backgroundColor: t.bgSubtle, borderRadius: radius.pill, paddingHorizontal: space.xs, overflow: "hidden" },
 
 	typeIcon: { alignItems: "center", justifyContent: "center" },
-	statusBadge: { position: "absolute", right: -2, bottom: -2, width: 15, height: 15, borderRadius: 8, borderWidth: 2, alignItems: "center", justifyContent: "center" },
-	statusDot: { width: 4, height: 4, borderRadius: 2 },
+	statusLetter: { position: "absolute", right: -3, bottom: -3, fontFamily: t.fontMono, fontSize: 10, lineHeight: 12, fontWeight: "700" },
 	counts: { fontFamily: t.fontMono, fontSize: type.caption1.fontSize, color: t.textSecondary },
 
 	fileRow: { minHeight: touchTarget + space.sm, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm },
