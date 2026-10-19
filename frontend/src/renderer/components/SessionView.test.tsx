@@ -1853,6 +1853,47 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting your terminal");
 	});
 
+	it("never covers a restored Chat-mode cloud session with the terminal reconnect loader", () => {
+		// Restore marks the session reconnecting; only its terminal pane clears
+		// that, and a Chat-mode session never mounts one.
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "freestyle",
+			desiredState: "running",
+			observedState: "running",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		// The flag is kept: a later switch to the terminal still waits for the
+		// fresh worker's terminal.
+		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
+	});
+
+	it("keeps the restored Chat-mode session's loader while its workspace comes back", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "freestyle",
+			desiredState: "running",
+			observedState: "restoring",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+	});
+
 	it("does not skip agent preparation just because the worker reports running", async () => {
 		autoAttachSessionTerminal.current = false;
 		const session = workerSession("sess-2");

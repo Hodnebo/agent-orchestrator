@@ -655,7 +655,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
 	const startupFailure = startupProblem && startupProblem.phase !== "retrying" ? startupProblem : undefined;
-	const cloudReconnecting = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
+	// Set by a restore and cleared only by the session's terminal pane once the
+	// fresh worker's terminal exists, so it means anything only while that pane
+	// can mount: a Chat-mode session never mounts one, and would otherwise keep
+	// the "Connecting your terminal" loader up for good. Its own lifecycle stage
+	// still raises the loader while the restored workspace comes up.
+	const cloudReconnectRequested = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
 	const onSessionTerminalAttached = useCallback((attached: boolean) => {
@@ -675,6 +680,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// the actual terminal attachment before dismissing the startup view.
 	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
+	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
