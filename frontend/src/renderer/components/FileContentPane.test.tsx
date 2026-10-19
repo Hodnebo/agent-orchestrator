@@ -26,7 +26,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+	ReadOnlyFileView: ({ detail, side, editing, onEditChange }: { side?: string; detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
 		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
 	) : editing ? (
 		<textarea
@@ -34,7 +34,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 			defaultValue={detail.content}
 			onChange={(event) => onEditChange?.(event.target.value)}
 		/>
-	) : <code>{detail.content}</code>,
+	) : <code data-side={side}>{detail.content}</code>,
 }));
 
 function renderWithQuery(children: ReactNode) {
@@ -173,7 +173,7 @@ describe("FileContentPane", () => {
 				split={false}
 			/>,
 		);
-		expect(await screen.findByText("previous content")).toBeInTheDocument();
+		expect(await screen.findByText("previous content")).toHaveAttribute("data-side","before");
  expect(screen.getByText("Previous version at aaaaaaaaaaaa")).toBeInTheDocument();
 		expect(getMock.mock.calls.every(([route]) => route.endsWith("/workspace/file"))).toBe(true);
 	});

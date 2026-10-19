@@ -591,7 +591,7 @@ function CompleteFileView({ annotation, commitSha, detail, editing, markdownEdit
 		);
 	}
 	if (markdownEditing) return <MarkdownEditor filePath={detail.path} onChange={onEditChange} value={detail.content} />;
-	return <ReadOnlyFileView annotation={annotation} detail={detail} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
+	return <ReadOnlyFileView annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
 
 // An artifact image loads from its raw URL. The load time joins the URL so a

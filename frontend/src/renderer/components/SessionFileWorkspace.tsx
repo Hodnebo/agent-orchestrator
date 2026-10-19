@@ -47,7 +47,7 @@ export function SessionFileWorkspace({
 	const snapshotAnnotation = useFileAnnotation(sessionId, {
 		hostId,
 		source:
-			source?.kind === "snapshot" ? `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; commits ${source.commitShas?.join(",") || "all"})` : "Workspace",
+			source?.kind === "snapshot" ? `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; review base ${source.view?.expectedBaseSha ?? "selected history"}; commits ${source.commitShas?.join(",") || "all"})` : "Workspace",
 	});
 	const identity = fileKey ?? path;
 	const scrollRef = useRef<HTMLDivElement>(null);
