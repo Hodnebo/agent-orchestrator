@@ -774,6 +774,7 @@ vi.mock("../lib/shell-context", () => ({
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
+	refetchCloudProjectsForUnknownSessions: vi.fn(),
 	useCloudSessionQuery: (orgId: string | undefined, sessionId: string, enabled: boolean, poll?: boolean) => {
 		cloudSessionLookup(orgId, sessionId, enabled);
 		cloudSessionPoll(poll);

@@ -61,6 +61,7 @@ import { useAgentSwitchRouteVisibility } from "../hooks/useAgentSwitchVisibility
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
 import {
+	refetchCloudProjectsForUnknownSessions,
 	toCloudWorkspaceSession,
 	useCloudSessionQuery,
 	useWorkspaceQuery,
@@ -277,6 +278,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			try {
 				const { session } = await client.getSession(orgId, sessionId, { signal: controller.signal });
 				if (controller.signal.aborted) return;
+				refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [session]);
 				const index = cloudStartupStage(session.observedState, session.runtimeConnected);
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
@@ -291,7 +293,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			controller.abort();
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
-	}, [client, orgId, sessionId, terminalOnly]);
+	}, [baseUrl, client, orgId, queryClient, sessionId, terminalOnly]);
 	useEffect(() => {
 		if (!orgId || terminalOnly) return;
 		const controller = new AbortController();
