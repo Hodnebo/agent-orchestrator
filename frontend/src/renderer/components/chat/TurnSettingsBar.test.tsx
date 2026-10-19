@@ -1788,6 +1788,19 @@ describe("permissions for the agent picked for the next message", () => {
 		expect(screen.getByRole("button", { name: "Approval policy for Kimi" })).toHaveTextContent("Use agent permissions");
 	});
 
+	it("goes back to the chat's own mode when leaving an agent that needed another", () => {
+		render(
+			<TurnSettingsBar
+				harness="pi"
+				models={[]}
+				settings={{ approvalMode: "bypass-permissions" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "claude-code" }, chatPermissionMode: "accept-edits", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(screen.getByRole("button", { name: "Approval policy for Claude Code" })).toHaveTextContent("Accept edits");
+	});
+
 	it("shows the pending agent's modes in place of the running agent's own mode option", async () => {
 		const user = userEvent.setup();
 		const onPendingChange = vi.fn();

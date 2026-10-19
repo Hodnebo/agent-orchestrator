@@ -295,7 +295,7 @@ export function TurnSettingsBar({
 	const pendingRuns = (mode: ApprovalMode) => !pendingModes || pendingModes.includes(mode);
 	const chatMode = shownModeOption?.choices.find((choice) => choice.value === shownModeOption.currentValue)?.permissionMode
 		?? settings.approvalMode ?? "default";
-	const pendingWanted = pending?.approvalMode ?? chatMode;
+	const pendingWanted = pending?.approvalMode ?? agentSwitch?.chatPermissionMode ?? chatMode;
 	const pendingMode = pendingRuns(pendingWanted) ? pendingWanted : pendingModes?.[0] ?? pendingWanted;
 	const pendingCopy = pending?.harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
 	const pendingOrder = pending?.harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;

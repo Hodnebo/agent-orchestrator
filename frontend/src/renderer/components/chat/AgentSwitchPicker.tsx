@@ -78,6 +78,8 @@ export interface AgentSwitchProps {
 	pending?: PendingAgentSwitch;
 	/** The permission modes the pending agent runs in, strictest first, once known. */
 	pendingPermissionModes?: ApprovalMode[];
+	/** The chat's own permission mode while its agent runs in another it needed, as Pi needs Bypass. */
+	chatPermissionMode?: ApprovalMode;
 	onPendingChange: (next: PendingAgentSwitch | undefined) => void;
 	/** Switching is refused while the agent is working. */
 	disabled?: boolean;

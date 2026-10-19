@@ -281,13 +281,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? { ...next, approvalMode: current.approvalMode }
 			: next);
 	}, []);
+	// While the agent runs in a mode it needed (Pi runs only bypassed), a switch
+	// away goes back to the chat's own, which its switch marker keeps.
+	const chatPermissionMode = useMemo(() => {
+		const marker = snapshot?.items.findLast((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
+		const detail = marker?.kind === "activity" ? marker.detail : undefined;
+		return detail?.targetHarness === currentHarness && detail?.permissionMode === snapshot?.settings.approvalMode
+			? detail?.chatPermissionMode
+			: undefined;
+	}, [currentHarness, snapshot?.items, snapshot?.settings.approvalMode]);
 	const permissionModes = useChatPermissionModes(hostId, pendingSwitch?.harness);
 	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
 			: undefined,
-		[autoCompact, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {

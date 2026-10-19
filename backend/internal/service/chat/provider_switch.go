@@ -35,6 +35,11 @@ type providerSwitchActivityDetail struct {
 	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
+	// PermissionMode is the mode the target started in. ChatPermissionMode is set
+	// when that is not the chat's own, because the target cannot run in it; a
+	// later switch away from the target goes back to the chat's own.
+	PermissionMode     ports.PermissionMode `json:"permissionMode,omitempty"`
+	ChatPermissionMode ports.PermissionMode `json:"chatPermissionMode,omitempty"`
 }
 
 // SwitchProvider performs an idle-only Chat-to-Chat handoff. It retains the
@@ -92,7 +97,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	}
 	// The target runs under the chat's own permission mode, so an agent that only
 	// runs with permissions bypassed (Pi) can take over a chat that has them.
-	permissions := s.switchPermissions(ctx, source, request)
+	permissions, chatPermissions := s.switchPermissions(ctx, source, request)
 	if err := s.PreflightChat(ctx, request.TargetHarness, permissions); err != nil {
 		kind := domain.ProviderSwitchRefusalUnavailable
 		if errors.Is(err, ports.ErrChatUnsupported) {
@@ -197,12 +202,17 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		targetRecord.Metadata.ControllerGeneration = started.ControllerGeneration
 		targetRecord.Metadata.Model, targetRecord.Metadata.Effort = request.Model, request.Effort
 		targetRecord.UpdatedAt = s.now()
-		detail, _ := json.Marshal(providerSwitchActivityDetail{
+		marker := providerSwitchActivityDetail{
 			Event: "provider_switch", SourceHarness: source.harness,
 			TargetHarness: request.TargetHarness, BranchID: started.ProviderBoundary.ID,
 			SourceModel: sourceModel, TargetModel: request.Model, TargetEffort: request.Effort,
 			TargetAutoCompactWindow: targetCfg.ProviderSwitch.AutoCompactWindow,
-		})
+			PermissionMode:          permissions,
+		}
+		if chatPermissions != permissions {
+			marker.ChatPermissionMode = chatPermissions
+		}
+		detail, _ := json.Marshal(marker)
 		switchActivity := domain.ConversationActivity{
 			ID: started.ProviderBoundary.ID + ":provider-switch", Kind: domain.ActivityKindSystem,
 			Status:  domain.ActivityStatusCompleted,
@@ -258,21 +268,47 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	return nil
 }
 
-// switchPermissions is the permission mode a switch target starts with: the
-// one picked for it, else the chat's current one, else the one its agent was launched with, else Auto. A
-// target that cannot run in that mode starts in the strictest one it can: Kimi
-// in its default, Pi with permissions bypassed, as the picker shows beforehand.
-func (s *Service) switchPermissions(ctx context.Context, source *Controller, request domain.ProviderSwitchRequest) ports.PermissionMode {
+// switchPermissions is the permission mode a switch target starts with, and
+// the chat's own: the one picked for the target, else the chat's current one,
+// else the one its agent was launched with, else Auto. The chat's current mode
+// is the one it had before the source was brought in, when the source could not
+// run in it. A target that cannot run in the chat's mode starts in the strictest
+// one it can: Kimi in its default, Pi with permissions bypassed, as the picker
+// shows beforehand.
+func (s *Service) switchPermissions(ctx context.Context, source *Controller, request domain.ProviderSwitchRequest) (start, chat ports.PermissionMode) {
 	mode := s.sourcePermissions(source)
+	if marker, ok := s.latestSwitchMarker(ctx, source.conversation.ID); ok &&
+		marker.TargetHarness == source.harness && marker.ChatPermissionMode != "" && marker.PermissionMode == mode {
+		mode = marker.ChatPermissionMode
+	}
 	if request.PermissionMode != "" {
 		mode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
 	modes, err := s.PermissionModes(ctx, request.TargetHarness)
 	if err != nil || len(modes) == 0 || slices.Contains(modes, mode) {
 		// An agent that cannot run at all is refused by the preflight after this.
-		return mode
+		return mode, mode
 	}
-	return modes[0]
+	return modes[0], mode
+}
+
+// latestSwitchMarker is the conversation's newest switch marker: the one that
+// brought in its current agent.
+func (s *Service) latestSwitchMarker(ctx context.Context, conversationID string) (providerSwitchActivityDetail, bool) {
+	if s.reader == nil {
+		return providerSwitchActivityDetail{}, false
+	}
+	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
+	if err != nil {
+		return providerSwitchActivityDetail{}, false
+	}
+	for index := len(rows.Activities) - 1; index >= 0; index-- {
+		var marker providerSwitchActivityDetail
+		if json.Unmarshal(rows.Activities[index].Detail, &marker) == nil && marker.Event == "provider_switch" {
+			return marker, true
+		}
+	}
+	return providerSwitchActivityDetail{}, false
 }
 
 func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {

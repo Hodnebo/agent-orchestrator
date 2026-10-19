@@ -384,6 +384,20 @@ func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(
 	if target.Permissions != ports.PermissionModeBypassPermissions {
 		t.Fatalf("target permissions = %q, want the only mode the agent runs in", target.Permissions)
 	}
+
+	// Leaving it goes back to the chat's own mode, not the one Pi needed.
+	driver.mu.Lock()
+	driver.onlyMode = ""
+	driver.mu.Unlock()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("switch back: %v", err)
+	}
+	driver.mu.Lock()
+	back := driver.startConfigs[len(driver.startConfigs)-1]
+	driver.mu.Unlock()
+	if back.Permissions != ports.PermissionModeAuto {
+		t.Fatalf("permissions after leaving Pi = %q, want the chat's auto", back.Permissions)
+	}
 }
 
 func TestProviderSwitchStartsTheTargetInTheModePickedForIt(t *testing.T) {

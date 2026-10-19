@@ -454,6 +454,10 @@ export interface SystemEventDetail {
 	targetEffort?: string;
 	/** The Claude Code compaction window the target started with, such as "200k". */
 	targetAutoCompactWindow?: string;
+	/** The permission mode the target started in. */
+	permissionMode?: ApprovalMode;
+	/** The chat's own mode, when the target could not run in it; a switch away goes back to it. */
+	chatPermissionMode?: ApprovalMode;
 	/** provider_switch: drawn before the daemon has switched, so the line shows it is still in progress. Never stored. */
 	switching?: boolean;
 	/** render */
