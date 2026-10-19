@@ -72,6 +72,13 @@ func TestLastTurnFailureIgnoresTurnsThatWereNotInterrupted(t *testing.T) {
 		"interrupt, then a prompt":  {transcriptPrompt, transcriptInterrupted, transcriptPrompt, transcriptAssistant},
 		"tool result after a reply": {transcriptPrompt, transcriptInterrupted, transcriptRejected},
 		"marker quoted in a prompt": {strings.Replace(transcriptPrompt, `"SLOW please"`, `"what does [Request interrupted by user] mean?"`, 1)},
+		// A typed prompt is recorded as a string, however it reads.
+		"prompt that is the marker": {transcriptPrompt, transcriptInterrupted,
+			strings.Replace(transcriptPrompt, `"SLOW please"`, `"[Request interrupted by user]"`, 1)},
+		"prompt that is the tool use marker": {transcriptPrompt, transcriptInterrupted,
+			strings.Replace(transcriptPrompt, `"SLOW please"`, `"[Request interrupted by user for tool use]"`, 1)},
+		"marker beside another block": {transcriptPrompt, strings.Replace(transcriptInterrupted, `"text":"[Request interrupted by user]"}]`,
+			`"text":"[Request interrupted by user]"},{"type":"text","text":"more"}]`, 1)},
 		// A subagent's interrupt is not the conversation's turn end.
 		"subagent interrupt": {transcriptPrompt, strings.Replace(transcriptInterrupted, `"isSidechain":false`, `"isSidechain":true`, 1)},
 		"marker without a timestamp": {transcriptPrompt,

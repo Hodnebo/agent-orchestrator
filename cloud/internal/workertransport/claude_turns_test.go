@@ -62,6 +62,11 @@ func TestClaudeTurnRecord(t *testing.T) {
 		// Claude ends a turn to deliver a queued message; the message follows.
 		"queued delivery":           `{"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Tool call did not complete: the turn was ended to deliver the message that follows. Nothing refused it; re-run it if still needed.]"}]},"timestamp":"2026-10-19T04:33:02.854Z"}`,
 		"marker quoted in a prompt": strings.Replace(claudePrompt, `"SLOW please"`, `"why did I get [Request interrupted by user]?"`, 1),
+		// A typed prompt is recorded as a string, however it reads.
+		"prompt that is the marker":          strings.Replace(claudePrompt, `"SLOW please"`, `"[Request interrupted by user]"`, 1),
+		"prompt that is the tool use marker": strings.Replace(claudePrompt, `"SLOW please"`, `"[Request interrupted by user for tool use]"`, 1),
+		"marker beside another block": strings.Replace(claudeInterrupted, `"text":"[Request interrupted by user]"}]`,
+			`"text":"[Request interrupted by user]"},{"type":"text","text":"more"}]`, 1),
 	} {
 		if _, kind := claudeTurnRecord([]byte(line)); kind != turnRecordStart {
 			t.Fatalf("%s classified %v, want a turn start", name, kind)

@@ -109,21 +109,21 @@ func claudeUserRecord(line []byte) (interrupt ports.TurnFailure, user bool) {
 }
 
 // claudeInterruptMarker reports whether a user message's content is exactly
-// an interrupt marker, as a string or a single text block.
+// an interrupt marker. Claude Code writes the marker as a one-element text
+// block array; a typed prompt is recorded as a plain string, so a prompt that
+// is exactly the marker text is not an interrupt. The marker's
+// interruptedMessageId cannot be required: Claude sets it only when Esc
+// cancelled a known API message (2.1.302 omits it before the first response).
 func claudeInterruptMarker(content json.RawMessage) bool {
-	var text string
-	if json.Unmarshal(content, &text) != nil {
-		var blocks []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(content, &blocks) != nil || len(blocks) != 1 || blocks[0].Type != "text" {
-			return false
-		}
-		text = blocks[0].Text
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &blocks) != nil || len(blocks) != 1 || blocks[0].Type != "text" {
+		return false
 	}
 	for _, marker := range claudeInterruptMarkers {
-		if text == marker {
+		if blocks[0].Text == marker {
 			return true
 		}
 	}
