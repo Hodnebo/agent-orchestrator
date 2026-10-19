@@ -170,6 +170,7 @@ type AppSetting struct {
 	UpdatedAt          time.Time
 	CloudOffering      bool
 	HarnessDefaults    string
+	VersionRefresh     bool
 }
 
 type Automation struct {
@@ -416,6 +417,12 @@ type Cue struct {
 	Command   string
 	Prompt    string
 	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ManagedHarnessRelease struct {
+	Harness   string
+	Release   string
 	UpdatedAt time.Time
 }
 
@@ -715,6 +722,10 @@ type Session struct {
 	BranchState                      string
 	RequestedOutput                  string
 	RuntimeReleasedLaunchID          string
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
 }
 
 type SessionAgentAccount struct {
@@ -747,6 +758,13 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+}
+
+type SessionHarnessRelease struct {
+	SessionID string
+	Launch    string
+	Harness   string
+	Release   string
 }
 
 type SessionInterfaceTransition struct {

@@ -2322,9 +2322,11 @@ type MergePRRequest struct {
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
 type MergePRResponse struct {
-	OK       bool   `json:"ok"`
-	PRNumber int    `json:"prNumber"`
-	Method   string `json:"method"`
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	Method         string         `json:"method"`
+	State          domain.PRState `json:"state" enum:"merged"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
@@ -3293,6 +3295,8 @@ type SettingsResponse struct {
 	CloudOffering bool `json:"cloudOffering"`
 	// ChatHibernationEnabled is the developer-mode gate for idle Chat process shutdown.
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
+	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
+	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3324,6 +3328,11 @@ type UpdateHarnessDefaultRequest struct {
 // UpdateCloudOfferingRequest flips the user's cloud toggle.
 type UpdateCloudOfferingRequest struct {
 	// Enabled turns the cloud offering on or off for this machine's user.
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
+type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

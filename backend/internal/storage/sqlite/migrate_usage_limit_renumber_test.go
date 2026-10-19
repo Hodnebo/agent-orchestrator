@@ -24,7 +24,7 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (201, 1);`)
 				if err := migrate(db); err != nil {
 					t.Fatalf("migrate: %v", err)
 				}
-				assertAppliedMigrations(t, db, 206, 213, 214)
+				assertAppliedMigrations(t, db, 206, 213, 214, 215, usageLimitMigrationVersion, usageLimitResetMigrationVersion)
 				assertUsageLimitMigrationApplied(t, db)
 				var receipts int
 				if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&receipts); err != nil {
@@ -49,7 +49,7 @@ INSERT INTO goose_db_version (version_id, is_applied) VALUES (201, 1);`)
 func TestMigrateRepairsLegacyUsageLimitHistory(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 200)
 	applyLegacyCodexProfileMigrations(t, db, []legacyCodexProfileMigration{{
-		version: 201, canonicalPath: "migrations/0213_usage_limit_auto_resume.sql", legacyName: "usage_limit_auto_resume.sql",
+		version: 201, canonicalPath: "migrations/20261019220421171_usage_limit_auto_resume.sql", legacyName: "usage_limit_auto_resume.sql",
 	}})
 	reset := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	mustExec(t, db, `
@@ -75,7 +75,7 @@ VALUES ('quota-message', 'quota-conversation', 'quota-turn', 1, 'user', 'human',
 		if err := migrate(db); err != nil {
 			t.Fatalf("migrate legacy usage-limit schema: %v", err)
 		}
-		assertAppliedMigrations(t, db, 201, 206, 213, 214)
+		assertAppliedMigrations(t, db, 201, 206, 213, 214, 215, usageLimitMigrationVersion, usageLimitResetMigrationVersion)
 		assertUsageLimitMigrationApplied(t, db)
 		var oldReceipt int64
 		if err := db.QueryRow(`SELECT id FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&oldReceipt); err != nil || oldReceipt != receiptID {
@@ -107,7 +107,7 @@ func TestUsageLimitRenumberRefusesIncompleteSchema(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, 200)
 			applyLegacyCodexProfileMigrations(t, db, []legacyCodexProfileMigration{{
-				version: 201, canonicalPath: "migrations/0213_usage_limit_auto_resume.sql", legacyName: "usage_limit_auto_resume.sql",
+				version: 201, canonicalPath: "migrations/20261019220421171_usage_limit_auto_resume.sql", legacyName: "usage_limit_auto_resume.sql",
 			}})
 			mustExec(t, db, tc.remove)
 			if err := repairRenumberedUsageLimitMigrationHistory(db); err != nil {
@@ -115,32 +115,32 @@ func TestUsageLimitRenumberRefusesIncompleteSchema(t *testing.T) {
 			}
 			assertAppliedMigrations(t, db, 201)
 			var receipts int
-			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 213`).Scan(&receipts); err != nil || receipts != 0 {
+			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ?`, usageLimitMigrationVersion).Scan(&receipts); err != nil || receipts != 0 {
 				t.Fatalf("incomplete schema marked as applied: receipts=%d err=%v", receipts, err)
 			}
 		})
 	}
 }
 
-func TestMigrateUsageLimitResetCDCFrom213(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 213)
+func TestMigrateUsageLimitResetCDCFromCanonical(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, usageLimitMigrationVersion)
 	var trigger string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'conversation_turns_auto_resume_cdc_update'`).Scan(&trigger); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(trigger, "usage_limit_resets_at") {
-		t.Fatal("213 fixture already has reset CDC")
+		t.Fatal("canonical fixture already has reset CDC")
 	}
 	for range 2 {
 		if err := migrate(db); err != nil {
 			t.Fatal(err)
 		}
-		assertAppliedMigrations(t, db, 213, 214)
+		assertAppliedMigrations(t, db, usageLimitMigrationVersion, usageLimitResetMigrationVersion)
 		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'conversation_turns_auto_resume_cdc_update'`).Scan(&trigger); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(trigger, "OLD.usage_limit_resets_at IS NOT NEW.usage_limit_resets_at") {
-			t.Fatalf("214 did not upgrade reset CDC: %s", trigger)
+			t.Fatalf("reset migration did not upgrade reset CDC: %s", trigger)
 		}
 	}
 }
@@ -156,7 +156,7 @@ WHERE name IN ('usage_limit_resets_at', 'usage_limit_auto_resume', 'usage_limit_
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('conversation_turns_auto_resume', 'conversation_turns_auto_resume_cdc_update')`).Scan(&objects); err != nil || objects != 2 {
 		t.Fatalf("usage-limit index/trigger count = %d, %v", objects, err)
 	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 213 AND is_applied = 1`).Scan(&receipts); err != nil || receipts != 1 {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, usageLimitMigrationVersion).Scan(&receipts); err != nil || receipts != 1 {
 		t.Fatalf("canonical usage-limit receipts = %d, %v", receipts, err)
 	}
 }
