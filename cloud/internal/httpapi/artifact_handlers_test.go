@@ -751,19 +751,30 @@ func TestSessionOutputTypeCountsLaterPullRequests(t *testing.T) {
 }
 
 func TestWorkerReconnectReportsArtifacts(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		h := newArtifactHarness(t, enabled)
-		rec := h.do(http.MethodGet, "/api/cloud/v1/worker/reconnect", h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch), nil, nil)
+	cases := []struct {
+		enabled, capable, want bool
+	}{
+		{enabled: false, capable: true, want: false},
+		{enabled: true, capable: false, want: false},
+		{enabled: true, capable: true, want: true},
+	}
+	for _, tc := range cases {
+		h := newArtifactHarness(t, tc.enabled)
+		headers := map[string]string{}
+		if tc.capable {
+			headers[worker.CapabilitiesHeader] = worker.CapabilityArtifacts
+		}
+		rec := h.do(http.MethodGet, "/api/cloud/v1/worker/reconnect", h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch), nil, headers)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("reconnect: %d %s", rec.Code, rec.Body.String())
 		}
 		launch := decodeBody[worker.BootstrapResponse](t, rec).Launch
 		wantOutput := ""
-		if enabled {
+		if tc.want {
 			wantOutput = domain.RequestedOutputArtifact
 		}
-		if launch.Artifacts != enabled || launch.RequestedOutput != wantOutput {
-			t.Fatalf("enabled=%v: launch artifacts=%v requestedOutput=%q", enabled, launch.Artifacts, launch.RequestedOutput)
+		if launch.Artifacts != tc.want || launch.RequestedOutput != wantOutput {
+			t.Fatalf("%+v: launch artifacts=%v requestedOutput=%q", tc, launch.Artifacts, launch.RequestedOutput)
 		}
 	}
 }

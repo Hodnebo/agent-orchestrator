@@ -105,7 +105,7 @@ func (b HarnessBuilder) BuildInteractive(
 		)
 	}
 	agentDir := agentDirectory(launch, workspace)
-	extraDirs := additionalDirectories(launch, workspace)
+	extraDirs := b.agentDirectories(launch, workspace)
 	if launch.Harness == "cursor" {
 		if err := removeCursorACPStandingRule(agentDir, launch.SessionID); err != nil {
 			return Command{}, err
@@ -371,7 +371,7 @@ func (b HarnessBuilder) Build(
 		return Command{}, errors.New("turn harness does not match session role context")
 	}
 	agentDir := agentDirectory(b.Launch, workspace)
-	extraDirs := additionalDirectories(b.Launch, workspace)
+	extraDirs := b.agentDirectories(b.Launch, workspace)
 	command := Command{
 		SystemPrompt: b.systemPrompt(b.Launch, workspace),
 		Path:         b.binary(turn.Harness),
@@ -809,4 +809,15 @@ func loginCodex(binary, home, credentialType, secret string) error {
 		return err
 	}
 	return nil
+}
+
+// agentDirectories is additionalDirectories plus, for a session that keeps
+// artifacts, its artifact directory: it is outside the workspace, so a
+// harness that limits writes to the workspace must be told it may write there.
+func (b HarnessBuilder) agentDirectories(launch worker.LaunchContext, workspace string) []string {
+	dirs := additionalDirectories(launch, workspace)
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		dirs = append(dirs, worker.ArtifactsDir(b.DataDir, launch.SessionID))
+	}
+	return dirs
 }

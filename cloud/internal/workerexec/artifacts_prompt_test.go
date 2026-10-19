@@ -2,6 +2,7 @@ package workerexec
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,5 +35,25 @@ func TestSystemPromptArtifactSections(t *testing.T) {
 				t.Fatalf("artifact output section present = %v, want %v", got, tc.wantDeliver)
 			}
 		})
+	}
+}
+
+func TestAgentDirectoriesIncludeTheArtifactDirectory(t *testing.T) {
+	dataDir := t.TempDir()
+	builder := HarnessBuilder{DataDir: dataDir}
+	want := worker.ArtifactsDir(dataDir, "session-1")
+	launch := worker.LaunchContext{SessionID: "session-1", Kind: "worker", Artifacts: true}
+	if dirs := builder.agentDirectories(launch, "/work"); len(dirs) != 1 || dirs[0] != want {
+		t.Fatalf("agentDirectories = %v, want [%s]", dirs, want)
+	}
+	if dirs := builder.agentDirectories(worker.LaunchContext{SessionID: "session-1", Kind: "worker"}, "/work"); len(dirs) != 0 {
+		t.Fatalf("agentDirectories with artifacts off = %v, want none", dirs)
+	}
+	reviewer := worker.LaunchContext{SessionID: "session-1", Kind: "reviewer", Artifacts: true}
+	if dirs := builder.agentDirectories(reviewer, "/work"); len(dirs) != 0 {
+		t.Fatalf("agentDirectories for a reviewer = %v, want none", dirs)
+	}
+	if args := codexWritableRootsArgs(builder.agentDirectories(launch, "/work")); len(args) != 2 || !strings.Contains(args[1], strconv.Quote(want)) {
+		t.Fatalf("codex writable roots = %v, want the artifact directory", args)
 	}
 }

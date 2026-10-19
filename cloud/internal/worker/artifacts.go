@@ -11,7 +11,7 @@ const CapabilityArtifacts = "session.artifacts"
 
 // ArtifactsDirEnv names the session's artifact directory in the coding
 // agent's environment.
-const ArtifactsDirEnv = "AO_ARTIFACTS_DIR"
+const ArtifactsDirEnv = "AO_SESSION_ARTIFACTS_DIR"
 
 // ArtifactSHA256Header carries the lowercase hex SHA-256 of an uploaded
 // artifact blob.

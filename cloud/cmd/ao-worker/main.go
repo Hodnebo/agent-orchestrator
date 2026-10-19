@@ -271,6 +271,8 @@ func run(logger *slog.Logger) error {
 	if bootstrap.Launch.Artifacts {
 		artifactsDir := worker.ArtifactsDir(dataDir, bootstrap.SessionID)
 		if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
+			// Without the directory the agent must not be told to use it.
+			bootstrap.Launch.Artifacts = false
 			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
 		} else {
 			artifacts = newArtifactSyncer(client, artifactsDir, logger)
