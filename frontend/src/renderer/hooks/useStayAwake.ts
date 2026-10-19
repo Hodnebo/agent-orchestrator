@@ -38,6 +38,10 @@ export function useStayAwake(enabled = true) {
 	});
 	const intent = pending.at(-1);
 	const busy = useIsMutating({ mutationKey }) > 0 || awake.busy;
+	// Requested ownership must stay clearable even when a rule is waiting or a
+	// safety stop has released the host assertion. Actual wake is separate.
+	const active = !!awake.state?.active || !!mobile.data?.keepAwake?.active;
+	const on = intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled || active);
 	const mutation = useMutation({
 		mutationKey,
 		mutationFn: async (change: Change) => {
@@ -90,13 +94,16 @@ export function useStayAwake(enabled = true) {
 		mutation.mutate(next);
 	};
 	return {
-		on: intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled),
+		on,
+		active,
+		attention: on && !active && !busy,
+		reason: desktopOn ? awake.state?.reason : undefined,
 		lidOn: intent ? intent.on && (intent.lidClosed ?? false) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed),
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
 		supported: awakeCapability(awake.state, "idle")?.available ?? false,
-		starting: intent?.on === true && !awake.state?.active,
+		starting: intent?.on === true && !active,
 	};
 }

@@ -1,11 +1,16 @@
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AwakeState } from "../hooks/useAwake";
+import { awakeQueryKey, type AwakeState } from "../hooks/useAwake";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { AwakeControl } from "./AwakeControl";
+import { TooltipProvider } from "./ui/tooltip";
+
+function render(ui: React.ReactNode) {
+	return renderView(<TooltipProvider delayDuration={0}>{ui}</TooltipProvider>);
+}
 
 const test = vi.hoisted(() => ({ mac: true, get: vi.fn(), post: vi.fn() }));
 vi.mock("../lib/platform", () => ({ isMacPlatform: () => test.mac }));
@@ -15,7 +20,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 let client: QueryClient;
 let state: AwakeState;
-let mobile: { keepAwake: { supported: boolean; enabled: boolean; lidClosed: boolean } };
+let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
 let release: (() => void) | undefined;
 let blockStart: boolean;
 function snapshot() { return structuredClone(state); }
@@ -29,11 +34,12 @@ beforeEach(() => {
 	blockStart = false;
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	state = { settings: { lidClosed: true }, sessions: [], rules: [], activeRules: [], active: false, paused: false, capabilities: [{ id: "idle", available: true }] } as unknown as AwakeState;
-	mobile = { keepAwake: { supported: true, enabled: false, lidClosed: false } };
+	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
 	test.get.mockReset().mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : structuredClone(mobile) }));
 	test.post.mockReset().mockImplementation(async (path, options) => {
 		if (path === "/api/v1/mobile/keep-awake") {
 			Object.assign(mobile.keepAwake, options.body);
+			if (!options.body.enabled) mobile.keepAwake.active = false;
 			return { data: structuredClone(mobile) };
 		}
 		if (path === "/api/v1/awake/sessions") {
@@ -177,6 +183,43 @@ describe("shared Stay Awake controls", () => {
 		await show();
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 		expect(coffee()).not.toHaveAttribute("aria-busy");
+	});
+
+	it.each(["low_battery", "critical_heat"])("explains an inactive safety-stopped request (%s) and keeps it clearable", async (reason) => {
+		state.sessions = [awakeSession({})];
+		state.active = true;
+		await show();
+		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+		state.active = false;
+		state.paused = true;
+		state.reason = reason;
+		await act(async () => { await client.invalidateQueries({ queryKey: awakeQueryKey }); });
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		await waitFor(() => expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument());
+		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
+		expect(coffee()).toHaveAccessibleDescription(/inactive/);
+		await userEvent.hover(coffee());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(/inactive/);
+		expect(screen.getByRole("tooltip")).toHaveTextContent(reason === "low_battery" ? /battery/i : /cool/i);
+		fireEvent.click(coffee());
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/stop");
+	});
+	it.each(["mobile", "rule"])("marks configured but inactive %s wake without an active fill", async (source) => {
+		if (source === "mobile") mobile.keepAwake.enabled = true;
+		else state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/configured.*not being kept awake/);
+		expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument();
+		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
+	});
+	it.each(["desktop", "mobile"])("fills the coffee button only when %s actually holds wake", async (source) => {
+		if (source === "desktop") state.active = true;
+		else Object.assign(mobile.keepAwake, { enabled: true, active: true });
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/being kept awake/);
+		expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 	});
 
 	it("fetches restored mobile wake with an empty cache and clears its cached response", async () => {
