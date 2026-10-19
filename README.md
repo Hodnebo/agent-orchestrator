@@ -150,7 +150,7 @@ From the phone you can open any project and worker, use structured Chat or the a
 
 Another Orchestrator.inc desktop can also connect to this computer as a remote host. Run `ao remote-host` on this computer. On the other one, turn on **Settings → General → Developer mode** and use **Settings → Remote hosts → Add host**. See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
 
-**AO Cloud is available now in the latest nightly:** sign in from the desktop app and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start. It's an early preview: turn on **Developer mode** and **Cloud** in **Settings → General**, then choose **Sign in to AO Cloud**. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud). Teams and enterprises can join the Teams & Enterprise waitlist at [orchestrator.inc](https://orchestrator.inc).
+**AO Cloud is generally available:** sign in from the desktop app and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start: turn on **Developer mode** and **Cloud** in **Settings → General**, then choose **Sign in to AO Cloud**. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) and [Plans](#plans).
 
 ## Supported agents
 
@@ -223,6 +223,19 @@ Another Orchestrator.inc desktop can also connect to this computer as a remote h
 
 **Use the interface that fits the moment: structured Chat or the agent's native terminal UI.**
 
+## Plans
+
+Local use is free: unlimited local agents with any supported harness, plus the orchestrator, workers and PR reviews. Plan limits apply only to cloud agents in AO Cloud.
+
+| Plan | Includes |
+| --- | --- |
+| **Free** | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. No cloud agents. |
+| **Starter** | Everything in Free. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
+| **Pro** | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
+| **Enterprise** | Custom pricing. Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
+
+Starter and Pro prices appear in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud#plans).
+
 ## FAQ
 
 ### What is Orchestrator.inc (Agent Orchestrator, AO)?
@@ -247,7 +260,7 @@ Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile
 
 ### How much does it cost?
 
-The desktop app, CLI and mobile apps are free, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. AO Cloud, which runs agents in hosted sandboxes, is available now in the latest nightly as an early preview: sign in from the desktop app to try it. Cloud pricing isn't published yet. Teams and enterprises can join the Teams & Enterprise waitlist at [orchestrator.inc](https://orchestrator.inc).
+The desktop app, CLI and mobile apps are free, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. AO Cloud, which runs agents in hosted sandboxes, is generally available with paid Starter, Pro and Enterprise plans; plan limits apply only to cloud agents. See [Plans](#plans).
 
 ### Is this the same project as `ComposioHQ/agent-orchestrator`?
 
