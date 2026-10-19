@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 )
 
 // A Cleanup run's step events. The control plane runs the Cleanup hook
@@ -176,7 +178,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				current.event.Repository = parts[1]
 			}
 			if len(parts) > 2 {
-				current.event.Command = boundScriptCommand(redactor.redact(parts[2]))
+				current.event.Command = boundScriptCommand(redactor.redact(activity.StripControl(parts[2])))
 			}
 			steps[step] = current
 		case "end":

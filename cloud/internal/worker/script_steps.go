@@ -152,7 +152,7 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 	// Redacted before activity.Redact runs (in redact), which masks a quoted
 	// value only up to an escaped quote and would hide the rest of it.
 	event.Output, event.OutputTruncated = scriptOutputTail(redactor.redact(activity.StripControl(event.Output)), event.OutputTruncated)
-	event.Command = boundScriptCommand(redactor.redact(strings.Join(strings.Fields(event.Command), " ")))
+	event.Command = boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(event.Command), " "))))
 	event.Repository = activity.Truncate(event.Repository, 256)
 	event.Dir = activity.Truncate(event.Dir, 1024)
 	event.User = activity.Truncate(event.User, 128)
@@ -184,6 +184,12 @@ var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|se
 // secretPairPattern pair.
 var secretFlagPattern = regexp.MustCompile(`(?i)(--?[a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)([ \t]+)`)
 
+// secretArgumentPattern matches a quoted flag whose name looks like a
+// secret's in a JSON or YAML argument list and the separator before its
+// value, the next quoted item (["--token","x"], also escaped inside a JSON
+// string).
+var secretArgumentPattern = regexp.MustCompile(`(?i)\\*["'](--?[a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)(\\*["'][ \t]*,[ \t]*)`)
+
 var (
 	// secretNameFragment is what makes a pair's name look like a secret's.
 	secretNameFragment = regexp.MustCompile(`(?i)token|secret|key|pass|auth|credential|private`)
@@ -192,9 +198,10 @@ var (
 	// name is checked.
 	benignNameWords = regexp.MustCompile(`(?i)author|passed|passes|passing|bypass|keyboard|monkey`)
 	// publicNameSuffix marks a name whose value is a socket, path, directory,
-	// file or URL (SSH_AUTH_SOCK, KEY_PATH); credentials in a URL are masked
+	// file or URL (SSH_AUTH_SOCK, KEY_PATH), or that says the secret is read
+	// from standard input (--password-stdin); credentials in a URL are masked
 	// on their own.
-	publicNameSuffix = regexp.MustCompile(`(?i)[_.-](?:sock|path|dir|file|url)$`)
+	publicNameSuffix = regexp.MustCompile(`(?i)[_.-](?:sock|path|dir|file|url|stdin)$`)
 )
 
 // isSecretName reports whether a pair's value is masked: its name contains a
@@ -205,10 +212,13 @@ func isSecretName(name string) bool {
 }
 
 // secretShapes are token shapes masked on top of activity.Redact's: npm,
-// Google API and SendGrid keys, and the body of a private key whose BEGIN
-// line is no longer in the output (only its END line is).
+// Google API, SendGrid and Hugging Face keys, Stripe restricted and secret
+// keys (not its publishable pk_ keys), and the body of a private key whose
+// BEGIN line is no longer in the output (only its END line is).
 var secretShapes = []*regexp.Regexp{
 	regexp.MustCompile(`\bnpm_[A-Za-z0-9]{20,}\b`),
+	regexp.MustCompile(`\bhf_[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`\b[rs]k_(?:live|test)_[A-Za-z0-9]{10,}`),
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{30,}`),
 	regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`(?m)(?:^[A-Za-z0-9+/=]{16,}\r?\n)+-----END [A-Z ]*PRIVATE KEY-----`),
@@ -224,12 +234,27 @@ func RedactScriptOutput(text string) string {
 	return scriptRedactor{}.redact(activity.StripControl(collapseCarriageReturns(text)))
 }
 
-// redactSecretPairs masks the value of each secretPairPattern pair and
-// secretFlagPattern flag with a secret's name (isSecretName), keeping its
-// quotes.
+// redactSecretPairs masks the value of each secretPairPattern pair,
+// secretArgumentPattern list item and secretFlagPattern flag with a secret's
+// name (isSecretName), keeping its quotes.
 func redactSecretPairs(text string) string {
-	return maskSecretPairs(maskSecretPairs(text, secretPairPattern, false), secretFlagPattern, true)
+	text = maskSecretPairs(text, secretPairPattern, namedPair)
+	text = maskSecretPairs(text, secretArgumentPattern, argumentPair)
+	return maskSecretPairs(text, secretFlagPattern, flagPair)
 }
+
+// pairKind is the form of the pairs maskSecretPairs masks.
+type pairKind int
+
+const (
+	// namedPair is NAME=value, NAME: value or a JSON member; its value may
+	// be a YAML block scalar.
+	namedPair pairKind = iota
+	// flagPair is --name value, starting at a flag boundary.
+	flagPair
+	// argumentPair is "--name","value" in an argument list.
+	argumentPair
+)
 
 // maskSecretPairs masks the values of pattern's matches (name and separator
 // groups) whose name is a secret's. A value is read whole (secretValue), so
@@ -238,9 +263,10 @@ func redactSecretPairs(text string) string {
 // found. A value already masked is skipped alone too: what follows it is
 // still read as text, so a pass that masked a value short (up to an escaped
 // quote) never hides the rest of it.
-func maskSecretPairs(text string, pattern *regexp.Regexp, flag bool) string {
+func maskSecretPairs(text string, pattern *regexp.Regexp, kind pairKind) string {
 	var out strings.Builder
 	last := 0
+	blocks := newBlockScalars(text)
 	for position := 0; position < len(text); {
 		match := pattern.FindStringSubmatchIndex(text[position:])
 		if match == nil {
@@ -249,12 +275,21 @@ func maskSecretPairs(text string, pattern *regexp.Regexp, flag bool) string {
 		nameStart, valueStart := position+match[2], position+match[5]
 		next := valueStart
 		switch {
-		case flag && nameStart > 0 && !isFlagBoundary(text[nameStart-1]):
+		case kind == flagPair && nameStart > 0 && !isFlagBoundary(text[nameStart-1]):
 		case !isSecretName(text[nameStart : position+match[3]]):
 		case strings.HasPrefix(text[valueStart:], redactedMarker):
 			next = valueStart + len(redactedMarker)
-		case flag && (valueStart == len(text) || text[valueStart] == '-'):
+		case kind == flagPair && (valueStart == len(text) || text[valueStart] == '-'),
+			kind == argumentPair && strings.HasPrefix(strings.TrimLeft(text[valueStart:], `\"'`), "--"):
 			// The next flag, not a value.
+		case kind == namedPair && strings.Contains(text[position+match[4]:valueStart], ":") &&
+			blocks.end(nameStart, valueStart) > valueStart:
+			// A YAML block scalar (private_key: |): its indented lines are
+			// the value.
+			end := blocks.end(nameStart, valueStart)
+			out.WriteString(text[last:valueStart])
+			out.WriteString(maskedBlockScalar(text[valueStart:end]))
+			last, next = end, end
 		default:
 			if end, masked := secretValue(text, valueStart); end > valueStart {
 				out.WriteString(text[last:valueStart])
@@ -273,10 +308,15 @@ func maskSecretPairs(text string, pattern *regexp.Regexp, flag bool) string {
 
 const redactedMarker = "[REDACTED]"
 
-// isFlagBoundary reports whether a flag may start after c: a blank, a quote or
-// the start of a command.
+// isFlagBoundary reports whether a flag may start after c: a blank, a quote,
+// the start of a command, an assignment (ARGS=--password x) or a list
+// ([--password x]).
 func isFlagBoundary(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '"' || c == '\'' || c == '(' || c == ';'
+	switch c {
+	case ' ', '\t', '\n', '"', '\'', '(', ';', '=', '[':
+		return true
+	}
+	return false
 }
 
 // credentialSchemes are bare values naming the kind of credential that
@@ -291,10 +331,16 @@ var credentialSchemes = map[string]bool{"bearer": true, "basic": true, "token": 
 //     escaped quotes of the JSON it may hold do not end it; one that is not
 //     closed on its line is masked to the end of the line;
 //   - a single-quoted string, up to its closing quote or the end of the line;
-//   - a bare word, up to a blank, a separator or a quote, with the word after
-//     it when it names a credential scheme ("Bearer x").
+//   - a Python string with its prefix (u'x', b"x"), as the quoted string;
+//   - a bare word, up to a blank (a separator or quote inside it is part of
+//     it: PASSWORD=ab;cd), with the word after it when it names a credential
+//     scheme ("Bearer x").
 func secretValue(text string, start int) (int, string) {
 	rest := text[start:]
+	if prefix := stringPrefixLength(rest); prefix > 0 {
+		end, masked := secretValue(text, start+prefix)
+		return end, rest[:prefix] + masked
+	}
 	slashes := len(rest) - len(strings.TrimLeft(rest, `\`))
 	switch {
 	case slashes < len(rest) && rest[slashes] == '"':
@@ -339,20 +385,26 @@ func secretValue(text string, start int) (int, string) {
 }
 
 // bareWordEnd is the length of the bare value text starts with: up to a
-// blank, a separator, a quote, or a backslash that escapes a quote (the end
-// of a value inside an escaped JSON string).
+// blank. A separator or quote does not end it, as a secret may hold one
+// (PASSWORD=ab;cd, TOKEN=ab"cd); masking what follows it up to the blank
+// (the rest of a JSON member or a query string) is the lesser harm.
 func bareWordEnd(text string) int {
-	for index := 0; index < len(text); index++ {
-		switch text[index] {
-		case ' ', '\t', '\n', '\r', ',', ';', '&', '"', '\'':
-			return index
-		case '\\':
-			if rest := strings.TrimLeft(text[index:], `\`); rest == "" || rest[0] == '"' || rest[0] == '\'' {
-				return index
-			}
-		}
+	if end := strings.IndexAny(text, " \t\n\r"); end >= 0 {
+		return end
 	}
 	return len(text)
+}
+
+// stringPrefixLength is the length of a Python string prefix (u, b, r, f,
+// br, rb, fr, rf) that text starts with, followed by its quote, or 0.
+func stringPrefixLength(text string) int {
+	for _, prefix := range []string{"u", "b", "r", "f", "br", "rb", "fr", "rf"} {
+		if len(text) > len(prefix) && strings.EqualFold(text[:len(prefix)], prefix) &&
+			(text[len(prefix)] == '\'' || text[len(prefix)] == '"') {
+			return len(prefix)
+		}
+	}
+	return 0
 }
 
 // escapeDepth is how deep in JSON strings a quote preceded by run backslashes
@@ -372,9 +424,12 @@ const minSecretValueLength = 6
 
 // scriptRedactor masks credentials in a step's output and command before they
 // leave the sandbox: the values of secret-named environment variables and any
-// extra secrets (the worker's own token) verbatim, then activity.Redact's
-// patterns, the values of secret-named pairs, secretShapes and AO worker
-// tokens. The control plane redacts what it receives and a Cleanup hook's
+// extra secrets (the worker's own token) verbatim, then the values of
+// secret-named pairs, flags and argument lists (a YAML block scalar's lines
+// too), the passwords known commands take in short flags, a Kubernetes
+// Secret's data, tokens used as a URL's user and signed URLs' signatures,
+// activity.Redact's patterns, secretShapes and AO worker tokens. The control
+// plane redacts what it receives and a Cleanup hook's
 // output with the same patterns (scriptRedactor{}, without values).
 type scriptRedactor struct {
 	values []string
@@ -409,7 +464,11 @@ func (r scriptRedactor) redact(text string) string {
 	}
 	// Pairs first: activity.Redact masks a quoted value up to its first
 	// quote, which would cut an escaped JSON string (a SecretString) short.
-	text = activity.Redact(redactSecretPairs(text))
+	text = redactSecretPairs(text)
+	text = maskCommandPasswords(text)
+	text = maskKubernetesSecretData(text)
+	text = maskURLTokens(text)
+	text = activity.Redact(text)
 	for _, shape := range secretShapes {
 		text = shape.ReplaceAllString(text, "[REDACTED]")
 	}
@@ -456,7 +515,7 @@ const minSecretFragmentLength = 4
 // tokenFragmentPattern matches the start of a well-known token shape at the
 // end of an output, however short: what a step printed before it ended mid-way
 // through a token the full patterns would mask.
-var tokenFragmentPattern = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_|sk-|xox[abprs]?-?|AKIA|eyJ|npm_|AIza|glpat-|SG\.)[A-Za-z0-9_.-]*$`)
+var tokenFragmentPattern = regexp.MustCompile(`\b(?:gh[pousr]_|github_pat_|sk-|[rs]k_(?:live|test)_|hf_|xox[abprs]?-?|AKIA|eyJ|npm_|AIza|glpat-|SG\.)[A-Za-z0-9_.-]*$`)
 
 // maskTrailingFragment masks the end of an output that may be a credential
 // cut short: the beginning of a known secret value (at least
@@ -514,7 +573,7 @@ func collapseCarriageReturns(text string) string {
 // before it is cut to ScriptStepCommandLimit bytes, and its repository folder.
 func scriptStepCommand(stored string, redactor scriptRedactor) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	return boundScriptCommand(redactor.redact(strings.Join(strings.Fields(command), " "))), repository
+	return boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(command), " ")))), repository
 }
 
 func boundScriptCommand(command string) string {

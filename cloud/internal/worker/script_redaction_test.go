@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 )
 
 // scriptLeakCase is output a Setup or Cleanup step may print with a
@@ -57,6 +59,56 @@ func scriptLeakCases() []scriptLeakCase {
 		// What a worker from before the fix published: the control plane
 		// masks the rest.
 		{"already cut short", `{"SecretString":[REDACTED]password\":\"Leak20old\"}"}`, []string{"Leak20old"}},
+		// Short flags of commands that take a password.
+		{"docker login -p", `docker login -u ci -p Leak30QZX registry.example`, []string{"Leak30QZX"}},
+		{"docker login -p first", `+ sudo docker login -p "Leak31QZX" -u ci registry.example`, []string{"Leak31QZX"}},
+		{"mysql -p attached", `mysql -uroot -pLeak32QZX -h db`, []string{"Leak32QZX"}},
+		{"mariadb -p attached quoted", `mariadb -u root '-pLeak33QZX' app`, []string{"Leak33QZX"}},
+		{"mysql -p separate", `mysql -u root -p Leak34QZX -e 'select 1'`, []string{"Leak34QZX"}},
+		{"sshpass -p", `sshpass -p Leak35QZX ssh -p 22 deploy@host`, []string{"Leak35QZX"}},
+		{"sshpass -p attached", `sshpass -pLeak36QZX scp f host:`, []string{"Leak36QZX"}},
+		{"redis-cli -a", `redis-cli -h cache -a Leak37QZX ping`, []string{"Leak37QZX"}},
+		{"curl -u", `curl -sSf -u admin:Leak38QZX https://api.example`, []string{"Leak38QZX"}},
+		{"curl -u attached", `curl -uadmin:Leak39QZX https://api.example`, []string{"Leak39QZX"}},
+		{"curl --user", `curl --user "admin:Leak40QZX" https://api.example`, []string{"Leak40QZX"}},
+		{"curl combined -u", `curl -fsSu admin:Leak41QZX https://api.example`, []string{"Leak41QZX"}},
+		// URLs.
+		{"token as a URL's user", `git clone https://Leak42tok0123456789abcdef@github.com/o/r.git`, []string{"Leak42tok"}},
+		{"github token as a URL's user", `remote: https://ghp_Leak43abcdefghijklmnopqrstuvwxyz0123@github.com/o/r`, []string{"Leak43"}},
+		{"azure sas", `https://acct.blob.core.windows.net/c/b.tgz?sv=2022-11-02&se=2026-10-20&sp=r&sig=Leak44sig%2Fab%3D`, []string{"Leak44sig"}},
+		{"sas sig first", `sig=Leak45sig%3D&sv=2022-11-02&sr=b`, []string{"Leak45sig"}},
+		// A Kubernetes Secret, whatever its keys are named, in kubectl's
+		// key order (data before kind) and with stringData after kind.
+		{"kubernetes secret data", "apiVersion: v1\ndata:\n  dbhost: TGVhazQ2ZGF0YQ==\n  conn: TGVhazQ2Y29ubg==\nkind: Secret\nmetadata:\n  name: db\ntype: Opaque",
+			[]string{"TGVhazQ2ZGF0YQ", "TGVhazQ2Y29ubg"}},
+		{"kubernetes secret stringData", "---\nkind: Secret\napiVersion: v1\nstringData:\n  url: Leak47strdata\n  config: |\n    host: db\n    Leak47block\nmetadata:\n  name: x",
+			[]string{"Leak47strdata", "Leak47block"}},
+		{"kubernetes secret list", "items:\n- apiVersion: v1\n  data:\n    a: TGVhazQ4bGlzdA==\n  kind: Secret",
+			[]string{"TGVhazQ4bGlzdA"}},
+		// Argument lists.
+		{"json argument list", `"Args": ["--token","Leak49arr","--verbose"]`, []string{"Leak49arr"}},
+		{"json argument list spaced", `["deploy", "--password", "Leak50arr"]`, []string{"Leak50arr"}},
+		{"assignment of flags", `ARGS=--password Leak51args`, []string{"Leak51args"}},
+		{"bracketed flags", `usage seen: [--password Leak52brk]`, []string{"Leak52brk"}},
+		// YAML block scalars.
+		{"yaml literal block", "private_key: |\n  Leak53blockA\n  Leak53blockB\nnext: ok", []string{"Leak53blockA", "Leak53blockB"}},
+		{"yaml folded block", "db:\n  password: >-\n    Leak54fold\n    Leak54fold2\n  host: db", []string{"Leak54fold"}},
+		// Token shapes.
+		{"hugging face", `HF said hf_Leak55abcdefghijklmnopqrstuvwxyz12`, []string{"Leak55"}},
+		{"stripe restricted", `using rk_live_Leak56abcdefghijklmn`, []string{"Leak56"}},
+		{"stripe secret", `using sk_live_Leak57abcdefghijklmn`, []string{"Leak57"}},
+		// Values holding a separator or a quote.
+		{"value with a semicolon", `DB_PASSWORD=Leak58;B58semi`, []string{"Leak58", "B58semi"}},
+		{"value with a comma", `API_TOKEN=Leak59,B59comma`, []string{"Leak59", "B59comma"}},
+		{"value with an ampersand", `client_secret=Leak60&B60amp`, []string{"Leak60", "B60amp"}},
+		{"value with a quote", `PASSWORD=Leak61"B61quote`, []string{"Leak61", "B61quote"}},
+		{"quoted value with separators", `PASSWORD="Leak62;a,b&c" next`, []string{"Leak62", "a,b&c"}},
+		// Escapes between the name and the value.
+		{"colour codes", "\x1b[1mNPM_AUTH\x1b[0m=\x1b[32mLeak63ansi\x1b[0m", []string{"Leak63ansi"}},
+		{"colour code after the separator", "SIGNING_KEY:\x1b[33m Leak64ansi\x1b[0m", []string{"Leak64ansi"}},
+		// Python strings.
+		{"python unicode string", `{'password': u'Leak65py', 'user': u'x'}`, []string{"Leak65py"}},
+		{"python bytes string", `{"api_key": b"Leak66py"}`, []string{"Leak66py"}},
 	}
 }
 
@@ -254,6 +306,66 @@ func TestScriptOutputSecretSplitAcrossLiveSnapshots(t *testing.T) {
 			if leaksPart(second, secret) {
 				t.Errorf("%s: second snapshot published %q", test.name, second)
 			}
+		}
+	}
+}
+
+// The redaction stays linear in its input: each worst case below, 64 KiB of
+// what makes one of its passes look back or ahead (a value, block, command or
+// document that never ends, pairs packed onto one line), goes through the
+// passes that read the text with their own loops (the regular expressions
+// alone, activity.Redact's and the token shapes, are linear by construction)
+// within a bound, 30 times what plain text of that size takes and at least
+// 1 s, that a pass reading the text again per match (quadratic: billions of
+// steps at this size) far exceeds. It runs alone, not in parallel, so the
+// timings compare.
+func TestScriptRedactionIsLinear(t *testing.T) {
+	const size = scriptLiveTailLimit
+	fill := func(unit string) string { return strings.Repeat(unit, size/len(unit)+1)[:size] }
+	cases := map[string]string{
+		"names without separators": fill("token"),
+		"pairs":                    fill("password="),
+		"pairs to the blank":       fill("password=x;"),
+		"unclosed quotes":          fill(`password: "`),
+		"block headers on a line":  fill("password: | #") + "\n" + fill(" ")[:size/2] + "\nnext: 1",
+		"block headers":            fill("password: |\n"),
+		"nested blocks":            fill("password: |\n  "),
+		"escaped quotes":           `"token":"` + fill(`\\\"`),
+		"backslashes":              `"token":"` + fill(`\`),
+		"escaped members":          fill(`\"password\":\"`),
+		"single quotes":            fill(`password='`),
+		"flags":                    fill("--token "),
+		"flags to flags":           fill("-token -"),
+		"argument lists":           fill(`"--token",`),
+		"python strings":           fill(`password: u'`),
+		"commands":                 fill("mysql -p "),
+		"logins":                   fill("docker login -p x "),
+		"command words":            fill("docker "),
+		"sshpass words":            fill("sshpass "),
+		"quoted arguments":         "mysql " + fill(`"-p`),
+		"curl users":               fill("curl -u a:b "),
+		"secret documents":         fill("kind: Secret\ndata:\n  a: b\n"),
+		"secret data":              "kind: Secret\ndata:\n" + fill("  a: |\n"),
+		"secret documents split":   fill("kind: Secret\n---\ndata:\n"),
+		"url users":                fill("https://abcdefghij0123456789@"),
+		"url schemes":              fill("a://"),
+		"signatures":               fill("&sig="),
+		"escapes":                  fill("\x1b["),
+		"carriage returns":         fill("password=x\r"),
+		"bearer":                   fill("token: Bearer "),
+	}
+	redactor := newScriptRedactor([]string{"MY_SERVICE_SECRET=value-of-a-secret"}, []string{"ao_worker.token.value"})
+	redactAll := func(text string) time.Duration {
+		started := time.Now()
+		text = activity.StripControl(collapseCarriageReturns(text))
+		text = maskURLTokens(maskKubernetesSecretData(maskCommandPasswords(redactSecretPairs(text))))
+		_ = redactor.maskTrailingFragment(text)
+		return time.Since(started)
+	}
+	bound := max(time.Second, 30*redactAll(fill("plain text ")))
+	for name, text := range cases {
+		if elapsed := redactAll(text); elapsed > bound {
+			t.Errorf("%s: redacting 64 KiB took %v (bound %v)", name, elapsed, bound)
 		}
 	}
 }
