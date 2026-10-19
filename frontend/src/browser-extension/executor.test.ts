@@ -31,6 +31,9 @@ function storage() {
 	};
 }
 
+// A 1x1 PNG data URL, as chrome.tabs.captureVisibleTab returns.
+const CAPTURE_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
 // Pages served to the fake tab by URL.
 const PAGES: Record<string, string> = {
 	"https://shop.test/": `<h1>Shop</h1><label for="q">Search</label><input id="q"><button id="buy">Buy now</button><a href="/help">Help</a>`,
@@ -52,6 +55,7 @@ class FakeChrome {
 	events = {
 		tabsRemoved: event(),
 		tabsUpdated: event(),
+		tabsActivated: event(),
 		groupsRemoved: event(),
 		windowsRemoved: event(),
 		runtimeMessage: event(),
@@ -64,6 +68,16 @@ class FakeChrome {
 	local = storage();
 	session = storage();
 	frames = [{ frameId: 0, parentFrameId: -1, url: "" }];
+	/** Which tab was in front of its window at each capture. */
+	captures: number[] = [];
+	/** Runs during a capture, for example a user switching tabs. */
+	duringCapture?: () => void;
+
+	activate(tabId: number) {
+		const tab = this.tabs.get(tabId)!;
+		for (const other of this.tabs.values()) if (other.windowId === tab.windowId) other.active = other.id === tabId;
+		this.events.tabsActivated.fire({ tabId, windowId: tab.windowId });
+	}
 	/** Answers content requests for specific frames (tabId, frameId). */
 	frameResponder?: (frameId: number, message: Record<string, unknown>) => unknown;
 
@@ -104,7 +118,8 @@ class FakeChrome {
 				},
 				update: async (tabId, props) => {
 					const tab = self.tabs.get(tabId)!;
-					if (props.active !== undefined) tab.active = props.active;
+					if (props.active === true) self.activate(tabId);
+					else if (props.active === false) tab.active = false;
 					if (props.url) self.load(tabId, props.url);
 					return { ...tab };
 				},
@@ -119,7 +134,8 @@ class FakeChrome {
 						self.events.tabsRemoved.fire(id, { windowId: 1, isWindowClosing: false });
 					}
 				},
-				query: async ({ windowId }) => [...self.tabs.values()].filter((tab) => windowId === undefined || tab.windowId === windowId),
+				query: async ({ windowId, active }) =>
+					[...self.tabs.values()].filter((tab) => (windowId === undefined || tab.windowId === windowId) && (active === undefined || tab.active === active)),
 				group: async ({ tabIds, groupId, createProperties }) => {
 					const id = groupId ?? self.nextGroup++;
 					if (!self.groups.has(id)) self.groups.set(id, { id, windowId: createProperties?.windowId ?? 1 });
@@ -146,11 +162,17 @@ class FakeChrome {
 						return { ok: false, error: { code: bridge.code ?? "X", message: bridge.message } };
 					}
 				},
-				captureVisibleTab: async () =>
-					"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+				captureVisibleTab: async (windowId) => {
+					await new Promise((resolve) => setTimeout(resolve, 5));
+					self.duringCapture?.();
+					const front = [...self.tabs.values()].find((tab) => tab.windowId === windowId && tab.active);
+					self.captures.push(front?.id ?? -1);
+					return CAPTURE_PNG;
+				},
 				goBack: async () => undefined,
 				onRemoved: self.events.tabsRemoved,
 				onUpdated: self.events.tabsUpdated,
+				onActivated: self.events.tabsActivated,
 			},
 			tabGroups: {
 				update: async (groupId, props) => Object.assign(self.groups.get(groupId)!, props) as never,
@@ -359,6 +381,40 @@ describe("Executor", () => {
 			message.op === "geometry" && frameId === 0 ? { x: 10, y: 15, width: 4, height: 4, inViewport: true } : message.op === "ping" ? { visibility: "visible" } : undefined;
 		await run("click", { ref: "eButton" });
 		expect(fake.debuggerCalls.find((call) => call.params?.type === "mousePressed")?.params).toMatchObject({ x: 10, y: 15 });
+	});
+
+	it("never returns another session's tab when sessions capture the same window at once", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1");
+		await approve("s2");
+		await run("open", { url: "https://shop.test/" }, "s1");
+		await run("open", { url: "https://shop.test/done" }, "s2");
+		const tabOf = (url: string) => [...fake.tabs.values()].find((tab) => tab.url === url)!.id!;
+		const [first, second] = await Promise.all([run("screenshot", {}, "s1"), run("screenshot", {}, "s2")]);
+		expect(first).toMatchObject({ target: { url: "https://shop.test/" } });
+		expect(second).toMatchObject({ target: { url: "https://shop.test/done" } });
+		// Each capture happened while that session's own tab was in front.
+		expect(fake.captures.sort()).toEqual([tabOf("https://shop.test/"), tabOf("https://shop.test/done")].sort());
+	});
+
+	it("refuses pixels captured after the window switched tabs", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const personal = await fake.api().tabs.create({ url: "https://personal.test/", active: false, windowId: 1 });
+		// The user switches to a personal tab during every capture.
+		fake.duringCapture = () => fake.activate(personal.id!);
+		await expect(run("screenshot")).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+
+		// A single switch is retried and then succeeds on the session's tab.
+		let switches = 1;
+		fake.duringCapture = () => {
+			if (switches-- > 0) fake.activate(personal.id!);
+		};
+		fake.captures = [];
+		expect(await run("screenshot")).toMatchObject({ target: { url: "https://shop.test/" } });
+		const own = [...fake.tabs.values()].find((tab) => tab.url === "https://shop.test/")!.id!;
+		expect(fake.captures).toEqual([personal.id, own]);
 	});
 
 	it("refuses panel-only actions", async () => {

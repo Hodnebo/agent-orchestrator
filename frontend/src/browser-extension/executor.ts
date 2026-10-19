@@ -53,6 +53,8 @@ type Context = {
 
 export class Executor {
 	private readonly extras = new Map<string, SessionExtras>();
+	/** One activate-and-capture at a time per Chrome window, across sessions. */
+	private readonly captureLocks = new Map<number, Promise<unknown>>();
 	private readonly navigationCounts = new Map<number, number>();
 
 	constructor(private readonly deps: ExecutorDeps) {}
@@ -694,10 +696,54 @@ export class Executor {
 		});
 	}
 
+	/**
+	 * captureVisibleTab captures whatever tab is in front of a window, not a
+	 * given tab. Serialize activation and capture per window across sessions,
+	 * and refuse the pixels if the window showed any other tab meanwhile, so a
+	 * screenshot can never contain another session's page or the user's tab.
+	 */
+	private async captureOwnTab(ctx: Context, page: ActiveTab): Promise<string> {
+		const chrome = this.deps.chrome;
+		for (let attempt = 0; ; attempt++) {
+			const fresh = await this.refreshed(page);
+			const windowId = fresh.tab.windowId;
+			const previous = this.captureLocks.get(windowId) ?? Promise.resolve();
+			const run = previous.catch(() => undefined).then(async () => {
+				throwIfAborted(ctx.signal);
+				await this.showTab(ctx, fresh);
+				let switched = false;
+				const onActivated = (info: { windowId: number }) => {
+					if (info.windowId === windowId) switched = true;
+				};
+				chrome.tabs.onActivated.addListener(onActivated);
+				try {
+					const isOurs = async () => {
+						const [front] = await chrome.tabs.query({ windowId, active: true });
+						return front?.id === fresh.tabId;
+					};
+					if (!(await isOurs())) return undefined;
+					const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+					return !switched && (await isOurs()) ? dataUrl : undefined;
+				} finally {
+					chrome.tabs.onActivated.removeListener(onActivated);
+				}
+			});
+			this.captureLocks.set(windowId, run);
+			let dataUrl: string | undefined;
+			try {
+				dataUrl = await run;
+			} finally {
+				if (this.captureLocks.get(windowId) === run) this.captureLocks.delete(windowId);
+			}
+			if (dataUrl !== undefined) return dataUrl;
+			if (attempt >= 1) {
+				throw new BridgeError("BROWSER_TARGET_CHANGED", "Chrome showed another tab while capturing the session's tab; retry the screenshot");
+			}
+		}
+	}
+
 	private async screenshot(ctx: Context, annotate: boolean): Promise<unknown> {
 		return this.withPage(ctx, async (page) => {
-			// captureVisibleTab captures the window's active tab.
-			await this.showTab(ctx, page);
 			let items: Annotation[] = [];
 			let dpr = 1;
 			if (annotate) {
@@ -705,7 +751,7 @@ export class Executor {
 				items = value.annotations;
 				dpr = value.dpr || 1;
 			}
-			const dataUrl = await this.deps.chrome.tabs.captureVisibleTab(page.tab.windowId, { format: "png" });
+			const dataUrl = await this.captureOwnTab(ctx, page);
 			let png = base64ToBytes(dataUrl.slice(dataUrl.indexOf(",") + 1));
 			if (annotate && items.length > 0) png = await annotatePng(png, items, dpr);
 			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded AO's size limit");
