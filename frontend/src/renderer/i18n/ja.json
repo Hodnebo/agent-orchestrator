@@ -1463,7 +1463,7 @@
 	"settings.project.cloudSetupShellHint": "ステップは順番に実行されます。失敗したステップがあるとエージェントは起動しません。ステップを修正してから、セッションを開き直して再試行してください。各ステップは最大 10 分間実行できます。",
 	"settings.project.cloudCleanupHint": "セッションを削除したとき、ワークスペースが削除される直前に、セッションのプロジェクトフォルダで実行されます。セッションの停止や一時停止では実行されません。",
 	"settings.project.cloudCleanupShellHint": "ステップは順番に実行され、合計で最大 10 分間です。ステップが失敗してもワークスペースは削除されます。",
-	"settings.project.cloudCleanupCoderOnly": "クリーンアップは Coder を使うプロジェクトでのみ実行されます。その他のクラウドワークスペースはクリーンアップなしで削除されます。",
+	"settings.project.cloudCleanupUnsupported": "クリーンアップは、AO が Coder、Freestyle、Docker のワークスペースを削除する前に実行されます。このプロジェクトのクラウドワークスペースはクリーンアップなしで削除されます。",
 	"settings.project.cloudVariables": "使える変数",
 	"settings.project.cloudVarFolder": "セッションのプロジェクトフォルダ",
 	"settings.project.cloudVarSessionId": "セッション固有の ID。セッション専用のコンテナやポートの命名に便利です",

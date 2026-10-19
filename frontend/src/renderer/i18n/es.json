@@ -1489,7 +1489,7 @@
 	"settings.project.cloudSetupShellHint": "Los pasos se ejecutan uno tras otro. Si un paso falla, el agente no se inicia; corrige el paso y vuelve a abrir la sesión para intentarlo de nuevo. Cada paso puede durar hasta 10 minutos.",
 	"settings.project.cloudCleanupHint": "Se ejecuta cuando se elimina una sesión, en la carpeta del proyecto de la sesión, justo antes de borrar su espacio de trabajo. No se ejecuta cuando una sesión se detiene o se pausa.",
 	"settings.project.cloudCleanupShellHint": "Los pasos se ejecutan uno tras otro, hasta 10 minutos en total. Si un paso falla, el espacio de trabajo se elimina igualmente.",
-	"settings.project.cloudCleanupCoderOnly": "La limpieza solo se ejecuta en proyectos que usan Coder. Los demás espacios de trabajo en la nube se eliminan sin ella.",
+	"settings.project.cloudCleanupUnsupported": "La limpieza se ejecuta antes de que AO elimine un espacio de trabajo de Coder, Freestyle o Docker. Los espacios de trabajo en la nube de este proyecto se eliminan sin ella.",
 	"settings.project.cloudVariables": "Variables que puedes usar",
 	"settings.project.cloudVarFolder": "la carpeta del proyecto de la sesión",
 	"settings.project.cloudVarSessionId": "un ID único de la sesión, útil para nombrar sus propios contenedores o puertos",

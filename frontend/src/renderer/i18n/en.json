@@ -1689,7 +1689,7 @@
 	"settings.project.cloudSetupShellHint": "Steps run one after another. If a step fails, the agent won't start; fix the step, then reopen the session to try again. Each step can run for up to 10 minutes.",
 	"settings.project.cloudCleanupHint": "Runs when a session is deleted, in the session's project folder, just before its workspace is removed. It doesn't run when a session is stopped or paused.",
 	"settings.project.cloudCleanupShellHint": "Steps run one after another, for up to 10 minutes in total. If a step fails, the workspace is still deleted.",
-	"settings.project.cloudCleanupCoderOnly": "Cleanup only runs for projects that use Coder. Other cloud workspaces are deleted without it.",
+	"settings.project.cloudCleanupUnsupported": "Cleanup runs before AO deletes a Coder, Freestyle or Docker workspace. This project's cloud workspaces are deleted without it.",
 	"settings.project.cloudVariables": "Variables you can use",
 	"settings.project.cloudVarFolder": "the session's project folder",
 	"settings.project.cloudVarSessionId": "a unique ID for the session, handy for naming its own containers or ports",

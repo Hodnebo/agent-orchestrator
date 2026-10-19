@@ -12,7 +12,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpProject } from "../lib/cloud-cp";
-import { CODER_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
+import { CODER_PROVIDER, FREESTYLE_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
 import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, repoDirName, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
@@ -104,8 +104,16 @@ export function CloudProjectScriptsSettings({ projectId, cloudOrgId, onSaveState
 	return <ScriptsEditor key={`${cloudOrgId}/${projectId}`} scratch={false}
 		postCreate={parseScriptSteps(project.config?.postCreate, project.repositoryUrl)} preRemove={parseScriptSteps(project.config?.preRemove, project.repositoryUrl)}
 		repositories={repositories}
-		cloud={{ cleanupRuns: projectSandboxProvider(project.config, offering) === CODER_PROVIDER, readOnly }}
+		cloud={{ cleanupRuns: cleanupRunsOn(projectSandboxProvider(project.config, offering)), readOnly }}
 		save={save} onSaveState={onSaveState} onSaved={() => { void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey }); }} />;
+}
+
+/** The cloud providers that run a project's Cleanup before deleting a session's workspace. */
+const CLEANUP_PROVIDERS = new Set([CODER_PROVIDER, FREESTYLE_PROVIDER, "docker"]);
+
+/** Whether Cleanup runs on provider; an unresolved provider ("") is not said not to. */
+function cleanupRunsOn(provider: string): boolean {
+	return provider === "" || CLEANUP_PROVIDERS.has(provider);
 }
 
 type ScriptSteps = { postCreate: ScriptStepDraft[]; preRemove?: ScriptStepDraft[] };
@@ -228,7 +236,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 							{cloud.readOnly && <p role="note" className="text-settings-label">{t("settings.project.cloudScriptsAdminOnly")}</p>}
 							<p>{t(kind === "setup" ? "settings.project.cloudSetupHint" : "settings.project.cloudCleanupHint")}</p>
 							<p>{t(kind === "setup" ? "settings.project.cloudSetupShellHint" : "settings.project.cloudCleanupShellHint")}</p>
-							{kind === "cleanup" && !cloud.cleanupRuns && <p role="note" className="text-settings-label">{t("settings.project.cloudCleanupCoderOnly")}</p>}
+							{kind === "cleanup" && !cloud.cleanupRuns && <p role="note" className="text-settings-label">{t("settings.project.cloudCleanupUnsupported")}</p>}
 						</div> : <div className="space-y-1 text-pretty text-xs leading-4 text-settings-muted">
 							<p>{t(kind === "setup" ? scratch ? "settings.project.setupHintScratch" : "settings.project.setupHintGit" : "settings.project.cleanupHint")}</p>
 							<p>{t(`settings.project.${kind}ShellHint`)}</p>

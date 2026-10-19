@@ -1463,7 +1463,7 @@
 	"settings.project.cloudSetupShellHint": "Die Schritte laufen nacheinander. Schlägt ein Schritt fehl, startet der Agent nicht; korrigiere den Schritt und öffne die Sitzung erneut, um es noch einmal zu versuchen. Jeder Schritt darf bis zu 10 Minuten laufen.",
 	"settings.project.cloudCleanupHint": "Läuft, wenn eine Sitzung gelöscht wird, im Projektordner der Sitzung, kurz bevor ihr Workspace entfernt wird. Beim Stoppen oder Pausieren einer Sitzung läuft es nicht.",
 	"settings.project.cloudCleanupShellHint": "Die Schritte laufen nacheinander, insgesamt bis zu 10 Minuten. Schlägt ein Schritt fehl, wird der Workspace trotzdem gelöscht.",
-	"settings.project.cloudCleanupCoderOnly": "Cleanup läuft nur bei Projekten, die Coder verwenden. Andere Cloud-Workspaces werden ohne Cleanup gelöscht.",
+	"settings.project.cloudCleanupUnsupported": "Cleanup läuft, bevor AO einen Coder-, Freestyle- oder Docker-Workspace löscht. Die Cloud-Workspaces dieses Projekts werden ohne Cleanup gelöscht.",
 	"settings.project.cloudVariables": "Verfügbare Variablen",
 	"settings.project.cloudVarFolder": "der Projektordner der Sitzung",
 	"settings.project.cloudVarSessionId": "eine eindeutige ID der Sitzung, praktisch zum Benennen eigener Container oder Ports",
