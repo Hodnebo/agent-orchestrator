@@ -503,6 +503,16 @@ func (r scriptRedactor) redact(text string) string {
 	for _, value := range r.values {
 		text = strings.ReplaceAll(text, value, redactedMarker)
 	}
+	// A printf's literal \n (in a command, or in a trace of it that set -x
+	// printed) is read as the line break it prints, so the line-based passes
+	// (a YAML block scalar, a Kubernetes Secret's data) read what it writes:
+	// as a carriage return and newline, which they take for a line's end, put
+	// back afterwards. Callers strip carriage returns first, so each one left
+	// is one of these.
+	expanded := strings.Contains(text, `\n`) && !strings.Contains(text, "\r")
+	if expanded {
+		text = strings.ReplaceAll(text, `\n`, "\r\n")
+	}
 	// Pairs first: activity.Redact masks a quoted value up to its first
 	// quote, which would cut an escaped JSON string (a SecretString) short.
 	text = redactSecretPairs(text)
@@ -513,21 +523,20 @@ func (r scriptRedactor) redact(text string) string {
 	for _, shape := range secretShapes {
 		text = shape.ReplaceAllString(text, "[REDACTED]")
 	}
-	return workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
+	text = workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
+	if expanded {
+		text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", `\n`), "\r", `\n`)
+	}
+	return text
 }
 
 // redactCommand is a step's command as its events and summaries show it:
 // redacted, then on one line. It is redacted while it still has its lines, so
 // the line-based passes (a YAML block scalar, a Kubernetes Secret's data) read
-// a command that writes one; a printf's literal \n is read as the line break
-// it prints too (as a carriage return and newline, which the passes take for
-// a line's end, put back afterwards).
+// a command that writes one (a printf's literal \n is read as a line break
+// too, see redact).
 func (r scriptRedactor) redactCommand(command string) string {
-	text := activity.StripControl(command)
-	text = strings.ReplaceAll(text, `\n`, "\r\n")
-	text = r.redact(text)
-	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", `\n`), "\r", `\n`)
-	return strings.Join(strings.Fields(text), " ")
+	return strings.Join(strings.Fields(r.redact(activity.StripControl(command))), " ")
 }
 
 // scriptStepOutput turns a finished step's raw output tail into what an event

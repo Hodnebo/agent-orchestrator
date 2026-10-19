@@ -609,3 +609,19 @@ func TestBareSecretValueEnds(t *testing.T) {
 		t.Errorf("case 12 published:\n%s", published)
 	}
 }
+
+// A trace of a printf that writes a Kubernetes Secret or a YAML block scalar
+// (as set -x prints it) is masked in a step's output as in its command: its
+// literal \n is read as the line break it prints, then put back.
+func TestTracedPrintfIsReadByLine(t *testing.T) {
+	t.Parallel()
+	redactor := newScriptRedactor(nil, nil)
+	for _, test := range []struct{ text, want string }{
+		{`+ printf 'apiVersion: v1\nkind: Secret\ndata:\n  foo: TGVhazkw\n'`, `+ printf 'apiVersion: v1\nkind: Secret\ndata:\n  foo: [REDACTED]\n'`},
+		{`+ printf 'vault_key: |\n  Leak91block\nnext: 1\n'`, `+ printf 'vault_key: |\n  [REDACTED]\nnext: 1\n'`},
+	} {
+		if got, _ := redactor.scriptStepOutput(test.text+"\n", false); got != test.want {
+			t.Errorf("scriptStepOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
+		}
+	}
+}
