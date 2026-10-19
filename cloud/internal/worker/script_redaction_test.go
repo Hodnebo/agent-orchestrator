@@ -492,3 +492,49 @@ func TestAssignedSecretNeverPublished(t *testing.T) {
 		t.Errorf("the later step's output is not masked:\n%s", published)
 	}
 }
+
+// The staging re-test's commands that print a Kubernetes Secret, a YAML block
+// scalar and a coloured pair (its cases 8, 10 and 13): masked in the command
+// fields too, which are redacted before they are put on one line, with a
+// printf's \n read as the line break it prints and colour codes written out
+// (\033[0m) read as escapes between a name and its value.
+func TestCommandsThatPrintSecretsAreMasked(t *testing.T) {
+	commands := []string{
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+	}
+	commands = append(commands, strings.Join(commands, "; ")+"; exit 3")
+	published := publishedByRuns(t, commands)
+	for _, secret := range []string{"RkFLRVZBTDg", "FAKEVAL10", "FAKEVAL13"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	if !strings.Contains(published, `after_block: visible\n`) || !strings.Contains(published, `name: demo\n`) {
+		t.Errorf("the commands lost what is not secret:\n%s", published)
+	}
+
+	// Each command path, and a command written on several lines.
+	redactor := newScriptRedactor(nil, nil)
+	multiline := "cat <<EOF > secret.yaml\nkind: Secret\ndata:\n  token: TGVhazgy\nEOF\nvault_key: |\n  Leak83block\nnext"
+	for _, command := range append(commands, multiline, `echo -e "\e[1mAPI_TOKEN\e[0m: \x1b[2mLeak84lit" "\u001b[1mNPM_AUTH\u001b[0m=Leak85lit"`) {
+		stepCommand, _ := scriptStepCommand(command, redactor)
+		summary, _ := scriptCommandSummary(command, redactor)
+		for path, shown := range map[string]string{
+			"scriptStepCommand":         stepCommand,
+			"scriptCommandSummary":      summary,
+			"SanitizeScriptStepEvent":   SanitizeScriptStepEvent(ScriptStepEvent{Command: command}).Command,
+			"worker then control plane": SanitizeScriptStepEvent(ScriptStepEvent{Command: stepCommand}).Command,
+		} {
+			for _, secret := range []string{"RkFLRVZBTDg", "FAKEVAL10", "FAKEVAL13", "TGVhazgy", "Leak83", "Leak84", "Leak85"} {
+				if strings.Contains(shown, secret) {
+					t.Errorf("%s published %q in %q", path, secret, shown)
+				}
+			}
+			if strings.Contains(shown, "\n") {
+				t.Errorf("%s is not on one line: %q", path, shown)
+			}
+		}
+	}
+}

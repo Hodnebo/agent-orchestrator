@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
@@ -108,7 +107,7 @@ func ScriptFailureHint(output string, exitCode int, runAs string) string {
 // so a cut cannot leave part of a secret that redaction no longer recognizes.
 func scriptCommandSummary(stored string, redactor scriptRedactor) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	command = redactor.redact(activity.StripControl(strings.Join(strings.Fields(command), " ")))
+	command = redactor.redactCommand(command)
 	if len(command) > scriptCommandLimit {
 		command = strings.ToValidUTF8(command[:scriptCommandLimit], "") + "..."
 	}

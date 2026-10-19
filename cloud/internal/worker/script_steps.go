@@ -152,7 +152,7 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 	// Redacted before activity.Redact runs (in redact), which masks a quoted
 	// value only up to an escaped quote and would hide the rest of it.
 	event.Output, event.OutputTruncated = scriptOutputTail(redactor.redact(activity.StripControl(event.Output)), event.OutputTruncated)
-	event.Command = boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(event.Command), " "))))
+	event.Command = boundScriptCommand(redactor.redactCommand(event.Command))
 	event.Repository = activity.Truncate(event.Repository, 256)
 	event.Dir = activity.Truncate(event.Dir, 1024)
 	event.User = activity.Truncate(event.User, 128)
@@ -175,9 +175,16 @@ var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|
 // NAME: value pair, or of a JSON "name": member at any depth of escaping
 // (\"password\": inside a JSON string, \\\"password\\\": inside one more, as
 // an AWS Secrets Manager SecretString can be), whose name looks like a
-// secret's. Its groups are the name and the separator; the value after it is
-// read by secretValue.
-var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)\\*["']?(\s*[:=]\s*)`)
+// secret's, also with colour codes written out around the separator
+// (literalEscapes). Its groups are the name and the separator; the value
+// after it is read by secretValue.
+var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)` +
+	literalEscapes + `\\*["']?(` + literalEscapes + `\s*[:=]\s*` + literalEscapes + `)`)
+
+// literalEscapes matches terminal colour codes written out in a command
+// (printf '\033[32mPASSWORD\033[0m=x', \e[...m, \x1b[...m, \u001b[...m),
+// which separate a pair's name from its value in what it prints.
+const literalEscapes = `(?:\\(?:033|e|x1b|u001b)\[[0-9;]*[a-z])*`
 
 // secretFlagPattern matches a command-line flag whose name looks like a
 // secret's and its separating blanks (--password x); --password=x is a
@@ -475,6 +482,20 @@ func (r scriptRedactor) redact(text string) string {
 	return workerTokenPattern.ReplaceAllString(text, "[REDACTED]")
 }
 
+// redactCommand is a step's command as its events and summaries show it:
+// redacted, then on one line. It is redacted while it still has its lines, so
+// the line-based passes (a YAML block scalar, a Kubernetes Secret's data) read
+// a command that writes one; a printf's literal \n is read as the line break
+// it prints too (as a carriage return and newline, which the passes take for
+// a line's end, put back afterwards).
+func (r scriptRedactor) redactCommand(command string) string {
+	text := activity.StripControl(command)
+	text = strings.ReplaceAll(text, `\n`, "\r\n")
+	text = r.redact(text)
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", `\n`), "\r", `\n`)
+	return strings.Join(strings.Fields(text), " ")
+}
+
 // scriptStepOutput turns a finished step's raw output tail into what an event
 // carries: carriage-return overwrites (progress bars) collapsed to their last
 // state, terminal escapes and control characters removed, credentials masked,
@@ -587,7 +608,7 @@ func collapseCarriageReturns(text string) string {
 // before it is cut to ScriptStepCommandLimit bytes, and its repository folder.
 func scriptStepCommand(stored string, redactor scriptRedactor) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	return boundScriptCommand(redactor.redact(activity.StripControl(strings.Join(strings.Fields(command), " ")))), repository
+	return boundScriptCommand(redactor.redactCommand(command)), repository
 }
 
 func boundScriptCommand(command string) string {

@@ -150,9 +150,15 @@ func blockLinesEnd(text string, position, keyIndent int) int {
 // lines) with its lines replaced by one masked line at their indentation.
 func maskedBlockScalar(block string) string {
 	header, body, _ := strings.Cut(block, "\n")
+	// A line's end as the block's last line had it (a command's printf \n
+	// is read as \r\n, see redactCommand).
+	end := ""
+	if strings.HasSuffix(block, "\r") {
+		end = "\r"
+	}
 	for _, line := range strings.Split(body, "\n") {
 		if strings.TrimSpace(line) != "" {
-			return header + "\n" + line[:indentation(line)] + redactedMarker
+			return header + "\n" + line[:indentation(line)] + redactedMarker + end
 		}
 	}
 	return header
