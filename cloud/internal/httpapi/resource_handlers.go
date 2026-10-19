@@ -72,15 +72,18 @@ type updateProjectRequest struct {
 }
 
 type projectResponse struct {
-	ID                 string         `json:"id"`
-	OrgID              string         `json:"orgId"`
-	DisplayName        string         `json:"displayName"`
-	RepositoryURL      string         `json:"repositoryUrl"`
-	DefaultBranch      string         `json:"defaultBranch"`
-	GitHubRepositoryID string         `json:"githubRepositoryId,omitempty"`
-	Config             map[string]any `json:"config"`
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID                 string `json:"id"`
+	OrgID              string `json:"orgId"`
+	DisplayName        string `json:"displayName"`
+	RepositoryURL      string `json:"repositoryUrl"`
+	DefaultBranch      string `json:"defaultBranch"`
+	GitHubRepositoryID string `json:"githubRepositoryId,omitempty"`
+	// Standalone marks a project with no repository; its repositoryUrl is a
+	// placeholder (https://scratch.ao.local/<id>) that is never cloned.
+	Standalone bool           `json:"standalone,omitempty"`
+	Config     map[string]any `json:"config"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
 }
 
 type createSessionRequest struct {
@@ -163,8 +166,11 @@ type sessionResponse struct {
 	RequestedOutput string `json:"requestedOutput,omitempty"`
 	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
 	OutputType string `json:"outputType"`
+	// ArtifactCount is the number of the session's committed artifact files,
+	// on the session read and list routes while cloud artifacts are on.
+	ArtifactCount *int `json:"artifactCount,omitempty"`
 	// ArtifactFiles lists the session's committed artifact files on the
-	// session read and list routes while cloud artifacts are on.
+	// session read route while cloud artifacts are on.
 	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
 	CreatedAt     time.Time                 `json:"createdAt"`
 	UpdatedAt     time.Time                 `json:"updatedAt"`
@@ -278,9 +284,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
-		return
-	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
@@ -314,6 +317,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
 			return
 		}
+	}
+	// Checked on the merged config, so the coder dev kit's extra repositories
+	// sent as the separate coder input are admin-gated like "repos".
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
 	}
 	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
@@ -356,6 +364,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, repo, _ := parseGitHubRepo(request.RepositoryURL)
 	canonicalURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	config, problem := normalizeNewProjectRepoConfig(canonicalURL, config)
+	if problem != nil {
+		problem.write(w, r)
+		return
+	}
+	// This project reaches GitHub through the creator's personal access token,
+	// so every additional repository must be reachable with it too.
+	for _, extra := range domain.ProjectAdditionalRepos(config) {
+		reachable, _, err := s.probeRepositoryAccess(r.Context(), extra.URL, string(secret))
+		if err != nil {
+			s.logger.Error("probe additional repository access", "error", err, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "provider_unavailable", "GitHub is temporarily unavailable. Please try again later.")
+			return
+		}
+		if !reachable {
+			writeError(w, r, http.StatusUnprocessableEntity, "repository_unreachable",
+				fmt.Sprintf("Can't reach %s with your GitHub token. It may be private, or the URL may be wrong.", extra.URL))
+			return
+		}
+	}
 
 	project, err := s.store.CreateProject(
 		r.Context(),
@@ -771,7 +799,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, sessionIDs)
+	artifactCounts, err := s.sessionArtifactCounts(r.Context(), orgID, sessionIDs)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
@@ -780,8 +808,9 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	for _, session := range sessions {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
-		if artifactFiles != nil {
-			response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[session.ID])
+		if artifactCounts != nil {
+			count := artifactCounts[session.ID]
+			response.ArtifactCount = &count
 		}
 		items = append(items, response)
 	}
@@ -950,6 +979,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
 	if artifactFiles != nil {
+		count := len(artifactFiles[sessionID])
+		response.ArtifactCount = &count
 		response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[sessionID])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
@@ -1325,6 +1356,7 @@ func toProjectResponse(project domain.Project) projectResponse {
 		RepositoryURL:      project.RepositoryURL,
 		DefaultBranch:      project.DefaultBranch,
 		GitHubRepositoryID: decimalID(project.GitHubRepositoryID),
+		Standalone:         domain.IsStandaloneRepositoryURL(project.RepositoryURL),
 		Config:             config,
 		CreatedAt:          project.CreatedAt,
 		UpdatedAt:          project.UpdatedAt,

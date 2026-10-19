@@ -131,13 +131,24 @@ func exerciseStore(t *testing.T, cfg artifactstore.Config, versions func(string)
 	if _, err := store.Head(ctx, key, firstVersion); !errors.Is(err, artifactstore.ErrNotFound) {
 		t.Fatalf("head deleted version err = %v, want ErrNotFound", err)
 	}
-	if err := store.DeleteCurrent(ctx, key); err != nil {
-		t.Fatalf("delete current: %v", err)
-	}
-	if _, err := store.Head(ctx, key, secondVersion); err != nil {
-		t.Fatalf("a delete marker removed the second version: %v", err)
-	}
 	if err := store.DeleteVersion(ctx, key, secondVersion); err != nil {
 		t.Fatalf("delete second version: %v", err)
+	}
+}
+
+func TestContentTypeUsesAFixedList(t *testing.T) {
+	cases := map[string]string{
+		"report.HTML":  "text/html; charset=utf-8",
+		"notes.md":     "text/markdown; charset=utf-8",
+		"chart.svg":    "image/svg+xml",
+		"demo.mp4":     "video/mp4",
+		"setup.exe":    "application/octet-stream",
+		"archive.zip":  "application/octet-stream",
+		"no-extension": "application/octet-stream",
+	}
+	for path, want := range cases {
+		if got := artifactstore.ContentType(path); got != want {
+			t.Errorf("ContentType(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

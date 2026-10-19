@@ -53,6 +53,24 @@ load_offering() {
 	done
 }
 
+# check_artifact_bucket fails unless the artifact bucket exists with versioning
+# enabled, when AO_CLOUD_ARTIFACTS=1. The control plane makes no AWS call at
+# startup, so without this a missing bucket would show up only as failed
+# uploads. Expects the caller's aws_cli.
+check_artifact_bucket() {
+	[[ "$AO_CLOUD_ARTIFACTS" == 1 ]] || return 0
+	if ! aws_cli s3api head-bucket --bucket "$AO_CLOUD_ARTIFACT_BUCKET" >/dev/null; then
+		echo "AO_CLOUD_ARTIFACTS=1 needs the artifact bucket ${AO_CLOUD_ARTIFACT_BUCKET}; create it first (docs/deployment.md, Session artifacts)." >&2
+		return 1
+	fi
+	local versioning
+	versioning="$(aws_cli s3api get-bucket-versioning --bucket "$AO_CLOUD_ARTIFACT_BUCKET" --query Status --output text)"
+	if [[ "$versioning" != "Enabled" ]]; then
+		echo "The artifact bucket ${AO_CLOUD_ARTIFACT_BUCKET} must have versioning enabled (got: ${versioning})." >&2
+		return 1
+	fi
+}
+
 # optional_secret_arn ID prints the secret's ARN, or nothing when the secret
 # does not exist. Any other failure (expired credentials, throttling, a missing
 # permission) fails, rather than quietly turning the optional feature off.

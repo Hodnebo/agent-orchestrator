@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,19 @@ func testArtifact(path string, size int64) domain.SessionArtifact {
 		VersionID:   "v-" + path,
 		MTime:       time.Now().UTC().Truncate(time.Microsecond),
 	}
+}
+
+// commitTestArtifacts records each upsert as an open upload of the fixture's
+// session and commits as its current worker.
+func commitTestArtifacts(t *testing.T, store *Store, fixture notificationFixture, upserts []domain.SessionArtifact, deletes []string) error {
+	t.Helper()
+	ctx := context.Background()
+	for _, artifact := range upserts {
+		if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, artifact.S3Key, artifact.VersionID, artifact.Size); err != nil {
+			t.Fatalf("record upload %s: %v", artifact.Path, err)
+		}
+	}
+	return store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, upserts, deletes)
 }
 
 func artifactEventCount(t *testing.T, admin *pgxpool.Pool, sessionID string) int {
@@ -59,7 +74,7 @@ func TestSessionArtifactCommitListAndOutputType(t *testing.T) {
 
 	report := testArtifact("report.html", 10)
 	chart := testArtifact("assets/chart.png", 20)
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID,
+	if err := commitTestArtifacts(t, store, fixture,
 		[]domain.SessionArtifact{report, chart}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +95,11 @@ func TestSessionArtifactCommitListAndOutputType(t *testing.T) {
 		t.Fatalf("artifact events = %d, want 1", got)
 	}
 
-	got, err := store.SessionArtifact(ctx, fixture.orgID, fixture.sessionID, "report.html")
+	got, err := store.SessionArtifact(ctx, fixture.userID, fixture.orgID, fixture.sessionID, "report.html")
 	if err != nil || got.S3Key != report.S3Key {
 		t.Fatalf("SessionArtifact = %+v, %v", got, err)
 	}
-	if _, err := store.SessionArtifact(ctx, fixture.orgID, fixture.sessionID, "missing.html"); !errors.Is(err, ErrNotFound) {
+	if _, err := store.SessionArtifact(ctx, fixture.userID, fixture.orgID, fixture.sessionID, "missing.html"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing artifact err = %v", err)
 	}
 
@@ -99,7 +114,7 @@ func TestSessionArtifactCommitListAndOutputType(t *testing.T) {
 	}
 	updated := report
 	updated.Size, updated.VersionID = 11, "v-report-2"
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID,
+	if err := commitTestArtifacts(t, store, fixture,
 		[]domain.SessionArtifact{updated}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +122,7 @@ func TestSessionArtifactCommitListAndOutputType(t *testing.T) {
 		t.Fatalf("output type = %q, want pr_artifact", got)
 	}
 
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID,
+	if err := commitTestArtifacts(t, store, fixture,
 		nil, []string{"report.html", "assets/chart.png"}); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +143,7 @@ func TestChangedSessionArtifacts(t *testing.T) {
 	same := testArtifact("same.md", 5)
 	resized := testArtifact("resized.md", 5)
 	rehashed := testArtifact("rehashed.md", 5)
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID,
+	if err := commitTestArtifacts(t, store, fixture,
 		[]domain.SessionArtifact{same, resized, rehashed}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +175,13 @@ func TestSessionArtifactLimits(t *testing.T) {
 	for index := range domain.MaxSessionArtifactFiles + 1 {
 		tooMany = append(tooMany, testArtifact(fmt.Sprintf("f%03d.txt", index), 1))
 	}
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, tooMany, nil); !errors.Is(err, ErrArtifactLimit) {
+	if err := commitTestArtifacts(t, store, fixture, tooMany, nil); !errors.Is(err, ErrArtifactLimit) {
 		t.Fatalf("over file cap err = %v, want ErrArtifactLimit", err)
 	}
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, tooMany[:domain.MaxSessionArtifactFiles], nil); err != nil {
+	if err := commitTestArtifacts(t, store, fixture, tooMany[:domain.MaxSessionArtifactFiles], nil); err != nil {
 		t.Fatalf("at file cap: %v", err)
 	}
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, nil, func() []string {
+	if err := commitTestArtifacts(t, store, fixture, nil, func() []string {
 		paths := make([]string, 0, domain.MaxSessionArtifactFiles)
 		for _, artifact := range tooMany[:domain.MaxSessionArtifactFiles] {
 			paths = append(paths, artifact.Path)
@@ -181,7 +196,7 @@ func TestSessionArtifactLimits(t *testing.T) {
 		testArtifact("b.bin", domain.MaxSessionArtifactBytes/2+1),
 	}
 	before := artifactEventCount(t, admin, fixture.sessionID)
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, tooBig, nil); !errors.Is(err, ErrArtifactLimit) {
+	if err := commitTestArtifacts(t, store, fixture, tooBig, nil); !errors.Is(err, ErrArtifactLimit) {
 		t.Fatalf("over byte cap err = %v, want ErrArtifactLimit", err)
 	}
 	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
@@ -202,7 +217,7 @@ func TestSessionArtifactCommitIsAllOrNothing(t *testing.T) {
 
 	bad := testArtifact("bad.html", 1)
 	bad.SHA256 = "not-hex"
-	err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID,
+	err := commitTestArtifacts(t, store, fixture,
 		[]domain.SessionArtifact{testArtifact("good.html", 1), bad}, nil)
 	if err == nil {
 		t.Fatal("commit with an invalid row succeeded")
@@ -226,7 +241,7 @@ func TestSessionArtifactsAreIsolatedByOrganization(t *testing.T) {
 	store := openRLSStore(t, admin)
 	ctx := context.Background()
 
-	if err := store.CommitSessionArtifacts(ctx, owner.orgID, owner.sessionID,
+	if err := commitTestArtifacts(t, store, owner,
 		[]domain.SessionArtifact{testArtifact("secret.html", 1)}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -238,18 +253,221 @@ func TestSessionArtifactsAreIsolatedByOrganization(t *testing.T) {
 	if _, err := store.ListSessionArtifacts(ctx, otherPrincipal, owner.orgID, owner.sessionID); err == nil {
 		t.Fatal("non-member listed the owner organization's artifacts")
 	}
-	if _, err := store.SessionArtifact(ctx, other.orgID, owner.sessionID, "secret.html"); !errors.Is(err, ErrNotFound) {
+	if _, err := store.SessionArtifact(ctx, other.userID, other.orgID, owner.sessionID, "secret.html"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other org reading owner artifact err = %v, want ErrNotFound", err)
 	}
 	bySession, err := store.SessionArtifactsBySessions(ctx, other.orgID, []string{owner.sessionID})
 	if err != nil || len(bySession) != 0 {
 		t.Fatalf("other org batch read = %v, %v", bySession, err)
 	}
-	if err := store.CommitSessionArtifacts(ctx, other.orgID, owner.sessionID,
+	if err := store.CommitSessionArtifacts(ctx, other.orgID, owner.sessionID, other.workerID, other.epoch,
 		[]domain.SessionArtifact{testArtifact("planted.html", 1)}, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other org committing to owner session err = %v, want ErrNotFound", err)
 	}
 	if _, err := store.ChangedSessionArtifacts(ctx, other.orgID, owner.sessionID, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other org manifest on owner session err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestArtifactUploadsAreCapped(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+
+	for index := range domain.MaxPendingArtifactUploads {
+		if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, "orgs/o/sessions/s/x", fmt.Sprintf("v%d", index), 1); err != nil {
+			t.Fatalf("upload %d: %v", index, err)
+		}
+	}
+	if allowed, err := store.ArtifactUploadAllowed(ctx, fixture.orgID, fixture.sessionID, 1); err != nil || allowed {
+		t.Fatalf("ArtifactUploadAllowed at the cap = %v, %v", allowed, err)
+	}
+	if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, "orgs/o/sessions/s/x", "over", 1); !errors.Is(err, ErrArtifactLimit) {
+		t.Fatalf("upload over the count cap err = %v, want ErrArtifactLimit", err)
+	}
+}
+
+func TestArtifactCommitClaimsOpenUploadsAndQueuesReplacedVersions(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+
+	report := testArtifact("report.html", 10)
+	notes := testArtifact("notes.md", 5)
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		[]domain.SessionArtifact{report}, nil); !errors.Is(err, ErrArtifactVersionUnknown) {
+		t.Fatalf("commit without an upload err = %v, want ErrArtifactVersionUnknown", err)
+	}
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{report, notes}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		[]domain.SessionArtifact{report}, nil); !errors.Is(err, ErrArtifactVersionUnknown) {
+		t.Fatalf("recommitting a committed version err = %v, want ErrArtifactVersionUnknown", err)
+	}
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch+1,
+		nil, []string{"notes.md"}); !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("commit from a replaced worker err = %v, want ErrStaleWorker", err)
+	}
+
+	updated := report
+	updated.VersionID, updated.Size = "v-report-2", 11
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{updated}, []string{"notes.md"}); err != nil {
+		t.Fatal(err)
+	}
+	queued := map[string]string{}
+	rows, err := admin.Query(ctx, `SELECT version_id, reason FROM ao_artifact_object_versions WHERE session_id = $1`, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var version, reason string
+		if err := rows.Scan(&version, &reason); err != nil {
+			t.Fatal(err)
+		}
+		queued[version] = reason
+	}
+	rows.Close()
+	if len(queued) != 2 || queued[report.VersionID] != "replaced" || queued[notes.VersionID] != "replaced" {
+		t.Fatalf("queued versions = %v, want the replaced report and the deleted notes", queued)
+	}
+
+	before := artifactEventCount(t, admin, fixture.sessionID)
+	if err := commitTestArtifacts(t, store, fixture, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := commitTestArtifacts(t, store, fixture, nil, []string{"never-existed.md"}); err != nil {
+		t.Fatal(err)
+	}
+	if after := artifactEventCount(t, admin, fixture.sessionID); after != before {
+		t.Fatalf("commits that changed nothing appended events: %d -> %d", before, after)
+	}
+}
+
+func TestArtifactSweeperQueue(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+
+	upload := testArtifact("report.html", 3)
+	if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, upload.S3Key, upload.VersionID, upload.Size); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimArtifactObjectVersions(ctx, 10, time.Minute); err != nil || len(claimed) != 0 {
+		t.Fatalf("claimed an upload before it expired: %v, %v", claimed, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_artifact_object_versions SET collect_after = now() - interval '1 second' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimArtifactObjectVersions(ctx, 10, time.Minute)
+	if err != nil || len(claimed) != 1 || claimed[0].VersionID != upload.VersionID {
+		t.Fatalf("claimed = %v, %v", claimed, err)
+	}
+	if again, err := store.ClaimArtifactObjectVersions(ctx, 10, time.Minute); err != nil || len(again) != 0 {
+		t.Fatalf("claimed a leased version twice: %v, %v", again, err)
+	}
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		[]domain.SessionArtifact{upload}, nil); !errors.Is(err, ErrArtifactVersionUnknown) {
+		t.Fatalf("committing a claimed version err = %v, want ErrArtifactVersionUnknown", err)
+	}
+	if err := store.ForgetArtifactObjectVersions(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_artifact_object_versions WHERE session_id = $1`, fixture.sessionID).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("versions left after forget = %d, %v", left, err)
+	}
+}
+
+func TestSessionArtifactNeedsAnActiveMember(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("report.html", 1)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SessionArtifact(ctx, fixture.userID, fixture.orgID, fixture.sessionID, "report.html"); err != nil {
+		t.Fatalf("member read: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_org_memberships SET status = 'disabled' WHERE org_id = $1 AND user_id = $2`, fixture.orgID, fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SessionArtifact(ctx, fixture.userID, fixture.orgID, fixture.sessionID, "report.html"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("disabled member read err = %v, want ErrNotFound", err)
+	}
+}
+
+// Two commits racing for the last free slots: the session lock lets exactly
+// one through.
+func TestSessionArtifactConcurrentCommitsRespectTheCap(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	batches := make([][]domain.SessionArtifact, 2)
+	for batch := range batches {
+		for index := range 150 {
+			artifact := testArtifact(fmt.Sprintf("b%d/f%03d.txt", batch, index), 1)
+			if err := store.RecordArtifactUpload(context.Background(), fixture.orgID, fixture.sessionID, artifact.S3Key, artifact.VersionID, 1); err != nil {
+				t.Fatal(err)
+			}
+			batches[batch] = append(batches[batch], artifact)
+		}
+	}
+	results := make(chan error, 2)
+	for _, batch := range batches {
+		go func() {
+			results <- store.CommitSessionArtifacts(context.Background(), fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, batch, nil)
+		}()
+	}
+	succeeded, limited := 0, 0
+	for range batches {
+		switch err := <-results; {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrArtifactLimit):
+			limited++
+		default:
+			t.Fatalf("commit err = %v", err)
+		}
+	}
+	if succeeded != 1 || limited != 1 {
+		t.Fatalf("succeeded = %d, limited = %d; want 1 and 1", succeeded, limited)
+	}
+}
+
+func TestSessionReadCountsPullRequestsIntoOutputType(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	if _, err := store.CreatePullRequestRecord(ctx, fixture.orgID, fixture.sessionID, "github", "owner/repo", "author", 9,
+		"https://github.test/owner/repo/pull/9", "feature", "main", "sha-9", "PR", 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.GetSession(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || session.OutputType != domain.SessionOutputPR {
+		t.Fatalf("output type = %q, %v; want pr", session.OutputType, err)
+	}
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("report.html", 1)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err = store.GetSession(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || session.OutputType != domain.SessionOutputPRAndArtifact {
+		t.Fatalf("output type = %q, %v; want pr_artifact", session.OutputType, err)
+	}
+}
+
+// The artifacts migration can run again on a database that already has it,
+// so it can be renumbered after reaching an environment.
+func TestSessionArtifactsMigrationIsRepeatable(t *testing.T) {
+	_, admin, _ := openNotificationTestStore(t)
+	raw, err := os.ReadFile("migrations/00085_session_artifacts.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, _, _ := strings.Cut(string(raw), "-- +goose Down")
+	if _, err := admin.Exec(context.Background(), up); err != nil {
+		t.Fatalf("re-running the migration: %v", err)
 	}
 }

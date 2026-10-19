@@ -33,6 +33,20 @@ const (
 	MaxSessionArtifactBytes = 500 << 20
 )
 
+// Limits on a session's uploaded but uncommitted artifact versions.
+const (
+	MaxPendingArtifactUploads = 2 * MaxSessionArtifactFiles
+	MaxPendingArtifactBytes   = 2 * MaxSessionArtifactBytes
+)
+
+// ArtifactUploadTTL is how long an uncommitted artifact upload can still be
+// committed before the sweeper deletes it.
+const ArtifactUploadTTL = 24 * time.Hour
+
+// ArtifactReplacedGrace is how long a version a commit replaced or deleted
+// stays in the bucket, so a read that started before the commit can finish.
+const ArtifactReplacedGrace = time.Hour
+
 // Session output types.
 const (
 	SessionOutputNone          = "none"
@@ -80,8 +94,20 @@ type ArtifactManifestEntry struct {
 	SHA256 string
 }
 
+// reservedArtifactNames are file names Windows reserves for devices, with or
+// without an extension.
+var reservedArtifactNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
 // CleanArtifactPath validates a slash-separated path relative to the session's
-// artifact directory and returns it in Unicode NFC form.
+// artifact directory and returns it in Unicode NFC form. It rejects control
+// and invisible format characters, dot segments, Windows device names, and
+// any path under the versions directory in any letter case.
 func CleanArtifactPath(raw string) (string, error) {
 	if raw == "" || !utf8.ValidString(raw) {
 		return "", ErrInvalidArtifactPath
@@ -94,7 +120,7 @@ func CleanArtifactPath(raw string) (string, error) {
 		return "", ErrInvalidArtifactPath
 	}
 	for _, r := range cleaned {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return "", ErrInvalidArtifactPath
 		}
 	}
@@ -103,9 +129,19 @@ func CleanArtifactPath(raw string) (string, error) {
 		if segment == "" || segment == "." || segment == ".." {
 			return "", ErrInvalidArtifactPath
 		}
+		base, _, _ := strings.Cut(segment, ".")
+		if reservedArtifactNames[strings.ToUpper(base)] {
+			return "", ErrInvalidArtifactPath
+		}
 	}
-	if segments[0] == ArtifactVersionsDir {
+	if strings.EqualFold(segments[0], ArtifactVersionsDir) {
 		return "", ErrInvalidArtifactPath
 	}
 	return cleaned, nil
+}
+
+// ArtifactObjectVersion is one object version in the artifact bucket.
+type ArtifactObjectVersion struct {
+	S3Key     string
+	VersionID string
 }

@@ -46,7 +46,16 @@ type memoryArtifactRows struct {
 	sessions map[string]string
 	members  map[string]string
 	rows     map[string]map[string]domain.SessionArtifact
+	// pending holds open uploads by S3 key and version.
+	pending map[domain.ArtifactObjectVersion]pendingUpload
+	// replaced holds versions a commit replaced or deleted.
+	replaced []domain.ArtifactObjectVersion
 	commits  int
+}
+
+type pendingUpload struct {
+	sessionID string
+	size      int64
 }
 
 func newMemoryArtifactRows() *memoryArtifactRows {
@@ -54,7 +63,64 @@ func newMemoryArtifactRows() *memoryArtifactRows {
 		sessions: map[string]string{artifactSessionA: artifactOrgA, artifactSessionB: artifactOrgB},
 		members:  map[string]string{artifactUserA: artifactOrgA, artifactUserB: artifactOrgB},
 		rows:     map[string]map[string]domain.SessionArtifact{},
+		pending:  map[domain.ArtifactObjectVersion]pendingUpload{},
 	}
+}
+
+func (m *memoryArtifactRows) pendingStats(sessionID string) (int, int64) {
+	count, bytes := 0, int64(0)
+	for _, upload := range m.pending {
+		if upload.sessionID == sessionID {
+			count++
+			bytes += upload.size
+		}
+	}
+	return count, bytes
+}
+
+func (m *memoryArtifactRows) ArtifactUploadAllowed(_ context.Context, orgID, sessionID string, size int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count, bytes := m.pendingStats(sessionID)
+	return count+1 <= domain.MaxPendingArtifactUploads && bytes+size <= domain.MaxPendingArtifactBytes, nil
+}
+
+func (m *memoryArtifactRows) RecordArtifactUpload(_ context.Context, orgID, sessionID, s3Key, versionID string, size int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions[sessionID] != orgID {
+		return postgres.ErrNotFound
+	}
+	count, bytes := m.pendingStats(sessionID)
+	if count+1 > domain.MaxPendingArtifactUploads || bytes+size > domain.MaxPendingArtifactBytes {
+		return postgres.ErrArtifactLimit
+	}
+	m.pending[domain.ArtifactObjectVersion{S3Key: s3Key, VersionID: versionID}] = pendingUpload{sessionID: sessionID, size: size}
+	return nil
+}
+
+func (m *memoryArtifactRows) RequireSessionArtifactAccess(_ context.Context, principal domain.Principal, orgID, sessionID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.members[principal.UserID] != orgID {
+		return postgres.ErrForbidden
+	}
+	if m.sessions[sessionID] != orgID {
+		return postgres.ErrNotFound
+	}
+	return nil
+}
+
+func (m *memoryArtifactRows) SessionArtifactCounts(_ context.Context, orgID string, sessionIDs []string) (map[string]int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]int{}
+	for _, sessionID := range sessionIDs {
+		if m.sessions[sessionID] == orgID && len(m.rows[sessionID]) > 0 {
+			out[sessionID] = len(m.rows[sessionID])
+		}
+	}
+	return out, nil
 }
 
 func (m *memoryArtifactRows) ChangedSessionArtifacts(_ context.Context, orgID, sessionID string, manifest []domain.ArtifactManifestEntry) ([]string, error) {
@@ -73,11 +139,23 @@ func (m *memoryArtifactRows) ChangedSessionArtifacts(_ context.Context, orgID, s
 	return changed, nil
 }
 
-func (m *memoryArtifactRows) CommitSessionArtifacts(_ context.Context, orgID, sessionID string, upserts []domain.SessionArtifact, deletes []string) error {
+func (m *memoryArtifactRows) CommitSessionArtifacts(_ context.Context, orgID, sessionID, _ string, workerEpoch int64, upserts []domain.SessionArtifact, deletes []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(upserts) == 0 && len(deletes) == 0 {
+		return nil
+	}
 	if m.sessions[sessionID] != orgID {
 		return postgres.ErrNotFound
+	}
+	if workerEpoch != artifactEpoch {
+		return postgres.ErrStaleWorker
+	}
+	for _, row := range upserts {
+		upload, ok := m.pending[domain.ArtifactObjectVersion{S3Key: row.S3Key, VersionID: row.VersionID}]
+		if !ok || upload.sessionID != sessionID {
+			return postgres.ErrArtifactVersionUnknown
+		}
 	}
 	next := map[string]domain.SessionArtifact{}
 	for path, row := range m.rows[sessionID] {
@@ -95,6 +173,14 @@ func (m *memoryArtifactRows) CommitSessionArtifacts(_ context.Context, orgID, se
 	}
 	if len(next) > domain.MaxSessionArtifactFiles || total > domain.MaxSessionArtifactBytes {
 		return postgres.ErrArtifactLimit
+	}
+	for path, old := range m.rows[sessionID] {
+		if row, ok := next[path]; !ok || row.VersionID != old.VersionID {
+			m.replaced = append(m.replaced, domain.ArtifactObjectVersion{S3Key: old.S3Key, VersionID: old.VersionID})
+		}
+	}
+	for _, row := range upserts {
+		delete(m.pending, domain.ArtifactObjectVersion{S3Key: row.S3Key, VersionID: row.VersionID})
 	}
 	m.rows[sessionID] = next
 	m.commits++
@@ -134,11 +220,11 @@ func (m *memoryArtifactRows) SessionArtifactsBySessions(_ context.Context, orgID
 	return out, nil
 }
 
-func (m *memoryArtifactRows) SessionArtifact(_ context.Context, orgID, sessionID, path string) (domain.SessionArtifact, error) {
+func (m *memoryArtifactRows) SessionArtifact(_ context.Context, userID, orgID, sessionID, path string) (domain.SessionArtifact, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	row, ok := m.rows[sessionID][path]
-	if m.sessions[sessionID] != orgID || !ok {
+	if m.sessions[sessionID] != orgID || m.members[userID] != orgID || !ok {
 		return domain.SessionArtifact{}, postgres.ErrNotFound
 	}
 	return row, nil
@@ -402,7 +488,8 @@ func TestArtifactSyncListAndServe(t *testing.T) {
 	projected := decodeBody[struct {
 		Session sessionResponse `json:"session"`
 	}](t, session).Session
-	if projected.OutputType != domain.SessionOutputArtifact || len(projected.ArtifactFiles) != 2 {
+	if projected.OutputType != domain.SessionOutputArtifact || len(projected.ArtifactFiles) != 2 ||
+		projected.ArtifactCount == nil || *projected.ArtifactCount != 2 {
 		t.Fatalf("session projection = %+v", projected)
 	}
 
@@ -587,10 +674,8 @@ func TestWorkerArtifactCommitVerifiesVersions(t *testing.T) {
 	if deleted.Code != http.StatusNoContent || len(h.store.rows[artifactSessionA]) != 0 {
 		t.Fatalf("delete: %d %s", deleted.Code, deleted.Body.String())
 	}
-	key := "orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/report.html"
-	if h.fake.DeleteMarkers(key) != 1 || h.fake.Versions(key) != 1 {
-		t.Fatalf("deleted path: markers=%d versions=%d, want a delete marker over the kept version",
-			h.fake.DeleteMarkers(key), h.fake.Versions(key))
+	if len(h.store.replaced) != 1 || h.store.replaced[0].VersionID != upload.VersionID {
+		t.Fatalf("replaced = %+v, want the deleted version queued for the sweeper", h.store.replaced)
 	}
 }
 
@@ -634,9 +719,14 @@ type artifactOfferingStore struct {
 }
 
 func TestLaunchContextCarriesRequestedOutput(t *testing.T) {
-	launch, err := launchContextFrom(domain.WorkerLaunch{SessionID: artifactSessionA, Kind: "worker", RequestedOutput: domain.RequestedOutputArtifact}, true)
+	session := domain.WorkerLaunch{SessionID: artifactSessionA, Kind: "worker", RequestedOutput: domain.RequestedOutputArtifact}
+	launch, err := launchContextFrom(session, launchCapabilities{resolvesWorkspacePath: true, artifacts: true})
 	if err != nil || launch.RequestedOutput != domain.RequestedOutputArtifact {
 		t.Fatalf("launch = %+v, %v", launch, err)
+	}
+	launch, err = launchContextFrom(session, launchCapabilities{resolvesWorkspacePath: true})
+	if err != nil || launch.RequestedOutput != "" {
+		t.Fatalf("launch with artifacts off = %+v, %v; want no requested output", launch, err)
 	}
 }
 
@@ -668,8 +758,89 @@ func TestWorkerReconnectReportsArtifacts(t *testing.T) {
 			t.Fatalf("reconnect: %d %s", rec.Code, rec.Body.String())
 		}
 		launch := decodeBody[worker.BootstrapResponse](t, rec).Launch
-		if launch.Artifacts != enabled || launch.RequestedOutput != domain.RequestedOutputArtifact {
+		wantOutput := ""
+		if enabled {
+			wantOutput = domain.RequestedOutputArtifact
+		}
+		if launch.Artifacts != enabled || launch.RequestedOutput != wantOutput {
 			t.Fatalf("enabled=%v: launch artifacts=%v requestedOutput=%q", enabled, launch.Artifacts, launch.RequestedOutput)
 		}
+	}
+}
+
+func TestArtifactUploadsAreCappedBeforeCommit(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	h.store.mu.Lock()
+	for index := range domain.MaxPendingArtifactUploads {
+		h.store.pending[domain.ArtifactObjectVersion{S3Key: "k", VersionID: strconv.Itoa(index)}] = pendingUpload{sessionID: artifactSessionA, size: 1}
+	}
+	h.store.mu.Unlock()
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	rec := h.upload(workerAuth, "report.html", []byte("x"), hexSHA([]byte("x")))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("upload over the pending limit: %d %s", rec.Code, rec.Body.String())
+	}
+	if h.fake.Puts() != 0 {
+		t.Fatal("an upload over the pending limit reached S3")
+	}
+}
+
+func TestArtifactCommitNeedsAnOpenUpload(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	h.syncArtifacts(map[string][]byte{"report.html": []byte("first")})
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	committed := h.store.rows[artifactSessionA]["report.html"]
+	// Committing the same version again: it is no longer an open upload.
+	rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{
+		Files: []worker.ArtifactCommitFile{{Path: "report.html", VersionID: committed.VersionID, Size: committed.Size, SHA256: committed.SHA256}},
+	})
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "artifact_version_missing") {
+		t.Fatalf("recommit: %d %s", rec.Code, rec.Body.String())
+	}
+	h.syncArtifacts(map[string][]byte{"report.html": []byte("second")})
+	if len(h.store.replaced) != 1 || h.store.replaced[0].VersionID != committed.VersionID {
+		t.Fatalf("replaced = %+v, want the first version queued", h.store.replaced)
+	}
+}
+
+func TestArtifactEmptyCommitChangesNothing(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	workerAuth := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	rec := h.workerJSON(http.MethodPost, "/api/cloud/v1/worker/artifacts/commit", workerAuth, worker.ArtifactCommitRequest{})
+	if rec.Code != http.StatusNoContent || h.store.commits != 0 {
+		t.Fatalf("empty commit: %d, commits = %d", rec.Code, h.store.commits)
+	}
+}
+
+func TestArtifactFileAccessEndsWithMembership(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	h.syncArtifacts(map[string][]byte{"report.html": []byte("x")})
+	prefix := h.accessPrefix(artifactTokenA, artifactOrgA, artifactSessionA)
+	if rec := h.do(http.MethodGet, prefix+"report.html", "", nil, nil); rec.Code != http.StatusOK {
+		t.Fatalf("member read: %d", rec.Code)
+	}
+	h.store.mu.Lock()
+	delete(h.store.members, artifactUserA)
+	h.store.mu.Unlock()
+	rec := h.do(http.MethodGet, prefix+"report.html", "", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("read after the user left: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Content-Security-Policy") != "" || rec.Header().Get("ETag") != "" {
+		t.Fatalf("an error response carries file headers: %v", rec.Header())
+	}
+}
+
+func TestArtifactFileHeadReadsNoBody(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	body := []byte("<html>x</html>")
+	h.syncArtifacts(map[string][]byte{"report.html": body})
+	prefix := h.accessPrefix(artifactTokenA, artifactOrgA, artifactSessionA)
+	rec := h.do(http.MethodHead, prefix+"report.html", "", nil, nil)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Length") != strconv.Itoa(len(body)) {
+		t.Fatalf("HEAD: %d %v", rec.Code, rec.Header())
+	}
+	if h.fake.Gets() != 0 {
+		t.Fatalf("HEAD read the object body %d times", h.fake.Gets())
 	}
 }
