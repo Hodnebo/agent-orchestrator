@@ -148,7 +148,7 @@ The phone tries every address in the QR code and uses the first one that answers
 
 From the phone you can open any project and worker, use structured Chat or the agent's terminal UI, start new sessions, answer approvals and questions, switch agents and models, dictate by voice, attach files, follow pull requests, reviews and reviewer runs, and get push notifications.
 
-Another Orchestrator.inc desktop can also connect to this computer as a remote host (`ao remote-host`, then **Settings → Remote hosts → Add host** on the other machine). See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
+Another Orchestrator.inc desktop can also connect to this computer as a remote host. Run `ao remote-host` on this computer. On the other one, turn on **Settings → General → Developer mode** and use **Settings → Remote hosts → Add host**. See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
 
 AO Cloud is a separate hosted service that runs workers in remote workspaces instead of on your computer. Access is limited for now; join the waitlist at [orchestrator.inc](https://orchestrator.inc).
 
