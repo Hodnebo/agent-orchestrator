@@ -425,3 +425,70 @@ func TestScriptRedactionIsLinear(t *testing.T) {
 		}
 	}
 }
+
+// publishedByRuns runs commands as a project's Setup and as its Cleanup (the
+// commands script with its markers, parsed as the control plane parses it,
+// with the commands it knows) and returns everything they publish: each
+// step's live and final events (command and output) as the worker sends them
+// and as the control plane sanitizes them, the failed Setup's summary (its
+// output, command and message, what the startup error's Detail is made of),
+// and the Cleanup steps, whose failed step's output repeats its command line.
+func publishedByRuns(t *testing.T, commands []string) string {
+	t.Helper()
+	summary, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond}, commands)
+	nonce := NewScriptMarkerNonce()
+	output, code := runCleanupScript(t, CleanupCommandsScript(commands, nonce), t.TempDir())
+	events = append(events, CleanupStepEvents(output, CleanupRun{
+		RunID: "r", Nonce: nonce, Commands: nonEmptyCommands(commands), ExitCode: code, StartedAt: time.Now(),
+	})...)
+	for _, event := range append([]ScriptStepEvent(nil), events...) {
+		events = append(events, SanitizeScriptStepEvent(event))
+	}
+	encoded, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published strings.Builder
+	for _, event := range events {
+		published.WriteString(event.Command + "\n" + event.Output + "\n")
+	}
+	published.WriteString(string(encoded) + "\n" + summary.Output + "\n" + summary.Command + "\n" + summary.Message() + "\n")
+	published.WriteString(RedactScriptOutput(summary.Output) + "\n" + RedactScriptOutput(summary.Command) + "\n")
+	return published.String()
+}
+
+// The values commands assign to secret-named variables, in every shell form,
+// literally; not those of other names or that expand something.
+func TestAssignedSecretValues(t *testing.T) {
+	t.Parallel()
+	got := assignedSecretValues([]string{
+		`MY_TOKEN=value01; export MY_SERVICE_SECRET=value02 && DB_PASSWORD="value 03" API_KEY='value04'`,
+		"declare -x DEPLOY_SECRET=value05; local -r SIGNING_KEY=value06; readonly AUTH_TOKEN=value07",
+		"typeset NPM_AUTH=value08; set -a; CI_TOKEN=value09 make deploy; (OTHER_PASS=value10)",
+		`HOST=db.example.com PORT=5432 KEY_PATH=/etc/key GIT_AUTHOR_NAME=jane TOKEN=$(cat f) SECRET="$X" PASSWORD=` + "`cat p`",
+	})
+	want := []string{"value01", "value02", "value 03", "value04", "value05", "value06", "value07", "value08", "value09", "value10"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("assignedSecretValues = %q, want %q", got, want)
+	}
+}
+
+// A value a step assigns to a secret-named variable and prints with nothing
+// naming it (the staging re-test's case 14) is masked on every path: in the
+// step that sets it, in a later step that inherits it through a file, in the
+// failed run's summary, and in Cleanup's steps and its failed step's line.
+func TestAssignedSecretNeverPublished(t *testing.T) {
+	published := publishedByRuns(t, []string{
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`echo 'export DEPLOY_TOKEN=Leak80QZXa' > "${TMPDIR:-/tmp}/ao-assigned-$$.sh"; echo saved`,
+		`echo 'DEPLOY_TOKEN=Leak81QZXb' >/dev/null; printf 'inherited %s\n' Leak81QZXb; exit 3`,
+	})
+	for _, secret := range []string{"FAKEVAL14", "Leak80QZXa", "Leak81QZXb"} {
+		if strings.Contains(published, secret) {
+			t.Errorf("%q published:\n%s", secret, published)
+		}
+	}
+	if !strings.Contains(published, "inherited [REDACTED]") {
+		t.Errorf("the later step's output is not masked:\n%s", published)
+	}
+}

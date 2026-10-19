@@ -924,15 +924,17 @@ type setupStepEvents struct {
 	stopWatch func()
 }
 
-// redactor masks what a run publishes: the values of the secret-named
-// variables of the environment its steps run in and Secrets, then the
-// patterns.
-func (r SetupRunner) redactor() scriptRedactor {
+// redactor masks what a run of commands publishes: the values of the
+// secret-named variables of the environment its steps run in, the values its
+// commands assign to secret-named variables (assignedSecretValues: a step
+// that sets one prints it with nothing naming it, and later steps inherit it)
+// and Secrets, then the patterns.
+func (r SetupRunner) redactor(commands []string) scriptRedactor {
 	var secrets []string
 	if r.Secrets != nil {
 		secrets = r.Secrets()
 	}
-	return newScriptRedactor(os.Environ(), secrets)
+	return newScriptRedactor(os.Environ(), append(secrets, assignedSecretValues(commands)...))
 }
 
 func (r SetupRunner) startStepEvents(ctx context.Context, total int, redactor scriptRedactor) *setupStepEvents {

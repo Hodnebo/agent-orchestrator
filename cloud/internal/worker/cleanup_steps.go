@@ -98,7 +98,10 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		nonce, own = match[1], match[1] == run.Nonce
 	}
 	prefix := scriptMarkerPrefix + nonce + " "
-	redactor := scriptRedactor{}
+	// The run's commands, when the control plane knows them, say which values
+	// they assign to secret-named variables: a step that sets one prints it
+	// with nothing naming it.
+	redactor := newScriptRedactor(nil, assignedSecretValues(run.Commands))
 	steps := map[int]*cleanupStep{}
 	var current *cleanupStep
 	var preamble, trailer strings.Builder
@@ -282,7 +285,10 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	if run.ExitCode == 0 && strings.TrimSpace(output) == "" {
 		return nil
 	}
-	redactor := scriptRedactor{}
+	// The run's commands, when the control plane knows them, say which values
+	// they assign to secret-named variables: a step that sets one prints it
+	// with nothing naming it.
+	redactor := newScriptRedactor(nil, assignedSecretValues(run.Commands))
 	event := ScriptStepEvent{
 		Phase: ScriptPhaseCleanup, RunID: run.RunID, Step: 1, Total: 1,
 		StartedAt: scriptTimestamp(run.StartedAt),

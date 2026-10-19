@@ -5,6 +5,44 @@ import (
 	"strings"
 )
 
+// assignmentPattern matches a shell assignment (NAME=value, export NAME=value,
+// declare -x NAME=value, local, readonly or typeset NAME=value, NAME=value
+// before a command) at the start of a word or of a quoted string (echo
+// 'TOKEN=x' > env.sh, which a later step sources): its groups are the name and the
+// value, double-quoted, single-quoted or bare.
+var assignmentPattern = regexp.MustCompile("(?:^|[\\s;&|(`\"'])(?:(?:export|declare|local|readonly|typeset)[ \t]+(?:-[A-Za-z]+[ \t]+)*)?([A-Za-z_][A-Za-z0-9_]*)=(\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|[^\\s;&|)`'\"]*)")
+
+// assignedSecretValues are the values commands assign to secret-named
+// variables (isSecretName) in shell assignments, literally: a value that
+// expands something ($, a backtick) is not known until it runs. A step that
+// sets one prints it with nothing naming it ("$MY_SERVICE_SECRET"), and the
+// steps after it may inherit it, so its run masks it wherever it appears.
+func assignedSecretValues(commands []string) []string {
+	var values []string
+	for _, command := range commands {
+		if !strings.Contains(command, "=") {
+			continue
+		}
+		for _, match := range assignmentPattern.FindAllStringSubmatch(command, -1) {
+			name, value := match[1], match[2]
+			if !isSecretName(name) {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(value, `"`):
+				value = strings.ReplaceAll(strings.TrimSuffix(value[1:], `"`), `\"`, `"`)
+			case strings.HasPrefix(value, "'"):
+				value = strings.TrimSuffix(value[1:], "'")
+			}
+			if value == "" || strings.ContainsAny(value, "$`") {
+				continue
+			}
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
 // The script redaction's passes for credentials a secret-named pair does not
 // name: a YAML block scalar's lines, a password given to a known command in a
 // short flag, a Kubernetes Secret's data, a token used as a URL's user, and a
