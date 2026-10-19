@@ -78,6 +78,7 @@ export type ChromeApi = {
 		captureVisibleTab(windowId: number, options: { format: "png" | "jpeg" }): Promise<string>;
 		goBack(tabId: number): Promise<void>;
 		onRemoved: Listener<[number, { windowId: number; isWindowClosing: boolean }]>;
+		onActivated: Listener<[{ tabId: number; windowId: number }]>;
 		onUpdated: Listener<[number, { status?: string; url?: string; groupId?: number; title?: string }, Tab]>;
 	};
 	tabGroups: {
