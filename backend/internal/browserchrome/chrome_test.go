@@ -222,6 +222,35 @@ func TestSetupUsesRegistryWhenPresent(t *testing.T) {
 	}
 }
 
+func TestRemoveKeepsAnotherInstallsRegistryEntry(t *testing.T) {
+	reg := &fakeRegistry{values: map[string]string{}}
+	first, _, _ := testInstaller(t)
+	first.registry = reg
+	second, _, _ := testInstaller(t) // another AO data directory
+	second.registry = reg
+	if _, err := first.Setup(); err != nil {
+		t.Fatal(err)
+	}
+	if second.Status().Enabled {
+		t.Fatal("the other install's registration counted as this one's")
+	}
+	if _, err := second.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if reg.values[HostName] != first.Paths.HostManifestCopy() {
+		t.Fatalf("removing one install unregistered another: %#v", reg.values)
+	}
+	if !first.Status().Enabled {
+		t.Fatal("first install lost its registration")
+	}
+	if _, err := first.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.values[HostName]; ok {
+		t.Fatal("owner's remove left the registration behind")
+	}
+}
+
 func TestDefaultExtensionSourceSitsBesideDaemonDir(t *testing.T) {
 	got := DefaultExtensionSource(filepath.Join("/Applications", "AO.app", "Contents", "Resources", "daemon", "ao"))
 	want := filepath.Join("/Applications", "AO.app", "Contents", "Resources", "browser-extension")

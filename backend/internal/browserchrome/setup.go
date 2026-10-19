@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Browser is one Chrome channel AO can register its native host with.
@@ -159,7 +160,9 @@ func (i Installer) Refresh() error {
 // Remove unregisters the host and deletes AO's Chrome-mode files.
 func (i Installer) Remove() (Status, error) {
 	var errs []error
-	if reg := i.reg(); reg != nil {
+	// Only unregister a registration that points at this data directory's
+	// manifest: the Windows name is shared by every AO install.
+	if reg := i.reg(); reg != nil && i.ownsRegistration(reg) {
 		errs = append(errs, reg.Unregister(HostName))
 	}
 	for _, browser := range i.browsers() {
@@ -193,8 +196,7 @@ func (i Installer) Status() Status {
 		status.ExtensionVersion = version
 	}
 	if reg := i.reg(); reg != nil {
-		path, err := reg.Lookup(HostName)
-		registered := err == nil && sameFile(path, i.Paths.HostManifestCopy())
+		registered := i.ownsRegistration(reg)
 		status.Channels = append(status.Channels, ChannelStatus{
 			Name:         "Google Chrome",
 			Available:    true,
@@ -217,6 +219,17 @@ func (i Installer) Status() Status {
 		}
 	}
 	return status
+}
+
+// ownsRegistration reports whether the registry's AO host entry points at
+// this data directory's manifest.
+func (i Installer) ownsRegistration(reg hostRegistry) bool {
+	path, err := reg.Lookup(HostName)
+	if err != nil || path == "" {
+		return false
+	}
+	want := i.Paths.HostManifestCopy()
+	return sameFile(path, want) || strings.EqualFold(filepath.Clean(path), filepath.Clean(want))
 }
 
 // ownsManifest reports whether path is AO's manifest pointing at this data
