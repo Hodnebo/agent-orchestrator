@@ -216,9 +216,12 @@ var secretShapes = []*regexp.Regexp{
 
 // RedactScriptOutput masks credentials in a Setup or Cleanup run's output
 // with the patterns every step event gets (no known secret values): the
-// control plane's redaction of what a worker or a Cleanup hook printed.
+// control plane's redaction of what a worker or a Cleanup hook printed. Like a
+// step's output (scriptStepOutput), the text is first collapsed to what a
+// terminal shows and stripped of escapes and control characters, so a colour
+// code between a secret's name and its value never hides the pair.
 func RedactScriptOutput(text string) string {
-	return scriptRedactor{}.redact(text)
+	return scriptRedactor{}.redact(activity.StripControl(collapseCarriageReturns(text)))
 }
 
 // redactSecretPairs masks the value of each secretPairPattern pair and

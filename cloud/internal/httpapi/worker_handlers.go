@@ -1171,6 +1171,9 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
 		} else {
 			// The script redaction: a Setup failure's detail is its output.
+			// RedactScriptOutput strips escapes and control characters before
+			// it masks, so a colour code between a secret's name and its value
+			// never hides the pair.
 			message := activitylog.Truncate(worker.RedactScriptOutput(strings.TrimSpace(startup.Message)), 1024)
 			detail := activitylog.Excerpt(worker.RedactScriptOutput(startup.Detail), 4096)
 			s.logger.Warn("workspace startup failed in the worker",

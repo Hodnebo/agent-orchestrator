@@ -528,6 +528,7 @@ func TestScriptRedactionPatterns(t *testing.T) {
 		{"gitlab", "glpat-" + strings.Repeat("x1Y2", 6), "[REDACTED]"},
 		{"github oauth", "gho_" + strings.Repeat("a1B2", 9), "[REDACTED]"},
 		{"private key", "-----BEGIN RSA PRIVATE KEY-----\n" + privateKeyBody + "-----END RSA PRIVATE KEY-----\nnext", "[REDACTED]\nnext"},
+		{"colour codes around a pair", "\x1b[1mNPM_AUTH\x1b[0m=\x1b[32mabc123\x1b[0m done", "NPM_AUTH=[REDACTED] done"},
 		{"private key end only", "...\n" + privateKeyBody + "-----END PRIVATE KEY-----\nnext", "...\n[REDACTED]\nnext"},
 		// Not secrets.
 		{"ssh agent socket", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1"},
