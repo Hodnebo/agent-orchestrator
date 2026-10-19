@@ -243,10 +243,9 @@ function reportApiError(
 
 async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
-	const visibilityOwned = operation === "GET /api/v1/projects" || operation === "GET /api/v1/sessions";
 	const baseUrl = runtimeApiBaseUrl;
 	if (baseUrl === null) {
-		if (!visibilityOwned) reportApiError(operation, "daemon_unavailable", 503);
+		reportApiError(operation, "daemon_unavailable", 503);
 		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
 			status: 503,
 			headers: { "Content-Type": "application/json" },
@@ -291,7 +290,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	} catch (error) {
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
-			if (!visibilityOwned) reportApiError(operation, "network_error");
+			reportApiError(operation, "network_error");
 		}
 		throw error;
 	}
@@ -307,7 +306,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		} catch {
 			// Non-JSON or empty body: fall back to status-only classification.
 		}
-		if (!visibilityOwned) reportApiError(
+		reportApiError(
 			operation,
 			response.status >= 500 ? "http_5xx" : "http_4xx",
 			response.status,

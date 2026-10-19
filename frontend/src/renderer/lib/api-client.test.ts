@@ -322,6 +322,17 @@ describe("api error telemetry", () => {
 		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("reports a failed project or session list like any other request", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("oops", { status: 500 }));
+		setApiBaseUrl("http://127.0.0.1:3037");
+
+		await apiClient.GET("/api/v1/projects");
+		await apiClient.GET("/api/v1/sessions");
+
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
+	});
+
 	it("reports http_4xx with ids stripped from the operation", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 404 }));
 		setApiBaseUrl("http://127.0.0.1:3037");
