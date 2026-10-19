@@ -46,6 +46,5 @@ func (s *Service) refreshProviderLaunch(ctx context.Context, id domain.SessionID
 	if err != nil || !stopped {
 		return false, err
 	}
-	s.startBackgroundWake(id)
 	return true, nil
 }

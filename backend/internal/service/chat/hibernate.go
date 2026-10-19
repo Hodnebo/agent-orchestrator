@@ -195,6 +195,9 @@ func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
 	if refreshed, err := s.refreshProviderLaunch(ctx, id, false); refreshed || err != nil {
+		if refreshed {
+			s.startBackgroundWake(id)
+		}
 		return refreshed, err
 	}
 	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: chatHibernateGrace})

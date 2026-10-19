@@ -206,6 +206,10 @@ func TestLaunchRefreshFailedResumeSurvivesServiceRestart(t *testing.T) {
 	ctx := context.Background()
 	// Match Session Manager: clear the sleep marker before attempting resume.
 	h.svc.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+		if _, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); err != nil {
+			t.Errorf("wake began before the triggering message was durable: %v", err)
+			return err
+		}
 		// Queue projection can advance the revision while wake clears the marker.
 		// Match the manager's retry rather than treating a rejected CAS as success.
 		for range 3 {
@@ -300,5 +304,29 @@ func TestLaunchRefreshExplicitStopClearsIntentWithoutSleepMarker(t *testing.T) {
 	pending, err := h.st.SessionLaunchRefreshPending(ctx, testSession)
 	if err != nil || pending {
 		t.Fatalf("explicit stop left intent=%v err=%v", pending, err)
+	}
+}
+
+func TestLaunchRefreshAdmitsMessageAfterConcurrentWakeClearsSleepMarker(t *testing.T) {
+	h, old, _ := versionRefreshHarness(t)
+	old.launchRefresh.Store(true)
+	ctx := context.Background()
+	wakeOnNewRelease(t, h, old, errors.New("replacement unavailable"))
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+		t.Fatalf("refresh=%v err=%v", stopped, err)
+	}
+	waitForLaunchRefresh(t, h)
+	// Model a concurrent resume clearing the UI marker before failing.
+	rec, _, _ := h.st.GetSession(ctx, testSession)
+	if cleared, err := h.st.SetSessionHibernated(ctx, testSession, rec.Revision, nil); err != nil || !cleared {
+		t.Fatalf("clear marker=%v err=%v", cleared, err)
+	}
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "keep concurrent send", ClientMessageID: "concurrent-refresh"})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send=%+v err=%v", turn, err)
+	}
+	queued, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || queued.TurnID != turn.ID {
+		t.Fatalf("accepted message not retained: %+v err=%v", queued, err)
 	}
 }
