@@ -160,7 +160,7 @@ export function TurnSettingsBar({
 			...option,
 			choices: option.choices.map((choice) => ({
 				...choice,
-				name: claudeLabels?.(choice.value) ?? agentModelDisplayLabel(harness, choice.name, choice.description),
+				name: claudeLabels?.(choice.value) ?? agentModelDisplayLabel(harness, choice.name),
 				description: choice.description
 					? agentModelDisplayLabel(harness, choice.description)
 					: choice.description,
