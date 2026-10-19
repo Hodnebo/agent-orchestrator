@@ -272,9 +272,11 @@ func Run() error {
 		log.Warn("install using-ao skill", "err", err)
 	}
 
-	telemetryCfg := cfg
-	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
-	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
+	// Product telemetry answers to AO_TELEMETRY_EVENTS alone. The agent-switch
+	// consent (policyCoordinator) governs only the Sentry failure path above and
+	// the dispatcher below; wiring it in here turned the "Share error events"
+	// switch into a kill switch for every daemon product event.
+	telemetrySink := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
