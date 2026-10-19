@@ -205,7 +205,7 @@ func TestLatestPrimaryTurnUsesReviewerFenceAndProjectionTransaction(t *testing.T
 		}
 		got, found, err := s.LatestPrimaryTurn(tx, conversation.ID, "review-thread", "review-generation")
 		if err != nil || !found || got.ID != "review-turn" {
-			return fmt.Errorf("transaction read: %+v %v %v", got, found, err)
+			return fmt.Errorf("transaction read: %+v %v: %w", got, found, err)
 		}
 		return nil
 	})
