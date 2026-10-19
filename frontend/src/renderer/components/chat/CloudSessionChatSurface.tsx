@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -435,6 +437,14 @@ export function CloudSessionChatSurface({
 			throw new Error("The Cloud worker did not become available.");
 		},
 	});
+	// Claude's live list is family aliases; the new-task picker's catalog carries the versions, as in local Chat.
+	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", ""), enabled: session.provider === "claude-code" }).data;
+	const resolveClaudeChoice = useMemo(() => claudeCatalog?.models.length ? claudeChoiceModel(claudeCatalog.models) : undefined, [claudeCatalog]);
+	const models = useMemo(() => resolveClaudeChoice && claudeCatalog
+		? claudeCatalog.models
+			.filter((model) => model.id.toLowerCase() !== "default")
+			.map((model) => ({ id: model.id, displayName: model.label || model.id, default: Boolean(model.isDefault), efforts: model.efforts, defaultEffort: model.defaultEffort }))
+		: modelsQuery.data?.models ?? [], [claudeCatalog, modelsQuery.data?.models, resolveClaudeChoice]);
 	useEffect(() => {
 		const native = modelsQuery.data;
 		if (!modelsQuery.isFetchedAfterMount || !native || native.selectionVersionAtFetch !== manualSelectionRef.current.version || (!native.model && !native.reasoningEffort)) return;
@@ -479,8 +489,9 @@ export function CloudSessionChatSurface({
 		onSuccess: () => void invalidate(),
 	});
 	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings,
-	}), [eventsQuery.data, session, settings]);
+		...toSnapshot(session, eventsQuery.data ?? []),
+		settings: { ...settings, model: (settings.model && resolveClaudeChoice?.(settings.model)?.id) || settings.model },
+	}), [eventsQuery.data, resolveClaudeChoice, session, settings]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -540,7 +551,7 @@ export function CloudSessionChatSurface({
 		<ChatWorkspace
 			snapshot={snapshot}
 			onSessionLinkOpen={openSessionLink}
-			models={modelsQuery.data?.models ?? []}
+			models={models}
 			configOptions={planOptions}
 			onChooseConfigOption={planOptions ? (id, choice) => {
 				if (id !== "mode" || !("value" in choice) || !planOptions[0].choices.some((option) => option.value === choice.value)) return;

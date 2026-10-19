@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -138,6 +139,24 @@ describe("CloudSessionChatSurface", () => {
 			expect.objectContaining({ mode: "trusted" }),
 			{ idempotencyKey: "agent-1" },
 		);
+	});
+
+	it("lists Claude models from the new-task catalog, as local Chat does", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [{ id: "opus", displayName: "Opus", default: true }], model: "opus" });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
+			{ id: "claude-opus-5", label: "Claude Opus 5" },
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: ["low", "high"] },
+		] });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings.model).toBe("claude-opus-5-5"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].models.map((model: { id: string }) => model.id)).toEqual(["claude-opus-5", "claude-opus-5-5"]);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].models[1].efforts).toEqual(["low", "high"]);
 	});
 
 	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {

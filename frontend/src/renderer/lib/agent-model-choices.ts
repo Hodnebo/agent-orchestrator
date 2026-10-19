@@ -33,12 +33,8 @@ export function modelChoiceLabel(choice: { id: string; label: string }): string 
 	return isDefaultPlaceholderLabel(choice.label) ? choice.id : choice.label || choice.id;
 }
 
-/** A Claude alias ("Opus") takes the model its description leads with ("Opus 5.5 · Best for…"). */
-export function agentModelDisplayLabel(agentId: string | undefined, label: string, description = ""): string {
-	if (agentId !== "claude-code") return label;
-	const name = label.replace(/^Claude\s+/i, "");
-	const resolved = description.split("·")[0].trim();
-	return resolved.toLowerCase().startsWith(`${name.toLowerCase()} `) ? resolved : name;
+export function agentModelDisplayLabel(agentId: string | undefined, label: string): string {
+	return agentId === "claude-code" ? label.replace(/^Claude\s+/i, "") : label;
 }
 
 const CLAUDE_FAMILIES = ["fable", "opus", "sonnet", "haiku"];

@@ -150,7 +150,7 @@ export function TurnSettingsBar({
 	const displayModels = useMemo(
 		() => models.map((model) => ({
 			...model,
-			displayName: agentModelDisplayLabel(harness, model.displayName, model.description),
+			displayName: agentModelDisplayLabel(harness, model.displayName),
 		})),
 		[harness, models],
 	);
