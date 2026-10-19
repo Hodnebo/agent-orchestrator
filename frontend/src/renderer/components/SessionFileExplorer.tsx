@@ -37,7 +37,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./ui/resiz
 
 import { useFilesActionsHost, useFilesTopbarHost } from "./files-topbar-host";
 import { FileTree } from "./FileTree";
-import { FileContentPane, type FileOpenOptions } from "./FileContentPane";
+import { FileContentPane, type FileOpenOptions, type FileViewMode } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { WorkspaceReviewPane } from "./diffs/WorkspaceReviewPane";
 import { ReviewChangesMenu } from "./diffs/ReviewChangesMenu";
@@ -192,6 +192,18 @@ export function SessionFileExplorer({
 		setSelectedPath(path);
 		setFilesChangedOnly(uiKey, false);
 	};
+	const openPreviewInCenter = (mode: FileViewMode) => {
+		if (!selectedPath || !onOpenFile) return;
+		onToggleMaximized?.(false);
+		onOpenFile(selectedPath, {
+			...previewRequest,
+			source: previewRequest?.source ?? source,
+			previousPath: previewRequest?.previousPath ?? selectedPreviousPath,
+			mode,
+			editing: false,
+		});
+	};
+
 	const treeSelectedPath = selectedPath;
 	const selectedPreviousPath = filesData?.files.find((file) => file.path === selectedPath)?.previousPath;
 
@@ -416,7 +428,7 @@ export function SessionFileExplorer({
 				<ResizablePanelGroup className="min-h-0 flex-1 border-t border-border">
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
-							<FileContentPane annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />
+							<FileContentPane onOpenInCenter={onOpenFile && selectedPath ? openPreviewInCenter : undefined} annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />
 						</ContentScrollArea>
 					</ResizablePanel>
 					{treeOpen ? (

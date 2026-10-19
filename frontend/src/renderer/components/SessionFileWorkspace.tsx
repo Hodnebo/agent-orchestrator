@@ -46,10 +46,16 @@ export function SessionFileWorkspace({
 }) {
 	const snapshotAnnotation = useFileAnnotation(sessionId, {
 		hostId,
-		source: source?.kind === "snapshot" ? `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; commits ${source.commitShas?.join(",") || "all"})` : "Workspace",
+		source:
+			source?.kind === "snapshot" ? `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; commits ${source.commitShas?.join(",") || "all"})` : "Workspace",
 	});
 	const identity = fileKey ?? path;
 	const scrollRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!active || initialEditing) return;
+		const frame = requestAnimationFrame(() => scrollRef.current?.focus({ preventScroll: true }));
+		return () => cancelAnimationFrame(frame);
+	}, [active, initialEditing, initialRequestKey]);
 	const pendingScrollRestoreRef = useRef<number | null>(null);
 	const restoreFrameRef = useRef<number | null>(null);
 	const scrollKey = `${hostId ?? "local"}:${sessionId}:${JSON.stringify(source)}:${path}`;
@@ -97,6 +103,9 @@ export function SessionFileWorkspace({
 			<div
 				className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
 				data-testid="session-file-scroll"
+				role="region"
+				aria-label={path}
+				tabIndex={-1}
 				onScroll={(event) => {
 					const pending = pendingScrollRestoreRef.current;
 					if (pending != null && event.currentTarget.scrollTop !== pending) return;

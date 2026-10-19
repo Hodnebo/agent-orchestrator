@@ -76,7 +76,7 @@ vi.mock("./FileTree", () => ({
 }));
 
 vi.mock("./FileContentPane", () => ({
-	FileContentPane: ({ commitSha, initialEditing, initialMode, path, previousPath, split }: { commitSha?: string; initialEditing?: boolean; initialMode?: string; path: string | null; previousPath?: string; split?: boolean }) => <div data-commit-sha={commitSha ?? ""} data-editing={String(Boolean(initialEditing))} data-mode={initialMode ?? "default"} data-previous-path={previousPath} data-split={String(Boolean(split))} data-testid="content-pane">{path ?? "none"}</div>,
+	FileContentPane: ({ onOpenInCenter, commitSha, initialEditing, initialMode, path, previousPath, split }: { onOpenInCenter?:(mode:"file")=>void; commitSha?: string; initialEditing?: boolean; initialMode?: string; path: string | null; previousPath?: string; split?: boolean }) => <div data-commit-sha={commitSha ?? ""} data-editing={String(Boolean(initialEditing))} data-mode={initialMode ?? "default"} data-previous-path={previousPath} data-split={String(Boolean(split))} data-testid="content-pane">{path ?? "none"}{onOpenInCenter ? <button onClick={()=>onOpenInCenter("file")} type="button">Open preview in center</button> : null}</div>,
 }));
 
 vi.mock("./diffs/WorkspaceReviewPane", () => ({
@@ -379,6 +379,16 @@ describe("SessionFileExplorer", () => {
 		await userEvent.click(screen.getByRole("button", {name:"Open diff in center"}));
   expect(onToggleMaximized).toHaveBeenCalledWith(false);
   expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx",expect.objectContaining({mode:"diff"}));
+	});
+
+	it("moves the maximized full-file preview into the center while keeping its source", async () => {
+		const onOpenFile = vi.fn();
+		const onToggleMaximized = vi.fn();
+		renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onToggleMaximized={onToggleMaximized} sessionId="max-preview-center" />);
+		await userEvent.click(await screen.findByRole("button", { name: "Open full file" }));
+		await userEvent.click(screen.getByRole("button", { name: "Open preview in center" }));
+		expect(onToggleMaximized).toHaveBeenCalledWith(false);
+		expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx", expect.objectContaining({ mode: "file", source: { kind: "workspace" }, editing: false }));
 	});
 
 	it("opens the rich preview in place when maximized", async () => {

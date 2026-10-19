@@ -46,6 +46,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { SvgFileView } from "./SvgFileView";
+import { VscodeGoToFileIcon } from "./icons/VscodeGoToFileIcon";
 import { isSvgPath } from "../lib/image-files";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
@@ -69,6 +70,7 @@ function canRenderSvg(path: string, detail: WorkspaceFileDetail): boolean {
 }
 
 export function FileContentPane({
+	onOpenInCenter,
 	active = true,
 	annotation,
 	initialEditing = false,
@@ -90,6 +92,7 @@ export function FileContentPane({
 	toolbarHost,
 }: {
 	annotation: FileAnnotationModel;
+	onOpenInCenter?: (mode: FileViewMode) => void;
 	active?: boolean;
 	initialEditing?: boolean;
 	initialLine?: number;
@@ -325,24 +328,32 @@ export function FileContentPane({
 			: mode;
 	const mediaPreview = mediaKind && !editing && effectiveMode === "file";
 	const fileView = (
-		<CompleteFileView
-			annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
-			detail={displayDetail}
-			editing={editing && effectiveMode === "file"}
-			revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
-			onEditChange={setDraft}
-			onContentReady={onContentReady}
-			onRevealLineConsumed={onInitialLineConsumed}
-			scope={scope}
-			sessionId={sessionId}
-			commitSha={commitSha}
-			hostId={hostId}
-			source={source}
-			markdownEditing={editing && markdownAvailable}
-			mediaKind={mediaKind}
-			version={detail.mediaVersion ?? (mediaKind === "image" ? query.dataUpdatedAt : detail.fileFingerprint || detail.size)}
-		/>
+		<>
+			{source.kind === "snapshot" && detail.deleted ? (
+				<p className="px-3 py-1 text-caption text-muted-foreground" role="status" title={detail.compareBaseSha}>
+					{t("files.previousVersionAt", { revision: detail.compareBaseSha?.slice(0, 12) ?? "base" })}
+				</p>
+			) : null}
+			<CompleteFileView
+				annotation={newerLiveText ? { ...annotation, begin: () => {} } : annotation}
+				detail={displayDetail}
+				editing={editing && effectiveMode === "file"}
+				revealLine={initialLine ? { line: initialLine, requestKey: initialRequestKey } : undefined}
+				onEditChange={setDraft}
+				onContentReady={onContentReady}
+				onRevealLineConsumed={onInitialLineConsumed}
+				scope={scope}
+				sessionId={sessionId}
+				commitSha={commitSha}
+				hostId={hostId}
+				source={source}
+				markdownEditing={editing && markdownAvailable}
+				mediaKind={mediaKind}
+				version={detail.mediaVersion ?? (mediaKind === "image" ? query.dataUpdatedAt : detail.fileFingerprint || detail.size)}
+			/>
+		</>
 	);
+
 	const renderedView = markdownAvailable
 		? <MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} snapshotSource={source.kind === "snapshot" ? source : undefined} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
 		: <SvgFileView content={detail.content} path={path} />;
@@ -402,6 +413,7 @@ export function FileContentPane({
 					{renderedAvailable ? compactModeButton("rendered", t("files.rendered"), <Eye aria-hidden="true" className="size-icon-sm" />) : null}
 				</div>
 			) : null}
+   {onOpenInCenter ? <Tooltip><TooltipTrigger asChild><span tabIndex={editing ? 0 : undefined}><Button aria-label={t("files.openInCenter",{path:detail.path})} disabled={editing} onClick={()=>onOpenInCenter(effectiveMode)} size="icon-sm" type="button" variant="ghost"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{editing ? t("files.finishEditingToOpen") : t("files.openInCenter",{path:detail.path})}</TooltipContent></Tooltip> : null}
 			{editing ? (
 				<div className="flex shrink-0 items-center gap-1">
 					<Button aria-label={t("files.cancelEditing")} className={EDIT_ACTION_CLASS} disabled={saving} onClick={cancelEditing} size="sm" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>

@@ -5415,3 +5415,16 @@ func TestSessionsAPI_SnapshotRejectsMalformedSource(t *testing.T) {
 		t.Fatalf("response=%d %s", status, body)
 	}
 }
+
+func TestSessionsAPI_SourceSelectorCannotFallBackToLiveFiles(t *testing.T) {
+	for _, route := range []string{"file", "tree", "file/blob"} {
+		t.Run(route, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/workspace/"+route+"?path=src&branch=feature", "")
+			if status != http.StatusOK || svc.workspaceSnapshotInput.View.Branch != "feature" {
+				t.Fatalf("source selector fell back to the worktree: %d %s input=%+v", status, body, svc.workspaceSnapshotInput)
+			}
+		})
+	}
+}

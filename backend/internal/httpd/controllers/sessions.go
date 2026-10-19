@@ -1071,7 +1071,7 @@ func (c *SessionsController) getWorkspaceFile(w http.ResponseWriter, r *http.Req
 	commitSHA := strings.TrimSpace(r.URL.Query().Get("commitSha"))
 	var file sessionsvc.WorkspaceFileDetail
 	var err error
-	if r.URL.Query().Get("snapshot") == "true" {
+	if workspaceSnapshotRequested(r.URL.Query()) {
 		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
 		if parseErr != nil {
 			envelope.WriteError(w, r, parseErr)
@@ -1334,7 +1334,7 @@ func (c *SessionsController) listWorkspaceTree(w http.ResponseWriter, r *http.Re
 	relPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	var tree sessionsvc.WorkspaceTree
 	var err error
-	if r.URL.Query().Get("snapshot") == "true" {
+	if workspaceSnapshotRequested(r.URL.Query()) || r.URL.Query().Has("commitSha") {
 		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
 		if parseErr != nil {
 			envelope.WriteError(w, r, parseErr)
@@ -1370,7 +1370,7 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	}
 	var blob sessionsvc.WorkspaceFileBlob
 	var err error
-	if r.URL.Query().Get("snapshot") == "true" {
+	if workspaceSnapshotRequested(r.URL.Query()) || r.URL.Query().Has("commitSha") {
 		input, parseErr := workspaceSnapshotQuery(r.URL.Query())
 		if parseErr != nil {
 			envelope.WriteError(w, r, parseErr)
@@ -3279,4 +3279,9 @@ func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevi
 		return sessionsvc.WorkspaceSelectionRevisionInput{}, err
 	}
 	return sessionsvc.WorkspaceSelectionRevisionInput{Path: query.Get("path"), View: view, CommitSHA: query.Get("commitSha"), CommitSHAs: strings.FieldsFunc(query.Get("commitShas"), func(r rune) bool { return r == ',' })}, nil
+}
+
+// Source selectors must never be silently answered with mutable worktree data.
+func workspaceSnapshotRequested(query url.Values) bool {
+	return query.Get("snapshot") == "true" || query.Has("branch") || query.Has("prNumber") || query.Has("sourceUrl") || query.Has("expectedTipSha") || query.Has("expectedBaseSha") || query.Has("commitShas")
 }

@@ -92,6 +92,28 @@ describe("FileContentPane", () => {
 		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
 	});
 
+	it("offers center navigation from a full-file preview", async () => {
+		const onOpenInCenter = vi.fn();
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "complete source",
+				size: 15,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" onOpenInCenter={onOpenInCenter} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Open in center: src/App.tsx" }));
+		expect(onOpenInCenter).toHaveBeenCalledWith("file");
+	});
+
 	it("opens a historical file through the snapshot API and keeps it read-only even with editable metadata", async () => {
 		const source = { kind: "snapshot" as const, view: { branch: "feature", expectedTipSha: "a".repeat(40) }, commitShas: [], label: "feature · aaaaaaa" };
 		getMock.mockResolvedValue({
@@ -129,6 +151,7 @@ describe("FileContentPane", () => {
 			data: {
 				historical:true, sessionId: "sess-1",
 				path: "removed.txt",
+ compareBaseSha: "a".repeat(40),
 				status: "deleted",
 				content: "previous content",
 				size: 16,
@@ -151,6 +174,7 @@ describe("FileContentPane", () => {
 			/>,
 		);
 		expect(await screen.findByText("previous content")).toBeInTheDocument();
+ expect(screen.getByText("Previous version at aaaaaaaaaaaa")).toBeInTheDocument();
 		expect(getMock.mock.calls.every(([route]) => route.endsWith("/workspace/file"))).toBe(true);
 	});
 
