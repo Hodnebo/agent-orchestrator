@@ -110,6 +110,16 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("u2");
 	});
 
+	it("shows a starting session's opening brief as sent instead of queued", () => {
+		const value = snapshot();
+		value.turns = [{ id: "t1", state: "queued", requestedAt: "2026-08-05T00:00:00Z" }];
+		value.items = value.items.filter((item) => item.id === "u1");
+		expect(timelineModel.queuedConversationMessages(value)).toHaveLength(1);
+		expect(timelineModel.queuedConversationMessages(value, "t1")).toEqual([]);
+		expect(readableConversationItems(value).map((item) => item.id)).toEqual([]);
+		expect(readableConversationItems(value, "t1").map((item) => item.id)).toEqual(["u1"]);
+	});
+
 	it("gates rollback on the daemon capability, accepted history and idle state", () => {
 		const value = snapshot();
 		expect(canRollbackTurn(value, value.turns[0])).toBe(true);

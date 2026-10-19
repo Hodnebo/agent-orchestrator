@@ -34,25 +34,36 @@ export type ConversationTimelineRenderPlan =
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
-/** Queued prompts stay next to the composer until they are actually dispatched. */
-export function queuedConversationMessages(snapshot: ConversationSnapshot): QueuedConversationMessage[] {
-	const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+/** Queued turns, except a starting session's opening brief, which reads as sent. */
+function queuedTurnIds(snapshot: ConversationSnapshot, openingTurnId?: string): Set<string> {
+	const ids = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+	if (openingTurnId) ids.delete(openingTurnId);
+	return ids;
+}
+
+/**
+ * Queued prompts stay next to the composer until they are actually dispatched.
+ * `openingTurnId` names a starting session's brief: it sits in the timeline
+ * above the setup checklist instead, as on the desktop.
+ */
+export function queuedConversationMessages(snapshot: ConversationSnapshot, openingTurnId?: string): QueuedConversationMessage[] {
+	const queued = queuedTurnIds(snapshot, openingTurnId);
 	return snapshot.items.flatMap((item) =>
 		item.kind === "message" &&
 		item.role === "user" &&
 		item.origin === "human" &&
 		item.turnId &&
-		queuedTurnIds.has(item.turnId)
+		queued.has(item.turnId)
 			? [{ turnId: item.turnId, message: item }]
 			: [],
 	);
 }
 
 /** Keep conversation signal while removing provider telemetry/noise. */
-export function readableConversationItems(snapshot: ConversationSnapshot): ConversationItem[] {
+export function readableConversationItems(snapshot: ConversationSnapshot, openingTurnId?: string): ConversationItem[] {
 	const plannedTurns = new Set(snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id));
-	const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
-	return snapshot.items.filter((item) => !item.turnId || !queuedTurnIds.has(item.turnId)).filter((item) => item.kind === "message" || (
+	const queued = queuedTurnIds(snapshot, openingTurnId);
+	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
 		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))

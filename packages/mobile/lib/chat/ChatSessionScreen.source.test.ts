@@ -71,7 +71,13 @@ describe("active turn controls", () => {
 	it("shows a failed start's reason instead of only a stopped-agent banner", () => {
 		expect(screenSource).toContain('session.provisionState !== "failed"');
 		expect(screenSource).toContain('title="Session failed to start" message={failedStart}');
-		expect(screenSource).toContain('startFailure={failedStart}');
+		// The setup checklist reports a failed start in place, with Retry; the banner covers the rest.
+		expect(screenSource).toContain('startFailure={startupShown ? undefined : failedStart}');
+		// A starting session shows its checklist while the conversation loads, not a bare spinner.
+		expect(screenSource).toContain("conversation.loading && !conversation.snapshot && startupView && !startupView.failed");
+		expect(screenSource).toContain("<SessionStartupStatus startup={startupView} />");
+		// While the checklist reports setup, the yellow "Starting the agent…" banner stands down.
+		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
 		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
 	});
 

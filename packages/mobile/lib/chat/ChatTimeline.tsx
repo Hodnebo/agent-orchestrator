@@ -70,6 +70,11 @@ import {
 import { type, space } from "../tokens";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { SessionStartupStatus } from "./SessionStartup";
+import type { SessionStartupView } from "../session/sessionStartup";
+
+/** A starting session's checklist and where it sits; see ChatSessionScreen. */
+export type TimelineStartup = { view: SessionStartupView; visible: boolean; onRetry?(): void; retrying?: boolean };
 
 type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
@@ -87,6 +92,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	jumpToSequence,
 	onJumpHandled,
 	answeredBelow,
+	startup,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -104,6 +110,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	 * controls that could disagree.
 	 */
 	answeredBelow?: number;
+	/** Setup progress for a session that is still starting. */
+	startup?: TimelineStartup;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -121,7 +129,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	}, []);
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
-	const items = useMemo(() => readableConversationItems(snapshot), [snapshot]);
+	const openingTurnId = startup?.view.openingTurnId;
+	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
@@ -145,6 +154,16 @@ export const ChatTimeline = memo(function ChatTimeline({
 		onJumpHandled?.();
 	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
+	if (plan.kind === "empty" && startup?.visible) {
+		// No brief in the timeline (a promptless start): the checklist stands alone.
+		return (
+			<View style={styles.timelineWrap}>
+				<View style={[styles.list, styles.content]}>
+					<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+				</View>
+			</View>
+		);
+	}
 	if (plan.kind === "empty") {
 		return (
 			<View style={styles.timelineWrap}>
@@ -210,6 +229,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					answeredBelow={answeredBelow}
 					workedOpen={openWorked.has(group.key)}
 					onToggleWorked={toggleWorked}
+					startup={startup?.visible && group.turnId === openingTurnId ? startup : undefined}
 				/>}
 			/>
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
@@ -217,7 +237,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -228,6 +248,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	answeredBelow?: number;
 	workedOpen: boolean;
 	onToggleWorked(key: string): void;
+	startup?: TimelineStartup;
 }) {
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
@@ -239,6 +260,19 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
 		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+	if (startup) {
+		// The checklist sits exactly where the Working row will, under the brief,
+		// so the handoff moves nothing.
+		const firstWork = items.findIndex((item) => !(item.kind === "message" && item.role === "user"));
+		const leading = firstWork < 0 ? items.length : firstWork;
+		// The checklist explains the wait, so the brief drops its "Queued" note.
+		const brief = items.slice(0, leading).map((item) => item.kind === "message" && item.delivery === "queued" ? { ...item, delivery: undefined } : item);
+		return <View>
+			{renderRows(brief)}
+			<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+			{renderRows(items.slice(leading))}
+		</View>;
+	}
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
