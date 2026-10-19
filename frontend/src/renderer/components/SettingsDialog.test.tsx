@@ -34,8 +34,15 @@ vi.mock("../lib/api-client", () => ({
 	hasTrustedApiBaseUrl: () => true,
 }));
 
-vi.mock("./ProjectSettingsForm", () => ({
-	ProjectSettingsForm: ({
+vi.mock("./ProjectSettingsForm", async () => {
+	const { useState } = await vi.importActual<typeof import("react")>("react");
+	const { SearchablePicker } = await vi.importActual<typeof import("./SearchablePicker")>("./SearchablePicker");
+	// A non-modal popover, like the cloud project's repository picker.
+	function RepositoryPicker() {
+		const [value, setValue] = useState("");
+		return <SearchablePicker ariaLabel="Repository" placeholder="Select a repository" searchPlaceholder="Search" value={value} options={[{ value: "acme/api", label: "acme/api" }]} onChange={setValue} />;
+	}
+	return { ProjectSettingsForm: ({
 		cloudOrgId,
 		onSaveState,
 	}: {
@@ -68,9 +75,10 @@ vi.mock("./ProjectSettingsForm", () => ({
 			<button type="button" onClick={() => onSaveState?.({ phase: "saved" })}>
 				Complete save
 			</button>
+			<RepositoryPicker />
 		</>
-	),
-}));
+	) };
+});
 
 vi.mock("./GlobalSettingsForm", () => ({
 	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
@@ -155,6 +163,16 @@ describe("SettingsDialog", () => {
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
 		await userEvent.click(screen.getByRole("button", { name: "Complete save" }));
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("stays open when a choice is picked from a popover inside project settings", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+
+		await userEvent.click(await screen.findByRole("combobox", { name: "Repository" }));
+		await userEvent.click(screen.getByRole("option", { name: "acme/api" }));
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
+		expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("acme/api");
 	});
 
 	it("renders visible error message when project settings save fails", async () => {

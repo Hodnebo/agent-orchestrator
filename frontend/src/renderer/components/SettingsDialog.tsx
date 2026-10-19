@@ -516,6 +516,12 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						const nestedPopup = [target, activeElement].some((element) => element?.closest('[role="menu"], [role="listbox"], [data-radix-popper-content-wrapper]'));
 						if (nestedPopup) event.preventDefault();
 					}}
+					onInteractOutside={(event) => {
+						// The body is portaled outside this dialog's React tree, so a popover it
+						// opens reads as outside: picking from one must not close the dialog.
+						const target = event.target instanceof Element ? event.target : null;
+						if (target?.closest("[data-radix-popper-content-wrapper]")) event.preventDefault();
+					}}
 					ref={contentRef}
 				>
 					<div className="flex h-full min-h-0">
