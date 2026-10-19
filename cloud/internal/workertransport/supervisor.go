@@ -127,7 +127,9 @@ type Supervisor struct {
 	pendingAgentTerminalData [][]byte
 	pendingAgentTerminalSize *worker.TerminalCommand
 	tuiStartedAt             time.Time
-	lastTUIInputAt           time.Time
+	// lastTUIInputAt is the latest agent terminal input that could change
+	// what the agent does (see mayChangeAgentTerminal).
+	lastTUIInputAt time.Time
 	// lastTUISubmitAt is the latest agent terminal input that could submit a
 	// prompt (see mayStartTurn).
 	lastTUISubmitAt   time.Time

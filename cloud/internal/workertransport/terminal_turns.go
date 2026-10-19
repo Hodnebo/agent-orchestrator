@@ -255,11 +255,15 @@ func (t *transcriptTail) ownedTranscript(path, name string) bool {
 	return owned
 }
 
-// noteAgentTerminalInput records terminal input to the agent. Callers hold
-// s.mu.
+// noteAgentTerminalInput records terminal input to the agent. Input that
+// cannot change what the agent does (see mayChangeAgentTerminal) is not
+// newer than a stop proof: a second Esc after an interrupt must not hold a
+// Chat switch. Callers hold s.mu.
 func (s *Supervisor) noteAgentTerminalInput(data []byte) {
 	now := time.Now()
-	s.lastTUIInputAt = now
+	if mayChangeAgentTerminal(data) {
+		s.lastTUIInputAt = now
+	}
 	if mayStartTurn(data) {
 		s.lastTUISubmitAt = now
 	}

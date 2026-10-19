@@ -1,6 +1,9 @@
 package workertransport
 
-import "bytes"
+import (
+	"bytes"
+	"strconv"
+)
 
 // terminalInputToken is one key or terminal reply in agent terminal input.
 type terminalInputToken struct {
@@ -114,4 +117,67 @@ func mayStartTurn(data []byte) bool {
 		}
 	})
 	return submit
+}
+
+// mayChangeAgentTerminal reports whether terminal input could change what the
+// terminal agent is doing or about to submit: typing, editing, Enter or a
+// shortcut. Input that cannot does not: Esc (which interrupts a running turn,
+// so a second one only finds the agent already stopped), cursor and page
+// navigation, focus events, and terminal replies (cursor position, device
+// attributes, mode and color reports). Unknown sequences count, so a
+// keystroke that matters never slips past the stop proof.
+func mayChangeAgentTerminal(data []byte) bool {
+	changes := false
+	scanTerminalInput(data, func(token terminalInputToken) {
+		changes = changes || terminalInputMayChange(token)
+	})
+	return changes
+}
+
+func terminalInputMayChange(token terminalInputToken) bool {
+	switch token.kind {
+	case terminalInputEscape, terminalInputString:
+		return false
+	case terminalInputSS3:
+		return !bytes.ContainsRune([]byte("ABCDEFH"), rune(token.final))
+	case terminalInputCSI:
+	default:
+		return true
+	}
+	if len(token.params) > 0 && bytes.ContainsRune([]byte("?>="), rune(token.params[0])) {
+		// A terminal's reply to a query (device attributes, kitty keyboard
+		// flags, a mode report), never a key.
+		return false
+	}
+	switch token.final {
+	case 'A', 'B', 'C', 'D', 'E', 'F', 'H':
+		// Cursor keys, keypad 5, End and Home, with any modifiers.
+		return false
+	case 'R':
+		// Cursor position report.
+		return false
+	case 'I', 'O':
+		// Focus in and out.
+		return len(token.params) != 0
+	case '~':
+		switch token.keyCode() {
+		case "1", "4", "5", "6", "7", "8", "200", "201":
+			// Home, End, Page Up and Page Down, and the brackets around a
+			// paste (its content is typing).
+			return false
+		}
+		return true
+	case 'u':
+		// The kitty keyboard protocol: Esc, a modifier key alone, and a key
+		// release do not change anything.
+		code, _ := strconv.Atoi(token.keyCode())
+		if code == 27 || (code >= 57441 && code <= 57454) {
+			return false
+		}
+		_, modifiers, _ := bytes.Cut(token.params, []byte{';'})
+		modifiers, _, _ = bytes.Cut(modifiers, []byte{';'})
+		_, event, _ := bytes.Cut(modifiers, []byte{':'})
+		return string(event) != "3"
+	}
+	return true
 }
