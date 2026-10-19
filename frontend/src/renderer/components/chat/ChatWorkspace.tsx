@@ -846,6 +846,9 @@ function ChatWorkspaceContent({
 	const handleChatSurfaceClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
 		const target = event.target;
 		if (!(target instanceof Element)) return;
+		// A menu opened from the chat (the agent picker) renders in a portal, but
+		// React still bubbles its clicks here; focusing the composer would close it.
+		if (!event.currentTarget.contains(target)) return;
 		// A click fires after a drag selection ends. Focusing the composer here would
 		// collapse the range the user just selected in the transcript.
 		if (window.getSelection()?.isCollapsed === false) return;

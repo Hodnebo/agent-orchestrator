@@ -1795,6 +1795,9 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
+					// A menu opened from the composer renders in a portal, but React still
+					// bubbles its clicks here; focusing the editor would close that menu.
+					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
 					if (
