@@ -264,3 +264,52 @@ func TestTurnFailureObserverReportsAnInterruptEvent(t *testing.T) {
 		t.Fatalf("signal = %#v", signal)
 	}
 }
+
+// Esc while a foreground Task subagent runs: Claude Code aborts the child and
+// its runAgent cleanup fires SubagentStop for it ("SubagentStop on interrupted
+// query", in the 2.1.287 and 2.1.302 bundles), then records the parent's
+// interrupt marker. Whichever reaches AO first, the session ends idle: a
+// running child keeps the interrupt's idle active only until its stop lands.
+func TestTurnFailureObserverIdlesAClaudeTurnInterruptedDuringASubagent(t *testing.T) {
+	for _, stopFirst := range []bool{false, true} {
+		name := "interrupt observed first"
+		if stopFirst {
+			name = "subagent stop first"
+		}
+		t.Run(name, func(t *testing.T) {
+			promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+			h := newInterruptHarness(t, domain.HarnessClaudeCode, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", promptAt.Add(-time.Minute))
+			h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt, Event: "user-prompt-submit", AgentSessionID: "native-1"})
+			h.write(t, claudeUserRecord(promptAt, `"research it"`))
+			h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt.Add(time.Second), Event: "pre-tool-use",
+				ToolName: "Agent", ToolUseID: "toolu_agent", AgentSessionID: "native-1"})
+			h.hook(t, ports.ActivitySignal{Timestamp: promptAt.Add(2 * time.Second), Event: "subagent-start", SubagentID: "child-1", AgentSessionID: "native-1"})
+			h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt.Add(3 * time.Second), Event: "pre-tool-use",
+				SubagentID: "child-1", ToolName: "Bash", ToolUseID: "toolu_child", AgentSessionID: "native-1"})
+
+			escAt := promptAt.Add(10 * time.Second)
+			subagentStop := func() {
+				h.hook(t, ports.ActivitySignal{Timestamp: escAt, Event: "subagent-stop", SubagentID: "child-1", AgentSessionID: "native-1"})
+			}
+			if stopFirst {
+				subagentStop()
+				if got := h.poll(t); got.Activity.State != domain.ActivityActive {
+					t.Fatalf("child stopped, parent turn running: state = %q, want active", got.Activity.State)
+				}
+			}
+			h.write(t, claudeUserRecord(escAt, `[{"type":"tool_result","content":"[Request interrupted by user for tool use]","is_error":true,"tool_use_id":"toolu_agent"}]`),
+				claudeInterrupt(escAt))
+			got := h.poll(t)
+			if !stopFirst {
+				if got.Activity.State != domain.ActivityActive {
+					t.Fatalf("interrupt with the child's stop in flight: state = %q, want active", got.Activity.State)
+				}
+				subagentStop()
+				got = h.poll(t)
+			}
+			if got.Activity.State != domain.ActivityIdle {
+				t.Fatalf("after Esc: state = %q, want idle", got.Activity.State)
+			}
+		})
+	}
+}
