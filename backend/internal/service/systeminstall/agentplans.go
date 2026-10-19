@@ -11,6 +11,7 @@ import (
 )
 
 var agentDocumentationURLs = map[Target]string{
+	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -265,6 +266,12 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetMemcode:
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planShellInstaller(target, "https://memcode.ai/install.sh", "sh")}
+		} else {
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -453,6 +460,15 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetFX:         {"fx", "upgrade"},
 	TargetPi:         {"pi", "update", "self", "--no-approve"},
 	TargetPrimeAgent: {"prime-agent", "update"},
+}
+
+// vendorUpdateEnv turns a vendor's own auto-update switch back on for an
+// update the user asked for. `droid update` exits 0 without updating, and
+// prints "Auto-update is not available for npm installations", whenever
+// FACTORY_DROID_AUTO_UPDATE_ENABLED is false or its build (npm's) turns
+// auto-update off, even for the copy at the official installer's location.
+var vendorUpdateEnv = map[Target][]string{
+	TargetDroid: {"FACTORY_DROID_AUTO_UPDATE_ENABLED=true"},
 }
 
 // installerUpdateTargets update by re-running the vendor installer, pinned to

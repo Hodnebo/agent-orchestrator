@@ -506,6 +506,7 @@ func run(logger *slog.Logger) error {
 			return fmt.Errorf("build artifact store: %w", err)
 		}
 		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
+		go artifactstore.RunSweeper(ctx, store, artifacts, artifactstore.DefaultSweepInterval, logger)
 	}
 	apiOptions := httpapi.Options{
 		Store:                     store,

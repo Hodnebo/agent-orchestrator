@@ -37,9 +37,15 @@ type fakeArtifactPlane struct {
 	uploads     int
 	commits     int
 	failCommits int
-	disabled    bool
-	deleted     []string
-	nextVersion int
+	// refuseCommits answers every commit with this status when set.
+	refuseCommits int
+	// staleCommits answers every commit as from a replaced worker.
+	staleCommits bool
+	// rejectUploads answers that many uploads with 422.
+	rejectUploads int
+	disabled      bool
+	deleted       []string
+	nextVersion   int
 }
 
 func newFakeArtifactPlane(t *testing.T) (*fakeArtifactPlane, *client) {
@@ -77,6 +83,11 @@ func (p *fakeArtifactPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, artifactBlobPath):
 		path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.EscapedPath(), artifactBlobPath))
 		body, _ := io.ReadAll(r.Body)
+		if p.rejectUploads > 0 {
+			p.rejectUploads--
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
 		sum := sha256.Sum256(body)
 		if hex.EncodeToString(sum[:]) != r.Header.Get(worker.ArtifactSHA256Header) || int64(len(body)) != r.ContentLength {
 			w.WriteHeader(http.StatusUnprocessableEntity)
@@ -93,6 +104,15 @@ func (p *fakeArtifactPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.failCommits > 0 {
 			p.failCommits--
 			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if p.refuseCommits != 0 {
+			w.WriteHeader(p.refuseCommits)
+			return
+		}
+		if p.staleCommits {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":"STALE_WORKER_TOKEN"}`))
 			return
 		}
 		for _, file := range input.Files {
@@ -270,6 +290,14 @@ func TestArtifactSyncRetriesFailedCommitWithoutReuploading(t *testing.T) {
 	if got := plane.paths(); len(got) != 0 {
 		t.Fatalf("failed commit stored %v", got)
 	}
+	if s.failures != 1 || !s.retryAt.After(time.Now()) {
+		t.Fatalf("failed commit: failures=%d retryAt=%v, want a backoff", s.failures, s.retryAt)
+	}
+	s.sync(context.Background())
+	if _, _, commits := plane.counts(); commits != 0 {
+		t.Fatal("a sync during the backoff retried the commit")
+	}
+	s.retryAt = time.Time{}
 	if changing := s.sync(context.Background()); changing {
 		t.Fatal("retry after a failed commit reported a change")
 	}
@@ -289,7 +317,7 @@ func TestArtifactSyncStopsWhenControlPlaneHasNoArtifacts(t *testing.T) {
 	writeArtifact(t, dir, "report.html", "report")
 	s := testSyncer(c, dir)
 	syncSettled(s)
-	if !s.disabled {
+	if !s.disabledUntil.After(time.Now()) {
 		t.Fatal("syncer kept running against a control plane without artifacts")
 	}
 }
@@ -319,5 +347,166 @@ func TestArtifactSyncFinalFlushOnShutdown(t *testing.T) {
 func TestEscapeArtifactPath(t *testing.T) {
 	if got := escapeArtifactPath("my docs/rep ort#1.html"); got != "my%20docs/rep%20ort%231.html" {
 		t.Fatalf("escapeArtifactPath = %q", got)
+	}
+}
+
+func TestArtifactSyncBacksOffAfterRepeatedFailures(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.failCommits = 3
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	var delays []time.Duration
+	for range 2 {
+		delays = append(delays, time.Until(s.retryAt).Round(time.Second))
+		s.retryAt = time.Time{}
+		if changing := s.sync(context.Background()); changing {
+			t.Fatal("a failed request scheduled a settle rescan")
+		}
+	}
+	if delays[0] != artifactRetryBase || delays[1] != 2*artifactRetryBase {
+		t.Fatalf("backoff delays = %v, want %v then %v", delays, artifactRetryBase, 2*artifactRetryBase)
+	}
+	s.retryAt = time.Time{}
+	s.sync(context.Background())
+	if got := plane.paths(); !slices.Equal(got, []string{"report.html"}) || s.failures != 0 {
+		t.Fatalf("after recovery committed = %v, failures = %d", got, s.failures)
+	}
+}
+
+func TestArtifactSyncWaitsForFilesToChangeAfterARefusal(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.refuseCommits = http.StatusRequestEntityTooLarge
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	manifests, uploads, _ := plane.counts()
+	s.sync(context.Background())
+	s.sync(context.Background())
+	if m, u, _ := plane.counts(); m != manifests || u != uploads {
+		t.Fatalf("a refused commit was retried with the same files: manifests %d->%d uploads %d->%d", manifests, m, uploads, u)
+	}
+	plane.mu.Lock()
+	plane.refuseCommits = 0
+	plane.mu.Unlock()
+	writeArtifact(t, dir, "notes.md", "notes")
+	syncSettled(s)
+	if got := plane.paths(); !slices.Equal(got, []string{"notes.md", "report.html"}) {
+		t.Fatalf("after the files changed committed = %v", got)
+	}
+}
+
+func TestArtifactSyncStopsForAReplacedWorker(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.staleCommits = true
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	if !s.disabledUntil.After(time.Now().Add(24 * time.Hour)) {
+		t.Fatalf("disabledUntil = %v, want the syncer stopped", s.disabledUntil)
+	}
+}
+
+func TestArtifactSyncUploadsEmptyFiles(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "placeholder.md", "")
+	syncSettled(testSyncer(c, dir))
+	if got := plane.paths(); !slices.Equal(got, []string{"placeholder.md"}) {
+		t.Fatalf("committed = %v, want the empty file", got)
+	}
+}
+
+func TestArtifactSyncRehashesAfterAChecksumRejection(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.rejectUploads = 1
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	if state := s.previous["report.html"]; state.sha != "" {
+		t.Fatalf("cached sha kept after a checksum rejection: %q", state.sha)
+	}
+	s.retryAt = time.Time{}
+	syncSettled(s)
+	if got := plane.paths(); !slices.Equal(got, []string{"report.html"}) {
+		t.Fatalf("committed = %v", got)
+	}
+}
+
+func TestArtifactSyncKeepsFilesItCannotSync(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.csv", "small")
+	writeArtifact(t, dir, "locked/notes.md", "notes")
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	if got := plane.paths(); !slices.Equal(got, []string{"locked/notes.md", "report.csv"}) {
+		t.Fatalf("committed = %v", got)
+	}
+	// The file grows past the per-file limit: its last good version stays.
+	big, err := os.OpenFile(filepath.Join(dir, "report.csv"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := big.Truncate(26 << 20); err != nil {
+		t.Fatal(err)
+	}
+	_ = big.Close()
+	// A directory that cannot be listed keeps its files.
+	if err := os.Chmod(filepath.Join(dir, "locked"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "locked"), 0o700) })
+	if _, err := os.ReadDir(filepath.Join(dir, "locked")); err == nil {
+		t.Skip("directory permissions are not enforced here")
+	}
+	syncSettled(s)
+	if got := plane.paths(); !slices.Equal(got, []string{"locked/notes.md", "report.csv"}) {
+		t.Fatalf("files the syncer could not read were deleted: %v", got)
+	}
+}
+
+func TestArtifactPathStorable(t *testing.T) {
+	if !artifactPathStorable("docs/report.html") {
+		t.Fatal("a short path is not storable")
+	}
+	if !artifactPathStorable(strings.Repeat("a", maxArtifactPathBytes)) {
+		t.Fatal("a path at the key limit is not storable")
+	}
+	if artifactPathStorable(strings.Repeat("a", maxArtifactPathBytes+1)) {
+		t.Fatal("a path over the key limit is storable")
+	}
+	if artifactPathStorable("CON.md") {
+		t.Fatal("an invalid path is storable")
+	}
+}
+
+func TestArtifactSyncSkipsToolDirectories(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, ".git/HEAD", "ref")
+	writeArtifact(t, dir, "app/node_modules/x/index.js", "x")
+	writeArtifact(t, dir, "report.html", "report")
+	syncSettled(testSyncer(c, dir))
+	if got := plane.paths(); !slices.Equal(got, []string{"report.html"}) {
+		t.Fatalf("committed = %v, want only report.html", got)
+	}
+}
+
+func TestArtifactSyncStopsRescanningAFileThatKeepsChanging(t *testing.T) {
+	_, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	s := testSyncer(c, dir)
+	changing := true
+	for index := range artifactMaxUnsettledScans + 1 {
+		writeArtifact(t, dir, "log.txt", strings.Repeat("x", index+1))
+		changing = s.sync(context.Background())
+	}
+	if changing {
+		t.Fatal("a file that keeps changing still schedules settle rescans")
 	}
 }

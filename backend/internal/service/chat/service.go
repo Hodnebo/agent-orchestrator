@@ -94,10 +94,14 @@ type Service struct {
 	controllers      map[domain.SessionID]*Controller
 	ownerControllers map[domain.ConversationOwner]*Controller
 	startConfigs     map[domain.ConversationOwner]StartConfig
-	gateMu           sync.Mutex
-	gates            map[domain.ConversationOwner]controllerGate
-	probeMu          sync.Mutex
-	probed           map[domain.AgentHarness]ports.ChatCapabilities
+	awakeInterrupted map[domain.ConversationOwner]domain.AwakeAgentTarget
+	// handoffInterrupted is the provider turn each session's pending handoff
+	// stopped, kept until the account move that stopped it commits.
+	handoffInterrupted map[domain.SessionID]string
+	gateMu             sync.Mutex
+	gates              map[domain.ConversationOwner]controllerGate
+	probeMu            sync.Mutex
+	probed             map[domain.AgentHarness]ports.ChatCapabilities
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -199,8 +203,10 @@ func New(opts Options) *Service {
 		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
+		handoffInterrupted:     make(map[domain.SessionID]string),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.ConversationOwner]StartConfig),
+		awakeInterrupted:       make(map[domain.ConversationOwner]domain.AwakeAgentTarget),
 		gates:                  make(map[domain.ConversationOwner]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
 		waking:                 make(map[domain.SessionID]int),
@@ -290,6 +296,10 @@ func notifyControllerReady(
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
+	if cfg.AwakeReconnectTarget != nil {
+		target := *cfg.AwakeReconnectTarget
+		cloned.AwakeReconnectTarget = &target
+	}
 	cloned.Env = make(map[string]string, len(cfg.Env))
 	for key, value := range cfg.Env {
 		cloned.Env[key] = value
@@ -346,6 +356,19 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		return nil, err
 	}
 	defer gate.unlock()
+	if target := cfg.AwakeReconnectTarget; target != nil {
+		s.mu.Lock()
+		candidate, exists := s.awakeInterrupted[owner]
+		old, hasConfig := s.startConfigs[owner]
+		valid := cfg.ReconnectOnly && !cfg.FreshIfProviderConversationMissing && owner.Kind == domain.ConversationOwnerSession && target.SessionID == cfg.SessionID && target.Owner == cfg.ExpectedControllerOwner && exists && candidate == *target && hasConfig && old.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil
+		if valid {
+			delete(s.awakeInterrupted, owner)
+		}
+		s.mu.Unlock()
+		if !valid {
+			return nil, fmt.Errorf("%w: interrupted attachment proof expired or was explicitly stopped", ports.ErrChatRecoveryInconclusive)
+		}
+	}
 	if cfg.HistoryMode > ports.ChatHistoryDeferred {
 		return nil, errors.New("invalid Chat history mode")
 	}
@@ -784,6 +807,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, err
 		}
 	}
+	if !liveReconnect && cfg.Harness == domain.HarnessCopilot && cfg.ProviderConversationID != "" {
+		if err := sanitizeCopilotLoadedMode(ctx, conv); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
+		}
+	}
 	var liveRows ConversationRows
 	if liveReconnect {
 		if s.reader == nil {
@@ -1064,8 +1093,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
 	cfg.ProviderScopeID = ""
+	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
 	s.startConfigs[owner] = cloneStartConfig(cfg)
+	delete(s.awakeInterrupted, owner)
 	controller.start()
 	s.mu.Unlock()
 
@@ -1076,6 +1107,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		controller.waitForBranchHandoff()
 		s.mu.Lock()
 		if current, ok := s.ownerControllers[owner]; ok && current == controller {
+			controller.mu.Lock()
+			interrupted := controller.transportInterrupted && !controller.explicitClose
+			controller.mu.Unlock()
+			if interrupted && owner.Kind == domain.ConversationOwnerSession && cfg.ExpectedControllerOwner.ControllerGeneration != "" {
+				s.awakeInterrupted[owner] = domain.AwakeAgentTarget{SessionID: cfg.SessionID, Owner: cfg.ExpectedControllerOwner}
+			}
 			delete(s.ownerControllers, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, cfg.SessionID)
@@ -1495,12 +1532,25 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.BeginHandoff(ctx, policy)
+	if err := controller.BeginHandoff(ctx, policy); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if turn := controller.HandoffInterruptedTurn(); turn != "" {
+		s.handoffInterrupted[id] = turn
+	} else {
+		delete(s.handoffInterrupted, id)
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 // AbortChatHandoff reopens the existing controller when the user cancels before
 // Session Manager has stopped it.
 func (s *Service) AbortChatHandoff(id domain.SessionID) {
+	s.mu.Lock()
+	delete(s.handoffInterrupted, id)
+	s.mu.Unlock()
 	controller, err := s.Controller(id)
 	if err == nil {
 		controller.AbortHandoff()
@@ -1532,6 +1582,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	if !ok {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		var stopErr error
 		if s.stopProviderHost != nil {
@@ -1572,6 +1623,7 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 			delete(s.controllers, id)
 		}
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 	default:
 	}
@@ -1594,6 +1646,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 	if errors.Is(err, ErrNoController) {
 		s.mu.Lock()
 		delete(s.startConfigs, owner)
+		delete(s.awakeInterrupted, owner)
 		s.mu.Unlock()
 		return nil
 	}
@@ -1607,6 +1660,7 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 		if s.ownerControllers[owner] == controller {
 			delete(s.ownerControllers, owner)
 			delete(s.startConfigs, owner)
+			delete(s.awakeInterrupted, owner)
 			if owner.Kind == domain.ConversationOwnerSession {
 				delete(s.controllers, controller.sessionID)
 			}
@@ -2207,12 +2261,22 @@ func (s *Service) SetConfigOption(
 	if !ok {
 		return nil, ErrConfigOptionsUnsupported
 	}
+	if record.Harness == domain.HarnessCopilot {
+		if err := copilotConfigOptionAllowed(configID, value); err != nil {
+			return nil, err
+		}
+	}
 	controller.configMu.Lock()
 	defer controller.configMu.Unlock()
 	previous := controller.Settings()
 	options, err := configurer.SetConfigOption(ctx, configID, value)
 	if err != nil {
 		return nil, err
+	}
+	if len(options) == 0 {
+		if listed, listErr := configurer.ListConfigOptions(ctx); listErr == nil {
+			options = listed
+		}
 	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
@@ -2486,6 +2550,9 @@ func (s *Service) StopChat(ctx context.Context, id domain.SessionID) error {
 // permissionConfigOptions annotates only provider controls whose semantics are
 // known. In particular, plan and dontAsk are not AO approval policies.
 func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	if harness == domain.HarnessCopilot {
+		options = copilotComposerOptions(options)
+	}
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
@@ -2542,6 +2609,115 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 	return out
 }
 
+// copilotComposerOptions removes the Copilot controls that would bypass AO's
+// approval state. AO drives "allow_all" from the session's approval mode, and
+// Autopilot turns allow-all on inside Copilot without AO knowing, so neither
+// is offered as a provider control. Agent and Plan remain execution modes.
+func copilotComposerOptions(options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	out := make([]ports.ChatConfigOption, 0, len(options))
+	for _, option := range options {
+		if option.ID == copilotAllowAllOption {
+			continue
+		}
+		if option.ID == "mode" {
+			choices := make([]ports.ChatConfigOptionChoice, 0, len(option.Choices))
+			for _, choice := range option.Choices {
+				if !isCopilotAutopilot(choice.Value) {
+					choices = append(choices, choice)
+				}
+			}
+			option.Choices = choices
+		}
+		out = append(out, option)
+	}
+	return out
+}
+
+func copilotDefaultModeChoice(choices []ports.ChatConfigOptionChoice) string {
+	for _, choice := range choices {
+		if isCopilotAutopilot(choice.Value) {
+			continue
+		}
+		if strings.EqualFold(choice.Name, "agent") || strings.HasSuffix(choice.Value, "#agent") || choice.Value == "agent" {
+			return choice.Value
+		}
+	}
+	for _, choice := range choices {
+		if strings.EqualFold(choice.Name, "plan") || strings.HasSuffix(choice.Value, "#plan") || choice.Value == "plan" {
+			return choice.Value
+		}
+	}
+	return ""
+}
+
+// sanitizeCopilotLoadedMode resets Copilot's mode to Agent if a resumed native
+// session was left in Autopilot. Autopilot enables allow-all inside Copilot
+// without AO's knowledge, which would let turns bypass default approvals.
+func sanitizeCopilotLoadedMode(ctx context.Context, conv ports.ChatConversation) error {
+	configurer, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		return fmt.Errorf("read Copilot session mode: config options unavailable for resumed conversation")
+	}
+	options, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		return fmt.Errorf("read Copilot session mode: %w", err)
+	}
+	modeFound := false
+	for _, option := range options {
+		if option.ID == "mode" {
+			modeFound = true
+		}
+		if option.ID == "mode" && isCopilotAutopilot(option.Current.Select) {
+			target := copilotDefaultModeChoice(option.Choices)
+			if target == "" {
+				return fmt.Errorf("%w: Copilot session is in Autopilot mode and has no safe mode fallback", ports.ErrChatConfigOptionInvalid)
+			}
+			updated, err := configurer.SetConfigOption(ctx, "mode", ports.ChatConfigOptionValue{Select: target})
+			if err != nil {
+				return fmt.Errorf("reset Copilot Autopilot mode to %q: %w", target, err)
+			}
+			updatedModeFound := false
+			for _, opt := range updated {
+				if opt.ID != "mode" {
+					continue
+				}
+				updatedModeFound = true
+				if opt.Current.Select != target {
+					return fmt.Errorf("reset Copilot Autopilot mode: provider reports %q, want %q", opt.Current.Select, target)
+				}
+			}
+			if !updatedModeFound {
+				return fmt.Errorf("reset Copilot Autopilot mode: provider did not report the resulting mode")
+			}
+			return nil
+		}
+	}
+	if !modeFound {
+		return fmt.Errorf("read Copilot session mode: mode option unavailable for resumed conversation")
+	}
+	return nil
+}
+
+// copilotConfigOptionAllowed refuses the Copilot settings AO owns or hides.
+func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionValue) error {
+	if configID == copilotAllowAllOption {
+		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
+	}
+	if configID == "mode" && isCopilotAutopilot(value.Select) {
+		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+	}
+	return nil
+}
+
+const copilotAllowAllOption = "allow_all"
+
+// isCopilotAutopilot matches Copilot's Autopilot mode id, which it reports as
+// the ACP session-modes URI ending in #autopilot.
+func isCopilotAutopilot(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "autopilot" || strings.HasSuffix(value, "#autopilot")
+}
+
 func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
 	switch value {
 	case "default":
@@ -2595,4 +2771,19 @@ func truncateUTF8Head(text string, limit int) string {
 		end--
 	}
 	return text[:end]
+}
+
+// InterruptedAwakeAgents exposes only a positively observed transport loss.
+// It does not infer failure from inactivity, lack of network, or a missing PID.
+func (s *Service) InterruptedAwakeAgents() []domain.AwakeAgentTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []domain.AwakeAgentTarget{}
+	for owner, target := range s.awakeInterrupted {
+		cfg, ok := s.startConfigs[owner]
+		if ok && cfg.ExpectedControllerOwner == target.Owner && s.ownerControllers[owner] == nil {
+			result = append(result, target)
+		}
+	}
+	return result
 }

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"path"
 	"strings"
@@ -114,7 +113,8 @@ func KindOf(cleanPath string) string {
 	return KindFile
 }
 
-// ContentType returns the Content-Type served for a path.
+// ContentType returns the Content-Type served for a path, from a fixed list so
+// it does not depend on the host's MIME tables.
 func ContentType(cleanPath string) string {
 	ext := strings.ToLower(path.Ext(cleanPath))
 	switch ext {
@@ -142,9 +142,14 @@ func ContentType(cleanPath string) string {
 		return "image/webp"
 	case ".pdf":
 		return "application/pdf"
-	}
-	if contentType := mime.TypeByExtension(ext); contentType != "" {
-		return contentType
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".mp4":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
 	}
 	return "application/octet-stream"
 }
@@ -223,19 +228,6 @@ func (s *Store) DeleteVersion(ctx context.Context, key, versionID string) error 
 	})
 	if err != nil && !notFound(err) {
 		return fmt.Errorf("delete artifact object version: %w", err)
-	}
-	return nil
-}
-
-// DeleteCurrent puts a delete marker on key, so every stored version becomes
-// noncurrent and the bucket's noncurrent-version expiration removes them.
-func (s *Store) DeleteCurrent(ctx context.Context, key string) error {
-	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return fmt.Errorf("delete artifact object: %w", err)
 	}
 	return nil
 }

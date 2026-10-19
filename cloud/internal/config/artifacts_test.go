@@ -66,3 +66,11 @@ func TestArtifactsOnRequiresSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestArtifactsRejectsAnUnreadableFlag(t *testing.T) {
+	setWorkOSTestEnv(t)
+	t.Setenv("AO_CLOUD_ARTIFACTS", "yes please")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "AO_CLOUD_ARTIFACTS") {
+		t.Fatalf("Load with AO_CLOUD_ARTIFACTS=%q err = %v, want an error", "yes please", err)
+	}
+}

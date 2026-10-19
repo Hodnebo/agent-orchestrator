@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,73 @@ const ArtifactChangedEventType = "artifact.changed"
 
 const sessionArtifactColumns = `path, name, kind, content_type, size, sha256,
 	s3_key, version_id, mtime, updated_at`
+
+// ErrArtifactVersionUnknown reports a commit naming an object version that is
+// not an open upload of the session: never recorded, already committed, or
+// expired and claimed by the sweeper.
+var ErrArtifactVersionUnknown = errors.New("artifact version is not an open upload")
+
+// ArtifactUploadAllowed reports whether the session can take one more
+// uncommitted upload of size bytes. RecordArtifactUpload enforces the same
+// limit exactly; this check only avoids writing an object that would be
+// refused.
+func (s *Store) ArtifactUploadAllowed(ctx context.Context, orgID, sessionID string, size int64) (bool, error) {
+	var allowed bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		count, bytes, err := pendingArtifactUploadsTx(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
+		}
+		allowed = count+1 <= domain.MaxPendingArtifactUploads && bytes+size <= domain.MaxPendingArtifactBytes
+		return nil
+	})
+	return allowed, err
+}
+
+// RecordArtifactUpload records an uploaded object version that the session
+// has not committed yet. The sweeper deletes it after ArtifactUploadTTL unless
+// a commit claims it first. It returns ErrArtifactLimit, and records nothing,
+// when the session's uncommitted uploads would exceed their limits.
+func (s *Store) RecordArtifactUpload(ctx context.Context, orgID, sessionID, s3Key, versionID string, size int64) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
+			return err
+		}
+		count, bytes, err := pendingArtifactUploadsTx(ctx, tx, orgID, sessionID)
+		if err != nil {
+			return err
+		}
+		if count+1 > domain.MaxPendingArtifactUploads || bytes+size > domain.MaxPendingArtifactBytes {
+			return ErrArtifactLimit
+		}
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO ao_artifact_object_versions (
+				org_id, session_id, s3_key, version_id, reason, size, collect_after
+			) VALUES ($1, $2, $3, $4, 'upload', $5, now() + $6::interval)
+			ON CONFLICT (s3_key, version_id) DO NOTHING`,
+			orgID, sessionID, s3Key, versionID, size, domain.ArtifactUploadTTL.String(),
+		); err != nil {
+			return fmt.Errorf("record artifact upload: %w", normalizeConstraintError(err))
+		}
+		return nil
+	})
+}
+
+func pendingArtifactUploadsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (int64, int64, error) {
+	var count, bytes int64
+	err := tx.QueryRow(
+		ctx,
+		`SELECT count(*), COALESCE(sum(size), 0)::bigint
+		FROM ao_artifact_object_versions
+		WHERE org_id = $1 AND session_id = $2 AND reason = 'upload'`,
+		orgID, sessionID,
+	).Scan(&count, &bytes)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count pending artifact uploads: %w", err)
+	}
+	return count, bytes, nil
+}
 
 // ChangedSessionArtifacts returns the manifest paths whose size or SHA-256
 // differ from the session's committed rows, including paths with no row.
@@ -71,24 +139,130 @@ func (s *Store) ChangedSessionArtifacts(
 
 // CommitSessionArtifacts upserts and deletes a session's artifact rows,
 // recomputes its output type, and appends an artifact.changed event, all in
-// one transaction. It returns ErrArtifactLimit, and changes nothing, when the
-// result would exceed the session's file count or total size.
+// one transaction. Each upserted version must be an open upload of the
+// session; versions the commit replaces or deletes are queued for the
+// sweeper. It returns ErrStaleWorker when the worker's connection was
+// replaced, ErrArtifactVersionUnknown for a version that is not an open
+// upload, and ErrArtifactLimit when the result would exceed the session's
+// file count or total size; each changes nothing. A commit that changes
+// nothing appends no event.
 func (s *Store) CommitSessionArtifacts(
 	ctx context.Context,
-	orgID, sessionID string,
+	orgID, sessionID, workerID string,
+	workerEpoch int64,
 	upserts []domain.SessionArtifact,
 	deletes []string,
 ) error {
+	if len(upserts) == 0 && len(deletes) == 0 {
+		return nil
+	}
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
 			return err
 		}
-		if len(deletes) > 0 {
+		var current bool
+		if err := tx.QueryRow(
+			ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_worker_connections
+				WHERE org_id = $1 AND session_id = $2 AND worker_id = $3
+					AND epoch = $4 AND disconnected_at IS NULL
+			)`,
+			orgID, sessionID, workerID, workerEpoch,
+		).Scan(&current); err != nil {
+			return fmt.Errorf("check artifact worker: %w", err)
+		}
+		if !current {
+			return ErrStaleWorker
+		}
+		if len(upserts) > 0 {
+			keys := make([]string, len(upserts))
+			versions := make([]string, len(upserts))
+			for index, artifact := range upserts {
+				keys[index] = artifact.S3Key
+				versions[index] = artifact.VersionID
+			}
+			claimed, err := tx.Exec(
+				ctx,
+				`DELETE FROM ao_artifact_object_versions version
+				USING unnest($3::text[], $4::text[]) AS committed(s3_key, version_id)
+				WHERE version.org_id = $1 AND version.session_id = $2
+					AND version.s3_key = committed.s3_key
+					AND version.version_id = committed.version_id
+					AND version.reason = 'upload'
+					AND version.collect_after > now()
+					AND version.collecting_until IS NULL`,
+				orgID, sessionID, keys, versions,
+			)
+			if err != nil {
+				return fmt.Errorf("claim artifact uploads: %w", err)
+			}
+			if claimed.RowsAffected() != int64(len(upserts)) {
+				return ErrArtifactVersionUnknown
+			}
+		}
+		paths := make([]string, 0, len(upserts)+len(deletes))
+		next := make(map[string]string, len(upserts))
+		for _, artifact := range upserts {
+			paths = append(paths, artifact.Path)
+			next[artifact.Path] = artifact.VersionID
+		}
+		paths = append(paths, deletes...)
+		rows, err := tx.Query(
+			ctx,
+			`SELECT path, s3_key, version_id, size FROM ao_session_artifacts
+			WHERE org_id = $1 AND session_id = $2 AND path = ANY($3)`,
+			orgID, sessionID, paths,
+		)
+		if err != nil {
+			return fmt.Errorf("read replaced artifacts: %w", err)
+		}
+		type previous struct {
+			path, s3Key, versionID string
+			size                   int64
+		}
+		var existing []previous
+		for rows.Next() {
+			var row previous
+			if err := rows.Scan(&row.path, &row.s3Key, &row.versionID, &row.size); err != nil {
+				rows.Close()
+				return err
+			}
+			existing = append(existing, row)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		deleted := make([]string, 0, len(deletes))
+		for _, row := range existing {
+			version, upserted := next[row.path]
+			if upserted && version == row.versionID {
+				continue
+			}
+			if !upserted {
+				deleted = append(deleted, row.path)
+			}
+			if _, err := tx.Exec(
+				ctx,
+				`INSERT INTO ao_artifact_object_versions (
+					org_id, session_id, s3_key, version_id, reason, size, collect_after
+				) VALUES ($1, $2, $3, $4, 'replaced', $5, now() + $6::interval)
+				ON CONFLICT (s3_key, version_id) DO NOTHING`,
+				orgID, sessionID, row.s3Key, row.versionID, row.size, domain.ArtifactReplacedGrace.String(),
+			); err != nil {
+				return fmt.Errorf("queue replaced artifact version: %w", err)
+			}
+		}
+		if len(upserts) == 0 && len(deleted) == 0 {
+			return nil
+		}
+		if len(deleted) > 0 {
 			if _, err := tx.Exec(
 				ctx,
 				`DELETE FROM ao_session_artifacts
 				WHERE org_id = $1 AND session_id = $2 AND path = ANY($3)`,
-				orgID, sessionID, deletes,
+				orgID, sessionID, deleted,
 			); err != nil {
 				return fmt.Errorf("delete session artifacts: %w", err)
 			}
@@ -142,19 +316,89 @@ func (s *Store) CommitSessionArtifacts(
 		); err != nil {
 			return fmt.Errorf("update session output type: %w", err)
 		}
-		paths := make([]string, 0, len(upserts))
+		changed := make([]string, 0, len(upserts))
 		for _, artifact := range upserts {
-			paths = append(paths, artifact.Path)
+			changed = append(changed, artifact.Path)
 		}
 		payload, err := json.Marshal(map[string][]string{
-			"changed": paths,
-			"deleted": nonNilPaths(deletes),
+			"changed": changed,
+			"deleted": deleted,
 		})
 		if err != nil {
 			return err
 		}
 		_, err = appendSessionEventTx(ctx, tx, orgID, sessionID, ArtifactChangedEventType, payload)
 		return err
+	})
+}
+
+// ClaimArtifactObjectVersions claims up to limit object versions whose
+// collect_after has passed, for lease, and returns them. A claimed version
+// can no longer be committed. A claim that is not followed by
+// ForgetArtifactObjectVersions lapses after lease and is claimed again.
+func (s *Store) ClaimArtifactObjectVersions(ctx context.Context, limit int, lease time.Duration) ([]domain.ArtifactObjectVersion, error) {
+	var versions []domain.ArtifactObjectVersion
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(
+			ctx,
+			`UPDATE ao_artifact_object_versions version
+			SET collecting_until = now() + $2::interval
+			FROM (
+				SELECT s3_key, version_id FROM ao_artifact_object_versions
+				WHERE collect_after <= now()
+					AND (collecting_until IS NULL OR collecting_until <= now())
+				ORDER BY collect_after
+				LIMIT $1
+				FOR UPDATE SKIP LOCKED
+			) due
+			WHERE version.s3_key = due.s3_key AND version.version_id = due.version_id
+			RETURNING version.s3_key, version.version_id`,
+			limit, lease.String(),
+		)
+		if err != nil {
+			return fmt.Errorf("claim artifact object versions: %w", err)
+		}
+		versions, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.ArtifactObjectVersion, error) {
+			var version domain.ArtifactObjectVersion
+			err := row.Scan(&version.S3Key, &version.VersionID)
+			return version, err
+		})
+		return err
+	})
+	return versions, err
+}
+
+// ForgetArtifactObjectVersions removes collected object versions from the
+// sweeper's queue.
+func (s *Store) ForgetArtifactObjectVersions(ctx context.Context, versions []domain.ArtifactObjectVersion) error {
+	if len(versions) == 0 {
+		return nil
+	}
+	keys := make([]string, len(versions))
+	ids := make([]string, len(versions))
+	for index, version := range versions {
+		keys[index] = version.S3Key
+		ids[index] = version.VersionID
+	}
+	return s.withService(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(
+			ctx,
+			`DELETE FROM ao_artifact_object_versions version
+			USING unnest($1::text[], $2::text[]) AS collected(s3_key, version_id)
+			WHERE version.s3_key = collected.s3_key AND version.version_id = collected.version_id`,
+			keys, ids,
+		); err != nil {
+			return fmt.Errorf("forget artifact object versions: %w", err)
+		}
+		return nil
+	})
+}
+
+// RequireSessionArtifactAccess returns ErrNotFound unless the session exists
+// in the organization, for a member of it.
+func (s *Store) RequireSessionArtifactAccess(ctx context.Context, principal domain.Principal, orgID, sessionID string) error {
+	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+		return requireSessionTx(ctx, tx, orgID, sessionID, false)
 	})
 }
 
@@ -235,10 +479,53 @@ func (s *Store) SessionArtifactsBySessions(
 	return bySession, nil
 }
 
-// SessionArtifact returns one committed artifact row, or ErrNotFound.
+// SessionArtifactCounts returns the committed artifact count of each listed
+// session in one organization that has any.
+func (s *Store) SessionArtifactCounts(
+	ctx context.Context,
+	orgID string,
+	sessionIDs []string,
+) (map[string]int, error) {
+	counts := make(map[string]int, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return counts, nil
+	}
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(
+			ctx,
+			`SELECT session_id::text, count(*)
+			FROM ao_session_artifacts
+			WHERE org_id = $1 AND session_id = ANY($2::uuid[])
+			GROUP BY session_id`,
+			orgID, sessionIDs,
+		)
+		if err != nil {
+			return fmt.Errorf("count session artifacts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sessionID string
+			var count int
+			if err := rows.Scan(&sessionID, &count); err != nil {
+				return err
+			}
+			counts[sessionID] = count
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
+// SessionArtifact returns one committed artifact row for userID, or
+// ErrNotFound. It also returns ErrNotFound unless userID is an active member
+// of the organization and the organization is active, so an access link stops
+// working when its user leaves.
 func (s *Store) SessionArtifact(
 	ctx context.Context,
-	orgID, sessionID, path string,
+	userID, orgID, sessionID, path string,
 ) (domain.SessionArtifact, error) {
 	var artifact domain.SessionArtifact
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
@@ -246,8 +533,17 @@ func (s *Store) SessionArtifact(
 			ctx,
 			`SELECT `+sessionArtifactColumns+`
 			FROM ao_session_artifacts
-			WHERE org_id = $1 AND session_id = $2 AND path = $3`,
-			orgID, sessionID, path,
+			WHERE org_id = $1 AND session_id = $2 AND path = $3
+				AND EXISTS (
+					SELECT 1
+					FROM ao_org_memberships membership
+					JOIN ao_organizations organization ON organization.id = membership.org_id
+					WHERE membership.org_id = $1
+						AND membership.user_id = $4
+						AND membership.status = 'active'
+						AND organization.status = 'active'
+				)`,
+			orgID, sessionID, path, userID,
 		)
 		if err != nil {
 			return fmt.Errorf("get session artifact: %w", err)
@@ -272,11 +568,13 @@ func scanSessionArtifact(row pgx.CollectableRow) (domain.SessionArtifact, error)
 }
 
 // requireSessionTx returns ErrNotFound unless the session exists in the
-// organization. lock takes the session row lock, which serializes commits.
+// organization. lock takes the session row lock, which serializes artifact
+// commits and uploads; FOR NO KEY UPDATE leaves inserts into tables that
+// reference the session unblocked.
 func requireSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, lock bool) error {
 	query := `SELECT 1 FROM ao_sessions WHERE org_id = $1 AND id = $2`
 	if lock {
-		query += ` FOR UPDATE`
+		query += ` FOR NO KEY UPDATE`
 	}
 	var found int
 	err := tx.QueryRow(ctx, query, orgID, sessionID).Scan(&found)
@@ -284,11 +582,4 @@ func requireSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, l
 		return ErrNotFound
 	}
 	return err
-}
-
-func nonNilPaths(paths []string) []string {
-	if paths == nil {
-		return []string{}
-	}
-	return paths
 }

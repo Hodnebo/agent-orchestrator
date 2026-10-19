@@ -154,42 +154,72 @@ replaced, or archived. The flag applies to every organization; with it off the
 artifact routes are not registered, `requestedOutput: "artifact"` is refused,
 and no S3 client is built.
 
-- **Worker.** When the launch context sets `artifacts`, the worker creates
+- **Worker.** When the launch context sets `artifacts` (artifacts are on and
+  the worker advertises `session.artifacts`), the worker creates
   `<AO_DATA_DIR>/artifacts/<sessionId>` outside the checkout, passes it to the
-  agent as `AO_ARTIFACTS_DIR`, and names it in the agent prompt. It walks the
-  directory through Go's rooted filesystem API, skipping symlinks, any
-  `.versions` directory, and files over the limits, and uploads a file once two
-  scans see the same size and modification time. The agent's Stop hook, a 30 s
-  rescan, a 2 s rescan after a change, and a final flush at shutdown trigger a
-  sync. It reports a deletion only for files the same worker process synced.
+  agent as `AO_SESSION_ARTIFACTS_DIR`, names it in the agent prompt, and adds it
+  to the directories the harness may write (Claude `--add-dir`, Codex writable
+  roots). It walks the directory through Go's rooted filesystem API, skipping
+  symlinks, `.versions`, `.git` and `node_modules`, paths that do not fit a
+  bucket key, and files over the limits, and uploads a file once two scans see
+  the same size and modification time. The agent's Stop hook, a 30 s rescan, a
+  2 s rescan after a change, and a final flush at shutdown trigger a sync. A
+  failed request backs off from 10 s to 5 min; a request refused with a client
+  error waits until the files change. The worker reports a deletion only for a
+  file the same process synced that is no longer in the directory at all.
 - **Storage.** The worker sends a manifest of `(path, size, sha256)`; the
   control plane answers with the paths whose committed row differs. Each
   changed file is relayed to the versioned tenant artifact bucket at
   `orgs/{orgId}/sessions/{sessionId}/{path}` with S3 verifying its SHA-256, so a
-  mismatched body creates no version. Sandboxes hold no AWS credentials.
+  mismatched body creates no version. Every upload is recorded in
+  `ao_artifact_object_versions`; a session can hold at most 400 uncommitted
+  uploads or 1000 MiB. Sandboxes hold no AWS credentials.
 - **Commit.** The commit checks every uploaded `(path, versionId)` with
-  `HeadObject`, then upserts and deletes `ao_session_artifacts` rows,
-  recomputes the session's `output_type`, and appends an `artifact.changed`
-  event in one transaction, under the session row lock. A commit over 200 files
-  or 500 MiB per session (25 MiB per file) changes nothing. A deleted path gets
-  an S3 delete marker, so its versions expire with the bucket's noncurrent
-  version rule.
+  `HeadObject`, then, in one transaction under the session row lock and only
+  from the worker's current connection: claims each version as an open upload,
+  upserts and deletes `ao_session_artifacts` rows, recomputes the session's
+  `output_type`, queues the versions it replaced or deleted, and appends an
+  `artifact.changed` event. A commit over 200 files or 500 MiB per session
+  (25 MiB per file) changes nothing, and a commit that changes nothing appends
+  no event.
+- **Cleanup.** A sweeper in the control plane deletes, by version, every
+  upload not committed within 24 hours and every replaced or deleted version
+  one hour after its commit. A version the sweeper has claimed can no longer be
+  committed.
 - **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
-  wakes the sandbox. `POST /sessions/{id}/artifacts/access` returns a 30-minute
-  path prefix signed for one organization and session (an iframe cannot send a
-  bearer header). `GET /artifact-files/{token}/{path}` reads the row and streams
+  wakes the sandbox; the session list carries only `artifactCount`.
+  `POST /sessions/{id}/artifacts/access` returns a ten-minute path prefix
+  signed for one user, organization, and session (an iframe cannot send a
+  bearer header). `GET /artifact-files/{token}/{path}` checks that the user is
+  still an active member of an active organization, reads the row, and streams
   the row's `version_id`, never the newest S3 version, with a sandbox
   Content-Security-Policy without `allow-same-origin`, `connect-src 'none'`,
   `nosniff`, and an ETag of the SHA-256. A row whose object is gone returns
-  404 `artifact_unavailable`.
+  404 `artifact_unavailable`. A served page cannot fetch, but it can navigate
+  or open a window, so it can carry its own URL to another site; the token in
+  that URL lasts ten minutes and works only for a current member.
 
 Every key comes from a worker's claims or from a row read under the caller's
 organization; a client never supplies one. Paths are NFC-normalized and must be
-relative, without `.` or `..` segments, backslashes, drive letters, or control
-characters, with the whole key at most 1024 bytes.
+relative, without `.` or `..` segments, backslashes, drive letters, control or
+invisible format characters, Windows device names, or a leading `.versions` in
+any letter case, with the whole key at most 1024 bytes.
 
 Archiving a session keeps its artifacts. Cloud has no hard delete of a session
-today, so no job removes a session's object versions.
+today, so no job removes a session's committed versions.
+
+## Agent browser relay
+
+The agent browser runs inside the sandbox; the control plane only relays it.
+The worker holds a control connection on
+`GET /api/cloud/v1/worker/agent-browser` and dials
+`/api/cloud/v1/worker/agent-browser/streams/{id}` for each stream, one
+HTTP/1.1 connection per stream. The desktop calls
+`/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/{tail}`, which
+is forwarded to the worker over those streams. Browser traffic is never
+persisted. Like the live terminal relay, the relay is process-local: a request
+is served only by the replica holding the worker's control connection, so the
+deployment keeps one control-plane replica for this path.
 
 ## Replica lifecycle
 

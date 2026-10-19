@@ -120,6 +120,8 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// are only known at runtime. Keep the broad exception limited to images;
 		// scripts, connections, frames, and other resource classes remain scoped.
 		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
+		// A cloud session's audio and video artifacts stream from its control plane.
+		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
