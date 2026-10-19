@@ -2,10 +2,12 @@ package workertransport
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,9 @@ func TestClaudeTranscriptTailFollowsAConversationSwitch(t *testing.T) {
 	const launch, cleared, headless = "511e68be-f634-4b26-b7c7-7f4d258144c6", "7d0c1b2a-3948-4576-8a9b-0c1d2e3f4a5b", "0f1e2d3c-4b5a-4968-8776-655443322110"
 	start := time.Now().Add(-time.Minute)
 	tail := newClaudeTranscriptTail(configDir, launch, dataDir, start.Add(-time.Second))
+	// Live processes, as hook helpers record only running Claude processes'
+	// conversations and prune the others.
+	terminalPID, headlessPID := strconv.Itoa(os.Getpid()), strconv.Itoa(os.Getppid())
 	record := func(pid, session string, at time.Time) {
 		t.Helper()
 		if err := worker.RecordClaudeConversation(dataDir, pid, session, at); err != nil {
@@ -173,14 +178,14 @@ func TestClaudeTranscriptTailFollowsAConversationSwitch(t *testing.T) {
 		tail.scans = 0
 		return tail.poll()
 	}
-	record("100", launch, start)
+	record(terminalPID, launch, start)
 	main := writeClaudeTranscript(t, configDir, launch+".jsonl", claudePrompt)
 	if ends := poll(); len(ends) != 0 {
 		t.Fatalf("ends = %v", ends)
 	}
 
 	// A headless claude the agent runs is its own process and conversation.
-	record("200", headless, start.Add(time.Second))
+	record(headlessPID, headless, start.Add(time.Second))
 	writeClaudeTranscript(t, configDir, headless+".jsonl", claudePrompt+claudeInterruptedAt(start.Add(2*time.Second)))
 	if ends := poll(); len(ends) != 0 {
 		t.Fatalf("a headless claude's interrupt was reported: %v", ends)
@@ -188,7 +193,7 @@ func TestClaudeTranscriptTailFollowsAConversationSwitch(t *testing.T) {
 
 	// /clear, then a prompt in the new conversation.
 	clearedAt := start.Add(10 * time.Second)
-	record("100", cleared, clearedAt)
+	record(terminalPID, cleared, clearedAt)
 	next := writeClaudeTranscript(t, configDir, cleared+".jsonl", claudePrompt)
 	if ends := poll(); len(ends) != 0 {
 		t.Fatalf("ends = %v", ends)
@@ -206,13 +211,42 @@ func TestClaudeTranscriptTailFollowsAConversationSwitch(t *testing.T) {
 	// /resume back to the launch conversation: what it holds from before the
 	// switch is history, an interrupt after it is the turn's end.
 	resumedAt := start.Add(20 * time.Second)
-	record("100", launch, resumedAt)
+	record(terminalPID, launch, resumedAt)
 	if ends := poll(); len(ends) != 0 {
 		t.Fatalf("history of the resumed conversation was reported: %v", ends)
 	}
 	appendRollout(t, main, claudePrompt+claudeInterruptedAt(start.Add(21*time.Second)))
 	if ends := poll(); len(ends) != 1 || !ends[0].at.Equal(start.Add(21*time.Second).Truncate(0)) {
 		t.Fatalf("ends = %v, want the resumed conversation's new interrupt", ends)
+	}
+}
+
+// The tail keeps the conversation records bounded and never drops the
+// terminal's.
+func TestClaudeTranscriptTailPrunesConversationRecords(t *testing.T) {
+	configDir, dataDir := t.TempDir(), t.TempDir()
+	const launch = "511e68be-f634-4b26-b7c7-7f4d258144c6"
+	tail := newClaudeTranscriptTail(configDir, launch, dataDir, time.Now().Add(-time.Second))
+	dir := filepath.Join(dataDir, "claude-conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Records of exited processes (pids above any pid_max), the terminal's
+	// among them as the oldest.
+	for i := 0; i <= worker.MaxClaudeConversations+5; i++ {
+		first := fmt.Sprintf("headless-%d", i)
+		if i == 0 {
+			first = launch
+		}
+		record := fmt.Sprintf(`{"first":%q,"current":%q,"since":%d,"started":%d}`, first, first, i+1, i+1)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", 90_000_000+i)), []byte(record), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tail.poll()
+	records := worker.ReadClaudeConversations(dataDir)
+	if _, ok := records["90000000"]; !ok || len(records) != 1 {
+		t.Fatalf("records = %d (terminal's kept %v), want only the terminal's", len(records), ok)
 	}
 }
 

@@ -69,13 +69,20 @@ type claudeConversation struct {
 // changed, and since when.
 func (c *claudeConversation) refresh() (time.Time, bool) {
 	var record worker.ClaudeConversation
-	found := false
-	for _, candidate := range worker.ReadClaudeConversations(c.dataDir) {
-		if candidate.First == c.launch && (!found || candidate.Started > record.Started) {
-			record, found = candidate, true
+	terminalPID := ""
+	records := worker.ReadClaudeConversations(c.dataDir)
+	for pid, candidate := range records {
+		if candidate.First == c.launch && (terminalPID == "" || candidate.Started > record.Started) {
+			record, terminalPID = candidate, pid
 		}
 	}
-	if !found || record.Current == c.current {
+	if len(records) > worker.MaxClaudeConversations {
+		// The hook helper drops exited processes' records; more than this
+		// many means pids reused or a crowd of headless runs. Keep the
+		// terminal's.
+		worker.PruneClaudeConversations(c.dataDir, terminalPID, worker.MaxClaudeConversations)
+	}
+	if terminalPID == "" || record.Current == c.current {
 		return time.Time{}, false
 	}
 	c.current = record.Current
