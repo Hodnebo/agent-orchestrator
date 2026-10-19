@@ -150,7 +150,7 @@ From the phone you can open any project and worker, use structured Chat or the a
 
 Another Orchestrator.inc desktop can also connect to this computer as a remote host. Run `ao remote-host` on this computer. On the other one, turn on **Settings → General → Developer mode** and use **Settings → Remote hosts → Add host**. See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
 
-**AO Cloud is available now in the desktop app** as an early preview: sign in and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start: turn on **Developer mode** and **Cloud** in **Settings → General**, then choose **Sign in to AO Cloud**. Cloud sessions run in remote sandboxes that can be slow to start or lose uncommitted work, so commit and push often. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) and [Plans](#plans).
+**Orchestrator Cloud is available now in the desktop app** (turn on **Settings → General → Developer mode**, then **Cloud**). Choose **Sign in to AO Cloud** and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start. Cloud sessions run in remote sandboxes that can be slow to start or lose uncommitted work, so commit and push often. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) and [Plans](#plans).
 
 ## Supported agents
 
@@ -234,7 +234,7 @@ Local use is free: unlimited local agents with any supported harness, plus the o
 | **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 15 simultaneous cloud agents. |
 | **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
 
-Plans are billed monthly. See [orchestrator.inc/pricing](https://orchestrator.inc/pricing), or choose and change a plan in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. For Enterprise, use **Talk to founder** on the same page.
+Plans are billed monthly. Choose or change a plan in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. For Enterprise, use **Talk to founder** on the same page, or join the [Teams & Enterprise waitlist](https://orchestrator.inc/waitlist).
 
 ## FAQ
 
@@ -260,7 +260,7 @@ Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile
 
 ### Is it free?
 
-Yes. The local app is free: the desktop app, CLI and mobile apps cost nothing, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. Paid AO Cloud plans start at $20/month (Starter); Pro is $40/month and Enterprise has custom pricing. See [Plans](#plans).
+Yes. The local app is free: the desktop app, CLI and mobile apps cost nothing, and the source is open under Apache-2.0. You use your own coding agent subscriptions or API keys. Paid AO Cloud plans start at $20/month (Starter); Pro is $40/month and Enterprise has custom pricing. See [Plans](#plans). Teams and enterprises can join the [Teams & Enterprise waitlist](https://orchestrator.inc/waitlist).
 
 ### Is this the same project as `ComposioHQ/agent-orchestrator`?
 
