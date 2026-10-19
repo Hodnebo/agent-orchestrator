@@ -302,7 +302,6 @@ function SessionFileContent() {
 					options={[{ key: "rendered", label: "Preview", icon: "eye" }, { key: "source", label: "Source", icon: "code" }]}
 				/>
 			) : null}
-			{rows.length > 0 && !selection && !image && !detail?.binary && !(markdown && rendered && effectiveMode === "file") && !(svg && effectiveMode === "file") ? <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.hint}>Tap a line to comment · hold and drag, or drag the line numbers, to select more</Text> : null}
 			{detail?.diffTruncated && effectiveMode === "diff" ? <Text style={styles.warn}>This diff is too large to show in full; the end is cut off.</Text> : null}
 			{detail?.contentTruncated && effectiveMode === "file" ? <Text style={styles.warn}>This file is too large to show in full.</Text> : null}
 		</View>
@@ -449,7 +448,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	disabled: { opacity: 0.35 },
 	notice: { position: "absolute", top: space.md, alignSelf: "center", backgroundColor: t.bgElevated, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingVertical: space.sm },
 	noticeText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
-	hint: { fontFamily: font.regular, fontSize: type.caption1.fontSize, color: t.textTertiary },
 	preview: { padding: space.lg },
 	markdown: { padding: space.lg, paddingBottom: 120 },
 	images: { padding: space.lg, gap: space.lg, paddingBottom: 120 },
