@@ -143,7 +143,7 @@ describe("useFilesReviewSelection", () => {
 		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/history", { params: { path: { sessionId: SESSION }, query: { branch: "main" } } });
 		expect(selectionRequests()).toHaveLength(1);
 		expect(selectionRequests()[0]?.[1]?.body).toEqual({ branch: "main", expectedTipSha: SHA("2"), commitShas: [] });
-		expect(result.current.target).toMatchObject({ key: "branch:main:all", scope: "committed", view: { branch: "main", expectedTipSha: SHA("2") }, openable: false, files: [file("x.ts", 4, 2)] });
+		expect(result.current.target).toMatchObject({ key: "branch:main:all", scope: "committed", view: { branch: "main", expectedTipSha: SHA("2") }, openable: true, files: [file("x.ts", 4, 2)] });
 		expect(result.current.changesMenu).toMatchObject({ mode: "view", value: { kind: "commits", shas: [] }, stats: { additions: 4, deletions: 2 } });
 		expect(result.current.changesMenu.commits.rangeMode).toBe("recent");
 		expect(result.current.branchMenu?.trigger).toEqual({ kind: "branch", name: "main" });
@@ -166,7 +166,7 @@ describe("useFilesReviewSelection", () => {
 
 		expect(selectionRequests()).toHaveLength(1);
 		expect(selectionRequests()[0]?.[1]?.body).toEqual({ commitShas: [SHA("a"), SHA("b"), SHA("c")], workspaceVersion: "v1" });
-		expect(result.current.target).toMatchObject({ commitShas: [SHA("a"), SHA("b"), SHA("c")], openable: false, files: [file("x.ts", 4, 2)] });
+		expect(result.current.target).toMatchObject({ commitShas: [SHA("a"), SHA("b"), SHA("c")], openable: true, files: [file("x.ts", 4, 2)] });
 		expect(result.current.changesMenu.stats).toEqual({ additions: 4, deletions: 2 });
 	});
 
@@ -263,8 +263,9 @@ describe("useFilesReviewSelection", () => {
 		await waitFor(() => expect(result.current.target).toMatchObject({ state: "ready", commitShas: [SHA("a"), SHA("b")] }));
 
 		rerender({ sessionId: other, manifest: manifest() });
-		// The explorer stays mounted across the switch; the next session reads its own pick at once.
-		expect(result.current.target).toMatchObject({ state: "ready", commitShas: undefined, files: [file("c.ts", 5, 2)] });
+		// Never reuse the old session's ticks while resolving the new snapshot tip.
+  expect(result.current.target).toMatchObject({state:"pending",commitShas:undefined});
+  await waitFor(()=>expect(result.current.target).toMatchObject({state:"ready",commitShas:undefined,files:[file("c.ts",5,2)]}));
 		await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
 		expect(selectionRequests().map((call) => call[1]?.params.path.sessionId)).toEqual([SESSION]);
 	});

@@ -231,43 +231,43 @@ export function SessionFileExplorer({
 		</label>
 	);
 
-const viewMenu = (
-	<>
-		{showLayout ? (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
-						aria-pressed={split}
-						onClick={() => setLayout(!split)}
-						size="icon-sm"
-						type="button"
-						variant="ghost"
-					>
-						{split ? <Columns2 aria-hidden="true" className="size-icon-base" /> : <Rows3 aria-hidden="true" className="size-icon-base" />}
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
-			</Tooltip>
-		) : null}
-		{showCollapse ? (
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						aria-label={t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}
-						onClick={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}
-						size="icon-sm"
-						type="button"
-						variant="ghost"
-					>
-						<ListChevronsUpDown aria-hidden="true" className="size-icon-base" />
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}</TooltipContent>
-			</Tooltip>
-		) : null}
-	</>
-);
+	const viewMenu = (
+		<>
+			{showLayout ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={split ? t("files.unifiedDiff") : t("files.splitDiff")}
+							aria-pressed={split}
+							onClick={() => setLayout(!split)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							{split ? <Columns2 aria-hidden="true" className="size-icon-base" /> : <Rows3 aria-hidden="true" className="size-icon-base" />}
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{split ? t("files.unifiedDiff") : t("files.splitDiff")}</TooltipContent>
+				</Tooltip>
+			) : null}
+			{showCollapse ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}
+							onClick={() => setCollapseRequest((current) => ({ expand: reviewAllCollapsed, key: (current?.key ?? 0) + 1 }))}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<ListChevronsUpDown aria-hidden="true" className="size-icon-base" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{t(reviewAllCollapsed ? "files.expandAll" : "files.collapseAll")}</TooltipContent>
+				</Tooltip>
+			) : null}
+		</>
+	);
 
 	const maximizeButton = onToggleMaximized ? (
 		<Tooltip>

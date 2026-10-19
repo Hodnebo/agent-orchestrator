@@ -69,6 +69,7 @@ function canRenderSvg(path: string, detail: WorkspaceFileDetail): boolean {
 }
 
 export function FileContentPane({
+	active = true,
 	annotation,
 	initialEditing = false,
 	initialLine,
@@ -89,6 +90,7 @@ export function FileContentPane({
 	toolbarHost,
 }: {
 	annotation: FileAnnotationModel;
+	active?: boolean;
 	initialEditing?: boolean;
 	initialLine?: number;
 	initialMode?: FileViewMode;
@@ -246,7 +248,7 @@ export function FileContentPane({
 		}
 	}, [commitSha, draft, initialMode, path, query.data, queryClient, saving, scope, sessionId, source, hostId, t]);
 	useEffect(() => {
-		if (!editing) return;
+		if (!active || !editing) return;
 		const onSaveShortcut = (event: KeyboardEvent) => {
 			if (
 				event.key.toLowerCase() !== "s"
@@ -259,7 +261,7 @@ export function FileContentPane({
 		};
 		window.addEventListener("keydown", onSaveShortcut, true);
 		return () => window.removeEventListener("keydown", onSaveShortcut, true);
-	}, [editing, hasUnsavedChanges, saveEditing, saving]);
+	}, [active, editing, hasUnsavedChanges, saveEditing, saving]);
 	const refetch = query.refetch;
 
 	if (!path) {

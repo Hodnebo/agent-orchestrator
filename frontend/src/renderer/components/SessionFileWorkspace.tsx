@@ -6,6 +6,7 @@ import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import type { WorkspaceDiffScope } from "../hooks/useSessionWorkspaceFiles";
 
 export function SessionFileWorkspace({
+	active = true,
 	fileKey,
 	source,
 	previousPath,
@@ -25,6 +26,7 @@ export function SessionFileWorkspace({
 	scope = "combined",
 }: {
 	annotation: FileAnnotationModel;
+	active?: boolean;
 	fileKey?: string;
 	source?: FileOpenOptions["source"];
 	previousPath?: string;
@@ -104,6 +106,7 @@ export function SessionFileWorkspace({
 				ref={scrollRef}
 			>
 				<FileContentPane
+					active={active}
 					source={source}
 					previousPath={previousPath}
 					annotation={source?.kind === "snapshot" ? snapshotAnnotation : annotation}

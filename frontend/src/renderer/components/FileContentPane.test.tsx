@@ -55,6 +55,43 @@ describe("FileContentPane", () => {
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
+	it("keeps inactive editor drafts without letting them handle the active tab's save shortcut", async () => {
+		const detail = {
+			sessionId: "sess-1",
+			path: "src/App.tsx",
+			status: "modified",
+			content: "original",
+			size: 8,
+			binary: false,
+			deleted: false,
+			contentTruncated: false,
+			diff: "",
+			diffTruncated: false,
+			editable: true,
+			fileFingerprint: "original-fingerprint",
+		};
+		getMock.mockResolvedValue({ data: detail });
+		putMock.mockResolvedValue({ data: { ...detail, content: "draft", fileFingerprint: "saved-fingerprint" } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const annotation = noopAnnotation();
+		const pane = (active: boolean) => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<FileContentPane active={active} annotation={annotation} initialEditing initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(pane(true));
+		fireEvent.change(await screen.findByRole("textbox", { name: "Edit src/App.tsx" }), { target: { value: "draft" } });
+		view.rerender(pane(false));
+		fireEvent.keyDown(window, { key: "s", metaKey: true });
+		expect(putMock).not.toHaveBeenCalled();
+		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toHaveValue("draft");
+		view.rerender(pane(true));
+		fireEvent.keyDown(window, { key: "s", metaKey: true });
+		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	});
+
 	it("opens a historical file through the snapshot API and keeps it read-only even with editable metadata", async () => {
 		const source = { kind: "snapshot" as const, view: { branch: "feature", expectedTipSha: "a".repeat(40) }, commitShas: [], label: "feature · aaaaaaa" };
 		getMock.mockResolvedValue({

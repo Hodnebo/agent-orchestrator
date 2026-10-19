@@ -134,24 +134,24 @@ export function useFilesReviewSelection({
 	});
 
 	const settledKey = changesKey(settledChanges);
-const target = useMemo(
-	() => {
-		const built = buildReviewTarget({
-			branch,
-			changes: settledChanges,
-			manifest,
-			legacy,
-			history,
-			historyError: historyQuery.error,
-			selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
-		});
-		return settledChanges.kind === "commits" && !history
-			? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
-			: built;
-	},
-	// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
-	[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
-);
+	const target = useMemo(
+		() => {
+			const built = buildReviewTarget({
+				branch,
+				changes: settledChanges,
+				manifest,
+				legacy,
+				history,
+				historyError: historyQuery.error,
+				selection: request ? { data: selectionQuery.data, error: selectionQuery.error, pending: selectionQuery.isPending } : undefined,
+			});
+			return settledChanges.kind === "commits" && !history
+				? { ...built, state: historyQuery.error ? ("error" as const) : ("pending" as const), files: undefined, error: historyQuery.error ?? undefined }
+				: built;
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- settledChanges and branch are read through their keys: normalizing rebuilds equal values on every render.
+		[branchKey(branch), settledKey, manifest, legacy, history, historyQuery.error, request?.selectionKey, selectionQuery.data, selectionQuery.error, selectionQuery.isPending],
+	);
 
 	// A moved tip or base fails the read it fenced; the new one arrives under new keys.
 	const selectionErrorCode = workspaceErrorCode(selectionQuery.error);
