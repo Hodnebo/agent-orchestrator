@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
@@ -21,9 +21,12 @@ export function useStayAwake(enabled = true) {
 	const [intent, setIntent] = useState<boolean | null>(null);
 	const [failure, setFailure] = useState<string | null>(null);
 	const sessions = awake.state?.sessions?.filter((s) => !s.endedAt && s.scope === "ao") ?? [];
-	// Subscribe to the mobile status the Connect Mobile page keeps fresh, without fetching it here.
-	const mobile = useQuery<MobileStatus>({ queryKey: mobileStatusQueryKey, enabled: false });
-	const legacyOn = mobile.data?.keepAwake?.enabled ?? false;
+	// Watch the mobile status the Connect Mobile page keeps fresh. A cache
+	// subscription, not a second observer, so this never fetches or steers that query.
+	const legacyOn = useSyncExternalStore(
+		(notify) => cache.getQueryCache().subscribe(notify),
+		() => cache.getQueryData<MobileStatus>(mobileStatusQueryKey)?.keepAwake?.enabled ?? false,
+	);
 	const on = intent ?? (sessions.length > 0 || legacyOn);
 	const set = async (next: boolean) => {
 		setIntent(next);

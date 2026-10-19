@@ -5,7 +5,7 @@ import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
-/** Square coffee toggle for the sidebar settings row: keeps this Mac awake while on. */
+/** Square coffee toggle beside the sidebar Connect mobile row: keeps this Mac awake while on. */
 export function AwakeControl({ className }: { className?: string }) {
 	if (!isMacPlatform()) return null;
 	return <MacAwakeControl className={className} />;
