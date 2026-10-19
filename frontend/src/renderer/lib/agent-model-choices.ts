@@ -25,6 +25,23 @@ export function filterDisabledModels<T extends { id: string }>(
 	return { models: filtered, narrowed: true };
 }
 
+/**
+ * The catalog models an agent that is not running yet would offer: those of the
+ * providers it has credentials for (its own session lists no others), without
+ * the ones switched off in Settings. A catalog that names no configured provider,
+ * or none of whose models belong to one, is offered whole.
+ */
+export function offeredCatalogModels<T extends { id: string; provider?: string }>(
+	catalog: { models: T[]; configuredProviders?: string[] } | undefined,
+	disabled: readonly string[] | undefined,
+	keep: ReadonlyArray<string | undefined> = [],
+): T[] {
+	const models = catalog?.models ?? [];
+	const configured = new Set(catalog?.configuredProviders ?? []);
+	const usable = configured.size > 0 ? models.filter((model) => !model.provider || configured.has(model.provider)) : models;
+	return filterDisabledModels(usable.length > 0 ? usable : models, disabled, keep).models;
+}
+
 export function isDefaultPlaceholderLabel(label: string): boolean {
 	return /^default(?:\s*\([^)]*\))?$/i.test(label.trim());
 }

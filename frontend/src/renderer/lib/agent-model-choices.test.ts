@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, splitClaudeModels } from "./agent-model-choices";
+import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, offeredCatalogModels, splitClaudeModels } from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -128,5 +128,29 @@ describe("Claude context variant selection", () => {
 		expect(resolve("sonnet")).toBeUndefined();
 		expect(resolve("opus[2m]")).toBeUndefined();
 		expect(resolve("claude-opus-4-9[1m]")?.id).toBe("claude-opus-4-9[1m]");
+	});
+});
+
+describe("offeredCatalogModels", () => {
+	const pi = {
+		configuredProviders: ["openai-codex"],
+		models: [
+			{ id: "openai-codex/gpt-5.5", provider: "openai-codex" },
+			{ id: "openai-codex/gpt-6-sol", provider: "openai-codex" },
+			{ id: "openrouter/aion-labs/aion-3.5", provider: "openrouter" },
+		],
+	};
+
+	it("offers only the providers the agent has credentials for, as its own session does", () => {
+		expect(offeredCatalogModels(pi, undefined).map((m) => m.id)).toEqual(["openai-codex/gpt-5.5", "openai-codex/gpt-6-sol"]);
+	});
+
+	it("leaves out the models switched off in Settings", () => {
+		expect(offeredCatalogModels(pi, ["openai-codex/gpt-5.5"]).map((m) => m.id)).toEqual(["openai-codex/gpt-6-sol"]);
+	});
+
+	it("offers the whole catalog when no configured provider has a model", () => {
+		expect(offeredCatalogModels({ ...pi, configuredProviders: [] }, undefined)).toHaveLength(3);
+		expect(offeredCatalogModels({ ...pi, configuredProviders: ["anthropic"] }, undefined)).toHaveLength(3);
 	});
 });

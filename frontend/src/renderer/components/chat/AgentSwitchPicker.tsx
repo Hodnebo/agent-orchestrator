@@ -16,7 +16,8 @@ import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
-import { agentModelDisplayLabel, splitClaudeModels } from "../../lib/agent-model-choices";
+import { useSettings } from "../../hooks/useSettings";
+import { agentModelDisplayLabel, offeredCatalogModels, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
 import { isLaunchableAgent } from "../../lib/agent-select-options";
 import { CHAT_SWITCH_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
@@ -252,8 +253,17 @@ export function AgentModelPicker({
 	const catalogs = useQueries({
 		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
 	});
+	const { settings: hostSettings } = useSettings(hostId);
+	// The models a pending agent offers are the ones its own session will: a running
+	// chat lists those from the agent itself, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
-		harness, catalogs[others.findIndex((agent) => agent.id === harness)]?.data?.models, held, onPendingChange, t,
+		harness,
+		offeredCatalogModels(
+			catalogs[others.findIndex((agent) => agent.id === harness)]?.data,
+			hostSettings?.harnessDefaults?.[harness]?.disabledModels,
+			[held?.model],
+		),
+		held, onPendingChange, t,
 	);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;

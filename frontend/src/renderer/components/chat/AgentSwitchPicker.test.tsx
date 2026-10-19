@@ -8,6 +8,7 @@ import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./
 const unavailableGet = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
 vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
+vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: undefined }) }));
 vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agent: string) => ({
 		queryKey: ["agent-models", agent],
