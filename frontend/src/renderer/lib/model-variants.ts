@@ -190,6 +190,19 @@ export function readableModelLabel(label: string): string {
  * becomes "OpenAI Codex". An agent's own id adds nothing, so it
  * yields no heading: Kimi's "managed:kimi-code" is not shown.
  */
+/**
+ * A running agent's own model choice named "<provider>/<model>", as Pi's chat
+ * names them: the model's name under its provider, as the agent's catalog
+ * shows it in the switch picker.
+ */
+export function providerQualifiedChoice<T extends { value: string; name: string; group?: string; groupName?: string }>(choice: T, harness: string): T {
+	const slash = choice.value.indexOf("/");
+	if (slash <= 0 || choice.group || choice.groupName) return choice;
+	const provider = choice.value.slice(0, slash);
+	if (!choice.name.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return choice;
+	return { ...choice, name: readableModelLabel(choice.name.slice(slash + 1)), group: modelGroupLabel(provider, harness) };
+}
+
 export function modelGroupLabel(group: string | undefined, harness: string): string | undefined {
 	const raw = (group ?? "").trim();
 	if (!raw) return undefined;

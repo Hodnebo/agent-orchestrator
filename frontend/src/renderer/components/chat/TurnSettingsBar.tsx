@@ -38,6 +38,7 @@ import { Switch } from "../ui/switch";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
 	ApprovalMode,
 	ChatConfigOption,
@@ -174,7 +175,7 @@ export function TurnSettingsBar({
 			...option,
 			// Claude Code can list one model twice, by alias and by the id the chat
 			// started with. The picker shows it once, as the current one if either is.
-			choices: dedupeChoicesByName(option.choices.map((choice) => ({
+			choices: dedupeChoicesByName(option.choices.map((choice) => providerQualifiedChoice(choice, harness ?? "")).map((choice) => ({
 				...choice,
 				name: claudeLabels?.(choice.value, choice.name) ?? agentModelDisplayLabel(harness, choice.name),
 				description: choice.description

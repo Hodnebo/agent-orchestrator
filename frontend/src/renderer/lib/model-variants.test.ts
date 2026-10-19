@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collapseModelVariants, findModelVariant, groupModelsByVendor, pickModelVariant, readableModelLabel } from "./model-variants";
+import { collapseModelVariants, findModelVariant, groupModelsByVendor, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
 
 // Shapes taken from a real Cursor catalog.
 const catalog = [
@@ -89,5 +89,20 @@ describe("collapseModelVariants", () => {
 
 	it("names a routed model by its last part", () => {
 		expect(readableModelLabel("openrouter/anthropic/claude-haiku-4.5")).toBe("Claude Haiku 4.5");
+	});
+});
+
+describe("providerQualifiedChoice", () => {
+	it("names a running Pi's model as its catalog does, under its provider", () => {
+		expect(providerQualifiedChoice({ value: "openai-codex/gpt-6.1-sol", name: "openai-codex/GPT-6.1 Sol" }, "pi"))
+			.toEqual({ value: "openai-codex/gpt-6.1-sol", name: "GPT-6.1 Sol", group: "OpenAI Codex" });
+		expect(providerQualifiedChoice({ value: "openai-codex/gpt-5.5", name: "openai-codex/gpt-5.5" }, "pi").name).toBe("GPT-5.5");
+	});
+
+	it("leaves a choice alone that is already grouped or not named by its provider", () => {
+		const grouped = { value: "anthropic/claude-opus", name: "anthropic/claude-opus", group: "Anthropic" };
+		expect(providerQualifiedChoice(grouped, "pi")).toBe(grouped);
+		const plain = { value: "anthropic/claude-opus", name: "Claude Opus" };
+		expect(providerQualifiedChoice(plain, "opencode")).toBe(plain);
 	});
 });

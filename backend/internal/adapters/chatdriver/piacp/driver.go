@@ -8,6 +8,7 @@ package piacp
 import (
 	"cmp"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -99,6 +100,9 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			env["PI_ACP_SOCKET_DIR"] = filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID), "run")
 			if err := prepareStandingInstructions(ctx, cfg); err != nil {
 				return acpdriver.Launch{}, err
+			}
+			if err := preloadCurrentModels(cfg, env); err != nil && log != nil {
+				log.Warn("Pi chat keeps pi-acp's own model list", "session", cfg.SessionID, "error", err)
 			}
 			return acpdriver.Launch{Command: binary, Env: env}, nil
 		},
@@ -234,6 +238,34 @@ func cloneEnv(in map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+// modelsPreload is loaded into pi-acp to give its bundled Pi the models a newer
+// Pi lists now. See the file for how.
+//
+//go:embed models_preload.mjs
+var modelsPreload []byte
+
+// preloadCurrentModels has pi-acp, and the daemon it starts, load
+// modelsPreload. pi-acp pins a Pi release whose built-in models providers have
+// since retired: a ChatGPT account refuses all of them. Without the preload
+// pi-acp keeps that list.
+func preloadCurrentModels(cfg acpdriver.LaunchConfig, env map[string]string) error {
+	dir := filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID))
+	script := filepath.Join(dir, "models-preload.mjs")
+	// BUN_OPTIONS splits on whitespace and takes no quotes.
+	if strings.ContainsAny(script, " \t\n") {
+		return fmt.Errorf("the preload path %q has whitespace, which BUN_OPTIONS cannot carry", script)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(script, modelsPreload, 0o600); err != nil {
+		return err
+	}
+	env["BUN_OPTIONS"] = strings.TrimSpace(env["BUN_OPTIONS"] + " --preload " + script)
+	env["AO_PI_MODELS_JSON"] = filepath.Join(dir, "models.json")
+	return nil
 }
 
 func instructionDir(cfg acpdriver.LaunchConfig) string {

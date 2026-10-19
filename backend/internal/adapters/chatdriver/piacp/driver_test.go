@@ -264,3 +264,36 @@ func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
 		t.Fatalf("a session with no record = %q, want none", got)
 	}
 }
+
+func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := buildConfig(fakePiPlugin{}, func(context.Context) (string, error) { return "/user/bin/pi-acp", nil }, nil)
+	launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{
+		SessionID: "session-1", DataDir: dataDir, Env: map[string]string{"BUN_OPTIONS": "--smol"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	dir := filepath.Join(dataDir, "pi-acp", "session-1")
+	script := filepath.Join(dir, "models-preload.mjs")
+	// The user's own Bun options are kept; the preload is added to them.
+	if got := launch.Env["BUN_OPTIONS"]; got != "--smol --preload "+script {
+		t.Fatalf("BUN_OPTIONS = %q", got)
+	}
+	if got := launch.Env["AO_PI_MODELS_JSON"]; got != filepath.Join(dir, "models.json") {
+		t.Fatalf("AO_PI_MODELS_JSON = %q", got)
+	}
+	if written, err := os.ReadFile(script); err != nil || string(written) != string(modelsPreload) {
+		t.Fatalf("preload script = %d bytes, %v; want the embedded one", len(written), err)
+	}
+
+	// A data directory Bun cannot name in BUN_OPTIONS leaves pi-acp as it is.
+	spaced := filepath.Join(t.TempDir(), "with space")
+	launch, err = cfg.Launch(context.Background(), acpdriver.LaunchConfig{SessionID: "session-2", DataDir: spaced})
+	if err != nil {
+		t.Fatalf("Launch with a spaced data directory: %v", err)
+	}
+	if _, set := launch.Env["BUN_OPTIONS"]; set {
+		t.Fatalf("BUN_OPTIONS = %q, want none", launch.Env["BUN_OPTIONS"])
+	}
+}
