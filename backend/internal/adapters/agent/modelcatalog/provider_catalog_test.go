@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -65,6 +66,40 @@ func TestLocalProviderCatalogReadsEachHarnessOwnCache(t *testing.T) {
 			}
 			if before == providerCatalogFingerprint(agentID, env) {
 				t.Fatal("cache change did not invalidate catalog")
+			}
+		})
+	}
+}
+
+func TestPiCatalogFingerprintIgnoresRewritesWithSameContents(t *testing.T) {
+	for _, agentID := range []string{"pi", "kimchi"} {
+		t.Run(agentID, func(t *testing.T) {
+			env := providerTestEnv(t)
+			dir := piCatalogDir(agentID, env)
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "models.json")
+			write := func(raw string, at time.Time) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(path, at, at); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := time.Now().Add(-time.Hour)
+			write(`{"providers":{}}`, start)
+			before := providerCatalogFingerprint(agentID, env)
+			// --list-models rewrites the file with the same contents.
+			write(`{"providers":{}}`, start.Add(time.Minute))
+			if got := providerCatalogFingerprint(agentID, env); got != before {
+				t.Fatalf("same contents changed the fingerprint: %q -> %q", before, got)
+			}
+			write(`{"providers":{"added":{}}}`, start.Add(2*time.Minute))
+			if providerCatalogFingerprint(agentID, env) == before {
+				t.Fatal("changed contents did not change the fingerprint")
 			}
 		})
 	}

@@ -276,6 +276,12 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 		path := filepath.Join(piCatalogDir(agentID, env), "models.db")
 		paths = []string{path, path + "-wal"}
 	}
+	if agentID == "pi" || agentID == "kimchi" {
+		// Pi and Kimchi rewrite these files on every --list-models with the same
+		// contents. A modification time would make each discovery invalidate the
+		// catalog it just wrote, so every catalog read would discover again.
+		return ";" + fingerprintConfigPaths(paths)
+	}
 	var stamp strings.Builder
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil {
