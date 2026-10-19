@@ -430,7 +430,7 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 		}
 		if request.AgentID == "pi" || request.AgentID == "kimchi" {
 			// Snapshots from before Pi's thinking levels were read lack them.
-			return fingerprint + ":shared-providers-v1:thinking-v1"
+			return fingerprint + ":shared-providers-v1:thinking-v2"
 		}
 		return fingerprint + ":shared-providers-v1"
 	}
