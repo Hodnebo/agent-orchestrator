@@ -300,6 +300,9 @@ func migrate(db *sql.DB) error {
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
+	if err := repairRenumberedProviderSwitchingMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered provider-switching migration history: %w", err)
+	}
 	if err := repairRenumberedChatMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered chat migration history: %w", err)
 	}
@@ -1205,6 +1208,30 @@ func quoteSQLiteIdent(name string) string {
 // upgraded schema. Version 0052 now belongs to model usage on main; if that
 // physical schema is absent, release the burned ledger entry so goose can apply
 // the real 0052 migration below.
+// repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
+// provider switching as 0201, its number on the feature branch, to 0216. It
+// would otherwise apply the migration again, and 0201 is left for main.
+func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
+	var gooseTable, turnsTable, applied201, applied216 int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_terminal_turns'`).Scan(&turnsTable); err != nil || turnsTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&applied201); err != nil {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 216 AND is_applied = 1`).Scan(&applied216); err != nil {
+		return err
+	}
+	if applied201 == 0 || applied216 != 0 {
+		return nil
+	}
+	_, err := db.Exec(`UPDATE goose_db_version SET version_id = 216 WHERE version_id = 201`)
+	return err
+}
+
 func repairRenumberedChatMigrationHistory(db *sql.DB) error {
 	// Probe on a read-only query first. A fresh database (the common import
 	// path and the cli import test) has no goose_db_version table yet, so there
