@@ -1558,10 +1558,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	return c.retryTurnLocked(ctx, turnID)
+	return c.retryTurnLocked(ctx, turnID, false)
 }
 
-func (c *Controller) retryTurnLocked(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
@@ -1632,7 +1632,13 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string) (domain
 		Continuation:        prompt.Continuation,
 	}
 	var created bool
-	if c.reviewID == "" {
+	if autoResume {
+		store, ok := c.store.(usageLimitStore)
+		if !ok {
+			return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
+		}
+		created, err = store.AppendAutoResumeRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
+	} else if c.reviewID == "" {
 		created, err = c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
 	} else {
 		created, err = c.store.AppendReviewRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, retryMessage, newTurnID, turnID, now)

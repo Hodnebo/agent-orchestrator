@@ -40,7 +40,7 @@
 	"chat.usageLimit.ready": "O horário de redefinição chegou. Você pode retomar agora.",
 	"chat.usageLimit.availableIn": "Disponível em <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "A retomada automática está agendada.",
-	"chat.usageLimit.resumeHint": "Disponível quando o limite de uso for redefinido",
+	"chat.usageLimit.waiting": "A retomada automática está aguardando uma nova tentativa.",
 	"chat.usageLimit.resume": "Retomar",
 	"chat.usageLimit.cancelAutoResume": "Cancelar retomada automática",
 	"chat.usageLimit.autoResume": "Retomar automaticamente após a redefinição",

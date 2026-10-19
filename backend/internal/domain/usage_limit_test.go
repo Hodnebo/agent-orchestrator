@@ -62,3 +62,55 @@ func TestUsageLimitNonexistentDSTClockRemainsUnknown(t *testing.T) {
 		t.Fatalf("limit = %+v, want unknown reset", limit)
 	}
 }
+
+func TestUsageLimitRepeatedDSTClockRemainsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name, failedAt, reset string
+	}{
+		{"New York before repeated hour", "2026-11-01T04:15:00Z", "1:30am (America/New_York)"},
+		{"New York between occurrences", "2026-11-01T05:45:00Z", "1:30am (America/New_York)"},
+		{"New York during second occurrence", "2026-11-01T06:15:00Z", "1:30am (America/New_York)"},
+		{"New York explicit tomorrow", "2026-10-31T12:00:00Z", "tomorrow 1:30am (America/New_York)"},
+		{"New York implicit date rollover", "2026-10-31T12:00:00Z", "1:30am (America/New_York)"},
+		{"Lord Howe before repeated half hour", "2026-04-04T14:15:00Z", "1:45am (Australia/Lord_Howe)"},
+		{"Lord Howe between occurrences", "2026-04-04T14:50:00Z", "1:45am (Australia/Lord_Howe)"},
+		{"Lord Howe during second occurrence", "2026-04-04T15:05:00Z", "1:45am (Australia/Lord_Howe)"},
+		{"Lord Howe explicit tomorrow", "2026-04-03T21:00:00Z", "tomorrow 1:45am (Australia/Lord_Howe)"},
+		{"Lord Howe implicit date rollover", "2026-04-03T21:00:00Z", "1:45am (Australia/Lord_Howe)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failedAt, err := time.Parse(time.RFC3339, tc.failedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			limit := ParseConversationUsageLimit("You've hit your session limit · resets "+tc.reset, &failedAt)
+			if limit == nil || limit.ResetsAt != nil {
+				t.Fatalf("limit = %+v, want unknown reset for a repeated wall clock", limit)
+			}
+		})
+	}
+}
+
+func TestUsageLimitUnambiguousResetClocks(t *testing.T) {
+	for _, tc := range []struct {
+		name, failedAt, clock, reset string
+	}{
+		{"UTC", "2026-11-01T01:15:00Z", "1:30am (UTC)", "2026-11-01T01:30:00Z"},
+		{"no DST", "2026-11-01T01:15:00Z", "7am (Asia/Kolkata)", "2026-11-01T01:30:00Z"},
+		{"New York after repeated hour", "2026-11-01T06:15:00Z", "2:30am (America/New_York)", "2026-11-01T07:30:00Z"},
+		{"New York tomorrow skips current fold", "2026-11-01T05:15:00Z", "tomorrow 1:30am (America/New_York)", "2026-11-02T06:30:00Z"},
+		{"Lord Howe after repeated half hour", "2026-04-04T14:15:00Z", "2:15am (Australia/Lord_Howe)", "2026-04-04T15:45:00Z"},
+		{"Lord Howe tomorrow skips current fold", "2026-04-04T14:15:00Z", "tomorrow 1:45am (Australia/Lord_Howe)", "2026-04-05T15:15:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failedAt, err := time.Parse(time.RFC3339, tc.failedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			limit := ParseConversationUsageLimit("You've hit your session limit · resets "+tc.clock, &failedAt)
+			if limit == nil || limit.ResetsAt == nil || limit.ResetsAt.Format(time.RFC3339) != tc.reset {
+				t.Fatalf("limit = %+v, want reset %s", limit, tc.reset)
+			}
+		})
+	}
+}

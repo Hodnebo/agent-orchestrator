@@ -97,6 +97,8 @@ type Service struct {
 	backgroundWakes       map[domain.SessionID]bool
 	autoResumeMu          sync.Mutex
 	autoResumeRetryAt     map[string]time.Time
+	autoResumeInFlight    map[string]bool
+	autoResumeScanning    bool
 	usageLimitAccounts    usageLimitAccountReader
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.

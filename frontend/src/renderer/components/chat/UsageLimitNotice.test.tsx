@@ -60,27 +60,34 @@ describe("UsageLimitNotice", () => {
 		expect(onResume).not.toHaveBeenCalled();
 	});
 
-	it("replaces scheduled cancellation with manual Resume at reset without retrying automatically", () => {
+	it("keeps cancellation available after reset while automatic retry remains armed", () => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
-		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
+		const view = render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
 		act(() => vi.advanceTimersByTime(65_000));
 
-		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
-		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).not.toBeInTheDocument();
 		expect(screen.queryByText(/Auto-resume is scheduled/)).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent("Auto-resume is waiting to retry.");
 		expect(onResume).not.toHaveBeenCalled();
 		expect(onAutoResumeChange).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		expect(onAutoResumeChange).toHaveBeenLastCalledWith(false);
+
+		view.rerender(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
+		expect(screen.getByRole("status")).toHaveTextContent("Reset time reached. You can resume now.");
+		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(onResume).toHaveBeenCalledOnce();
 	});
 
 	it.each([undefined, "not-a-date"])("offers only manual resume when the reset time is %s", (resetsAt) => {
 		const onResume = vi.fn();
-		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={vi.fn()} />);
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={vi.fn()} />);
 
 		expect(screen.getByText(/The provider did not supply a reset time\./)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
@@ -105,20 +112,43 @@ describe("UsageLimitNotice", () => {
 		expect(onResume).not.toHaveBeenCalled();
 	});
 
-	it.each([{ pending: true }, { disabled: true }])("prevents cancelling scheduled resume while unavailable: %j", (props) => {
+	it("allows cancellation while new work is disabled, including after reset", () => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
-		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} {...props} />);
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} disabled />);
 
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		act(() => vi.advanceTimersByTime(65_000));
+		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		expect(onAutoResumeChange).toHaveBeenCalledTimes(2);
+		expect(onAutoResumeChange).toHaveBeenLastCalledWith(false);
+		expect(onResume).not.toHaveBeenCalled();
+	});
+
+	it("prevents duplicate consent changes while a request is pending, including after reset", () => {
+		const onAutoResumeChange = vi.fn();
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={vi.fn()} onAutoResumeChange={onAutoResumeChange} pending />);
+
 		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeDisabled();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
 		act(() => vi.advanceTimersByTime(65_000));
-		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
-		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
 		expect(onAutoResumeChange).not.toHaveBeenCalled();
-		expect(onResume).not.toHaveBeenCalled();
+	});
+
+	it.each([undefined, "not-a-date"])("keeps armed consent cancellable when the reset time is %s", (resetsAt) => {
+		const onAutoResumeChange = vi.fn();
+		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: true }} onResume={vi.fn()} onAutoResumeChange={onAutoResumeChange} />);
+
+		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		expect(onAutoResumeChange).toHaveBeenCalledWith(false);
 	});
 
 	it("shows resume failures beside the actions and prefers the latest request error", () => {

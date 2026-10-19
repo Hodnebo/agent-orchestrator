@@ -740,6 +740,9 @@ var ErrNoConversationTurn = errors.New("conversation turn not found")
 // ErrClientMessageConflict refuses reuse of a delivery ID for different content.
 var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 
+// ErrConversationAutoResumeNotDue preserves consent when its deadline moved.
+var ErrConversationAutoResumeNotDue = errors.New("usage-limit reset time has not arrived")
+
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")
 

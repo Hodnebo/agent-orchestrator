@@ -59,14 +59,41 @@ func ParseConversationUsageLimit(message string, failedAt *time.Time) *Conversat
 	}
 	local := failedAt.In(zone)
 	reset := time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, zone)
+	if match[1] == "" && usageLimitClockRepeated(reset) {
+		return limit
+	}
 	if match[1] != "" || !reset.After(*failedAt) {
 		reset = reset.AddDate(0, 0, 1)
 	}
-	// A nonexistent wall clock during a DST jump must not become a guessed time.
-	if reset.Hour() != hour || reset.Minute() != minute {
+	// Nonexistent or repeated wall clocks must not become guessed deadlines.
+	if reset.Hour() != hour || reset.Minute() != minute || usageLimitClockRepeated(reset) {
 		return limit
 	}
 	reset = reset.UTC()
 	limit.ResetsAt = &reset
 	return limit
+}
+
+func usageLimitClockRepeated(reset time.Time) bool {
+	start, end := reset.ZoneBounds()
+	_, offset := reset.Zone()
+	clock := reset.Format(time.DateTime)
+	for i, boundary := range []time.Time{start, end} {
+		if boundary.IsZero() {
+			continue
+		}
+		if i == 0 {
+			boundary = boundary.Add(-time.Nanosecond)
+		}
+		_, adjacentOffset := boundary.Zone()
+		if adjacentOffset == offset {
+			continue
+		}
+		// Both neighboring offsets can represent this clock during a backward jump.
+		other := reset.Add(time.Duration(offset-adjacentOffset) * time.Second)
+		if other.Format(time.DateTime) == clock {
+			return true
+		}
+	}
+	return false
 }

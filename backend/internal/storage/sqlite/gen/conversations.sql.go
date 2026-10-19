@@ -568,6 +568,36 @@ func (q *Queries) CompleteQueuedConversationTurnPromotion(ctx context.Context, a
 	return result.RowsAffected()
 }
 
+const consumeConversationTurnAutoResume = `-- name: ConsumeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE id = ?1 AND conversation_id = ?2
+  AND handled_by_session_id = ?3
+  AND state = 'failed' AND rolled_back_at IS NULL
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= ?4
+`
+
+type ConsumeConversationTurnAutoResumeParams struct {
+	ID             string
+	ConversationID string
+	SessionID      domain.SessionID
+	Now            sql.NullTime
+}
+
+// Consent and its due deadline are checked in the transaction creating a retry.
+func (q *Queries) ConsumeConversationTurnAutoResume(ctx context.Context, arg ConsumeConversationTurnAutoResumeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, consumeConversationTurnAutoResume,
+		arg.ID,
+		arg.ConversationID,
+		arg.SessionID,
+		arg.Now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const conversationActivityExistsForProviderItem = `-- name: ConversationActivityExistsForProviderItem :one
 SELECT EXISTS(
     SELECT 1

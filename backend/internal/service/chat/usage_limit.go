@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,11 +19,15 @@ var ErrUsageLimitResetUnknown = errors.New("the provider did not report a known 
 
 const usageLimitAutoResumeBackoff = 30 * time.Second
 
+// Bound provider processes and wakes without making one session block another.
+const usageLimitAutoResumeWorkers = 4
+
 type usageLimitStore interface {
 	SetTurnAutoResume(context.Context, string, string, *time.Time, bool, string) error
 	PostponeTurnAutoResume(context.Context, string, string, time.Time) (bool, error)
 	AutoResumeTurns(context.Context) ([]domain.ConversationTurn, error)
 	LatestAutoResumeTurn(context.Context, string) (domain.ConversationTurn, error)
+	AppendAutoResumeRetryUserMessage(context.Context, string, domain.SessionID, string, domain.ConversationMessage, string, string, time.Time) (bool, error)
 }
 
 type usageLimitAccountReader interface {
@@ -39,8 +44,6 @@ func (s *Service) SetUsageLimitAccounts(accounts usageLimitAccountReader) {
 // SetTurnAutoResume arms one failed human prompt, rather than a session-wide
 // policy. Cancellation needs no live controller and remains available while busy.
 func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, turnID string, enabled bool) error {
-	s.autoResumeMu.Lock()
-	defer s.autoResumeMu.Unlock()
 	store, ok := s.store.(usageLimitStore)
 	if !ok {
 		return ErrUsageLimitAutoResumeInvalid
@@ -68,7 +71,9 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if !enabled {
 		err = store.SetTurnAutoResume(ctx, conversation.ID, turnID, nil, false, "")
 		if err == nil {
+			s.autoResumeMu.Lock()
 			delete(s.autoResumeRetryAt, turnID)
+			s.autoResumeMu.Unlock()
 		}
 		return err
 	}
@@ -80,7 +85,9 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	}
 	err = store.SetTurnAutoResume(ctx, conversation.ID, turnID, source.UsageLimit.ResetsAt, true, "")
 	if err == nil {
+		s.autoResumeMu.Lock()
 		delete(s.autoResumeRetryAt, turnID)
+		s.autoResumeMu.Unlock()
 	}
 	return err
 }
@@ -184,9 +191,9 @@ func (c *Controller) retryUsageLimitTurn(ctx context.Context, turnID string) (do
 		return domain.ConversationTurn{}, err
 	}
 	if source.UsageLimit.ResetsAt.After(c.now()) {
-		return domain.ConversationTurn{}, fmt.Errorf("%w: the reset time has not arrived", ErrUsageLimitAutoResumeInvalid)
+		return domain.ConversationTurn{}, domain.ErrConversationAutoResumeNotDue
 	}
-	return c.retryTurnLocked(ctx, turnID)
+	return c.retryTurnLocked(ctx, turnID, true)
 }
 
 func permanentUsageLimitResumeError(err error) bool {
@@ -216,95 +223,126 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	sources, err := store.AutoResumeTurns(ctx)
-	if err != nil {
-		return err
+	s.autoResumeMu.Lock()
+	if s.autoResumeScanning || len(s.autoResumeInFlight) >= usageLimitAutoResumeWorkers {
+		s.autoResumeMu.Unlock()
+		return nil
 	}
+	s.autoResumeScanning = true
+	s.autoResumeMu.Unlock()
+	sources, err := store.AutoResumeTurns(ctx)
 	armed := make(map[string]bool, len(sources))
 	for _, source := range sources {
 		armed[source.ID] = true
 	}
 	s.autoResumeMu.Lock()
+	s.autoResumeScanning = false
+	if err != nil || ctx.Err() != nil {
+		s.autoResumeMu.Unlock()
+		return errors.Join(err, ctx.Err())
+	}
 	for id := range s.autoResumeRetryAt {
 		if !armed[id] {
 			delete(s.autoResumeRetryAt, id)
 		}
 	}
-	s.autoResumeMu.Unlock()
-	var failures []error
+	var claimed []domain.ConversationTurn
 	for _, candidate := range sources {
-		// Deadline-independent eligibility reads are needed only once work is due.
-		if candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil &&
-			candidate.UsageLimit.ResetsAt.After(s.now()) {
+		if len(s.autoResumeInFlight) >= usageLimitAutoResumeWorkers {
+			break
+		}
+		if s.autoResumeInFlight[candidate.ID] || s.autoResumeRetryAt[candidate.ID].After(s.now()) {
 			continue
 		}
-		if err := func() error {
-			s.autoResumeMu.Lock()
-			defer s.autoResumeMu.Unlock()
-			if ctx.Err() != nil {
-				return ctx.Err()
+		// Eligibility reads are needed only once the durable deadline arrives.
+		if candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil && candidate.UsageLimit.ResetsAt.After(s.now()) {
+			continue
+		}
+		if s.autoResumeInFlight == nil {
+			s.autoResumeInFlight = make(map[string]bool)
+		}
+		s.autoResumeInFlight[candidate.ID] = true
+		claimed = append(claimed, candidate)
+	}
+	s.autoResumeMu.Unlock()
+
+	failures := make(chan error, len(claimed))
+	var workers sync.WaitGroup
+	for _, candidate := range claimed {
+		workers.Go(func() {
+			defer func() {
+				s.autoResumeMu.Lock()
+				delete(s.autoResumeInFlight, candidate.ID)
+				s.autoResumeMu.Unlock()
+			}()
+			if err := s.resumeUsageLimitedTurn(ctx, store, candidate); err != nil {
+				failures <- err
 			}
-			if s.autoResumeRetryAt[candidate.ID].After(s.now()) {
-				return nil
-			}
-			// A cancellation or manual retry can consume intent after the scan.
-			source, err := s.store.TurnByID(ctx, candidate.ID)
-			var record domain.SessionRecord
-			if err == nil {
-				if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
-					delete(s.autoResumeRetryAt, candidate.ID)
-					return nil
-				}
-				if source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
-					return nil
-				}
-				record, err = s.requireChatSession(ctx, source.HandledBySessionID)
-				if err == nil {
-					err = validateUsageLimitSession(record)
-				}
-			}
-			if err == nil {
-				err = validateUsageLimitSource(ctx, s.store, store, source, source.HandledBySessionID)
-			}
-			if err == nil {
-				var postponed bool
-				postponed, err = s.postponeUsageLimit(ctx, store, source, record.Harness)
-				if postponed {
-					return nil
-				}
-			}
-			if err == nil {
-				// Hibernation recovery already permits a 60-second native wake.
-				attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-				_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, true)
-				cancel()
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err == nil {
-				delete(s.autoResumeRetryAt, candidate.ID)
-				return nil
-			}
-			if permanentUsageLimitResumeError(err) {
-				err = store.SetTurnAutoResume(ctx, candidate.ConversationID, candidate.ID, nil, false,
-					"Auto-resume stopped: "+err.Error())
-				if err == nil {
-					delete(s.autoResumeRetryAt, candidate.ID)
-					return nil
-				}
-			}
-			if s.autoResumeRetryAt == nil {
-				s.autoResumeRetryAt = make(map[string]time.Time)
-			}
-			s.autoResumeRetryAt[candidate.ID] = s.now().Add(usageLimitAutoResumeBackoff)
-			return err
-		}(); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			failures = append(failures, err)
+		})
+	}
+	workers.Wait()
+	close(failures)
+	var errs []error
+	for err := range failures {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitStore, candidate domain.ConversationTurn) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// A cancellation or manual retry can consume intent after the scan.
+	source, err := s.store.TurnByID(ctx, candidate.ID)
+	var record domain.SessionRecord
+	if err == nil {
+		if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
+			return nil
+		}
+		if source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
+			return nil
+		}
+		record, err = s.requireChatSession(ctx, source.HandledBySessionID)
+		if err == nil {
+			err = validateUsageLimitSession(record)
 		}
 	}
-	return errors.Join(failures...)
+	if err == nil {
+		err = validateUsageLimitSource(ctx, s.store, store, source, source.HandledBySessionID)
+	}
+	if err == nil {
+		var postponed bool
+		postponed, err = s.postponeUsageLimit(ctx, store, source, record.Harness)
+		if postponed {
+			return nil
+		}
+	}
+	if err == nil {
+		// Hibernation recovery already permits a 60-second native wake.
+		attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, true)
+		cancel()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, domain.ErrConversationAutoResumeNotDue) {
+		return nil
+	}
+	if permanentUsageLimitResumeError(err) {
+		err = store.SetTurnAutoResume(ctx, candidate.ConversationID, candidate.ID, nil, false,
+			"Auto-resume stopped: "+err.Error())
+	}
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	if err == nil {
+		delete(s.autoResumeRetryAt, candidate.ID)
+	} else {
+		if s.autoResumeRetryAt == nil {
+			s.autoResumeRetryAt = make(map[string]time.Time)
+		}
+		s.autoResumeRetryAt[candidate.ID] = s.now().Add(usageLimitAutoResumeBackoff)
+	}
+	return err
 }

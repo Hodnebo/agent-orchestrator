@@ -11,6 +11,7 @@ export interface UsageLimitNoticeProps {
 	onResume?: () => void;
 	onAutoResumeChange?: (enabled: boolean) => void;
 	pending?: boolean;
+	/** Prevents starting work; cancellation only waits for an in-flight request. */
 	disabled?: boolean;
 	error?: string;
 	/** A historical marker; current resume controls belong by the composer. */
@@ -47,9 +48,9 @@ export function UsageLimitNotice({
 	const resetAt = Number.isFinite(parsedReset) ? parsedReset : undefined;
 	const ready = resetAt === undefined || now >= resetAt;
 	const actionError = error ?? usageLimit.resumeError;
-	const scheduled = !ready && usageLimit.autoResume;
-	const showResume = onResume && ready;
-	const showAutoResume = resetAt !== undefined && !ready && onAutoResumeChange;
+	const scheduled = usageLimit.autoResume;
+	const showResume = onResume && ready && !scheduled;
+	const showAutoResume = onAutoResumeChange && (scheduled || (resetAt !== undefined && !ready));
 
 	useEffect(() => {
 		if (compact || resetAt === undefined) return;
@@ -82,7 +83,7 @@ export function UsageLimitNotice({
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 						<strong className="text-balance text-xs font-medium text-foreground">{t("chat.usageLimit.title")}</strong>
-						{!compact && resetAt !== undefined ? (
+						{!compact && resetAt !== undefined && (!ready || !scheduled) ? (
 							<span className="text-pretty text-xs text-muted-foreground">
 								{ready ? <span role="status">{t("chat.usageLimit.ready")}</span> : (
 									<Trans
@@ -96,7 +97,7 @@ export function UsageLimitNotice({
 					</div>
 					{!compact ? (
 						<p className="mt-1 text-pretty text-xs leading-5 text-muted-foreground">
-							{scheduled ? <span role="status" className="mr-2 text-foreground">{t("chat.usageLimit.scheduled")}</span> : null}
+							{scheduled ? <span role="status" className="mr-2 text-foreground">{t(ready ? "chat.usageLimit.waiting" : "chat.usageLimit.scheduled")}</span> : null}
 							{resetAt === undefined ? <span>{t("chat.usageLimit.unknownReset")}</span> : (
 								<Trans
 									t={t} i18nKey="chat.usageLimit.resetsAt"
@@ -104,7 +105,7 @@ export function UsageLimitNotice({
 									components={{ time: <time className="tabular-nums" dateTime={usageLimit.resetsAt} /> }}
 								/>
 							)}
-							{resetAt === undefined ? <> <span>{t("chat.usageLimit.manualResumeHint")}</span></> : null}
+							{resetAt === undefined && !scheduled ? <> <span>{t("chat.usageLimit.manualResumeHint")}</span></> : null}
 						</p>
 					) : null}
 					{actionError ? <p role="alert" className="mt-1 whitespace-pre-wrap wrap-anywhere text-pretty text-xs text-destructive">{actionError}</p> : null}
@@ -126,7 +127,7 @@ export function UsageLimitNotice({
 						<Button
 							type="button" size="sm" variant={scheduled ? "ghost" : "secondary"}
 							onClick={() => onAutoResumeChange?.(!usageLimit.autoResume)}
-							disabled={pending || disabled}
+								disabled={pending || (!scheduled && disabled)}
 							className="focus-visible:ring-2 focus-visible:ring-ring"
 						>
 							{t(usageLimit.autoResume ? "chat.usageLimit.cancelAutoResume" : "chat.usageLimit.autoResume")}

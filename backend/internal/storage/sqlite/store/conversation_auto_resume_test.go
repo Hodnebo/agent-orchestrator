@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestSetTurnAutoResumeRefusalPreservesConsumedConsent(t *testing.T) {
@@ -40,6 +41,56 @@ func TestSetTurnAutoResumeRefusalPreservesConsumedConsent(t *testing.T) {
 			limit := source.UsageLimit
 			if limit.AutoResume || limit.ResumeError != priorError || limit.ResetsAt == nil || !limit.ResetsAt.Equal(reset) {
 				t.Fatalf("stale refusal changed consumed intent: %+v", limit)
+			}
+		})
+	}
+}
+
+func TestAppendAutoResumeRetryRequiresDueConsent(t *testing.T) {
+	for _, state := range []string{"due", "future", "cancelled", "changed account", "failed insert"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			s := newTestStore(t)
+			session, conversation := seedAccountAutoResume(t, s, domain.HarnessCodex)
+			sourceID := "turn-" + string(session.ID)
+			now := testNow.Add(2 * time.Hour)
+			msg := domain.ConversationMessage{ID: "auto-message", Origin: domain.MessageOriginHuman, Text: "finish this task"}
+			switch state {
+			case "future":
+				now = testNow.Add(30 * time.Minute)
+			case "cancelled":
+				mustNoError(t, s.SetTurnAutoResume(ctx, conversation.ID, sourceID, nil, false, ""))
+			case "changed account":
+				mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, domain.AgentAccountProviderCodex, "account-a", testNow.Add(-time.Minute)))
+				mustNoError(t, s.BindSessionAgentAccount(ctx, session.ID, domain.AgentAccountProviderCodex, "account-b", testNow.Add(time.Minute)))
+			case "failed insert":
+				msg.ID = "message-" + string(session.ID)
+			}
+			created, err := s.AppendAutoResumeRetryUserMessage(ctx, conversation.ID, session.ID, "generation-root", msg, "auto-retry", sourceID, now)
+			if state == "due" {
+				if err != nil || !created {
+					t.Fatalf("due retry: created=%v err=%v", created, err)
+				}
+			} else if err == nil || created {
+				t.Fatalf("ineligible retry: created=%v err=%v", created, err)
+			}
+			if state == "changed account" && !errors.Is(err, ports.ErrAgentAccountChanged) {
+				t.Fatalf("changed account error = %v", err)
+			}
+			if state == "future" && !errors.Is(err, domain.ErrConversationAutoResumeNotDue) {
+				t.Fatalf("future reset error = %v", err)
+			}
+			_, found, lookupErr := s.RetryTurnIDForSource(ctx, conversation.ID, sourceID)
+			if lookupErr != nil || found != (state == "due") {
+				t.Fatalf("retry receipt: found=%v err=%v", found, lookupErr)
+			}
+			source, err := s.TurnByID(ctx, sourceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantArmed := state == "future" || state == "failed insert"
+			if source.UsageLimit.AutoResume != wantArmed {
+				t.Fatalf("consent=%v want=%v", source.UsageLimit.AutoResume, wantArmed)
 			}
 		})
 	}

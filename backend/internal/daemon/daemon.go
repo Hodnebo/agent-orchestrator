@@ -1146,6 +1146,7 @@ func Run() error {
 	}
 
 	var startupReconcileDone <-chan struct{}
+	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
 		// Agent-readiness warming is advisory and idempotent, and request paths
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
@@ -1198,7 +1199,12 @@ func Run() error {
 				}
 			}
 		}()
+		resumeDone := make(chan struct{})
+		usageLimitResumeDone = resumeDone
 		go func() {
+			defer close(resumeDone)
+			var sweeps sync.WaitGroup
+			defer sweeps.Wait()
 			// Recovery must attach existing provider work before scheduled retries
 			// inspect controller readiness. The durable opt-in survives shutdown.
 			select {
@@ -1209,9 +1215,16 @@ func Run() error {
 			ticker := time.NewTicker(time.Second)
 			defer ticker.Stop()
 			for {
-				if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
-					log.Warn("usage-limit auto-resume failed", "err", err)
+				if ctx.Err() != nil {
+					return
 				}
+				// The service bounds overlapping scans and provider attempts. A wake
+				// must not stop the next tick discovering another session's deadline.
+				sweeps.Go(func() {
+					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
 				select {
 				case <-ctx.Done():
 					return
@@ -1233,6 +1246,9 @@ func Run() error {
 	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
 	// runs before the cancel: a non-signal exit path would hang otherwise.
 	stop()
+	if usageLimitResumeDone != nil {
+		<-usageLimitResumeDone
+	}
 	if agentSwitchDispatcher != nil {
 		dispatcherStopContext, dispatcherStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 		if err := agentSwitchDispatcher.Stop(dispatcherStopContext); err != nil {

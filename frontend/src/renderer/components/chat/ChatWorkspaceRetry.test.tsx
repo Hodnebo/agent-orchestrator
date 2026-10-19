@@ -68,6 +68,25 @@ describe("ChatWorkspace retry", () => {
 		expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
 	});
 
+	it.each([
+		{ agentResuming: true },
+		{ controllerTransitioning: true },
+		{ busy: true },
+		{ agentInputDisabled: true },
+		{ newWorkDisabled: true },
+	])("keeps overdue cancellation available while new work is unavailable: %j", async (props) => {
+		const snapshot = limitedSnapshot(true);
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		const setAutoResume = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume }} {...props} />);
+
+		expect(screen.getByRole("button", { name: "Cancel auto-resume" })).toBeEnabled();
+		expect(screen.getByText("Auto-resume is waiting to retry.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
+		expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
+	});
+
 	it("resumes the original prompt when the reset has passed", async () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();

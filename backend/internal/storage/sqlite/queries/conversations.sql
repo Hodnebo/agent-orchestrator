@@ -1632,6 +1632,15 @@ SET usage_limit_resets_at = sqlc.arg(resets_at)
 WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
   AND usage_limit_auto_resume = 1;
 
+-- Consent and its due deadline are checked in the transaction creating a retry.
+-- name: ConsumeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
+  AND handled_by_session_id = sqlc.arg(session_id)
+  AND state = 'failed' AND rolled_back_at IS NULL
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now);
+
 -- name: SelectAutoResumeConversationTurns :many
 SELECT * FROM conversation_turns
 WHERE usage_limit_auto_resume = 1

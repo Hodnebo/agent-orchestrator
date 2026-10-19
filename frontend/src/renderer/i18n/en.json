@@ -40,7 +40,7 @@
 	"chat.usageLimit.ready": "Reset time reached. You can resume now.",
 	"chat.usageLimit.availableIn": "Available in <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "Auto-resume is scheduled.",
-	"chat.usageLimit.resumeHint": "Available when the usage limit resets",
+	"chat.usageLimit.waiting": "Auto-resume is waiting to retry.",
 	"chat.usageLimit.resume": "Resume",
 	"chat.usageLimit.cancelAutoResume": "Cancel auto-resume",
 	"chat.usageLimit.autoResume": "Auto-resume at reset",

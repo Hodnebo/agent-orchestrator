@@ -32,7 +32,7 @@ for (const { harness, providerLabel } of [
 			await expect(page.getByText("The agent ran into a problem")).toHaveCount(0);
 		});
 
-		test("replaces scheduled cancellation with Resume at reset on a narrow screen and dismisses recovery after retry", async ({ page }) => {
+		test("keeps overdue auto-resume cancellable on a narrow screen before manual recovery", async ({ page }) => {
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.clock.install();
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
@@ -48,9 +48,16 @@ for (const { harness, providerLabel } of [
 			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
 			await page.clock.fastForward(61_000);
-			await expect(cancel).toHaveCount(0);
+			await expect(cancel).toBeEnabled();
+			await expect(cancel).toBeInViewport({ ratio: 1 });
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
 			await expect(page.getByText(/Auto-resume is scheduled/)).toHaveCount(0);
+			await expect(page.getByText("Auto-resume is waiting to retry.", { exact: true })).toBeVisible();
+			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
+			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+			await cancel.click();
+			await expect(cancel).toHaveCount(0);
 			const resume = page.getByRole("button", { name: "Resume", exact: true });
 			await expect(resume).toBeEnabled();
 			await expect(resume).toBeInViewport({ ratio: 1 });

@@ -40,7 +40,7 @@
 	"chat.usageLimit.ready": "Ya llegó la hora de restablecimiento. Puedes reanudar ahora.",
 	"chat.usageLimit.availableIn": "Disponible en <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "La reanudación automática está programada.",
-	"chat.usageLimit.resumeHint": "Disponible cuando se restablezca el límite de uso",
+	"chat.usageLimit.waiting": "La reanudación automática está esperando para volver a intentarlo.",
 	"chat.usageLimit.resume": "Reanudar",
 	"chat.usageLimit.cancelAutoResume": "Cancelar reanudación automática",
 	"chat.usageLimit.autoResume": "Reanudar automáticamente al restablecerse",

@@ -40,7 +40,7 @@
 	"chat.usageLimit.ready": "已到重置时间。现在可以恢复。",
 	"chat.usageLimit.availableIn": "<duration>{{duration}}</duration>后可恢复。",
 	"chat.usageLimit.scheduled": "已安排自动恢复。",
-	"chat.usageLimit.resumeHint": "使用上限重置后可用",
+	"chat.usageLimit.waiting": "自动恢复正在等待重试。",
 	"chat.usageLimit.resume": "恢复",
 	"chat.usageLimit.cancelAutoResume": "取消自动恢复",
 	"chat.usageLimit.autoResume": "重置时自动恢复",

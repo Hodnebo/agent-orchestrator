@@ -51,7 +51,7 @@ test.describe("usage-limit recovery through the real daemon @connected", () => {
 			await expect(page.getByText("Auto-resume is scheduled.", { exact: true })).toBeVisible();
 
 			// Real wall-clock time and the production daemon ticker dispatch the retry.
-			// Resume may appear briefly between the deadline and the daemon's next tick.
+			// Consent stays cancellable until the daemon records the retry.
 			await expect(completedMessages).toHaveCount(completedBefore + 1, { timeout: 15_000 });
 			await expect(completedMessages.last()).toBeVisible();
 			await expect(recoveryNotice).toHaveCount(0);

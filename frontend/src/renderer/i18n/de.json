@@ -40,7 +40,7 @@
 	"chat.usageLimit.ready": "Der Zeitpunkt für die Zurücksetzung ist erreicht. Du kannst jetzt fortsetzen.",
 	"chat.usageLimit.availableIn": "Verfügbar in <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "Die automatische Fortsetzung ist geplant.",
-	"chat.usageLimit.resumeHint": "Verfügbar, sobald das Nutzungslimit zurückgesetzt wird",
+	"chat.usageLimit.waiting": "Die automatische Fortsetzung wartet auf einen erneuten Versuch.",
 	"chat.usageLimit.resume": "Fortsetzen",
 	"chat.usageLimit.cancelAutoResume": "Automatische Fortsetzung abbrechen",
 	"chat.usageLimit.autoResume": "Nach Zurücksetzung automatisch fortsetzen",
