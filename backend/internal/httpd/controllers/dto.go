@@ -2322,9 +2322,11 @@ type MergePRRequest struct {
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
 type MergePRResponse struct {
-	OK       bool   `json:"ok"`
-	PRNumber int    `json:"prNumber"`
-	Method   string `json:"method"`
+	OK             bool           `json:"ok"`
+	PRNumber       int            `json:"prNumber"`
+	Method         string         `json:"method"`
+	State          domain.PRState `json:"state" enum:"merged"`
+	StateChangedAt time.Time      `json:"stateChangedAt"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.
