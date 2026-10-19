@@ -4388,6 +4388,7 @@ export interface components {
             refreshState?: "idle" | "queued" | "refreshing" | "error";
             /** Format: date-time */
             retryAt?: null | string;
+            runnableModels?: string[];
             /** @enum {string} */
             selectionMode: "catalog" | "text" | "mode";
             source: string;

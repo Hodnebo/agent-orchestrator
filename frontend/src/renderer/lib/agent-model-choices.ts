@@ -32,13 +32,18 @@ export function filterDisabledModels<T extends { id: string }>(
  * or none of whose models belong to one, is offered whole.
  */
 export function offeredCatalogModels<T extends { id: string; provider?: string }>(
-	catalog: { models: T[]; configuredProviders?: string[] } | undefined,
+	catalog: { models: T[]; configuredProviders?: string[]; runnableModels?: string[] } | undefined,
 	disabled: readonly string[] | undefined,
 	keep: ReadonlyArray<string | undefined> = [],
 ): T[] {
 	const models = catalog?.models ?? [];
+	// An agent that names the models it can run (OpenCode) is taken at its word;
+	// the rest of its catalog is every model it knows of, there to browse.
+	const runnable = new Set([...(catalog?.runnableModels ?? []), ...keep.filter((id): id is string => Boolean(id))]);
 	const configured = new Set(catalog?.configuredProviders ?? []);
-	const usable = configured.size > 0 ? models.filter((model) => !model.provider || configured.has(model.provider)) : models;
+	const usable = catalog?.runnableModels?.length
+		? models.filter((model) => runnable.has(model.id))
+		: configured.size > 0 ? models.filter((model) => !model.provider || configured.has(model.provider)) : models;
 	return filterDisabledModels(usable.length > 0 ? usable : models, disabled, keep).models;
 }
 

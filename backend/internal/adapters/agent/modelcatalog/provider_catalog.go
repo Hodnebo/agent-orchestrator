@@ -30,6 +30,16 @@ func hasLocalProviderCatalog(agentID string) bool {
 	return false
 }
 
+// listsRunnableModels reports an agent whose model command lists only the
+// models it can run now, while its provider cache names every model it knows.
+func listsRunnableModels(agentID string) bool {
+	switch agentID {
+	case "opencode", "kilocode", "mimo-code":
+		return true
+	}
+	return false
+}
+
 func localProviderCatalog(ctx context.Context, agentID, binary, workingDir string, env map[string]string) ports.AgentModelCatalog {
 	var result ports.AgentModelCatalog
 	switch agentID {

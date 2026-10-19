@@ -424,6 +424,10 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	}
 	if request.CredentialType == "" && (hasLocalProviderCatalog(request.AgentID) || browseProviderCredentials[request.AgentID] != nil) {
 		// Replace older task-only snapshots through the normal background refresh.
+		if listsRunnableModels(request.AgentID) {
+			// Snapshots from before RunnableModels lack it.
+			return fingerprint + ":shared-providers-v1:runnable-v1"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
@@ -472,6 +476,13 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
+		// OpenCode's own list is what it can run; its provider cache, added next,
+		// names every model it knows.
+		if listsRunnableModels(agentID) {
+			for _, model := range normalize(models) {
+				base.RunnableModels = append(base.RunnableModels, model.ID)
+			}
+		}
 		reported := localProviderCatalog(runCtx, agentID, binary, workingDir, env)
 		models = append(models, reported.Models...)
 		base.Providers = append(base.Providers, reported.Providers...)

@@ -149,6 +149,21 @@ describe("offeredCatalogModels", () => {
 		expect(offeredCatalogModels(pi, ["openai-codex/gpt-5.5"]).map((m) => m.id)).toEqual(["openai-codex/gpt-6-sol"]);
 	});
 
+	it("offers only what OpenCode lists it can run, not every model it knows of", () => {
+		const opencode = {
+			models: [
+				{ id: "opencode/big-pickle", provider: "opencode" },
+				{ id: "opencode/claude-opus", provider: "opencode" },
+				{ id: "openrouter/anthropic/claude-haiku", provider: "openrouter" },
+			],
+			runnableModels: ["opencode/big-pickle"],
+		};
+		expect(offeredCatalogModels(opencode, undefined).map((m) => m.id)).toEqual(["opencode/big-pickle"]);
+		// A model already picked stays, so the picker still names it.
+		expect(offeredCatalogModels(opencode, undefined, ["opencode/claude-opus"]).map((m) => m.id))
+			.toEqual(["opencode/big-pickle", "opencode/claude-opus"]);
+	});
+
 	it("offers the whole catalog when no configured provider has a model", () => {
 		expect(offeredCatalogModels({ ...pi, configuredProviders: [] }, undefined)).toHaveLength(3);
 		expect(offeredCatalogModels({ ...pi, configuredProviders: ["anthropic"] }, undefined)).toHaveLength(3);

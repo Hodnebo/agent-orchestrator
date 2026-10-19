@@ -12704,6 +12704,10 @@ components:
           type:
           - "null"
           - string
+        runnableModels:
+          items:
+            type: string
+          type: array
         selectionMode:
           enum:
           - catalog

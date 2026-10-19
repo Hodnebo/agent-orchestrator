@@ -241,6 +241,10 @@ func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T)
 	if !reflect.DeepEqual(task.ConfiguredProviders, []string{"anthropic"}) {
 		t.Fatalf("shared catalog configured providers = %v", task.ConfiguredProviders)
 	}
+	// OpenCode lists what it can run; the cached provider is there to browse.
+	if !reflect.DeepEqual(task.RunnableModels, []string{"anthropic/claude-sonnet"}) {
+		t.Fatalf("shared catalog runnable models = %v, want only what OpenCode listed", task.RunnableModels)
+	}
 	sharedFingerprint := (Discoverer{}).CatalogFingerprint(context.Background(), request)
 	request.CredentialType = "anthropic_api_key"
 	scoped, err := (Discoverer{}).Discover(context.Background(), request)
