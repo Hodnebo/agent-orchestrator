@@ -17224,6 +17224,13 @@ components:
         model:
           maxLength: 200
           type: string
+        permissionMode:
+          enum:
+          - default
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
         targetHarness:
           type: string
         ultracode:

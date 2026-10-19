@@ -52,6 +52,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
+		PermissionMode: domain.PermissionMode(req.PermissionMode),
 	})
 	var refusal *domain.ProviderSwitchError
 	if errors.As(err, &refusal) {

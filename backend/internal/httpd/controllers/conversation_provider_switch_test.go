@@ -30,13 +30,13 @@ func providerSwitchRouteRequest(t *testing.T, svc controllers.ConversationServic
 func TestProviderSwitchRoutePassesTheRequestAndAnswersOK(t *testing.T) {
 	svc := &fakeConversationService{}
 	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch",
-		`{"targetHarness":"codex","idempotencyKey":"k1","model":" gpt-5 ","effort":"high","fastMode":true,"ultracode":true,"autoCompactWindow":"1m"}`)
+		`{"targetHarness":"codex","idempotencyKey":"k1","model":" gpt-5 ","effort":"high","fastMode":true,"ultracode":true,"autoCompactWindow":"1m","permissionMode":"accept-edits"}`)
 	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"status":"ok"}` {
 		t.Fatalf("switch = %d %s, want 200 with an ok body", status, body)
 	}
 	want := domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessCodex, IdempotencyKey: "k1", Model: "gpt-5", Effort: "high",
-		FastMode: true, Ultracode: true, AutoCompactWindow: "1m",
+		FastMode: true, Ultracode: true, AutoCompactWindow: "1m", PermissionMode: domain.PermissionMode("accept-edits"),
 	}
 	if svc.switchRequest != want {
 		t.Fatalf("service request = %+v, want %+v", svc.switchRequest, want)

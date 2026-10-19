@@ -26,6 +26,9 @@ type ProviderSwitchRequest struct {
 	Effort string
 	// FastMode starts the target on its faster tier, where its model has one.
 	FastMode bool
+	// PermissionMode is the mode the user picked for the target. Empty keeps
+	// the chat's. A mode the target cannot run in gives way to its strictest.
+	PermissionMode PermissionMode
 	// Ultracode and AutoCompactWindow are Claude Code launch choices for a
 	// terminal target. See AgentLaunchOptions.
 	Ultracode         bool

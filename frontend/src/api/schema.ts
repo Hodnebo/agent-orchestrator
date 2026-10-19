@@ -6064,6 +6064,8 @@ export interface components {
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
+            /** @enum {string} */
+            permissionMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             targetHarness: string;
             ultracode?: boolean;
         };
