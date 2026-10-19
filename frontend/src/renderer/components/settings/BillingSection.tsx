@@ -472,16 +472,10 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 			<div className="flex flex-1 flex-col gap-4 border-t border-border pt-3">
 				{features.length + excluded.length > 0 ? <ul className="flex flex-col gap-2">
 					{features.map((feature) => (
-						<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-label">
-							<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
-							{feature}
-						</li>
+						<PlanFeature key={feature} text={feature} />
 					))}
 					{excluded.map((feature) => (
-						<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-muted">
-							<Minus className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
-							{feature}
-						</li>
+						<PlanFeature key={feature} text={feature} excluded />
 					))}
 				</ul> : null}
 				{cloudLimits.length > 0 ? (
@@ -489,16 +483,29 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 						<p id={cloudLabelId} className="text-xs text-settings-muted">{t("settings.billing.cloudLimits")}</p>
 						<ul aria-labelledby={cloudLabelId} className="flex flex-col gap-2">
 							{cloudLimits.map((limit) => (
-								<li key={limit} className="flex items-start gap-2 text-control leading-5 text-settings-label">
-									<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
-									{limit}
-								</li>
+								<PlanFeature key={limit} text={limit} />
 							))}
 						</ul>
 					</div>
 				) : null}
 			</div>
 		</div>
+	);
+}
+
+/**
+ * One plan line: a check (or a dash for what the plan leaves out) centered on
+ * the first line of text, so wrapped lines keep the icon beside their start.
+ */
+function PlanFeature({ text, excluded }: { text: string; excluded?: boolean }) {
+	const Icon = excluded ? Minus : Check;
+	return (
+		<li className={cn("flex items-start gap-2 text-control leading-5", excluded ? "text-settings-muted" : "text-settings-label")}>
+			<span className="flex h-5 shrink-0 items-center">
+				<Icon className="size-icon-sm text-settings-muted" aria-hidden="true" />
+			</span>
+			{text}
+		</li>
 	);
 }
 
