@@ -183,9 +183,29 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 		}
 		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
-			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record)})
+			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record)})
 	}
 	return models
+}
+
+// piThinkingLevels are the thinking levels a Pi model takes, as effort choices,
+// so a switch to Pi can pick one before Pi runs. Pi's record marks a reasoning
+// model, and its thinkingLevelMap renames levels or sets one it lacks to null;
+// a level it leaves out is taken as it is. Only the levels pi-acp's bundled
+// runtime takes are offered: picking one it does not would fail the switch.
+// Records without the map (OpenCode's cache) name none.
+func piThinkingLevels(record map[string]any) []string {
+	levels, mapped := record["thinkingLevelMap"].(map[string]any)
+	if reasoning, _ := record["reasoning"].(bool); !reasoning || !mapped {
+		return nil
+	}
+	var efforts []string
+	for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
+		if value, named := levels[level]; !named || value != nil {
+			efforts = append(efforts, level)
+		}
+	}
+	return efforts
 }
 
 func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalog {

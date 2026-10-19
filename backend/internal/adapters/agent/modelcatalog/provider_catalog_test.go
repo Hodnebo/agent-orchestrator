@@ -293,3 +293,23 @@ func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
 		}
 	}
 }
+
+func TestPiModelRecordsCarryTheirThinkingLevels(t *testing.T) {
+	models := parseProviderModelRecords([]byte(`[
+		{"id":"gpt-6.1-sol","reasoning":true,"thinkingLevelMap":{"off":null,"minimal":"low","max":"max"}},
+		{"id":"spark","reasoning":true,"thinkingLevelMap":{"xhigh":"xhigh","low":null}},
+		{"id":"plain","reasoning":false,"thinkingLevelMap":{}},
+		{"id":"cached","reasoning":true}
+	]`), "openai-codex")
+	want := map[string][]string{
+		"openai-codex/gpt-6.1-sol": {"minimal", "low", "medium", "high", "xhigh"},
+		"openai-codex/spark":       {"minimal", "medium", "high", "xhigh"},
+		"openai-codex/plain":       nil,
+		"openai-codex/cached":      nil,
+	}
+	for _, model := range models {
+		if !reflect.DeepEqual(model.Efforts, want[model.ID]) {
+			t.Errorf("%s efforts = %v, want %v", model.ID, model.Efforts, want[model.ID])
+		}
+	}
+}

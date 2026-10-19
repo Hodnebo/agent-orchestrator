@@ -428,6 +428,10 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 			// Snapshots from before RunnableModels lack it.
 			return fingerprint + ":shared-providers-v1:runnable-v1"
 		}
+		if request.AgentID == "pi" || request.AgentID == "kimchi" {
+			// Snapshots from before Pi's thinking levels were read lack them.
+			return fingerprint + ":shared-providers-v1:thinking-v1"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
@@ -1432,6 +1436,9 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 			}
 			if len(previous.Inputs) == 0 {
 				previous.Inputs = item.Inputs
+			}
+			if len(previous.Efforts) == 0 {
+				previous.Efforts = item.Efforts
 			}
 			previous.IsDefault = previous.IsDefault || item.IsDefault
 			byID[item.ID] = previous
