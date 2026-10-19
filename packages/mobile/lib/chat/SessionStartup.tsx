@@ -3,6 +3,7 @@ import { Animated as RNAnimated, Pressable, StyleSheet, Text, View } from "react
 import Animated, { FadeOut, LinearTransition } from "react-native-reanimated";
 
 import { Feather } from "../icons";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { LAYOUT_MS, ROW_ENTER_MS } from "../motion";
 import type { Theme } from "../theme";
@@ -136,7 +137,9 @@ function BranchNamingLabel() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	wrap: { paddingBottom: space.sm },
-	header: { alignSelf: "flex-start", minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+	// Full width with a rule under it, like the desktop's live status header, so
+	// the checklist reads as its own block under the brief.
+	header: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
 	headerLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	row: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: space.xs },
 	rowLabel: { flexShrink: 0, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
