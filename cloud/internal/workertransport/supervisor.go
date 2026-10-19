@@ -814,7 +814,7 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
 	if turnEnds != nil {
-		go s.watchTerminalTurnEnds(processCtx, s.Harness, turnEnds, environmentValue(command.Env, "AO_CHECKPOINT_SOCKET"))
+		go s.watchTerminalTurnEnds(processCtx, s.Harness, turnEnds, environmentValue(command.Env, "AO_CHECKPOINT_SOCKET"), terminalTurnPollInterval)
 	}
 	go func() {
 		_ = command.Wait()

@@ -288,11 +288,13 @@ func (s *Supervisor) noteAgentTerminalInput(data []byte) {
 	}
 }
 
-// watchTerminalTurnEnds runs for the life of the terminal agent's process.
-// checkpointSocket is the agent's AO_CHECKPOINT_SOCKET, poked as its Stop hook
-// would be, so the files the turn edited are checkpointed.
-func (s *Supervisor) watchTerminalTurnEnds(ctx context.Context, harness string, tail *transcriptTail, checkpointSocket string) {
-	ticker := time.NewTicker(terminalTurnPollInterval)
+// watchTerminalTurnEnds runs for the life of the terminal agent's process,
+// reading the transcript every interval (terminalTurnPollInterval, read by the
+// caller when the terminal opens). checkpointSocket is the agent's
+// AO_CHECKPOINT_SOCKET, poked as its Stop hook would be, so the files the turn
+// edited are checkpointed.
+func (s *Supervisor) watchTerminalTurnEnds(ctx context.Context, harness string, tail *transcriptTail, checkpointSocket string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
