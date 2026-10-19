@@ -13,6 +13,7 @@ When Connect Mobile is on, the pairing QR carries every address the desktop can 
 | --- | --- | --- | --- |
 | **LAN** | Phone and computer on the same trusted network. | None. Plain HTTP protected by the connection password. | Nothing extra. See [Pair on the same network](#pair-on-the-same-network). |
 | **Tailscale** | Phone and computer on the same tailnet, from any network. iPhone and iPad cannot use it. Android is allowed but not yet verified on a device. | Tailscale's WireGuard tunnel between devices. The AO request itself is plain HTTP. | Install Tailscale on both devices. See [Tailscale](#tailscale). |
+| **Cloud relay** | Any network, on the Starter plan and above. | Not yet documented. | Included with Starter and higher [plans](/guides/cloud#plans). |
 | **Managed HTTPS tunnel** | Any network, iPhone, iPad, and Android. | HTTPS to Cloudflare's edge. Cloudflare terminates TLS. | **Install cloudflared** in Connect Mobile. See the `cloudflared` steps in [Pair on the same network](#pair-on-the-same-network). |
 
 ## Pair on the same network
