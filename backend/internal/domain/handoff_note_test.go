@@ -109,3 +109,16 @@ func TestBuildHandoffNoteQuotedTextCannotCloseTheBlock(t *testing.T) {
 		t.Fatalf("a chat note must close with the chat instruction")
 	}
 }
+
+func TestHandoffNoteFitsAWindowsCommandLine(t *testing.T) {
+	if limit := handoffNoteCharLimit("windows"); limit*2 > 32_767 {
+		t.Fatalf("Windows note limit %d leaves no room on a 32,767-unit command line", limit)
+	}
+	saved := handoffNoteMaxChars
+	handoffNoteMaxChars = handoffNoteCharLimit("windows")
+	t.Cleanup(func() { handoffNoteMaxChars = saved })
+	note := BuildHandoffNote(HandoffNoteInput{Turns: []HandoffTurn{{UserRequest: strings.Repeat("a", 40_000)}}})
+	if got := utf8.RuneCountInString(note); got > handoffNoteMaxChars {
+		t.Fatalf("note is %d characters, want at most %d", got, handoffNoteMaxChars)
+	}
+}

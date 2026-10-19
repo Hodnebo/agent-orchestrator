@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -71,6 +72,18 @@ type HandoffNoteInput struct {
 	Terminal      bool
 }
 
+// handoffNoteMaxChars is the note's length cap on this system. On Windows a
+// whole command line is limited to 32,767 UTF-16 units, escaping included, and
+// a note passed as an argument shares it with the agent's own arguments.
+var handoffNoteMaxChars = handoffNoteCharLimit(runtime.GOOS)
+
+func handoffNoteCharLimit(goos string) int {
+	if goos == "windows" {
+		return 16_000
+	}
+	return ProviderSwitchMaxBootstrapChars
+}
+
 // BuildHandoffNote renders the note a provider receives when it takes over a
 // session. It is deterministic and never asks a model to summarise: the latest
 // turn is kept, the five before it are clipped to a budget, up to fifteen older
@@ -84,7 +97,7 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 	// turn is never dropped.
 	for {
 		note := renderHandoffNote(in, older, recent)
-		if utf8.RuneCountInString(note) <= ProviderSwitchMaxBootstrapChars && len(note) <= handoffNoteMaxBytes {
+		if utf8.RuneCountInString(note) <= handoffNoteMaxChars && len(note) <= handoffNoteMaxBytes {
 			return note
 		}
 		switch {
@@ -93,7 +106,7 @@ func BuildHandoffNote(in HandoffNoteInput) string {
 		case len(recent) > 1:
 			recent = recent[1:]
 		default:
-			return clipHandoffText(note, ProviderSwitchMaxBootstrapChars, handoffClipMarker)
+			return clipHandoffText(note, handoffNoteMaxChars, handoffClipMarker)
 		}
 	}
 }
