@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,6 +69,70 @@ describe("shared Stay Awake controls", () => {
 		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
 		expect(screen.queryByTestId("awake-button")).toBeNull();
 	});
+	it.each([false, true])("does not poll mobile status in steady state (error=%s)", async (failing) => {
+		vi.useFakeTimers();
+		focusManager.setFocused(true);
+		test.get.mockImplementation(async (path) => path === "/api/v1/awake"
+			? { data: snapshot() }
+			: failing ? { error: "mobile unavailable" } : { data: structuredClone(mobile) });
+		const view = render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			const mobileReads = () => test.get.mock.calls.filter(([path]) => path === "/api/v1/mobile/status").length;
+			expect(mobileReads()).toBe(1);
+			await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+			expect(mobileReads()).toBe(1);
+		} finally {
+			view.unmount();
+			client.clear();
+			vi.useRealTimers();
+			focusManager.setFocused(undefined);
+		}
+	});
+	it("refreshes mobile status on focus only after its freshness window expires", async () => {
+		vi.useFakeTimers();
+		focusManager.setFocused(false);
+		client.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
+		const view = render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			const mobileReads = () => test.get.mock.calls.filter(([path]) => path === "/api/v1/mobile/status").length;
+			expect(mobileReads()).toBe(1);
+			await act(async () => { focusManager.setFocused(true); await vi.advanceTimersByTimeAsync(0); });
+			expect(mobileReads()).toBe(1);
+			focusManager.setFocused(false);
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_001); });
+			expect(mobileReads()).toBe(1);
+			await act(async () => { focusManager.setFocused(true); await vi.advanceTimersByTimeAsync(0); });
+			expect(mobileReads()).toBe(2);
+		} finally {
+			view.unmount();
+			client.clear();
+			vi.useRealTimers();
+			focusManager.setFocused(undefined);
+		}
+	});
+
+	it("allows desktop wake while the mobile startup request is still pending", async () => {
+		let finishMobile: (() => void) | undefined;
+		test.get.mockImplementation(async (path) => path === "/api/v1/awake" ? { data: snapshot() }
+			: await new Promise((resolve) => { finishMobile = () => resolve({ data: structuredClone(mobile) }); }));
+		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(client.getQueryData(mobileStatusQueryKey)).toBeUndefined();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(state.active).toBe(true));
+		await act(async () => finishMobile!());
+	});
+	it("allows desktop wake when mobile status fails", async () => {
+		test.get.mockImplementation(async (path) => path === "/api/v1/awake" ? { data: snapshot() } : { error: "mobile unavailable" });
+		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
+		await waitFor(() => expect(client.getQueryState(mobileStatusQueryKey)?.status).toBe("error"));
+		expect(coffee()).toBeEnabled();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(state.active).toBe(true));
+	});
+
 	it.each([-1, 0])("forwards tabIndex %i to the coffee button and respects keyboard navigation", async (tabIndex) => {
 		const user = userEvent.setup();
 		render(<QueryClientProvider client={client}>

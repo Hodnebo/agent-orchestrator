@@ -21,7 +21,11 @@ export function useStayAwake(enabled = true) {
 			if (!data) throw new Error("Mobile status is unavailable");
 			return data;
 		},
-		refetchInterval: enabled ? () => cache.isMutating({ mutationKey }) > 0 ? false : 5_000 : false,
+		// Status can spawn host probes; the sidebar only refreshes stale data on
+		// mount/focus. Connect Mobile owns its separate pairing-pending interval.
+		staleTime: 60_000,
+		refetchOnWindowFocus: true,
+		refetchInterval: false,
 		retry: false,
 	});
 	const sessions = awake.state?.sessions?.filter((s) => !s.endedAt) ?? [];
@@ -92,7 +96,7 @@ export function useStayAwake(enabled = true) {
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
-		supported: (awakeCapability(awake.state, "idle")?.available ?? false) && (!!mobile.data || desktopOn),
+		supported: awakeCapability(awake.state, "idle")?.available ?? false,
 		starting: intent?.on === true && !awake.state?.active,
 	};
 }
