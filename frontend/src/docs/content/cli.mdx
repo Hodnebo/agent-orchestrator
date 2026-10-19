@@ -220,9 +220,9 @@ Selects what the desktop Browser panel displays for the session identified by `A
 
 `.ao/launch.json` is optional project configuration. Orchestrator does not infer or scaffold development servers, and static files do not require one.
 
-### `ao render <file.html>`
+### `ao render <file.html> --title <name>`
 
-Shows a self-contained HTML page, such as a chart, table, diagram, or mockup, inline in the current Chat session's thread. Run `ao render --check <file>` first to get a screenshot, content height, and console messages from the desktop app. Terminal UI sessions use `ao preview` instead.
+Shows a self-contained HTML page, such as a chart, table, diagram, or mockup, inline in the current Chat session's thread. `--title` is required. `--height` sets the first-paint frame height, and `--artifact` also keeps the page as a session artifact. Run `ao render --check <file.html>` first to get a screenshot, content height, and console messages from the desktop app; `--width` and `--out` apply to the check. Terminal UI sessions use `ao preview` instead.
 
 ### `ao browser`
 

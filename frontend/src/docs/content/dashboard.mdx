@@ -12,7 +12,7 @@ The Orchestrator desktop app is where you manage projects and sessions. Plan wit
 | **Sidebar** | Registered projects and their worker or orchestrator sessions. |
 | **Board / center pane** | Sessions grouped by their current derived state. |
 | **Session view** | Structured Chat or the live native Terminal UI. |
-| **Inspector** | Pull request, reviews, files, artifacts, side chats, and browser preview for the selected session. |
+| **Inspector** | Pull request, reviews, files, artifacts, browser preview, and (in Developer mode) side chats for the selected session. |
 
 Orchestrator remembers the session's committed interface mode. Opening a Chat session restores its paged conversation timeline; opening a TUI session reconnects to its terminal through the daemon mux.
 
@@ -54,7 +54,7 @@ Chat controls depend on the provider. Where supported, choose a model, reasoning
 
 After a reply completes, Chat can suggest a next message in gray in the empty composer. Press **Tab** to insert it as an editable draft, or keep typing or press **Escape** to dismiss it.
 
-Turn on **Settings → General → Side chats** to open separate side conversations in the inspector. A side chat starts from the main conversation's latest completed turn, then runs independently with its own draft, queue, and approvals. Type `/btw` or `/side` in the main composer to send a question to a new side chat. Where the provider supports native conversation forks, the side chat is a native fork of the main conversation; otherwise Orchestrator rebuilds the context from the visible history. Side chats are local to the desktop and do not survive an app restart.
+Side chats are a Developer mode preview. Turn on **Settings → General → Developer mode**, then **Side chats**, to open separate side conversations in the inspector. A side chat starts from the main conversation's latest completed turn, then runs independently with its own draft, queue, and approvals. Type `/btw` or `/side` in the main composer to send a question to a new side chat. Where the provider supports native conversation forks, the side chat is a native fork of the main conversation; otherwise Orchestrator rebuilds the context from the visible history. Side chats are local to the desktop and do not survive an app restart.
 
 **Run a cue** sends a saved project instruction or opens a shell command in a fresh terminal. See [Project settings](#project-settings).
 
@@ -115,7 +115,7 @@ Opening the panel marks loaded unread alerts as read, but leaves them in the fee
 
 In **Settings → Connect Mobile**, enable access and wait until pairing is ready before scanning the QR in the mobile app. Orchestrator advertises available LAN, Tailscale, or managed remote-connector addresses. The primary desktop API stays on the local computer. See [Connect Mobile](/configuration/remote-access) for pairing and transport details.
 
-From the mobile app you can manage several paired computers, start new sessions, use Chat and the Terminal UI, answer approvals, and follow pull requests and reviews. The app uses the same color themes as the desktop. Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile.
+From the mobile app you can manage several paired computers, start new sessions, use Chat and the Terminal UI, answer approvals, and follow pull requests and reviews. Paired phones can receive push notifications when they have permission and the daemon can reach the push service. Mute or unpair a device in Connect Mobile.
 
 ## Stay Awake (macOS)
 
