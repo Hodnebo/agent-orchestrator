@@ -52,7 +52,9 @@ import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
 import { sessionStartupView, startupVisible } from "../session/sessionStartup";
-import { STARTUP_POLL_MS, useStartupSession } from "../session/useStartupSession";
+import { startSerialPoll } from "../session/serialPoll";
+import { STARTUP_POLL_MS } from "../session/startupPoll";
+import { useStartupSession } from "../session/useStartupSession";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
@@ -426,9 +428,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			setAwaitingAgent(false);
 			return;
 		}
-		void refreshConversation();
-		const timer = setInterval(() => void refreshConversation(), STARTUP_POLL_MS);
-		return () => clearInterval(timer);
+		// One read at a time: the refresh keeps only its newest request, so a
+		// fixed interval faster than the link discards every response.
+		return startSerialPoll(refreshConversation, STARTUP_POLL_MS);
 	}, [agentConnecting, awaitingAgent, hasSnapshot, refreshConversation]);
 	const retryStart = useCallback(() => void resume(), [resume]);
 	const timelineStartup = useMemo<TimelineStartup | undefined>(

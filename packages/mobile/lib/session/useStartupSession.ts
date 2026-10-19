@@ -8,13 +8,7 @@ import type { ServerConfig } from "../config";
 import { haptics } from "../haptics";
 import { sameJson } from "../keepUnchanged";
 import { newlyFinishedSteps } from "./sessionStartup";
-
-/**
- * How often a provisioning session is re-read while its screen is open. The
- * board's poll (8s direct, 2s over the tunnel) skips whole setup stages: fetch
- * takes about half a second and the agent step about one.
- */
-export const STARTUP_POLL_MS = 1_000;
+import { STARTUP_POLL_MS } from "./startupPoll";
 
 type ProvisionFields = Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch">;
 

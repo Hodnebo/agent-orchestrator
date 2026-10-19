@@ -76,7 +76,10 @@ export function sessionStartupView(session: StartupSession, snapshot: Pick<Conve
 		// Keep the provisional branch private until the worktree step lands, as the desktop does.
 		branch: worktreeUnfinished ? undefined : session.branch ?? undefined,
 		namingBranch: worktreeUnfinished && state === "provisioning" && !session.isTerminated,
-		openingTurnId: openingLive ? opening?.id : undefined,
+		// While a start is in progress or failed, the first turn hosts the
+		// checklist whatever its state, as on the desktop: a provider rejection
+		// fails that turn too, and the failed start's Retry must still render.
+		openingTurnId: state || openingLive ? opening?.id : undefined,
 	};
 }
 

@@ -55,6 +55,17 @@ describe("sessionStartupView", () => {
 		expect(view).toMatchObject({ failed: true, error: "setup exited 1", namingBranch: false });
 	});
 
+	it("keeps a failed opening turn as the checklist's anchor so Retry renders", () => {
+		// A provider rejection fails the opening turn as well as provisioning
+		// (backend: TestAsyncChatSpawnRealDrainFailureStaysRetryable).
+		const failedTurn = snapshot([turn("t1", "failed")], false, "stopped");
+		const view = sessionStartupView({ provisionState: "failed", provisionSteps: running, provisionError: "provider rejected" }, failedTurn);
+		expect(view).toMatchObject({ failed: true, openingTurnId: "t1" });
+		expect(startupVisible(view, failedTurn)).toBe(true);
+		// Once the start succeeds, a finished first turn no longer anchors anything.
+		expect(sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([turn("t1", "failed")], false, "ready"))).toBeUndefined();
+	});
+
 	it("shows a provisioning session from a daemon too old to send steps", () => {
 		expect(sessionStartupView({ provisionState: "provisioning" }, undefined)).toMatchObject({ steps: [], agentName: "the agent" });
 		expect(sessionStartupView({ provisionState: "ready" }, snapshot([turn("t1", "running")]))).toBeUndefined();

@@ -65,6 +65,7 @@ import {
 	countActivityNodes,
 	partitionTurnItems,
 	readableConversationItems,
+	startupPlacement,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
@@ -174,6 +175,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View>
 		);
 	}
+	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
+	// A checklist no loaded turn can host sits at the live edge instead.
+	const standaloneStartup = placement === "standalone" && startup ? (
+		<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
+	) : null;
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
@@ -217,8 +223,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListHeaderComponent={inverted ? null : olderControl}
-				ListFooterComponent={inverted ? olderControl : null}
+				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
+				ListFooterComponent={inverted ? olderControl : standaloneStartup}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -230,7 +236,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 					answeredBelow={answeredBelow}
 					workedOpen={openWorked.has(group.key)}
 					onToggleWorked={toggleWorked}
-					startup={startup?.visible && group.turnId === openingTurnId ? startup : undefined}
+					startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 				/>}
 			/>
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}

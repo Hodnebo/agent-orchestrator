@@ -164,6 +164,17 @@ export function partitionTurnItems(items: ConversationItem[], turn: Conversation
 	return { settled, prompt, work, notices, final };
 }
 
+/**
+ * Where a visible setup checklist renders: inside the turn that carries the
+ * opening brief, or on its own at the live edge when no loaded turn does. It
+ * must never go undrawn, because while it shows the screen suppresses the
+ * failure and resume banners, and a failed start's Retry lives in it.
+ */
+export function startupPlacement(groups: ReadonlyArray<Pick<ConversationGroup, "turnId">>, openingTurnId: string | undefined, visible: boolean): "turn" | "standalone" | "none" {
+	if (!visible) return "none";
+	return openingTurnId && groups.some((group) => group.turnId === openingTurnId) ? "turn" : "standalone";
+}
+
 /** Latest-first data lets an inverted virtualized list paint the live edge first. */
 export function latestFirstConversationGroups(
 	snapshot: ConversationSnapshot,

@@ -80,7 +80,9 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
 		// The agent coming up emits no conversation event; keep re-reading until it reports connected.
 		expect(screenSource).toContain('if (before === "provisioning" && provisionState === "ready") setAwaitingAgent(true);');
-		expect(screenSource).toContain("setInterval(() => void refreshConversation(), STARTUP_POLL_MS)");
+		// Serially, so a read slower than the poll interval is never superseded (see serialPoll.test.ts).
+		expect(screenSource).toContain("return startSerialPoll(refreshConversation, STARTUP_POLL_MS);");
+		expect(screenSource).not.toContain("setInterval(() => void refreshConversation()");
 		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
 	});
 
