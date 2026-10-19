@@ -117,7 +117,10 @@ describe("BillingSection", () => {
 		expect(within(starterCloud).queryByText("8 sessions in total")).not.toBeInTheDocument();
 		expect(within(starterCloud).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
 		expect(within(within(card("pro")).getByRole("list", { name: "Cloud agents" })).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
-		expect(within(within(card("enterprise")).getByRole("list", { name: "Cloud agents" })).getByText("10+ cloud projects")).toBeInTheDocument();
+		const enterpriseCloud = within(card("enterprise")).getByRole("list", { name: "Cloud agents" });
+		expect(within(enterpriseCloud).getByText("Unlimited cloud projects")).toBeInTheDocument();
+		expect(within(enterpriseCloud).getByText("Unlimited simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("enterprise")).getByText("Collaborate on cloud agents")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("Everything in Starter")).toBeInTheDocument();
 		expect(within(card("pro")).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
 		const enterprise = card("enterprise");

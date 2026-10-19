@@ -228,13 +228,14 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						name={t("settings.billing.planEnterprise")}
 						amount={t("settings.billing.enterprisePrice")}
 						features={[
+							t("settings.billing.enterpriseCollaborate"),
 							t("settings.billing.enterpriseCoder"),
 							t("settings.billing.enterpriseSso"),
 							t("settings.billing.enterpriseSupport"),
 						]}
 						cloudLimits={[
 							t("settings.billing.enterpriseProjects"),
-							t("settings.billing.enterpriseSessions"),
+							t("settings.billing.enterpriseAgents"),
 							t("settings.billing.enterpriseHours"),
 						]}
 						current={false}
