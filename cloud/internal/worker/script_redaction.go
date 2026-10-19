@@ -196,6 +196,7 @@ const (
 func maskCommandPasswords(text string) string {
 	var out strings.Builder
 	last := 0
+	quoting := quoteCursor{text: text}
 	for position := 0; position < len(text); {
 		match := passwordCommandPattern.FindStringSubmatchIndex(text[position:])
 		if match == nil {
@@ -204,10 +205,7 @@ func maskCommandPasswords(text string) string {
 		command := text[position+match[2] : position+match[3]]
 		// A command written inside a quoted string (echo "mysql -px") ends
 		// with that string: its closing quote is not an argument's.
-		var enclosing byte
-		if boundary := position + match[0]; boundary < position+match[2] && (text[boundary] == '"' || text[boundary] == '\'') {
-			enclosing = text[boundary]
-		}
+		enclosing := quoting.at(position + match[2])
 		end := maskCommandArguments(text, position+match[1], command, enclosing, func(start, stop int, kind valueKind) {
 			masked, ok := maskedArgument(text[start:stop], kind)
 			if ok && start >= last {
@@ -328,12 +326,12 @@ func maskCommandArguments(text string, position int, command string, enclosing b
 
 // nextArgument reads the shell word at or after position: its start and end,
 // and false at the end of the command: the end of its shell segment (a line,
-// ;, &&, ||, |, $( or a closing parenthesis or backtick) or of the quoted
-// string the command is written in (enclosing). A quoted part is read to its
-// closing quote within the segment; a quote that is not closed there closes a
-// string the command is written in, so the word, and the command, end before
-// it (echo "mysql -px"; echo "ssh -p 22" never reads the second echo as
-// mysql's).
+// or ;, &&, ||, |, $( or a closing parenthesis or backtick outside quotes) or
+// of the quoted string the command is written in (enclosing, the quote of the
+// string its name is in: echo "mysql -px"; echo "ssh -p 22" never reads the
+// second echo as mysql's). A quoted part is read to its closing quote on the
+// line, separators inside it included; one that is not closed there ends the
+// word and the command.
 func nextArgument(text string, position int, enclosing byte) (int, int, bool) {
 	for position < len(text) && (text[position] == ' ' || text[position] == '\t') {
 		position++
@@ -362,18 +360,53 @@ func nextArgument(text string, position int, enclosing byte) (int, int, bool) {
 	return position, end, true
 }
 
-// quoteEnd is the index of the quote that closes the one at start within its
-// shell segment, or -1.
+// quoteEnd is the index of the quote that closes the one at start on its line
+// (a separator inside quotes is part of the argument: mysql -e "select 1;
+// select 2"), past backslash escapes in a double-quoted one, or -1.
 func quoteEnd(text string, start int) int {
 	for index := start + 1; index < len(text); index++ {
 		switch text[index] {
 		case text[start]:
 			return index
-		case '\n', '\r', ';', '|', '&':
+		case '\\':
+			if text[start] == '"' {
+				index++
+			}
+		case '\n', '\r':
 			return -1
 		}
 	}
 	return -1
+}
+
+// quoteCursor tells which quoted string, if any, a position of text is in,
+// reading each line from its start with the shell's rules (a backslash
+// escapes outside single quotes). Positions are looked up in order, so each
+// byte is read once.
+type quoteCursor struct {
+	text     string
+	position int
+	quote    byte
+}
+
+// at returns the quote of the string position is in, or 0.
+func (c *quoteCursor) at(position int) byte {
+	if position < c.position {
+		c.position, c.quote = 0, 0
+	}
+	for ; c.position < position; c.position++ {
+		switch character := c.text[c.position]; {
+		case character == '\n':
+			c.quote = 0
+		case character == '\\' && c.quote != '\'':
+			c.position++
+		case c.quote == 0 && (character == '"' || character == '\''):
+			c.quote = character
+		case character == c.quote:
+			c.quote = 0
+		}
+	}
+	return c.quote
 }
 
 func isCommandEnd(text string, index int) bool {

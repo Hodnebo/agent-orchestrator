@@ -476,6 +476,9 @@ func TestScriptRedactionIsLinear(t *testing.T) {
 		"command words":            fill("docker "),
 		"sshpass words":            fill("sshpass "),
 		"quoted arguments":         "mysql " + fill(`"-p`),
+		"quoted separators":        fill(`mysql -e "a;b" -p x; `),
+		"unclosed argument quotes": fill(`mysql "a; `),
+		"enclosed commands":        fill(`echo "mysql -px"; `),
 		"curl users":               fill("curl -u a:b "),
 		"secret documents":         fill("kind: Secret\ndata:\n  a: b\n"),
 		"secret data":              "kind: Secret\ndata:\n" + fill("  a: |\n"),
@@ -632,6 +635,13 @@ func TestPasswordCommandsAreReadPerSegment(t *testing.T) {
 		{`mysql -pFAKEVAL3 || ssh -p 22 host | curl --user admin:FAKEVAL5 x`, `mysql -p[REDACTED] || ssh -p 22 host | curl --user admin:[REDACTED] x`},
 		{`x=$(mysql -pFAKEVAL3)$(ssh -p 22 h) curl -sS -u "admin:FAKEVAL5" x`, `x=$(mysql -p[REDACTED])$(ssh -p 22 h) curl -sS -u "admin:[REDACTED]" x`},
 		{`mysql -h db -e "select 1" -pFAKEVAL3`, `mysql -h db -e "select 1" -p[REDACTED]`},
+		// A separator inside a quoted argument is part of it.
+		{`mysql -e "select 1; select 2" -pFAKEVAL3`, `mysql -e "select 1; select 2" -p[REDACTED]`},
+		{`mysql -e 'a;b|c&&d' -p FAKEVAL3 db; ssh -p 22 h`, `mysql -e 'a;b|c&&d' -p [REDACTED] db; ssh -p 22 h`},
+		{`sh -c "mysql -e 'a; b' -pFAKEVAL3"; ssh -p 22 h`, `sh -c "mysql -e 'a; b' -p[REDACTED]"; ssh -p 22 h`},
+		{`curl -d "a=1;b=2" -u "admin:FAKEVAL5" x && ssh -p 22 h`, `curl -d "a=1;b=2" -u "admin:[REDACTED]" x && ssh -p 22 h`},
+		{`echo "mysql -e"; ssh -p 22 host`, `echo "mysql -e"; ssh -p 22 host`},
+		{`don't run mysql -pFAKEVAL3; then ssh -p 22 h`, `don't run mysql -p[REDACTED]; then ssh -p 22 h`},
 	} {
 		if got := RedactScriptOutput(test.text); got != test.want {
 			t.Errorf("RedactScriptOutput(%q)\n got %q\nwant %q", test.text, got, test.want)
