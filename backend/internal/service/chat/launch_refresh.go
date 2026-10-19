@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -32,7 +33,13 @@ func providerNeedsLaunchRefresh(controller *Controller) bool {
 // a new message may refresh under its view before entering the durable queue.
 func (s *Service) refreshProviderLaunch(ctx context.Context, id domain.SessionID, ignoreViews bool) (bool, error) {
 	controller, err := s.Controller(id)
-	if err != nil || !providerNeedsLaunchRefresh(controller) {
+	if errors.Is(err, ErrNoController) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !providerNeedsLaunchRefresh(controller) {
 		return false, nil
 	}
 	stopped, err := s.hibernateChat(ctx, id, hibernateOptions{launchRefresh: true, ignoreViews: ignoreViews})
