@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "Erneuter Versuch fehlgeschlagen: {{message}}",
 	"cloud.startupError.retryUnavailable": "Diese Sitzung kann gerade nicht erneut gestartet werden.",
 	"cloud.startupError.stillRetrying": "AO versucht es weiterhin.",
+	"cloud.startupError.restoreToRetry": "Diese Sitzung wurde gelöscht. Stellen Sie sie wieder her, um es erneut zu versuchen.",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "Die Einrichtung des Workspace wurde nicht abgeschlossen",
 	"cloud.startupError.projectSetupFailedTitle": "Das Setup-Skript des Projekts ist fehlgeschlagen",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "Der Checkout des Repositorys ist fehlgeschlagen",

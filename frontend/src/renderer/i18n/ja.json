@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "再試行できませんでした: {{message}}",
 	"cloud.startupError.retryUnavailable": "このセッションは現在再試行できません。",
 	"cloud.startupError.stillRetrying": "AO は再試行を続けています。",
+	"cloud.startupError.restoreToRetry": "このセッションは削除されました。再試行するにはセッションを復元してください。",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "ワークスペースのセットアップが完了しませんでした",
 	"cloud.startupError.projectSetupFailedTitle": "プロジェクトのセットアップスクリプトが失敗しました",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "リポジトリのチェックアウトに失敗しました",

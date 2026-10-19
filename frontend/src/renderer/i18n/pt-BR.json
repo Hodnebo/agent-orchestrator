@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "Não foi possível tentar novamente: {{message}}",
 	"cloud.startupError.retryUnavailable": "Não é possível tentar esta sessão novamente agora.",
 	"cloud.startupError.stillRetrying": "O AO continua tentando.",
+	"cloud.startupError.restoreToRetry": "Esta sessão foi excluída. Restaure-a para tentar de novo.",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "A configuração do espaço de trabalho não terminou",
 	"cloud.startupError.projectSetupFailedTitle": "O script de configuração do projeto falhou",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "O checkout do repositório falhou",

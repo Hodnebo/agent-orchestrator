@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "无法重试：{{message}}",
 	"cloud.startupError.retryUnavailable": "此会话现在无法重试。",
 	"cloud.startupError.stillRetrying": "AO 仍在重试。",
+	"cloud.startupError.restoreToRetry": "此会话已删除。请恢复会话后重试。",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "工作区设置未完成",
 	"cloud.startupError.projectSetupFailedTitle": "项目的 Setup 脚本失败",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "代码仓库检出失败",

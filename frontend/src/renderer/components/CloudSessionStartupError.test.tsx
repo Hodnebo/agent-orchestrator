@@ -18,13 +18,13 @@ vi.mock("../lib/cloud-cp/stream-bridge", () => ({
 	subscribeSessionEventsBridged: (options: unknown) => subscribeSessionEvents(options),
 }));
 
-function mount(problem: Parameters<typeof CloudSessionStartupError>[0]["problem"], coderWorkspaceUrl?: string) {
+function mount(problem: Parameters<typeof CloudSessionStartupError>[0]["problem"], coderWorkspaceUrl?: string, ended?: boolean) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	const invalidate = vi.spyOn(client, "invalidateQueries");
 	const view = (next: typeof problem) => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
-				<CloudSessionStartupError coderWorkspaceUrl={coderWorkspaceUrl} orgId="org-1" sessionId="sess-1" problem={next} />
+				<CloudSessionStartupError coderWorkspaceUrl={coderWorkspaceUrl} ended={ended} orgId="org-1" sessionId="sess-1" problem={next} />
 			</TooltipProvider>
 		</QueryClientProvider>
 	);
@@ -142,6 +142,17 @@ describe("CloudSessionStartupError", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("offers no Retry for a deleted session whose Setup failed, and says to restore it", () => {
+		mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret" }, undefined, true);
+		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		expect(screen.getByText("This session was deleted. Restore it to retry.")).toBeInTheDocument();
+		// The failure's output stays readable.
+		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("missing secret");
+		expect(requestWorkspaceCheckout).not.toHaveBeenCalled();
+		expect(retrySessionStartup).not.toHaveBeenCalled();
 	});
 
 	it("names a repository checkout failure", () => {

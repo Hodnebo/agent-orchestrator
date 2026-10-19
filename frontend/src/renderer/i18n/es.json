@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "No se pudo reintentar: {{message}}",
 	"cloud.startupError.retryUnavailable": "Esta sesión no se puede reintentar ahora.",
 	"cloud.startupError.stillRetrying": "AO sigue reintentando.",
+	"cloud.startupError.restoreToRetry": "Esta sesión se eliminó. Restáurala para volver a intentarlo.",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "La configuración del espacio de trabajo no terminó",
 	"cloud.startupError.projectSetupFailedTitle": "El script de configuración del proyecto falló",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "La extracción del repositorio falló",

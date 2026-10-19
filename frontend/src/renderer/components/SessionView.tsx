@@ -1950,7 +1950,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<div className="relative min-h-0 flex-1" ref={bindHandoffDialogContainer}>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
 							{startupFailure && session?.cloud ? (
-								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
+								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} ended={terminated} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
 							{session && !session.cloud && handoffDialogContainer ? (
 								<SwitchAgentDialog

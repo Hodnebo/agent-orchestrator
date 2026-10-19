@@ -243,6 +243,7 @@
 	"cloud.startupError.retryFailed": "다시 시도할 수 없습니다: {{message}}",
 	"cloud.startupError.retryUnavailable": "지금은 이 세션을 다시 시도할 수 없습니다.",
 	"cloud.startupError.stillRetrying": "AO가 계속 다시 시도하고 있습니다.",
+	"cloud.startupError.restoreToRetry": "이 세션은 삭제되었습니다. 다시 시도하려면 세션을 복원하세요.",
 	"cloud.startupError.workspaceSetupNotReadyTitle": "작업 공간 설정이 완료되지 않았습니다",
 	"cloud.startupError.projectSetupFailedTitle": "프로젝트 설정 스크립트가 실패했습니다",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "저장소 체크아웃에 실패했습니다",
