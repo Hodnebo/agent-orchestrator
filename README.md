@@ -141,7 +141,7 @@ The phone is a remote control for the desktop app. Your repositories, worktrees 
 How the phone reaches your computer:
 
 - **Same network (LAN):** works out of the box on a trusted home or office Wi-Fi. This connection is plain HTTP protected by the connection password, so keep it off untrusted networks.
-- **Tailscale:** when the computer is on a tailnet, the QR code also carries its Tailscale address, so the phone can connect from anywhere on that tailnet. Android can use this address. iPhone and iPad currently cannot, because iOS blocks unencrypted connections to Tailscale addresses. Use the HTTPS option below instead.
+- **Tailscale:** when the computer is on a tailnet, the QR code also carries its Tailscale address, for phones on the same tailnet. iPhone and iPad cannot use it, because iOS blocks unencrypted connections to Tailscale addresses. The Android app allows this connection, but it has not been verified on a physical Android device yet. Use the HTTPS option below for a tested path away from home.
 - **Managed HTTPS tunnel:** Connect Mobile can install and run `cloudflared` to add an HTTPS address for use away from home on any device. Cloudflare terminates TLS on that route.
 
 The phone tries every address in the QR code and uses the first one that answers. The desktop's main API never leaves `127.0.0.1`. Connect Mobile is a separate listener that is off by default, needs the connection password, and can be switched off or given a new password at any time.
@@ -243,7 +243,7 @@ The desktop app runs on macOS (Apple silicon and Intel), Windows and Linux (AppI
 
 ### Is there a mobile app?
 
-Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile/id6792552173) for iPhone and iPad and on [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) for Android. The app pairs with your desktop over your local network, Tailscale (Android) or a managed HTTPS tunnel. See [Mobile and cross-device](#mobile-and-cross-device).
+Yes. Orchestrator.inc is on the [App Store](https://apps.apple.com/app/ao-mobile/id6792552173) for iPhone and iPad and on [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) for Android. The app pairs with your desktop over your local network or a managed HTTPS tunnel. Tailscale addresses are also offered, but iPhone and iPad cannot use them and Android has not been verified on a device yet. See [Mobile and cross-device](#mobile-and-cross-device).
 
 ### How much does it cost?
 
