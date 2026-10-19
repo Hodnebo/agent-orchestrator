@@ -1,7 +1,7 @@
 {
 	"name": "@aoagents/ao",
 	"version": "0.10.0",
-	"description": "Orchestrator.inc (Agent Orchestrator / AO) CLI: run and supervise Claude Code, Codex and 30+ coding agents in parallel, each in its own git worktree, with an orchestrator agent and an autonomous PR, CI and review loop. Resolves and runs the prebuilt Go binary for your platform.",
+	"description": "Orchestrator.inc (Agent Orchestrator / AO) CLI: run and supervise Claude Code, Codex and 35+ coding agents in parallel, each in its own git worktree, with an orchestrator agent and an autonomous PR, CI and review loop. Resolves and runs the prebuilt Go binary for your platform.",
 	"keywords": [
 		"claude-code",
 		"codex",
