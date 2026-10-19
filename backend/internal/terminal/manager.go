@@ -201,9 +201,11 @@ func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, relea
 }
 
 // terminalReports matches bytes the terminal view sends on its own, not typed by
-// anyone: focus in and out, and replies to the agent's device, cursor and colour
-// queries. They are no reason to think the agent was given work.
-var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\))+$`)
+// anyone: focus in and out, and replies to the agent's queries about the
+// device and cursor, colours, modes ($y), keyboard flags (?…u), window size (…t)
+// and version (a DCS string). They are no reason to think the agent was given
+// work. A key under the kitty keyboard protocol ends in u too, but never has ?.
+var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\[\??[0-9;]*\$y|\x1b\[\?[0-9]*u|\x1b\[[0-9;]+t|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$`)
 
 // Close tears down every live attachment and stops re-attach loops. Safe to
 // call once on daemon shutdown.
