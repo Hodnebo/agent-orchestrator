@@ -96,6 +96,38 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 	}
 }
 
+// A failed Setup step's output and command never carry a credential to the
+// control plane, in the outcome event or the startup error: an AWS Secrets
+// Manager SecretString's password is masked whole, not cut at its first
+// escaped quote.
+func TestFailedSetupNeverReportsASecret(t *testing.T) {
+	recorder := &workerEventRecorder{}
+	c := recorder.server(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	workspace := t.TempDir()
+	failed := runProjectSetup(context.Background(), logger, c, t.TempDir(), true,
+		[]string{`printf '%s\n' '{"SecretString":"{\"password\":\"hunter2xyz\"}"}' 'mysql --password Leak7flag'; exit 3`},
+		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
+	if failed == nil {
+		t.Fatal("setup reported success")
+	}
+	reportWorkspaceStartup(context.Background(), logger, c, setupStartupFailure(*failed))
+	recorder.mu.Lock()
+	encoded, err := json.Marshal(recorder.events)
+	recorder.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"hunter2xyz", "Leak7flag"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("%q reported in %s", secret, encoded)
+		}
+	}
+	if !strings.Contains(failed.Output, `"SecretString":[REDACTED]`) {
+		t.Fatalf("setup output = %q", failed.Output)
+	}
+}
+
 // A Setup step refused Docker says so in the startup message, and the detail
 // names the command, the user it ran as, and its full log.
 func TestSetupPermissionFailureExplainsWhoRanIt(t *testing.T) {

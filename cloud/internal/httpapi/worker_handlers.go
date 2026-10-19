@@ -1170,8 +1170,9 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		if startup.Status == worker.WorkspaceStartupReady {
 			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
 		} else {
-			message := activitylog.Truncate(activitylog.Redact(strings.TrimSpace(startup.Message)), 1024)
-			detail := activitylog.Excerpt(startup.Detail, 4096)
+			// The script redaction: a Setup failure's detail is its output.
+			message := activitylog.Truncate(worker.RedactScriptOutput(strings.TrimSpace(startup.Message)), 1024)
+			detail := activitylog.Excerpt(worker.RedactScriptOutput(startup.Detail), 4096)
 			s.logger.Warn("workspace startup failed in the worker",
 				"org_id", claims.OrgID, "session_id", claims.SessionID, "code", startup.Code, "message", message)
 			err = s.store.RecordWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID,

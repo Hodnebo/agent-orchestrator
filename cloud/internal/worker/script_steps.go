@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/bits"
 	"os"
 	"regexp"
 	"sort"
@@ -148,7 +149,9 @@ func ValidScriptStepEvent(event ScriptStepEvent) bool {
 // of the worker's own redaction, so the control plane never stores more.
 func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 	redactor := scriptRedactor{}
-	event.Output, event.OutputTruncated = scriptOutputTail(redactor.redact(activity.Excerpt(event.Output, 0)), event.OutputTruncated)
+	// Redacted before activity.Redact runs (in redact), which masks a quoted
+	// value only up to an escaped quote and would hide the rest of it.
+	event.Output, event.OutputTruncated = scriptOutputTail(redactor.redact(activity.StripControl(event.Output)), event.OutputTruncated)
 	event.Command = boundScriptCommand(redactor.redact(strings.Join(strings.Fields(event.Command), " ")))
 	event.Repository = activity.Truncate(event.Repository, 256)
 	event.Dir = activity.Truncate(event.Dir, 1024)
@@ -168,13 +171,18 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 // are masked in a step's output.
 var secretNamePattern = regexp.MustCompile(`(?i)(TOKEN|SECRET|KEY|PASSWORD|PASS|CREDENTIAL|AUTH|PRIVATE)`)
 
-// secretPairPattern matches a NAME=value or NAME: value pair, or a JSON
-// "name": "value" member (also escaped inside a JSON string, as in
-// \"password\":\"x\" or an AWS Secrets Manager SecretString), whose name
-// looks like a secret's. Its groups are the opening quote, the name, the
-// closing quote, the separator and the value: a JSON-escaped string, a quoted
-// string, or a bare word.
-var secretPairPattern = regexp.MustCompile(`(?i)(\\?["']?)([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)(\\?["']?)(\s*[:=]\s*)(\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;&"'\\]+)`)
+// secretPairPattern matches the name and separator of a NAME=value or
+// NAME: value pair, or of a JSON "name": member at any depth of escaping
+// (\"password\": inside a JSON string, \\\"password\\\": inside one more, as
+// an AWS Secrets Manager SecretString can be), whose name looks like a
+// secret's. Its groups are the name and the separator; the value after it is
+// read by secretValue.
+var secretPairPattern = regexp.MustCompile(`(?i)\\*["']?([a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)\\*["']?(\s*[:=]\s*)`)
+
+// secretFlagPattern matches a command-line flag whose name looks like a
+// secret's and its separating blanks (--password x); --password=x is a
+// secretPairPattern pair.
+var secretFlagPattern = regexp.MustCompile(`(?i)(--?[a-z0-9_.-]*(?:token|secret|key|pass|auth|credential|private)[a-z0-9_.-]*)([ \t]+)`)
 
 var (
 	// secretNameFragment is what makes a pair's name look like a secret's.
@@ -213,35 +221,143 @@ func RedactScriptOutput(text string) string {
 	return scriptRedactor{}.redact(text)
 }
 
-// redactSecretPairs masks the value of each secretPairPattern pair with a
-// secret's name (isSecretName), keeping its quotes.
+// redactSecretPairs masks the value of each secretPairPattern pair and
+// secretFlagPattern flag with a secret's name (isSecretName), keeping its
+// quotes.
 func redactSecretPairs(text string) string {
-	matches := secretPairPattern.FindAllStringSubmatchIndex(text, -1)
-	if matches == nil {
-		return text
-	}
+	return maskSecretPairs(maskSecretPairs(text, secretPairPattern, false), secretFlagPattern, true)
+}
+
+// maskSecretPairs masks the values of pattern's matches (name and separator
+// groups) whose name is a secret's. A value is read whole (secretValue), so
+// an escaped JSON string holding more JSON is masked as one; a name that is
+// not a secret's is skipped alone, so pairs inside its value are still
+// found. A value already masked is skipped alone too: what follows it is
+// still read as text, so a pass that masked a value short (up to an escaped
+// quote) never hides the rest of it.
+func maskSecretPairs(text string, pattern *regexp.Regexp, flag bool) string {
 	var out strings.Builder
 	last := 0
-	for _, match := range matches {
-		name, value := text[match[4]:match[5]], text[match[10]:match[11]]
-		if bare := strings.Trim(value, `\"'`); !isSecretName(name) || strings.HasPrefix(bare, "[REDACTED") {
-			continue
+	for position := 0; position < len(text); {
+		match := pattern.FindStringSubmatchIndex(text[position:])
+		if match == nil {
+			break
 		}
-		masked := "[REDACTED]"
+		nameStart, valueStart := position+match[2], position+match[5]
+		next := valueStart
 		switch {
-		case strings.HasPrefix(value, `\"`):
-			masked = `\"[REDACTED]\"`
-		case strings.HasPrefix(value, `"`):
-			masked = `"[REDACTED]"`
-		case strings.HasPrefix(value, "'"):
-			masked = "'[REDACTED]'"
+		case flag && nameStart > 0 && !isFlagBoundary(text[nameStart-1]):
+		case !isSecretName(text[nameStart : position+match[3]]):
+		case strings.HasPrefix(text[valueStart:], redactedMarker):
+			next = valueStart + len(redactedMarker)
+		case flag && (valueStart == len(text) || text[valueStart] == '-'):
+			// The next flag, not a value.
+		default:
+			if end, masked := secretValue(text, valueStart); end > valueStart {
+				out.WriteString(text[last:valueStart])
+				out.WriteString(masked)
+				last, next = end, end
+			}
 		}
-		out.WriteString(text[last:match[10]])
-		out.WriteString(masked)
-		last = match[11]
+		position = next
+	}
+	if last == 0 {
+		return text
 	}
 	out.WriteString(text[last:])
 	return out.String()
+}
+
+const redactedMarker = "[REDACTED]"
+
+// isFlagBoundary reports whether a flag may start after c: a blank, a quote or
+// the start of a command.
+func isFlagBoundary(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '"' || c == '\'' || c == '(' || c == ';'
+}
+
+// credentialSchemes are bare values naming the kind of credential that
+// follows them ("Authorization: Bearer x"): the word after them is masked too.
+var credentialSchemes = map[string]bool{"bearer": true, "basic": true, "token": true, "bot": true, "digest": true}
+
+// secretValue reads the value of a pair that starts at text[start:] and
+// returns where it ends and its masked form:
+//
+//   - a double-quoted string at any depth of JSON escaping ("x", \"x\",
+//     \\\"x\\\"), read up to the quote that closes it at that depth, so the
+//     escaped quotes of the JSON it may hold do not end it; one that is not
+//     closed on its line is masked to the end of the line;
+//   - a single-quoted string, up to its closing quote or the end of the line;
+//   - a bare word, up to a blank, a separator or a quote, with the word after
+//     it when it names a credential scheme ("Bearer x").
+func secretValue(text string, start int) (int, string) {
+	rest := text[start:]
+	slashes := len(rest) - len(strings.TrimLeft(rest, `\`))
+	switch {
+	case slashes < len(rest) && rest[slashes] == '"':
+		quote := rest[:slashes+1]
+		depth := escapeDepth(slashes)
+		for index := slashes + 1; index < len(rest); index++ {
+			switch rest[index] {
+			case '\n':
+				return start + index, quote + redactedMarker
+			case '"':
+				run := 0
+				for run < index-slashes-1 && rest[index-1-run] == '\\' {
+					run++
+				}
+				// A quote escaped deeper belongs to the value; one at this
+				// depth (or shallower, in malformed text) closes it.
+				if escapeDepth(run) <= depth {
+					return start + index + 1, quote + redactedMarker + quote
+				}
+			}
+		}
+		return len(text), quote + redactedMarker
+	case slashes == 0 && rest != "" && rest[0] == '\'':
+		if end := strings.IndexAny(rest[1:], "'\n"); end >= 0 {
+			if rest[1+end] == '\'' {
+				return start + end + 2, "'" + redactedMarker + "'"
+			}
+			return start + 1 + end, "'" + redactedMarker
+		}
+		return len(text), "'" + redactedMarker
+	}
+	end := bareWordEnd(rest)
+	if credentialSchemes[strings.ToLower(rest[:end])] {
+		blanks := len(rest[end:]) - len(strings.TrimLeft(rest[end:], " \t"))
+		if blanks > 0 {
+			if word := bareWordEnd(rest[end+blanks:]); word > 0 {
+				end += blanks + word
+			}
+		}
+	}
+	return start + end, redactedMarker
+}
+
+// bareWordEnd is the length of the bare value text starts with: up to a
+// blank, a separator, a quote, or a backslash that escapes a quote (the end
+// of a value inside an escaped JSON string).
+func bareWordEnd(text string) int {
+	for index := 0; index < len(text); index++ {
+		switch text[index] {
+		case ' ', '\t', '\n', '\r', ',', ';', '&', '"', '\'':
+			return index
+		case '\\':
+			if rest := strings.TrimLeft(text[index:], `\`); rest == "" || rest[0] == '"' || rest[0] == '\'' {
+				return index
+			}
+		}
+	}
+	return len(text)
+}
+
+// escapeDepth is how deep in JSON strings a quote preceded by run backslashes
+// is: a quote at depth d is preceded by 2^d - 1 backslashes, plus any number
+// of escaped literal backslashes (2^(d+1) each), so the depth is the count of
+// trailing one bits of run.
+func escapeDepth(run int) int {
+	return bits.TrailingZeros(^uint(run))
 }
 
 // workerTokenPattern matches an AO worker token (see TokenManager.Issue).
@@ -286,7 +402,7 @@ func newScriptRedactor(environment []string, extra []string) scriptRedactor {
 
 func (r scriptRedactor) redact(text string) string {
 	for _, value := range r.values {
-		text = strings.ReplaceAll(text, value, "[REDACTED]")
+		text = strings.ReplaceAll(text, value, redactedMarker)
 	}
 	// Pairs first: activity.Redact masks a quoted value up to its first
 	// quote, which would cut an escaped JSON string (a SecretString) short.
@@ -312,8 +428,10 @@ func (r scriptRedactor) scriptStepOutput(raw string, headDropped bool) (string, 
 		}
 	}
 	text := collapseCarriageReturns(raw)
-	// Excerpt with no limit strips escapes and control characters and redacts.
-	text = r.redact(activity.Excerpt(text, 0))
+	// Only stripped here: redact masks secret pairs before activity.Redact's
+	// patterns, which mask a quoted value only up to an escaped quote and
+	// would hide the rest of it (a SecretString's password) from the pairs.
+	text = r.redact(activity.StripControl(text))
 	if raw != "" && !strings.HasSuffix(raw, "\n") {
 		text = r.maskTrailingFragment(text)
 	}

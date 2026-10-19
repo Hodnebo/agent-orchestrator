@@ -292,7 +292,10 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	default:
 		event.finish(SetupFailed, run.ExitCode, run.Duration)
 	}
-	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, false)
+	// The hook prints only the tail of a long output (CleanupHookOutputLimit):
+	// one that long may start part way through a line, which is dropped, as a
+	// secret cut in half there is not recognized.
+	event.Output, event.OutputTruncated = redactor.scriptStepOutput(output, len(output) >= CleanupHookOutputLimit)
 	if match := cleanupLogPattern.FindStringSubmatch(event.Output); match != nil {
 		event.LogPath = strings.TrimSpace(match[1])
 	}

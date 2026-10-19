@@ -399,19 +399,33 @@ func mergeEnvironment(base []string, overrides map[string]string) []string {
 
 // tailBuffer keeps the last limit bytes written to it.
 type tailBuffer struct {
-	limit int
-	data  bytes.Buffer
+	limit   int
+	data    bytes.Buffer
+	dropped bool
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
 	b.data.Write(p)
 	if over := b.data.Len() - b.limit; over > 0 {
 		b.data.Next(over)
+		b.dropped = true
 	}
 	return len(p), nil
 }
 
-func (b *tailBuffer) String() string { return b.data.String() }
+// String is the kept output. Once its beginning was dropped, the partial line
+// it then starts with is dropped too: a secret cut in half there is not
+// recognized by any redaction pattern.
+func (b *tailBuffer) String() string {
+	text := b.data.String()
+	if b.dropped {
+		if index := strings.IndexByte(text, '\n'); index >= 0 {
+			return text[index+1:]
+		}
+		return ""
+	}
+	return text
+}
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
 // command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
