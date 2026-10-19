@@ -85,9 +85,9 @@ describe("BillingSection", () => {
 		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
 		expect(within(card("starter")).getByText("$20")).toBeInTheDocument();
 		expect(within(card("starter")).getByText("/ month")).toBeInTheDocument();
-		expect(within(card("starter")).getByText("1 simultaneous cloud agent")).toBeInTheDocument();
-		expect(within(card("pro")).getByText("3 simultaneous cloud agents")).toBeInTheDocument();
-		expect(within(card("pro")).getByText("16 sessions in total")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("pro")).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(card("pro")).queryByText("16 sessions in total")).not.toBeInTheDocument();
 		// Session-hour windows and resets stay on the Usage section, not the plan cards.
 		expect(within(card("pro")).queryByText("16 session hours every 6 h")).not.toBeInTheDocument();
 		expect(within(card("starter")).queryByText("1 usage reset a month")).not.toBeInTheDocument();
@@ -112,11 +112,11 @@ describe("BillingSection", () => {
 		expect(within(card("starter")).getByText("Unlimited devices, including mobile (bring your own)")).toBeInTheDocument();
 		// Plan limits only cap cloud agents, so they sit under their own label.
 		const starterCloud = within(card("starter")).getByRole("list", { name: "Cloud agents" });
-		// Orchestrators hold their own slots, so agents get what is left of the running pool.
 		expect(within(starterCloud).getByText("1 cloud project")).toBeInTheDocument();
-		expect(within(starterCloud).getByText("1 simultaneous cloud agent")).toBeInTheDocument();
+		expect(within(starterCloud).getByText("2 simultaneous cloud agents")).toBeInTheDocument();
+		expect(within(starterCloud).queryByText("8 sessions in total")).not.toBeInTheDocument();
 		expect(within(starterCloud).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
-		expect(within(within(card("pro")).getByRole("list", { name: "Cloud agents" })).getByText("16 sessions in total")).toBeInTheDocument();
+		expect(within(within(card("pro")).getByRole("list", { name: "Cloud agents" })).getByText("4 simultaneous cloud agents")).toBeInTheDocument();
 		expect(within(within(card("enterprise")).getByRole("list", { name: "Cloud agents" })).getByText("10+ cloud projects")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("Everything in Starter")).toBeInTheDocument();
 		expect(within(card("pro")).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();

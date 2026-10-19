@@ -570,9 +570,8 @@ function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { 
 		: [];
 	const cloudLimits = [
 		t("settings.billing.featureProjects", { count: limits.orchestratorSlots }),
-		// Orchestrators hold their own running slots; this is what is left for agents.
-		t("settings.billing.featureAgents", { count: runningSlots(limits) - limits.orchestratorSlots }),
-		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
+		// Agents run in the plan's running slots; each cloud project's orchestrator is on top.
+		t("settings.billing.featureAgents", { count: runningSlots(limits) }),
 	];
 	return {
 		intro: starter ? t("settings.billing.everythingInFree") : pro ? t("settings.billing.everythingInStarter") : undefined,

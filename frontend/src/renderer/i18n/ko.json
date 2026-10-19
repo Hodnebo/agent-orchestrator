@@ -3114,8 +3114,6 @@
 	"settings.billing.downgrade": "다운그레이드",
 	"settings.billing.featureAgents_one": "동시 클라우드 에이전트 {{count}}개",
 	"settings.billing.featureAgents_other": "동시 클라우드 에이전트 {{count}}개",
-	"settings.billing.featureTotal_one": "전체 세션 {{count}}개",
-	"settings.billing.featureTotal_other": "전체 세션 {{count}}개",
 	"settings.billing.freeAgents": "Claude Code, Codex, Cursor",
 	"settings.billing.freeOrchestrator": "오케스트레이터, 워커, PR 리뷰",
 	"settings.billing.freeDevices": "동시 로그인 기기 2대",

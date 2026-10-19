@@ -3114,8 +3114,6 @@
 	"settings.billing.downgrade": "Downgrade",
 	"settings.billing.featureAgents_one": "{{count}} gleichzeitiger Cloud-Agent",
 	"settings.billing.featureAgents_other": "{{count}} gleichzeitige Cloud-Agenten",
-	"settings.billing.featureTotal_one": "{{count}} Sitzung insgesamt",
-	"settings.billing.featureTotal_other": "{{count}} Sitzungen insgesamt",
 	"settings.billing.freeAgents": "Claude Code, Codex und Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrator, Worker und PR-Reviews",
 	"settings.billing.freeDevices": "2 Geräte gleichzeitig angemeldet",
