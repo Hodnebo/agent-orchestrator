@@ -84,7 +84,7 @@ func validateTurnSettings(_ ports.PermissionMode, s ports.ChatTurnSettings) erro
 	switch s.Effort {
 	case "", "default", "minimal", "low", "medium", "high":
 	default:
-		return fmt.Errorf("Open Interpreter ACP: unsupported reasoning effort %q", s.Effort)
+		return fmt.Errorf("open interpreter ACP: unsupported reasoning effort %q", s.Effort)
 	}
 	return nil
 }
