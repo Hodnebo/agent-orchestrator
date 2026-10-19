@@ -42,6 +42,10 @@ export function useStayAwake(enabled = true) {
 	// safety stop has released the host assertion. Actual wake is separate.
 	const active = !!awake.state?.active || !!mobile.data?.keepAwake?.active;
 	const on = intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled || active);
+	// Status also includes recovery/lid errors unrelated to an inactive request.
+	const pauseReason = awake.state?.paused ? awake.state.reason : undefined;
+	const reason = pauseReason === "low_battery" || pauseReason === "critical_heat" || pauseReason === "battery_unknown"
+		? pauseReason : undefined;
 	const mutation = useMutation({
 		mutationKey,
 		mutationFn: async (change: Change) => {
@@ -97,7 +101,7 @@ export function useStayAwake(enabled = true) {
 		on,
 		active,
 		attention: on && !active && !busy,
-		reason: desktopOn ? awake.state?.reason : undefined,
+		reason: desktopOn ? reason : undefined,
 		lidOn: intent ? intent.on && (intent.lidClosed ?? false) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed),
 		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
 		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),

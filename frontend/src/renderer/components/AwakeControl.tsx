@@ -21,9 +21,13 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	const stay = useStayAwake(true);
 	const title = t("awake.title", "Stay Awake");
 	const descriptionId = useId();
-	const reason = stay.reason
-		? t(`mobile.keepAwake.lidReason.${stay.reason}`, stay.reason.replaceAll("_", " "))
-		: "";
+	const reason = stay.reason === "low_battery"
+		? t("awake.stopReason.low_battery", "Stopped because the battery reached the configured safety limit. Charge your Mac, then turn Stay Awake off and on to restart.")
+		: stay.reason === "critical_heat"
+			? t("awake.stopReason.critical_heat", "Stopped because the Mac needs to cool down. After it cools, turn Stay Awake off and on to restart.")
+			: stay.reason === "battery_unknown"
+				? t("awake.stopReason.battery_unknown", "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.")
+				: "";
 	const description = stay.error ?? (stay.starting
 		? t("awake.startingTooltip", "Starting Stay Awake…")
 		: stay.active

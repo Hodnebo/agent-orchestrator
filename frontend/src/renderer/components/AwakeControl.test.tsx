@@ -185,8 +185,14 @@ describe("shared Stay Awake controls", () => {
 		expect(coffee()).not.toHaveAttribute("aria-busy");
 	});
 
-	it.each(["low_battery", "critical_heat"])("explains an inactive safety-stopped request (%s) and keeps it clearable", async (reason) => {
+	it.each([
+		{ reason: "low_battery", stopBatteryPercent: 10, explanation: /battery reached the configured safety limit/ },
+		{ reason: "low_battery", stopBatteryPercent: 45, explanation: /battery reached the configured safety limit/ },
+		{ reason: "critical_heat", stopBatteryPercent: 10, explanation: /Mac needs to cool down/ },
+		{ reason: "battery_unknown", stopBatteryPercent: 10, explanation: /battery state could not be read/ },
+	])("explains a confirmed $reason safety stop (battery limit $stopBatteryPercent%) and keeps it clearable", async ({ reason, stopBatteryPercent, explanation }) => {
 		state.sessions = [awakeSession({})];
+		state.settings.stopBatteryPercent = stopBatteryPercent;
 		state.active = true;
 		await show();
 		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
@@ -198,12 +204,39 @@ describe("shared Stay Awake controls", () => {
 		await waitFor(() => expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument());
 		expect(coffee().querySelector("[data-nav-row-highlight]")).not.toHaveClass("bg-interactive-active");
 		expect(coffee()).toHaveAccessibleDescription(/inactive/);
+		expect(coffee()).toHaveAccessibleDescription(explanation);
 		await userEvent.hover(coffee());
 		expect(await screen.findByRole("tooltip")).toHaveTextContent(/inactive/);
-		expect(screen.getByRole("tooltip")).toHaveTextContent(reason === "low_battery" ? /battery/i : /cool/i);
+		expect(screen.getByRole("tooltip")).toHaveTextContent(explanation);
+		expect(screen.getByRole("tooltip")).not.toHaveTextContent(/\d+%/);
 		fireEvent.click(coffee());
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/stop");
+	});
+	it.each(["helper_missing", "unsupported", "isolated_data_dir", "observation_unavailable", "persistence_failed"])("keeps an unmatched armed rule's inactive description generic despite %s", async (reason) => {
+		state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
+		state.reason = reason;
+		await show();
+		const description = "Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.";
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(coffee()).toHaveAccessibleDescription(description);
+		await userEvent.hover(coffee());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(description);
+	});
+	it.each([
+		{ paused: false, reason: "low_battery" },
+		{ paused: false, reason: "critical_heat" },
+		{ paused: false, reason: "battery_unknown" },
+		{ paused: true, reason: "observation_unavailable" },
+		{ paused: true, reason: "persistence_failed" },
+		{ paused: true, reason: "unknown_future_reason" },
+	])("does not describe an unconfirmed safety stop ($reason, paused=$paused)", async ({ paused, reason }) => {
+		state.sessions = [awakeSession({})];
+		state.paused = paused;
+		state.reason = reason;
+		await show();
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(coffee()).toHaveAccessibleDescription("Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.");
 	});
 	it.each(["mobile", "rule"])("marks configured but inactive %s wake without an active fill", async (source) => {
 		if (source === "mobile") mobile.keepAwake.enabled = true;
