@@ -500,7 +500,8 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 function PlanFeature({ text, excluded }: { text: string; excluded?: boolean }) {
 	const Icon = excluded ? Minus : Check;
 	return (
-		<li className={cn("flex items-start gap-2 text-control leading-5", excluded ? "text-settings-muted" : "text-settings-label")}>
+		// Not cn(): tailwind-merge reads text-control and the color as one group and drops the size.
+		<li className={`flex items-start gap-2 text-control leading-5 ${excluded ? "text-settings-muted" : "text-settings-label"}`}>
 			<span className="flex h-5 shrink-0 items-center">
 				<Icon className="size-icon-sm text-settings-muted" aria-hidden="true" />
 			</span>
