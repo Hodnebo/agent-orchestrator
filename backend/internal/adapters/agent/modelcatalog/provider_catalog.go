@@ -67,6 +67,12 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		}
 		if agentID == "pi" {
 			result.Models = append(result.Models, piInstalledModels(ctx, binary, workingDir, env)...)
+		} else {
+			// Kimchi's chat has no thinking control, so a level picked for it
+			// would not reach it.
+			for i := range result.Models {
+				result.Models[i].Efforts = nil
+			}
 		}
 	case "prime-agent":
 		// Prime Agent keeps no provider cache; its installed pi-ai fork lists
