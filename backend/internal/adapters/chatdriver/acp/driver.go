@@ -262,6 +262,15 @@ func (d *Driver) CheckChatInstall(ctx context.Context) error {
 	return d.cfg.InstallCheck(ctx)
 }
 
+// SupportsPermissionMode reports whether the agent can start under mode.
+func (d *Driver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	if d.cfg.ValidateTurnSettings == nil {
+		return true
+	}
+	err := d.cfg.ValidateTurnSettings(mode, ports.ChatTurnSettings{Approval: mode})
+	return !errors.Is(err, ports.ErrChatPermissionModeUnsupported)
+}
+
 // Start creates a new ACP session in the AO worktree.
 func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	totalStarted := time.Now()

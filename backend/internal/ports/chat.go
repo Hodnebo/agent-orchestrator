@@ -1151,6 +1151,12 @@ type ChatInstallChecker interface {
 	CheckChatInstall(ctx context.Context) error
 }
 
+// ChatPermissionModeChecker is implemented by chat drivers whose agent refuses
+// some AO permission modes, so a caller can pick one it accepts before starting.
+type ChatPermissionModeChecker interface {
+	SupportsPermissionMode(mode PermissionMode) bool
+}
+
 // ChatDriver opens conversations for one harness.
 type ChatDriver interface {
 	// Harness is the agent this driver serves.

@@ -583,6 +583,8 @@ type editDriverState struct {
 	beforeResume func(ports.ChatResumeConfig) error
 	fresh        *fakeConversation
 	resumed      map[string]*fakeConversation
+	// refusedMode is a permission mode the agent will not run in.
+	refusedMode ports.PermissionMode
 }
 
 func newEditHarness(t *testing.T, supportsPromptReplay bool) (*harness, *historyRecorder, *editDriverState) {
@@ -662,6 +664,11 @@ func newEditHarnessWithOptions(
 		initial = source.fakeConversation
 	}
 	driver := fakeDriver{conv: initial}
+	driver.supports = func(mode ports.PermissionMode) bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.refusedMode == "" || mode != state.refusedMode
+	}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 		state.mu.Lock()
 		defer state.mu.Unlock()

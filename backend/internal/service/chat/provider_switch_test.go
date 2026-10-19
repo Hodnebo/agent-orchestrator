@@ -217,6 +217,30 @@ func TestProviderSwitchStartsTheTargetUnderTheChatsPermissionMode(t *testing.T) 
 	}
 }
 
+func TestProviderSwitchStartsATargetThatRefusesTheChatsModeInDefault(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
+		ApprovalMode: domain.PermissionModeBypassPermissions,
+	}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+	// Like Kimi, the target runs only in its default mode.
+	driver.mu.Lock()
+	driver.refusedMode = ports.PermissionModeBypassPermissions
+	driver.mu.Unlock()
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessKimi}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	driver.mu.Lock()
+	target := driver.startConfigs[len(driver.startConfigs)-1]
+	driver.mu.Unlock()
+	if target.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("target permissions = %q, want default for an agent that refuses bypass", target.Permissions)
+	}
+}
+
 func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	h, _, _ := newEditHarness(t, false)
 	ctx := context.Background()

@@ -393,6 +393,12 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// supports, when set, is the agent's answer to which permission modes it runs in.
+	supports func(ports.PermissionMode) bool
+}
+
+func (d fakeDriver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	return d.supports == nil || d.supports(mode)
 }
 
 type sequenceDriver struct {

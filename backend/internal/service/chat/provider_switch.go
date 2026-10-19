@@ -89,7 +89,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	}
 	// The target runs under the chat's own permission mode, so an agent that only
 	// runs with permissions bypassed (Pi) can take over a chat that has them.
-	permissions := s.switchPermissions(source)
+	permissions := s.switchPermissions(source, request.TargetHarness)
 	if err := s.PreflightChat(ctx, request.TargetHarness, permissions); err != nil {
 		kind := domain.ProviderSwitchRefusalUnavailable
 		if errors.Is(err, ports.ErrChatUnsupported) {
@@ -250,8 +250,20 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 }
 
 // switchPermissions is the permission mode a switch target starts with: the
-// chat's current one, else the one its agent was launched with, else Auto.
-func (s *Service) switchPermissions(source *Controller) ports.PermissionMode {
+// chat's current one, else the one its agent was launched with, else Auto. A
+// target that refuses that mode (Kimi runs only in its default) gets Default,
+// which asks before acting.
+func (s *Service) switchPermissions(source *Controller, target domain.AgentHarness) ports.PermissionMode {
+	mode := s.sourcePermissions(source)
+	if driver, err := s.drivers.Driver(target); err == nil {
+		if checker, ok := driver.(ports.ChatPermissionModeChecker); ok && !checker.SupportsPermissionMode(mode) {
+			return ports.PermissionModeDefault
+		}
+	}
+	return mode
+}
+
+func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
 	if mode := source.Settings().ApprovalMode; mode != "" {
 		return ports.NormalizePermissionMode(mode)
 	}
