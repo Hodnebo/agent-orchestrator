@@ -533,7 +533,7 @@ export function WorkspaceReviewPane({
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
 	const loading = patchQueries.some((query) => query.isPending);
 	const viewedCount = allFiles.filter((file) => viewed.has(file.path)).length;
-	const fileOpenContext = selectedCommit ? { commitSha: selectedCommit.sha, scope } : { scope };
+	const fileOpenContext = useMemo(() => selectedCommit ? { commitSha: selectedCommit.sha, scope } : { scope }, [selectedCommit, scope]);
 	const workingSourceLabel = (entry: WorkspaceDiffScope) => entry === "combined" ? t("files.reviewChanges") : t(`files.section.${entry}`);
 	const hasAnyReviewFiles = data.files.some((file) => file.status !== "unmodified")
 		|| workingScopeOrder.some((entry) => data.sections[entry].length > 0)
@@ -592,6 +592,50 @@ export function WorkspaceReviewPane({
 		</>
 	);
 
+	const fallbackFiles = useMemo(() => files.filter((file) => file.binary || !metadataByPath.has(file.path)), [files, metadataByPath]);
+	// Keep non-text rows in Pierre's measured scroll content, including reviews
+	// with no text items. Its ResizeObserver tracks late image loads and collapse.
+	const renderFallbackFiles = useCallback(() => (
+		<>
+			{fallbackFiles.map((file) => {
+				const collapsed = collapsedPaths.has(file.path);
+				const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
+				const serverDeferredReason = serverDeferredByPath.get(file.path);
+				const pending = pendingDiffPaths.has(file.path);
+				const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
+				const image = file.binary && isWorkspaceImagePath(file.path);
+				return (
+					<div className="m-2 overflow-hidden rounded-md border border-border bg-surface" key={file.path}>
+						<div className="flex min-w-0 items-center gap-2 p-3">
+							<button
+								aria-expanded={!collapsed}
+								aria-label={t(collapsed ? "files.expandFile" : "files.collapseFile", { file: file.path })}
+								className="flex min-w-0 flex-1 items-center gap-2 text-left text-xs focus-visible:underline"
+								onClick={() => toggleCollapsed(file.path)}
+								type="button"
+							>
+								<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", !collapsed && "rotate-90")} />
+								<span className="truncate" title={file.path}>{file.path}</span>
+							</button>
+							{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
+						</div>
+						{!collapsed ? (
+							<div className="min-w-0 p-3 pt-0">
+								{image ? (
+									<ImageDiffView path={file.path} sessionId={sessionId} hostId={hostId} split={split} status={file.status} version={data.workspaceVersion ?? ""} />
+								) : (
+									<p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p>
+								)}
+								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
+								{unavailable ? <RetryButton onClick={() => patchQueries.forEach((query) => void query.refetch())} /> : null}
+							</div>
+						) : null}
+					</div>
+				);
+			})}
+		</>
+	), [collapsedPaths, data.workspaceVersion, fallbackFiles, fileOpenContext, hostId, loadedDeferredPaths, onOpenFile, patchQueries, pendingDiffPaths, serverDeferredByPath, sessionId, split, t, toggleCollapsed]);
+
 	return (
 		<div
 			className="@container/review flex h-full min-h-0 flex-col"
@@ -642,11 +686,12 @@ export function WorkspaceReviewPane({
 			{loading && items.length === 0 ? <PanelMessage compact>{t("files.loadingDiff")}</PanelMessage> : null}
 			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? t(hasAnyReviewFiles ? "files.noneInSource" : "files.noneChanged") : t("files.noFilterMatches")}</PanelMessage> : null}
 			<div className="min-h-0 flex-1 overflow-hidden">
-				{items.length > 0 ? (
+				{items.length > 0 || fallbackFiles.length > 0 ? (
 					<CodeView<"feedback">
 						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-contain"
 						disableWorkerPool={typeof Worker === "undefined"}
 						items={items}
+						renderCodeViewFooter={renderFallbackFiles}
 						options={{
 							collapsedContextThreshold: 8,
 							diffIndicators: "classic",
@@ -829,38 +874,6 @@ export function WorkspaceReviewPane({
 					/>
 				) : null}
 				<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
-				{files.filter((file) => file.binary || !metadataByPath.has(file.path)).map((file) => {
-					const deferred = isDeferredByDefault(file) && !loadedDeferredPaths.has(file.path);
-					const serverDeferredReason = serverDeferredByPath.get(file.path);
-					const pending = pendingDiffPaths.has(file.path);
-					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
-					const image = file.binary && isWorkspaceImagePath(file.path);
-					return (
-					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
-						{image ? (
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-xs">{file.path}</p>
-								<ImageDiffView
-									path={file.path}
-									sessionId={sessionId}
-									hostId={hostId}
-									split={split}
-									status={file.status}
-									version={data.workspaceVersion ?? ""}
-								/>
-							</div>
-						) : (
-							<>
-								<FileCode2 aria-hidden="true" className="text-passive" />
-								<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
-							</>
-						)}
-						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
-						{unavailable ? <RetryButton onClick={retryAll} /> : null}
-						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
-					</div>
-					);
-				})}
 			</div>
 				</>
 			)}

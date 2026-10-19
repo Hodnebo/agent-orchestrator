@@ -47,11 +47,12 @@ vi.mock("@pierre/diffs", () => ({
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
-	CodeView: ({ className, items, options, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+	CodeView: ({ className, items, options, renderAnnotation, renderCustomHeader, renderGutterUtility, renderCodeViewFooter }: {
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
 		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
+		renderCodeViewFooter?: () => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
 	}) => (
@@ -63,6 +64,7 @@ vi.mock("@pierre/diffs/react", () => ({
 					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item)}</div>)}
 				</div>
 			))}
+			{renderCodeViewFooter?.()}
 			{items[0] ? renderGutterUtility?.(() => ({ lineNumber: 7, side: "additions" }), items[0]) : null}
 		</div>
 	),
@@ -159,6 +161,30 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.queryByText("Binary file preview is not available.")).not.toBeInTheDocument();
 	});
 
+	it.each([false, true])("collapses image bodies individually and together with text files (mixed: %s)", async (mixed) => {
+		const images: WorkspaceFilesResponse["files"] = ["one.png", "two.png"].map((path) => ({ path, status: "added", additions: 0, deletions: 0, size: 128, binary: true }));
+		const data = workspace(mixed ? [{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 0, size: 20, binary: false }, ...images] : images);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
+
+		const firstImage = await screen.findByAltText("After version of one.png");
+		// Image-only reviews must mount CodeView too, so its footer owns scrolling.
+		expect(screen.getByTestId("code-view")).toContainElement(firstImage);
+		await userEvent.click(screen.getByRole("button", { name: "Collapse one.png" }));
+		expect(screen.queryByAltText("After version of one.png")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Expand one.png" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByAltText("After version of two.png")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Expand one.png" }));
+		expect(screen.getByAltText("After version of one.png")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		expect(screen.queryAllByRole("img")).toHaveLength(0);
+		for (const { path } of images) expect(screen.getByRole("button", { name: `Expand ${path}` })).toBeInTheDocument();
+		if (mixed) expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		expect(screen.getAllByRole("img")).toHaveLength(2);
+		if (mixed) expect(screen.getByTestId("code-view").querySelector("[data-collapsed]")).toHaveAttribute("data-collapsed", "false");
+	});
+
 	it("does not reuse parsed metadata when an equal-length patch changes", async () => {
 		const firstPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+one\n";
 		const secondPatch = "diff --git a/src/App.tsx b/src/App.tsx\n-old\n+two\n";
@@ -225,7 +251,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByTestId("code-view")).toHaveClass("overflow-y-auto");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-overflow", "wrap");
 		expect(screen.getByTestId("code-view")).toHaveAttribute("data-surface-css", expect.stringContaining("--diffs-bg: var(--color-bg-primary)"));
-		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByText("1 of 1 viewed")).toBeInTheDocument();
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		expect(screen.getByRole("checkbox", { name: "Mark src/App.tsx as not viewed" })).toHaveClass("size-4");
@@ -366,7 +392,7 @@ describe("WorkspaceReviewPane", () => {
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 
 		release();
 		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "false"));
@@ -386,7 +412,7 @@ describe("WorkspaceReviewPane", () => {
 
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 		expect(screen.queryByText("Loading diff...")).not.toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 	});
 
 	it("keeps the patch-only diff (and its load-more row) when the file may continue", async () => {
@@ -394,7 +420,7 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
-		expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true");
+		await waitFor(() => expect(screen.getByTestId("code-view").querySelector("[data-partial]")).toHaveAttribute("data-partial", "true"));
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -403,7 +429,7 @@ describe("WorkspaceReviewPane", () => {
 		const first = renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
-		await userEvent.click(screen.getByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
+		await userEvent.click(await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		first.unmount();
 
@@ -417,6 +443,7 @@ describe("WorkspaceReviewPane", () => {
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
+		await screen.findByRole("checkbox", { name: "Mark src/App.tsx as viewed" });
 		await userEvent.click(screen.getByRole("button", { name: "Collapse src/App.tsx" }));
 		expect(screen.getByTestId("code-view").querySelector("[data-collapsed]"))?.toHaveAttribute("data-collapsed", "true");
 		await userEvent.click(screen.getByRole("button", { name: "Expand src/App.tsx" }));
@@ -512,7 +539,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
 
 		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Open full file" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Open full file" })).toBeInTheDocument();
 	});
 
 	it("opens a changed diff directly in syntax-aware edit mode", async () => {
@@ -781,6 +808,7 @@ describe("WorkspaceReviewPane", () => {
 		const data = committedWorkspace([{ path: "package-lock.json", status: "modified", additions: 800, deletions: 700, size: 600_000, binary: false, fileFingerprint: "lock-1" }]);
 		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} data={data} filter="" onBrowseAll={vi.fn()} sessionId="sess-1" split={false} />);
 
+		await userEvent.click(screen.getByRole("button", { name: "Expand package-lock.json" }));
 		expect(screen.getByText(/diff is deferred/i)).toBeInTheDocument();
 		expect(postMock).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "Load diff" }));
