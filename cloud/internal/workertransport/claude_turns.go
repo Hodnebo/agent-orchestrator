@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 )
 
 // Claude Code records an Esc interrupt as a user message holding only one of
@@ -16,18 +18,45 @@ var claudeInterruptMarkers = []string{
 	"[Request interrupted by user for tool use]",
 }
 
-// newClaudeTranscriptTail follows the newest conversation transcript the
-// terminal's Claude Code writes under a CLAUDE_CONFIG_DIR:
-// projects/<project>/<session id>.jsonl. Subagent transcripts live a level
-// deeper (or, in older releases, as agent-*.jsonl beside the conversation) and
-// are never the terminal's own turn. Reviewers run with their own config
-// directory, and Chat never runs beside the terminal agent. Call it before the
-// agent starts.
-func newClaudeTranscriptTail(configDir string, started time.Time) *transcriptTail {
+// newClaudeTranscriptTail follows the terminal's Claude Code conversation
+// transcript under a CLAUDE_CONFIG_DIR: projects/<project>/<session id>.jsonl.
+// With the conversation's id known (the terminal launches Claude with
+// --session-id or --resume), only that transcript is the terminal's: a
+// headless claude the agent runs from a tool shares the config directory, and
+// its transcript is often the newest. Without it, the newest conversation
+// transcript is. Subagent transcripts live a level deeper (or, in older
+// releases, as agent-*.jsonl beside the conversation) and are never the
+// terminal's own turn. Reviewers run with their own config directory, and
+// Chat never runs beside the terminal agent. Call it before the agent starts.
+func newClaudeTranscriptTail(configDir, conversationID string, started time.Time) *transcriptTail {
+	conversationID = strings.TrimSpace(conversationID)
 	owns := func(_, name string) (bool, bool) {
+		if conversationID != "" {
+			return strings.TrimSuffix(name, ".jsonl") == conversationID, true
+		}
 		return !strings.HasPrefix(name, "agent-"), true
 	}
 	return newTranscriptTail(filepath.Join(configDir, "projects"), 2, started, owns, claudeTurnRecord)
+}
+
+// claudeTerminalConversationID is the conversation a terminal Claude Code
+// command resumes, or the id it starts a new one with.
+func claudeTerminalConversationID(command workerexec.Command) string {
+	if id := strings.TrimSpace(command.ConversationID); id != "" {
+		return id
+	}
+	for i, arg := range command.Args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--session-id" && i+1 < len(command.Args) {
+			return strings.TrimSpace(command.Args[i+1])
+		}
+		if id, ok := strings.CutPrefix(arg, "--session-id="); ok {
+			return strings.TrimSpace(id)
+		}
+	}
+	return ""
 }
 
 // claudeTurnRecord classifies a transcript record. An interrupt marker on the

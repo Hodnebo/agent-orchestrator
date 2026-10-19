@@ -752,7 +752,10 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 			}
 		case "claude-code":
 			if configDir := environmentValue(command.Env, "CLAUDE_CONFIG_DIR"); configDir != "" {
-				turnEnds = newClaudeTranscriptTail(configDir, time.Now())
+				s.mu.Lock()
+				conversationID := claudeTerminalConversationID(s.AgentCommand)
+				s.mu.Unlock()
+				turnEnds = newClaudeTranscriptTail(configDir, conversationID, time.Now())
 			}
 		}
 	}

@@ -89,7 +89,7 @@ func TestClaudeTranscriptTailReportsOnlyNewInterrupts(t *testing.T) {
 	configDir := t.TempDir()
 	// An interrupt from before the terminal started is history.
 	path := writeClaudeTranscript(t, configDir, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", claudePrompt+claudeAssistant+claudeInterrupted)
-	tail := newClaudeTranscriptTail(configDir, time.Now().Add(-time.Second))
+	tail := newClaudeTranscriptTail(configDir, "511e68be-f634-4b26-b7c7-7f4d258144c6", time.Now().Add(-time.Second))
 	// The terminal resumed that conversation and started a new turn.
 	appendRollout(t, path, claudePrompt)
 	if ends := tail.poll(); len(ends) != 0 {
@@ -111,7 +111,7 @@ func TestClaudeTranscriptTailReportsOnlyNewInterrupts(t *testing.T) {
 // the terminal's own turn.
 func TestClaudeTranscriptTailIgnoresSubagentTranscripts(t *testing.T) {
 	configDir := t.TempDir()
-	tail := newClaudeTranscriptTail(configDir, time.Now().Add(-time.Second))
+	tail := newClaudeTranscriptTail(configDir, "", time.Now().Add(-time.Second))
 	main := writeClaudeTranscript(t, configDir, "s1.jsonl", claudePrompt)
 	if ends := tail.poll(); len(ends) != 0 {
 		t.Fatalf("ends = %v", ends)
@@ -127,6 +127,48 @@ func TestClaudeTranscriptTailIgnoresSubagentTranscripts(t *testing.T) {
 	tail.scans = 0
 	if ends := tail.poll(); len(ends) != 1 {
 		t.Fatalf("ends = %v, want the conversation's interrupt", ends)
+	}
+}
+
+// A headless claude the agent runs from a tool writes its own transcript to
+// the same config directory, often the newest one. With the terminal's
+// conversation id known, only its transcript is followed.
+func TestClaudeTranscriptTailFollowsTheTerminalConversation(t *testing.T) {
+	configDir := t.TempDir()
+	const id = "511e68be-f634-4b26-b7c7-7f4d258144c6"
+	tail := newClaudeTranscriptTail(configDir, id, time.Now().Add(-time.Second))
+	main := writeClaudeTranscript(t, configDir, id+".jsonl", claudePrompt)
+	if ends := tail.poll(); len(ends) != 0 {
+		t.Fatalf("ends = %v", ends)
+	}
+	time.Sleep(20 * time.Millisecond)
+	writeClaudeTranscript(t, configDir, "0f1e2d3c-4b5a-4968-8776-655443322110.jsonl", claudePrompt+claudeInterrupted)
+	tail.scans = 0
+	if ends := tail.poll(); len(ends) != 0 {
+		t.Fatalf("another conversation's interrupt was reported: %v", ends)
+	}
+	appendRollout(t, main, claudeInterrupted)
+	tail.scans = 0
+	if ends := tail.poll(); len(ends) != 1 || !ends[0].interrupted {
+		t.Fatalf("ends = %v, want the terminal conversation's interrupt", ends)
+	}
+}
+
+func TestClaudeTerminalConversationID(t *testing.T) {
+	for name, tc := range map[string]struct {
+		command workerexec.Command
+		want    string
+	}{
+		"resumed":          {workerexec.Command{ConversationID: "c1", Args: []string{"--resume", "c1"}}, "c1"},
+		"new":              {workerexec.Command{Args: []string{"--session-id", "n1", "--model", "opus"}}, "n1"},
+		"new, joined flag": {workerexec.Command{Args: []string{"--session-id=n2"}}, "n2"},
+		// The prompt after -- is not a flag.
+		"flag text in the prompt": {workerexec.Command{Args: []string{"--model", "opus", "--", "--session-id", "x"}}, ""},
+		"unknown":                 {workerexec.Command{Args: []string{"-c", "cat"}}, ""},
+	} {
+		if got := claudeTerminalConversationID(tc.command); got != tc.want {
+			t.Errorf("%s: claudeTerminalConversationID = %q, want %q", name, got, tc.want)
+		}
 	}
 }
 
