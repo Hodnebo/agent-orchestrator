@@ -185,3 +185,23 @@ func TestCodexStopFailureIsTerminalOnly(t *testing.T) {
 		t.Fatal("Codex stop-failure with an active state was accepted")
 	}
 }
+
+// Claude Code fires no hook for an Esc interrupt; only the worker reports it,
+// for the terminal agent.
+func TestClaudeInterruptIsTerminalOnly(t *testing.T) {
+	event := ActivityEvent{Harness: "claude-code", Event: "interrupt", State: contract.ActivityIdle, SourceInterface: "tui"}
+	if !ValidActivityEvent(event) {
+		t.Fatalf("terminal Claude interrupt rejected: %+v", event)
+	}
+	event.SourceInterface = ""
+	if ValidActivityEvent(event) {
+		t.Fatal("Claude interrupt without the terminal source was accepted")
+	}
+	event = ActivityEvent{Harness: "claude-code", Event: "interrupt", State: contract.ActivityActive, SourceInterface: "tui"}
+	if ValidActivityEvent(event) {
+		t.Fatal("Claude interrupt with an active state was accepted")
+	}
+	if _, ok := ActivityEventFromHook("claude-code", "interrupt", []byte(`{}`)); ok {
+		t.Fatal("a Claude hook named interrupt produced activity")
+	}
+}

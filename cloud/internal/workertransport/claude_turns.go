@@ -1,0 +1,84 @@
+package workertransport
+
+import (
+	"bytes"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// Claude Code records an Esc interrupt as a user message holding only one of
+// these markers (verified against Claude Code 2.1.287 and 2.1.302). No hook
+// fires: not Stop, not StopFailure, not PostToolUse for the tool it cut short.
+var claudeInterruptMarkers = []string{
+	"[Request interrupted by user]",
+	"[Request interrupted by user for tool use]",
+}
+
+// newClaudeTranscriptTail follows the newest conversation transcript the
+// terminal's Claude Code writes under a CLAUDE_CONFIG_DIR:
+// projects/<project>/<session id>.jsonl. Subagent transcripts live a level
+// deeper (or, in older releases, as agent-*.jsonl beside the conversation) and
+// are never the terminal's own turn. Reviewers run with their own config
+// directory, and Chat never runs beside the terminal agent. Call it before the
+// agent starts.
+func newClaudeTranscriptTail(configDir string, started time.Time) *transcriptTail {
+	owns := func(_, name string) (bool, bool) {
+		return !strings.HasPrefix(name, "agent-"), true
+	}
+	return newTranscriptTail(filepath.Join(configDir, "projects"), 2, started, owns, claudeTurnRecord)
+}
+
+// claudeTurnRecord classifies a transcript record. An interrupt marker on the
+// main conversation is a turn end, dated by the record. Any other main
+// conversation user record (a new prompt, a tool result) means the agent is
+// working again, so an interrupt before it is history.
+func claudeTurnRecord(line []byte) (turnEnd, turnRecordKind) {
+	// Most records are assistant output, progress and bookkeeping; skip them
+	// before decoding.
+	if !bytes.Contains(line, []byte(`"user"`)) {
+		return turnEnd{}, turnRecordOther
+	}
+	var record struct {
+		Type        string `json:"type"`
+		IsSidechain bool   `json:"isSidechain"`
+		Timestamp   string `json:"timestamp"`
+		Message     struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &record) != nil || record.Type != "user" || record.IsSidechain {
+		return turnEnd{}, turnRecordOther
+	}
+	if !claudeInterruptMarker(record.Message.Content) {
+		return turnEnd{}, turnRecordStart
+	}
+	at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+	if err != nil {
+		at = time.Now()
+	}
+	return turnEnd{at: at, interrupted: true}, turnRecordEnd
+}
+
+// claudeInterruptMarker reports whether a user message's content is exactly
+// an interrupt marker, as a string or a single text block.
+func claudeInterruptMarker(content json.RawMessage) bool {
+	var text string
+	if json.Unmarshal(content, &text) != nil {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(content, &blocks) != nil || len(blocks) != 1 || blocks[0].Type != "text" {
+			return false
+		}
+		text = blocks[0].Text
+	}
+	for _, marker := range claudeInterruptMarkers {
+		if text == marker {
+			return true
+		}
+	}
+	return false
+}

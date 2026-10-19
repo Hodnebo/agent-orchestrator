@@ -26,6 +26,8 @@ const (
 	// Recorded from Codex 0.150 when its sign-in expired mid-session.
 	codexTurnFailed = `{"timestamp":"2026-10-18T06:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","last_agent_message":null,"error":{"message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.","codex_error_info":"unauthorized"}}}` + "\n"
 	codexTurnDone   = `{"timestamp":"2026-10-18T06:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","last_agent_message":"done"}}` + "\n"
+	// Recorded from Codex 0.147 when Esc interrupted a turn.
+	codexTurnInterrupted = `{"timestamp":"2026-10-19T04:39:23.327Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"01a15274-f5ac-7b32-bd2e-6ff4528b4f0f","reason":"interrupted","started_at":1792384759,"completed_at":1792384763,"duration_ms":4109}}` + "\n"
 )
 
 // codexTurnFailedAt is codexTurnFailed stamped at a given time.
@@ -58,29 +60,61 @@ func appendRollout(t *testing.T, path, content string) {
 	}
 }
 
-func TestCodexTurnFailedRecord(t *testing.T) {
-	failure, failed := codexTurnFailedRecord([]byte(codexTurnFailed))
-	if !failed || failure.message == "" {
-		t.Fatalf("failed turn = %+v/%v, want reported with its message", failure, failed)
+func TestCodexTurnRecord(t *testing.T) {
+	end, kind := codexTurnRecord([]byte(codexTurnFailed))
+	if kind != turnRecordEnd || end.message == "" || end.interrupted {
+		t.Fatalf("failed turn = %+v/%v, want reported with its message", end, kind)
 	}
-	if want := time.Date(2026, 10, 18, 6, 0, 2, 0, time.UTC); !failure.at.Equal(want) {
-		t.Fatalf("failed turn ended at %v, want its record's timestamp %v", failure.at, want)
+	if want := time.Date(2026, 10, 18, 6, 0, 2, 0, time.UTC); !end.at.Equal(want) {
+		t.Fatalf("failed turn ended at %v, want its record's timestamp %v", end.at, want)
 	}
 	before := time.Now()
-	failure, failed = codexTurnFailedRecord([]byte(strings.Replace(codexTurnFailed, `"timestamp":"2026-10-18T06:00:02Z",`, "", 1)))
-	if !failed || failure.at.Before(before) {
-		t.Fatalf("failed turn without a timestamp = %+v/%v, want it ended now", failure, failed)
+	end, kind = codexTurnRecord([]byte(strings.Replace(codexTurnFailed, `"timestamp":"2026-10-18T06:00:02Z",`, "", 1)))
+	if kind != turnRecordEnd || end.at.Before(before) {
+		t.Fatalf("failed turn without a timestamp = %+v/%v, want it ended now", end, kind)
+	}
+	end, kind = codexTurnRecord([]byte(codexTurnInterrupted))
+	if kind != turnRecordEnd || !end.interrupted {
+		t.Fatalf("interrupted turn = %+v/%v, want an interrupt", end, kind)
+	}
+	if want := time.Date(2026, 10, 19, 4, 39, 23, 327_000_000, time.UTC); !end.at.Equal(want) {
+		t.Fatalf("interrupted turn ended at %v, want its record's timestamp %v", end.at, want)
+	}
+	if _, kind := codexTurnRecord([]byte(codexTurnStarted)); kind != turnRecordStart {
+		t.Fatalf("task_started kind = %v, want a turn start", kind)
 	}
 	for _, line := range []string{
 		codexTurnDone,
-		codexTurnStarted,
 		`{"type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","error":null}}`,
 		`{"type":"response_item","payload":{"type":"task_complete","error":{"message":"x"}}}`,
+		// A turn replaced by a newer one leaves the agent working.
+		`{"timestamp":"2026-10-19T04:39:23.327Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"u1","reason":"replaced"}}`,
 		`not json`,
 	} {
-		if _, failed := codexTurnFailedRecord([]byte(line)); failed {
-			t.Fatalf("record %s reported as a failed turn", line)
+		if _, kind := codexTurnRecord([]byte(line)); kind != turnRecordOther {
+			t.Fatalf("record %s classified %v, want ignored", line, kind)
 		}
+	}
+}
+
+// Esc in the terminal: Codex 0.147 (the version AO installs) has no Interrupt
+// hook and fires no Stop for an aborted turn, but writes turn_aborted.
+func TestCodexRolloutTailReportsAnInterruptedTurn(t *testing.T) {
+	home := t.TempDir()
+	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
+	path := writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted)
+	if ends := tail.poll(); len(ends) != 0 {
+		t.Fatalf("a running turn was reported: %v", ends)
+	}
+	appendRollout(t, path, codexTurnInterrupted)
+	ends := tail.poll()
+	if len(ends) != 1 || !ends[0].interrupted {
+		t.Fatalf("ends = %+v, want the interrupt", ends)
+	}
+	// A prompt sent right after, in the same read, supersedes it.
+	appendRollout(t, path, codexTurnStarted+codexTurnInterrupted+codexTurnStarted)
+	if ends := tail.poll(); len(ends) != 0 {
+		t.Fatalf("ends = %+v, want none: a later turn is running", ends)
 	}
 }
 
@@ -189,9 +223,9 @@ func (c *codexActivityControl) PublishActivity(_ context.Context, event worker.A
 // must still report the agent idle and write the terminal stop proof, or a
 // switch to Chat waits forever for the turn to finish.
 func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
-	previous := codexTurnPollInterval
-	codexTurnPollInterval = 20 * time.Millisecond
-	defer func() { codexTurnPollInterval = previous }()
+	previous := terminalTurnPollInterval
+	terminalTurnPollInterval = 20 * time.Millisecond
+	defer func() { terminalTurnPollInterval = previous }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	home, dataDir := t.TempDir(), t.TempDir()
@@ -234,7 +268,7 @@ func TestCodexTerminalTurnFailureMarksAgentIdle(t *testing.T) {
 	}
 	// The user typed the prompt that failed.
 	supervisor.mu.Lock()
-	supervisor.lastTUIInputAt = time.Now()
+	supervisor.noteAgentTerminalInput([]byte("fix it\r"))
 	supervisor.mu.Unlock()
 	if idle, _ := supervisor.tuiSourceIdle(); idle {
 		t.Fatal("terminal reported idle before the turn ended")
@@ -281,7 +315,8 @@ func TestCodexTurnFailureDoesNotOverrideALaterPrompt(t *testing.T) {
 	}
 	supervisor.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	supervisor.lastTUIInputAt = failedAt.Add(500 * time.Millisecond)
-	supervisor.reportCodexTurnFailure(context.Background(), codexTurnFailure{message: "usage limit", at: failedAt})
+	supervisor.lastTUISubmitAt = supervisor.lastTUIInputAt
+	supervisor.reportTerminalTurnEnd(context.Background(), "codex", turnEnd{message: "usage limit", at: failedAt})
 	if idle, _ := supervisor.tuiSourceIdle(); idle {
 		t.Fatal("a failure from before the latest prompt marked the terminal idle")
 	}
@@ -290,7 +325,8 @@ func TestCodexTurnFailureDoesNotOverrideALaterPrompt(t *testing.T) {
 	}
 
 	supervisor.lastTUIInputAt = failedAt.Add(-500 * time.Millisecond)
-	supervisor.reportCodexTurnFailure(context.Background(), codexTurnFailure{message: "usage limit", at: failedAt})
+	supervisor.lastTUISubmitAt = supervisor.lastTUIInputAt
+	supervisor.reportTerminalTurnEnd(context.Background(), "codex", turnEnd{message: "usage limit", at: failedAt})
 	if idle, unverified := supervisor.tuiSourceIdle(); !idle || unverified {
 		t.Fatalf("terminal idle = %v (unverified %v), want verified idle after the failed turn", idle, unverified)
 	}
@@ -304,9 +340,9 @@ func TestCodexTurnFailureDoesNotOverrideALaterPrompt(t *testing.T) {
 func TestCodexRolloutTailSkipsAnOversizedRecord(t *testing.T) {
 	home := t.TempDir()
 	tail := newCodexRolloutTail(home, "", time.Now().Add(-time.Second))
-	huge := `{"type":"response_item","payload":{"output":"` + strings.Repeat("x", 2*maxCodexRolloutReadSize+1) + `"}}` + "\n"
+	huge := `{"type":"response_item","payload":{"output":"` + strings.Repeat("x", 2*maxTranscriptReadSize+1) + `"}}` + "\n"
 	writeRollout(t, home, "rollout-tui.jsonl", codexCLIMeta+codexTurnStarted+huge+codexTurnFailed)
-	var failures []codexTurnFailure
+	var failures []turnEnd
 	for range 6 {
 		failures = append(failures, tail.poll()...)
 	}

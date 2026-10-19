@@ -128,7 +128,10 @@ type Supervisor struct {
 	pendingAgentTerminalSize *worker.TerminalCommand
 	tuiStartedAt             time.Time
 	lastTUIInputAt           time.Time
-	tuiHandoffClosing        bool
+	// lastTUISubmitAt is the latest agent terminal input that could submit a
+	// prompt (see mayStartTurn).
+	lastTUISubmitAt   time.Time
+	tuiHandoffClosing bool
 }
 
 // ChatRunner executes the headless Chat controller kind for a session. Run
@@ -734,14 +737,21 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		cancel()
 		return err
 	}
-	var codexTurns *codexRolloutTail
-	if input.Kind == "agent" && !input.Review && s.Harness == "codex" {
-		// Before the PTY starts, so only what this agent writes is new.
-		if home := environmentValue(command.Env, "CODEX_HOME"); home != "" {
-			s.mu.Lock()
-			conversationID := s.AgentCommand.ConversationID
-			s.mu.Unlock()
-			codexTurns = newCodexRolloutTail(home, conversationID, time.Now())
+	// Before the PTY starts, so only what this agent writes is new.
+	var turnEnds *transcriptTail
+	if input.Kind == "agent" && !input.Review {
+		switch s.Harness {
+		case "codex":
+			if home := environmentValue(command.Env, "CODEX_HOME"); home != "" {
+				s.mu.Lock()
+				conversationID := s.AgentCommand.ConversationID
+				s.mu.Unlock()
+				turnEnds = newCodexRolloutTail(home, conversationID, time.Now())
+			}
+		case "claude-code":
+			if configDir := environmentValue(command.Env, "CLAUDE_CONFIG_DIR"); configDir != "" {
+				turnEnds = newClaudeTranscriptTail(configDir, time.Now())
+			}
 		}
 	}
 	s.mu.Lock()
@@ -785,6 +795,7 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	if input.Kind == "agent" {
 		s.tuiStartedAt = time.Now()
 		s.lastTUIInputAt = time.Time{}
+		s.lastTUISubmitAt = time.Time{}
 		s.tuiHandoffClosing = false
 	}
 	s.mu.Unlock()
@@ -797,8 +808,8 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	if s.Streams != nil {
 		go s.runTerminalStream(processCtx, input.TerminalID, terminal)
 	}
-	if codexTurns != nil {
-		go s.watchCodexTurnFailures(processCtx, codexTurns, environmentValue(command.Env, "AO_CHECKPOINT_SOCKET"))
+	if turnEnds != nil {
+		go s.watchTerminalTurnEnds(processCtx, s.Harness, turnEnds, environmentValue(command.Env, "AO_CHECKPOINT_SOCKET"))
 	}
 	go func() {
 		_ = command.Wait()
@@ -998,7 +1009,7 @@ func (s *Supervisor) writeTerminal(input worker.TerminalCommand) error {
 			s.mu.Unlock()
 			return errors.New("agent terminal is switching interfaces")
 		}
-		s.lastTUIInputAt = time.Now()
+		s.noteAgentTerminalInput(input.Data)
 	}
 	if s.agentStarting && input.TerminalID == s.AgentTerminalID {
 		s.pendingAgentTerminalData = append(s.pendingAgentTerminalData, append([]byte(nil), input.Data...))

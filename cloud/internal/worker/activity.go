@@ -158,6 +158,10 @@ func ValidActivityEvent(event ActivityEvent) bool {
 			return event.State == contract.ActivityBlocked
 		case "stop", "stop-failure":
 			return event.State == contract.ActivityIdle
+		case "interrupt":
+			// Claude Code has no hook for an Esc interrupt. The worker reports
+			// it from the transcript (workertransport/claude_turns.go).
+			return event.State == contract.ActivityIdle && event.SourceInterface == "tui"
 		case "notification":
 			return event.State == contract.ActivityIdle ||
 				event.State == contract.ActivityWaitingInput ||
@@ -177,7 +181,8 @@ func ValidActivityEvent(event ActivityEvent) bool {
 			return event.State == contract.ActivityIdle
 		case "stop-failure":
 			// Codex has no hook for a turn that ended on an error. The worker
-			// reports it from the rollout (workertransport/codex_turns.go).
+			// reports it from the rollout (workertransport/codex_turns.go), as it
+			// does an interrupt for a Codex without the Interrupt hook.
 			return event.State == contract.ActivityIdle && event.SourceInterface == "tui"
 		}
 	case "cursor":
