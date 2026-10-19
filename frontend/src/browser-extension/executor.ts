@@ -164,7 +164,7 @@ export class Executor {
 						throw new BridgeError("INVALID_ARGUMENT", "operation must be status, accept, or dismiss");
 					}
 					return {
-						...(await this.deps.trusted.dialog(page.tabId, operation, typeof args.text === "string" ? args.text : undefined)),
+						...(await this.deps.trusted.dialog(page.tabId, operation, typeof args.text === "string" ? args.text : undefined, ctx.signal)),
 						target: this.target(page),
 					};
 				}, { allowBlocked: true });
@@ -185,7 +185,7 @@ export class Executor {
 			case "console":
 			case "errors":
 				return this.withPage(ctx, async (page) => {
-					const messages = await this.deps.trusted.consoleMessages(page.tabId);
+					const messages = await this.deps.trusted.consoleMessages(page.tabId, ctx.signal);
 					return { messages: action === "console" ? messages.console : messages.errors, target: this.target(page), untrustedExternalContent: true };
 				}, { allowBlocked: true });
 			default:
@@ -555,6 +555,7 @@ export class Executor {
 						const input = await this.deps.trusted.click(page.tabId, await this.point(ctx, page, ref), {
 							clicks: action === "dblclick" ? 2 : 1,
 							human: args.human === true,
+							signal: ctx.signal,
 						});
 						value = { clicked: true, ...input };
 					} else {
@@ -564,7 +565,7 @@ export class Executor {
 				case "hover":
 					if (trusted) {
 						await this.showTab(ctx, page);
-						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true)) };
+						value = { hovered: true, ...(await this.deps.trusted.hover(page.tabId, await this.point(ctx, page, ref), args.human === true, ctx.signal)) };
 					} else {
 						value = await this.content(page, ctx, { op: "hover", ref });
 					}
@@ -573,7 +574,7 @@ export class Executor {
 					if (trusted) {
 						await this.showTab(ctx, page);
 						await this.content(page, ctx, { op: "focus", ref });
-						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""))) };
+						value = { typed: true, ...(await this.deps.trusted.insertText(page.tabId, String(args.text ?? ""), ctx.signal)) };
 					} else {
 						value = await this.content(page, ctx, { op: "type", ref, text: args.text });
 					}
@@ -591,7 +592,7 @@ export class Executor {
 			let input = {};
 			if (this.useTrustedInput(ctx, page)) {
 				await this.showTab(ctx, page);
-				input = await this.deps.trusted.press(page.tabId, key);
+				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
 			} else await this.content(page, ctx, { op: "press", key });
 			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
 		});
@@ -605,7 +606,7 @@ export class Executor {
 			await this.showTab(ctx, page);
 			const from = await this.point(ctx, page, ref);
 			const to = await this.point(ctx, page, targetRef);
-			const input = await this.deps.trusted.drag(page.tabId, from, to, human);
+			const input = await this.deps.trusted.drag(page.tabId, from, to, human, ctx.signal);
 			return { dragged: true, ...input, ...this.result(await this.refreshed(page)) };
 		});
 	}

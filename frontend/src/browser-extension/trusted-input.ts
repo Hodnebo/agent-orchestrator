@@ -9,6 +9,11 @@
 // One exception: when an action opens alert/confirm/prompt, the attachment
 // stays until the dialog is answered, because only the debugger that saw a
 // dialog open can answer it and the page is blocked until then.
+//
+// Every action takes the command's AbortSignal ("Stop all agents" or a
+// cancelled command). Cancellation is checked after waiting for the tab's
+// queue, before attaching, and before every event; a gesture cancelled
+// midway releases whatever it still holds (mouse button, keys).
 
 import type { ChromeApi, DebuggeeTarget } from "./chrome-api";
 import { humanPath, type Point } from "./human-path";
@@ -18,6 +23,7 @@ import { BridgeError } from "./protocol";
 const PROTOCOL_VERSION = "1.3";
 
 type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+type InputEvent = [string, Record<string, unknown>];
 
 export type ConsoleMessage = { level: string; message: string; timestamp?: number; source?: string };
 export type DialogInfo = { type: string; message: string; defaultPrompt?: string };
@@ -65,10 +71,15 @@ export class TrustedInput {
 	}
 
 	/** Run fn with the debugger attached to tabId, serialized per tab. */
-	async withDebugger<T>(tabId: number, fn: (send: Send) => Promise<T>): Promise<T> {
+	async withDebugger<T>(tabId: number, fn: (send: Send) => Promise<T>, signal?: AbortSignal): Promise<T> {
 		this.listen();
+		throwIfAborted(signal);
 		const previous = this.locks.get(tabId) ?? Promise.resolve();
-		const run = previous.catch(() => undefined).then(() => this.attached(tabId, fn));
+		const run = previous.catch(() => undefined).then(() => {
+			// The command may have been cancelled while it waited its turn.
+			throwIfAborted(signal);
+			return this.attached(tabId, fn);
+		});
 		this.locks.set(tabId, run);
 		try {
 			return await run;
@@ -109,9 +120,10 @@ export class TrustedInput {
 	/**
 	 * Send input events in order, but stop at the moment one of them opens a
 	 * JavaScript dialog: Chrome does not finish dispatching that event until
-	 * the dialog is answered.
+	 * the dialog is answered. Stop too when the command is cancelled, after
+	 * releasing any mouse button or key this gesture still holds.
 	 */
-	private async dispatch(tabId: number, send: Send, events: [string, Record<string, unknown>][], paceMs = 0): Promise<InputResult> {
+	private async dispatch(tabId: number, send: Send, events: InputEvent[], paceMs = 0, signal?: AbortSignal): Promise<InputResult> {
 		const waiters = this.dialogWaiters.get(tabId) ?? new Set();
 		this.dialogWaiters.set(tabId, waiters);
 		let opened: (dialog: DialogInfo) => void = () => undefined;
@@ -119,12 +131,18 @@ export class TrustedInput {
 			opened = () => resolve(DIALOG_OPENED);
 		});
 		waiters.add(opened);
+		const held = new HeldInput();
 		try {
 			for (const [method, params] of events) {
 				// Human-paced pointer movement: a short, jittered gap between moves.
-				if (paceMs > 0 && params.type === "mouseMoved") await sleep(paceMs + Math.random() * paceMs);
+				if (paceMs > 0 && params.type === "mouseMoved") await abortableSleep(paceMs + Math.random() * paceMs, signal).catch(() => undefined);
+				if (signal?.aborted) {
+					await held.release(send);
+					throw canceled();
+				}
 				const outcome = await Promise.race([send(method, params), dialogOpened]);
 				if (outcome === DIALOG_OPENED) return { dialogOpened: true, dialog: this.pendingDialogs.get(tabId) };
+				held.track(method, params);
 			}
 			// A handler can open a dialog just after the last event returns.
 			const late = await Promise.race([dialogOpened, sleep(50).then(() => undefined)]);
@@ -141,25 +159,29 @@ export class TrustedInput {
 		}
 	}
 
-	async click(tabId: number, point: Point, options: { clicks?: number; human?: boolean } = {}): Promise<InputResult> {
+	async click(tabId: number, point: Point, options: { clicks?: number; human?: boolean; signal?: AbortSignal } = {}): Promise<InputResult> {
 		this.assertNoDialog(tabId);
 		const clicks = options.clicks ?? 1;
-		return this.withDebugger(tabId, async (send) => {
-			const events: [string, Record<string, unknown>][] = this.moveEvents(tabId, point, options.human === true);
-			for (let i = 1; i <= clicks; i++) {
-				events.push(["Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: i }]);
-				events.push(["Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: i }]);
-			}
-			return this.dispatch(tabId, send, events, options.human === true ? 8 : 0);
-		});
+		return this.withDebugger(
+			tabId,
+			async (send) => {
+				const events: InputEvent[] = this.moveEvents(tabId, point, options.human === true);
+				for (let i = 1; i <= clicks; i++) {
+					events.push(["Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", buttons: 1, clickCount: i }]);
+					events.push(["Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", buttons: 0, clickCount: i }]);
+				}
+				return this.dispatch(tabId, send, events, options.human === true ? 8 : 0, options.signal);
+			},
+			options.signal,
+		);
 	}
 
-	async hover(tabId: number, point: Point, human = false): Promise<InputResult> {
+	async hover(tabId: number, point: Point, human = false, signal?: AbortSignal): Promise<InputResult> {
 		this.assertNoDialog(tabId);
-		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, this.moveEvents(tabId, point, human), human ? 8 : 0));
+		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, this.moveEvents(tabId, point, human), human ? 8 : 0, signal), signal);
 	}
 
-	async drag(tabId: number, from: Point, to: Point, human = false): Promise<InputResult> {
+	async drag(tabId: number, from: Point, to: Point, human = false, signal?: AbortSignal): Promise<InputResult> {
 		this.assertNoDialog(tabId);
 		return this.withDebugger(tabId, async (send) => {
 			const events = this.moveEvents(tabId, from, human);
@@ -169,23 +191,23 @@ export class TrustedInput {
 			}
 			events.push(["Input.dispatchMouseEvent", { type: "mouseReleased", x: to.x, y: to.y, button: "left", buttons: 0, clickCount: 1 }]);
 			this.lastPointer.set(tabId, to);
-			return this.dispatch(tabId, send, events, human ? 8 : 0);
-		});
+			return this.dispatch(tabId, send, events, human ? 8 : 0, signal);
+		}, signal);
 	}
 
-	async insertText(tabId: number, text: string): Promise<InputResult> {
+	async insertText(tabId: number, text: string, signal?: AbortSignal): Promise<InputResult> {
 		this.assertNoDialog(tabId);
-		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, [["Input.insertText", { text }]]));
+		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, [["Input.insertText", { text }]], 0, signal), signal);
 	}
 
-	async press(tabId: number, chord: string): Promise<InputResult> {
+	async press(tabId: number, chord: string, signal?: AbortSignal): Promise<InputResult> {
 		this.assertNoDialog(tabId);
-		const events = keyEvents(chord).map((event): [string, Record<string, unknown>] => ["Input.dispatchKeyEvent", event]);
-		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, events));
+		const events = keyEvents(chord).map((event): InputEvent => ["Input.dispatchKeyEvent", event]);
+		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, events, 0, signal), signal);
 	}
 
 	/** Console messages and exceptions Chrome kept for the page. */
-	async consoleMessages(tabId: number): Promise<{ console: ConsoleMessage[]; errors: ConsoleMessage[] }> {
+	async consoleMessages(tabId: number, signal?: AbortSignal): Promise<{ console: ConsoleMessage[]; errors: ConsoleMessage[] }> {
 		this.assertNoDialog(tabId);
 		const console: ConsoleMessage[] = [];
 		const errors: ConsoleMessage[] = [];
@@ -214,9 +236,10 @@ export class TrustedInput {
 			await this.withDebugger(tabId, async (send) => {
 				// Enabling Runtime replays the messages Chrome kept for the page.
 				await send("Runtime.enable");
-				await sleep(300);
+				await abortableSleep(300, signal).catch(() => undefined);
 				await send("Runtime.disable");
-			});
+				throwIfAborted(signal);
+			}, signal);
 		} finally {
 			this.chrome.debugger.onEvent.removeListener(listener);
 		}
@@ -224,7 +247,7 @@ export class TrustedInput {
 	}
 
 	/** Inspect or answer a JavaScript dialog (alert/confirm/prompt). */
-	async dialog(tabId: number, operation: "status" | "accept" | "dismiss", promptText?: string): Promise<Record<string, unknown>> {
+	async dialog(tabId: number, operation: "status" | "accept" | "dismiss", promptText?: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		const pending = this.pendingDialogs.get(tabId);
 		if (operation === "status") return pending ? { open: true, ...pending } : { open: false };
 		if (!pending) throw new BridgeError("DIALOG_NOT_OPEN", "No dialog opened by an AO action is waiting on this page");
@@ -232,15 +255,79 @@ export class TrustedInput {
 			await send("Page.handleJavaScriptDialog", { accept: operation === "accept", ...(promptText !== undefined ? { promptText } : {}) });
 			this.pendingDialogs.delete(tabId);
 			return { open: true, ...pending, handled: operation };
-		});
+		}, signal);
 	}
 
-	private moveEvents(tabId: number, point: Point, human: boolean): [string, Record<string, unknown>][] {
+	private moveEvents(tabId: number, point: Point, human: boolean): InputEvent[] {
 		const from = this.lastPointer.get(tabId);
 		const path = human ? humanPath(from ?? { x: point.x - 120, y: point.y + 80 }, point) : [point];
 		this.lastPointer.set(tabId, point);
 		return path.map((step) => ["Input.dispatchMouseEvent", { type: "mouseMoved", x: step.x, y: step.y, button: "none", buttons: 0 }]);
 	}
+}
+
+/**
+ * Mouse buttons and keys a gesture has pressed but not yet released, so a
+ * cancelled gesture never leaves the page with a stuck button or modifier.
+ */
+class HeldInput {
+	private mouse?: { x: number; y: number; button: string };
+	private readonly keys = new Map<string, Record<string, unknown>>();
+
+	track(method: string, params: Record<string, unknown>): void {
+		if (method === "Input.dispatchMouseEvent") {
+			if (params.type === "mousePressed") this.mouse = { x: Number(params.x), y: Number(params.y), button: String(params.button ?? "left") };
+			else if (params.type === "mouseReleased") this.mouse = undefined;
+			else if (params.type === "mouseMoved" && this.mouse) this.mouse = { ...this.mouse, x: Number(params.x), y: Number(params.y) };
+		} else if (method === "Input.dispatchKeyEvent") {
+			const code = String(params.code ?? params.key ?? "");
+			if (params.type === "keyDown" || params.type === "rawKeyDown") this.keys.set(code, params);
+			else if (params.type === "keyUp") this.keys.delete(code);
+		}
+	}
+
+	async release(send: Send): Promise<void> {
+		if (this.mouse) {
+			await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...this.mouse, buttons: 0, clickCount: 1 }).catch(() => undefined);
+			this.mouse = undefined;
+		}
+		for (const [code, params] of [...this.keys].reverse()) {
+			await send("Input.dispatchKeyEvent", {
+				type: "keyUp",
+				key: params.key,
+				code: params.code,
+				windowsVirtualKeyCode: params.windowsVirtualKeyCode,
+				modifiers: 0,
+			}).catch(() => undefined);
+			this.keys.delete(code);
+		}
+	}
+}
+
+function canceled(): BridgeError {
+	return new BridgeError("BROWSER_COMMAND_CANCELED", "Browser command was canceled");
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw canceled();
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(canceled());
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(canceled());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 function linearPath(from: Point, to: Point, steps: number): Point[] {
