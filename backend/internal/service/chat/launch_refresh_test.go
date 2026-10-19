@@ -206,14 +206,22 @@ func TestLaunchRefreshFailedResumeSurvivesServiceRestart(t *testing.T) {
 	ctx := context.Background()
 	// Match Session Manager: clear the sleep marker before attempting resume.
 	h.svc.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
-		rec, _, err := h.st.GetSession(ctx, id)
-		if err != nil {
-			return err
+		// Queue projection can advance the revision while wake clears the marker.
+		// Match the manager's retry rather than treating a rejected CAS as success.
+		for range 3 {
+			rec, _, err := h.st.GetSession(ctx, id)
+			if err != nil {
+				return err
+			}
+			cleared, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil)
+			if err != nil {
+				return err
+			}
+			if cleared {
+				return errors.New("replacement unavailable")
+			}
 		}
-		if _, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil); err != nil {
-			return err
-		}
-		return errors.New("replacement unavailable")
+		return errors.New("sleep marker changed concurrently")
 	})
 	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "survive daemon restart", ClientMessageID: "restart-refresh"})
 	if err != nil {
