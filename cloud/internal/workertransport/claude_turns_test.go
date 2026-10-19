@@ -228,7 +228,20 @@ func TestTerminalInterruptDoesNotOverrideALaterSubmit(t *testing.T) {
 func TestMayStartTurn(t *testing.T) {
 	for input, want := range map[string]bool{
 		"\x1b": false, "\x1b\x1b": false, "hello": false, "\x1b[A": false,
-		"\r": true, "hi\n": true, "\x1b[200~line1\nline2\x1b[201~": true, "\x1b[13u": true,
+		"\r": true, "hi\n": true, "\x1b[200~line1\nline2\x1b[201~": true,
+		// Keypad Enter in application keypad mode.
+		"\x1bOM": true, "\x1bOA": false,
+		// The kitty keyboard protocol's Enter: plain, with modifiers, with an
+		// event type or alternate key codes.
+		"\x1b[13u": true, "\x1b[13;2u": true, "\x1b[13;1:1u": true, "\x1b[13:13u": true, "go\x1b[13u": true,
+		// Not Enter: a cursor position report on row 13, F3, a kitty key
+		// whose code starts with 13 and kitty Esc.
+		"\x1b[13;1R": false, "\x1b[13;80R": false, "\x1b[13~": false, "\x1b[13;5~": false,
+		"\x1b[130u": false, "\x1b[27u": false, "\x1b[13": false,
+		// Terminal replies: kitty flags, a color report.
+		"\x1b[?13u": false, "\x1b]11;rgb:1313/1313/1313\x07": false, "\x1b]11;rgb:0d0d/0d0d/0d0d\x1b\\": false,
+		// Alt+Enter still carries CR.
+		"\x1b\r": true,
 	} {
 		if got := mayStartTurn([]byte(input)); got != want {
 			t.Fatalf("mayStartTurn(%q) = %v, want %v", input, got, want)

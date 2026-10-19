@@ -255,13 +255,6 @@ func (t *transcriptTail) ownedTranscript(path, name string) bool {
 	return owned
 }
 
-// mayStartTurn reports whether terminal input can submit a prompt and so
-// start a turn: it carries Enter (CR or LF, or the CSI 13 key code of the
-// kitty keyboard protocol). Esc, typing and navigation keys cannot.
-func mayStartTurn(data []byte) bool {
-	return bytes.ContainsAny(data, "\r\n") || bytes.Contains(data, []byte("\x1b[13"))
-}
-
 // noteAgentTerminalInput records terminal input to the agent. Callers hold
 // s.mu.
 func (s *Supervisor) noteAgentTerminalInput(data []byte) {
