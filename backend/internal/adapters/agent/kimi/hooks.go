@@ -16,10 +16,12 @@ import (
 var kimiAPIKeyLineRE = regexp.MustCompile(`(?m)^\s*api_key\s*=\s*("([^"]*)"|'([^']*)'|([^\s#]+))`)
 
 const (
-	kimiInstructionsDirName  = ".kimi"
-	kimiInstructionsFileName = "AGENTS.md"
-	kimiInstructionsSentinel = "<!-- managed by agent-orchestrator: kimi system prompt -->"
-	kimiInstructionsEnd      = "<!-- /managed by agent-orchestrator: kimi system prompt -->"
+	kimiInstructionsDirName = ".kimi"
+	// kimiCodeInstructionsDirName is where Kimi Code looks for project AGENTS.md.
+	kimiCodeInstructionsDirName = ".kimi-code"
+	kimiInstructionsFileName    = "AGENTS.md"
+	kimiInstructionsSentinel    = "<!-- managed by agent-orchestrator: kimi system prompt -->"
+	kimiInstructionsEnd         = "<!-- /managed by agent-orchestrator: kimi system prompt -->"
 
 	kimiHooksSentinelStart = "# managed by agent-orchestrator: kimi hooks"
 	kimiHooksSentinelEnd   = "# /managed by agent-orchestrator: kimi hooks"
@@ -68,7 +70,17 @@ func PrepareACPInstructions(ctx context.Context, workspacePath, systemPrompt str
 	if strings.TrimSpace(workspacePath) == "" {
 		return errors.New("kimi: workspace path is required for ACP instructions")
 	}
-	instructionsPath := kimiInstructionsPath(workspacePath)
+	// Kimi Code reads <project>/.kimi-code/AGENTS.md; the older Kimi CLI read
+	// .kimi/AGENTS.md. Both are written, so either finds AO's instructions.
+	for _, dir := range []string{kimiCodeInstructionsDirName, kimiInstructionsDirName} {
+		if err := writeKimiInstructions(ctx, filepath.Join(workspacePath, dir, kimiInstructionsFileName), systemPrompt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeKimiInstructions(ctx context.Context, instructionsPath, systemPrompt string) error {
 	var existing []byte
 	existing, err := os.ReadFile(instructionsPath) //nolint:gosec // path built from caller-owned workspace dir
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

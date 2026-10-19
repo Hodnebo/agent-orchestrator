@@ -1021,3 +1021,21 @@ func TestContextCancellation(t *testing.T) {
 		t.Fatalf("ResolveKimiBinary err = %v, want context.Canceled", err)
 	}
 }
+
+// Kimi Code reads <project>/.kimi-code/AGENTS.md, not the older .kimi/ one, so
+// AO's instructions and a switch's handoff note go to both.
+func TestPrepareACPInstructionsWritesWhereKimiCodeReads(t *testing.T) {
+	workspace := t.TempDir()
+	if err := PrepareACPInstructions(context.Background(), workspace, "AO standing instructions"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".kimi-code", ".kimi"} {
+		data, err := os.ReadFile(filepath.Join(workspace, dir, "AGENTS.md"))
+		if err != nil || !strings.Contains(string(data), "AO standing instructions") {
+			t.Fatalf("%s/AGENTS.md = %q, %v; want AO's instructions", dir, data, err)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, dir, ".gitignore")); err != nil {
+			t.Fatalf("%s is not gitignored: %v", dir, err)
+		}
+	}
+}
