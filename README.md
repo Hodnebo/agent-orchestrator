@@ -225,7 +225,7 @@ Another Orchestrator.inc desktop can also connect to this computer as a remote h
 
 ## Plans
 
-Local use is free: unlimited local agents with any supported harness, plus the orchestrator, workers and PR reviews. Local agents have no plan limits. Paid plans add AO Cloud agents and cross-device connectivity.
+Local use is free: unlimited local agents with any supported harness, plus the orchestrator, workers and PR reviews. Local agents have no plan limits. Paid plans add AO Cloud agents, and a cloud relay for cross-device connectivity is coming soon.
 
 | Plan | Price | Includes |
 | --- | --- | --- |
