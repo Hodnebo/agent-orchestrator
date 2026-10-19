@@ -13,7 +13,7 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
-Agent Orchestrator (AO) by Orchestrator Inc is an open-source (Apache-2.0) orchestrator for Claude Code, Codex and 30+ coding agents. It runs agents in parallel, each in its own isolated git worktree and branch. A project orchestrator agent plans larger outcomes and spawns focused worker agents. An autonomous pull-request loop routes CI failures and review comments back to the agent that owns the change. AO ships as a desktop app for macOS, Windows and Linux, with companion apps for iPhone, iPad and Android so you can follow and steer agents from your phone.
+Orchestrator.inc (formerly Agent Orchestrator, AO; formerly github.com/ComposioHQ/agent-orchestrator) is an open-source (Apache-2.0) orchestrator for Claude Code, Codex and 30+ coding agents. It runs agents in parallel, each in its own isolated git worktree and branch. A project orchestrator agent plans larger outcomes and spawns focused worker agents. An autonomous pull-request loop routes CI failures and review comments back to the agent that owns the change. AO ships as a desktop app for macOS, Windows and Linux, with companion apps for iPhone, iPad and Android so you can follow and steer agents from your phone.
 
 Give every coding task its own agent, workspace, and feedback loop.<br />
 Plan and delegate larger outcomes with a project-aware orchestrator.<br />
@@ -225,9 +225,9 @@ AO Cloud is a separate hosted service that runs workers in remote workspaces ins
 
 ## FAQ
 
-### What is Agent Orchestrator (AO)?
+### What is Orchestrator.inc (Agent Orchestrator, AO)?
 
-An open-source desktop app and CLI from Orchestrator Inc. It runs and supervises Claude Code, Codex and other coding agents in parallel, each in its own git worktree. It also tracks their pull requests, CI and reviews.
+Orchestrator.inc, formerly Agent Orchestrator (AO), is an open-source desktop app and CLI. It runs and supervises Claude Code, Codex and other coding agents in parallel, each in its own git worktree. It also tracks their pull requests, CI and reviews.
 
 ### What license is it under?
 
