@@ -136,6 +136,40 @@ func (m *Manager) exactLaunchAlive(ctx context.Context, handle ports.RuntimeHand
 	})
 }
 
+// launchPollInterval paces the checks for a supervised launch's liveness.
+const launchPollInterval = 150 * time.Millisecond
+
+// waitForExactLaunch waits, up to launchStartWait, for the supervisor of one
+// exact launch to report its agent alive. Seeing the runtime accept the start
+// only proves the supervisor was created.
+func (m *Manager) waitForExactLaunch(ctx context.Context, handle ports.RuntimeHandle, id domain.SessionID, launchID string) (bool, error) {
+	if strings.TrimSpace(handle.ID) == "" || launchID == "" {
+		return false, errors.New("target runtime handle and launch are required")
+	}
+	deadline := time.NewTimer(max(m.launchStartWait, launchPollInterval))
+	defer deadline.Stop()
+	ticker := time.NewTicker(launchPollInterval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: id, Generation: launchID})
+		if probe.Liveness == ports.FencedAlive {
+			return true, nil
+		}
+		lastErr = nil
+		if probe.Liveness == ports.FencedUnknown {
+			lastErr = fmt.Errorf("launch ownership probe is unknown: %s", probe.Reason)
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-deadline.C:
+			return false, lastErr
+		case <-ticker.C:
+		}
+	}
+}
+
 // exactLaunchPreWrite closes the final check-then-write gap: the guard calls
 // it after its durable read and immediately before the runtime write, and a
 // matching row is not enough, the exact launch must still be alive.
