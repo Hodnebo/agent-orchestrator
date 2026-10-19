@@ -99,14 +99,23 @@ func TestFailedSetupIsReportedAsTheWorkspaceStartupError(t *testing.T) {
 // A failed Setup step's output and command never carry a credential to the
 // control plane, in the outcome event or the startup error: an AWS Secrets
 // Manager SecretString's password is masked whole, not cut at its first
-// escaped quote.
+// escaped quote, and a secret environment variable's value printed with
+// nothing naming it (or traced by set -x) is masked as the step's events mask
+// it.
 func TestFailedSetupNeverReportsASecret(t *testing.T) {
+	t.Setenv("MY_SERVICE_SECRET", "LeakEnvSvc01x")
+	t.Setenv("REGISTRY_PASSWORD", "LeakEnvReg02x")
+	// Not a secret's name: only the coloured pair it prints names it one.
+	t.Setenv("PRINTED_VALUE", "LeakAnsi03x")
 	recorder := &workerEventRecorder{}
 	c := recorder.server(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	workspace := t.TempDir()
 	failed := runProjectSetup(context.Background(), logger, c, t.TempDir(), true,
-		[]string{`printf '%s\n' '{"SecretString":"{\"password\":\"hunter2xyz\"}"}' 'mysql --password Leak7flag'; exit 3`},
+		[]string{`printf '%s\n' '{"SecretString":"{\"password\":\"hunter2xyz\"}"}' 'mysql --password Leak7flag'; ` +
+			`printf '\033[1mSIGNING_KEY\033[0m: %s\n' "$PRINTED_VALUE"; ` +
+			`(set -x; : docker login -u ci -p "$REGISTRY_PASSWORD" registry.example) 2>&1; ` +
+			`printf '%s' "$MY_SERVICE_SECRET"; exit 3`},
 		workspace, worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace})
 	if failed == nil {
 		t.Fatal("setup reported success")
@@ -118,7 +127,7 @@ func TestFailedSetupNeverReportsASecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"hunter2xyz", "Leak7flag"} {
+	for _, secret := range []string{"hunter2xyz", "Leak7flag", "LeakEnvSvc01x", "LeakEnvReg02x", "LeakAnsi03x"} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("%q reported in %s", secret, encoded)
 		}

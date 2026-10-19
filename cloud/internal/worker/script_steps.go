@@ -851,13 +851,20 @@ type setupStepEvents struct {
 	stopWatch func()
 }
 
-func (r SetupRunner) startStepEvents(ctx context.Context, total int) *setupStepEvents {
-	if r.Publish == nil {
-		return &setupStepEvents{}
-	}
+// redactor masks what a run publishes: the values of the secret-named
+// variables of the environment its steps run in and Secrets, then the
+// patterns.
+func (r SetupRunner) redactor() scriptRedactor {
 	var secrets []string
 	if r.Secrets != nil {
 		secrets = r.Secrets()
+	}
+	return newScriptRedactor(os.Environ(), secrets)
+}
+
+func (r SetupRunner) startStepEvents(ctx context.Context, total int, redactor scriptRedactor) *setupStepEvents {
+	if r.Publish == nil {
+		return &setupStepEvents{}
 	}
 	interval := liveUpdateInterval
 	if r.UpdateInterval > 0 {
@@ -869,7 +876,7 @@ func (r SetupRunner) startStepEvents(ctx context.Context, total int) *setupStepE
 	}
 	return &setupStepEvents{
 		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second, finalWait),
-		redactor:  newScriptRedactor(os.Environ(), secrets),
+		redactor:  redactor,
 		interval:  interval,
 		runID:     uuid.NewString(),
 		total:     total,

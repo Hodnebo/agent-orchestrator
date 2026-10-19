@@ -104,11 +104,11 @@ func ScriptFailureHint(output string, exitCode int, runAs string) string {
 // scriptCommandSummary is a step's command as the person wrote it (a
 // repository step without the cd AO wraps it in), on one line, redacted and
 // bounded, and the repository folder it ran in ("" for the main repository).
-// It is redacted before it is cut, so a cut cannot leave part of a secret
-// that redaction no longer recognizes.
-func scriptCommandSummary(stored string) (command, repository string) {
+// It is redacted (with the step events' redaction, redactor) before it is cut,
+// so a cut cannot leave part of a secret that redaction no longer recognizes.
+func scriptCommandSummary(stored string, redactor scriptRedactor) (command, repository string) {
 	repository, command, _ = domain.ParseRepoScriptCommand(stored)
-	command = activity.Redact(strings.Join(strings.Fields(command), " "))
+	command = redactor.redact(activity.StripControl(strings.Join(strings.Fields(command), " ")))
 	if len(command) > scriptCommandLimit {
 		command = strings.ToValidUTF8(command[:scriptCommandLimit], "") + "..."
 	}

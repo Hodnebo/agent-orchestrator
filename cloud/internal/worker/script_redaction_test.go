@@ -124,9 +124,17 @@ func TestScriptOutputNeverLeaksASecret(t *testing.T) {
 
 // End to end: a Setup step that prints every case publishes none of them in
 // its live or final events, and the failed run's summary (what the startup
-// screen shows, redacted as the worker does before sending it) holds none.
+// screen shows) holds none, as the run returns it and as the worker redacts it
+// again before sending it. A secret environment variable's value is masked
+// even where nothing names it: printed bare, traced by set -x, and as the
+// unfinished last line.
 func TestSetupRunNeverPublishesASecret(t *testing.T) {
-	cases := scriptLeakCases()
+	t.Setenv("MY_SERVICE_SECRET", "LeakEnvSvc01x")
+	t.Setenv("REGISTRY_PASSWORD", "LeakEnvReg02x")
+	cases := append(scriptLeakCases(),
+		scriptLeakCase{name: "env value, bare", secrets: []string{"LeakEnvSvc01x"}},
+		scriptLeakCase{name: "env value, set -x", secrets: []string{"LeakEnvReg02x"}},
+	)
 	var printed strings.Builder
 	for _, test := range cases {
 		printed.WriteString(test.text + "\n")
@@ -136,14 +144,17 @@ func TestSetupRunNeverPublishesASecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	summary, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond},
-		[]string{"cat " + file + "; sleep 0.1; exit 1"})
+		[]string{"cat " + file + `; printf '%s\n' "$MY_SERVICE_SECRET"; ` +
+			`(set -x; : docker login -u ci -p "$REGISTRY_PASSWORD" registry.example) 2>&1; ` +
+			`sleep 0.1; printf 'last %s' "$MY_SERVICE_SECRET"; exit 1`})
 	encoded, err := json.Marshal(events)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// JSON escapes the published text's quotes and backslashes, not the
 	// secrets, which are letters and digits.
-	published := string(encoded) + "\n" + RedactScriptOutput(summary.Output) + "\n" + RedactScriptOutput(summary.Message())
+	published := string(encoded) + "\n" + summary.Output + "\n" + summary.Command + "\n" +
+		RedactScriptOutput(summary.Output) + "\n" + RedactScriptOutput(summary.Message())
 	for _, test := range cases {
 		for _, secret := range test.secrets {
 			if strings.Contains(published, secret) {
