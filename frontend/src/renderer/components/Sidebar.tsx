@@ -1290,7 +1290,7 @@ export function Sidebar({
 								<span className="tracking-tight">{t("settings.connectMobile")}</span>
 							</span>
 						</button>
-						<AwakeControl />
+						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
 					</div>
 					<button
 						aria-label={t("shell.settings")}

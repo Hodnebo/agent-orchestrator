@@ -5,13 +5,15 @@ import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
+type AwakeControlProps = { className?: string; tabIndex?: number };
+
 /** Square coffee toggle beside the sidebar Connect mobile row: keeps this Mac awake while on. */
-export function AwakeControl({ className }: { className?: string }) {
+export function AwakeControl(props: AwakeControlProps) {
 	if (!isMacPlatform()) return null;
-	return <MacAwakeControl className={className} />;
+	return <MacAwakeControl {...props} />;
 }
 
-function MacAwakeControl({ className }: { className?: string }) {
+function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	const { t } = useTranslation();
 	const stay = useStayAwake(true);
 	const title = t("awake.title", "Stay Awake");
@@ -19,6 +21,7 @@ function MacAwakeControl({ className }: { className?: string }) {
 		<>
 			<button
 				type="button"
+				tabIndex={tabIndex}
 				aria-label={title}
 				aria-pressed={stay.on}
 				aria-busy={stay.starting || undefined}

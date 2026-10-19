@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AwakeState } from "../hooks/useAwake";
 import { useStayAwake } from "../hooks/useStayAwake";
@@ -68,6 +69,19 @@ describe("shared Stay Awake controls", () => {
 		render(<QueryClientProvider client={client}><AwakeControl /></QueryClientProvider>);
 		expect(screen.queryByTestId("awake-button")).toBeNull();
 	});
+	it.each([-1, 0])("forwards tabIndex %i to the coffee button and respects keyboard navigation", async (tabIndex) => {
+		const user = userEvent.setup();
+		render(<QueryClientProvider client={client}>
+			<button>Before coffee</button><AwakeControl tabIndex={tabIndex} /><button>After coffee</button>
+		</QueryClientProvider>);
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(coffee()).toHaveAttribute("tabindex", String(tabIndex));
+		await user.click(screen.getByRole("button", { name: "Before coffee" }));
+		await user.tab();
+		expect(tabIndex === -1 ? screen.getByRole("button", { name: "After coffee" }) : coffee()).toHaveFocus();
+		expect(test.post).not.toHaveBeenCalled();
+	});
+
 	it("starts idle-only wake even when the saved desktop lid default is true", async () => {
 		await show();
 		fireEvent.click(coffee());
