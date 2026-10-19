@@ -473,7 +473,6 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	}
 }
 
-
 // liveModelConversation runs its own model, as Claude Code's chat does when it
 // does not offer the one picked for it.
 type liveModelConversation struct {

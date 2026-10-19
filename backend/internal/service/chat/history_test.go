@@ -584,9 +584,9 @@ type editDriverState struct {
 	// beforeStart runs, unlocked, before every start after the first.
 	beforeStart func(ports.ChatStartConfig)
 	// target, when set, is what the second start returns, wrapping fresh.
-	target func(*fakeConversation) ports.ChatConversation
-	fresh       *fakeConversation
-	resumed     map[string]*fakeConversation
+	target  func(*fakeConversation) ports.ChatConversation
+	fresh   *fakeConversation
+	resumed map[string]*fakeConversation
 	// refusedMode is a permission mode the agent will not run in; onlyMode, when
 	// set, is the one mode it runs in.
 	refusedMode ports.PermissionMode

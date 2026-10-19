@@ -69,6 +69,13 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	if !s.SupportsChat(request.TargetHarness) {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s does not support Chat", request.TargetHarness)}
 	}
+	// A chat asleep, or still waking, has no source agent to hand over from
+	// yet. It is woken first, as a message to it would be.
+	if !s.HasLiveChatController(id) {
+		if err := s.wakeHibernated(ctx, id); err != nil && !errors.Is(err, ErrNoController) {
+			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "the chat's agent could not be woken: " + err.Error(), Cause: err}
+		}
+	}
 	owner := domain.SessionConversationOwner(id)
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
