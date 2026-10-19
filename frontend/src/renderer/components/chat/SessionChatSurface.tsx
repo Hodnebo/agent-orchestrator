@@ -231,6 +231,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// next message, so the handoff note is written when it is needed.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	// The chat is the tab in front: not a file, terminal or reviewer tab.
+	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
+	// Sending is the switch, so a pick is only kept while the chat stays in view.
+	// Opening another session already drops it; another tab of this one does too,
+	// or a message typed on coming back could go to an agent no longer meant.
+	useEffect(() => {
+		if (!chatInFront) setChosenSwitch(undefined);
+	}, [chatInFront]);
 	const queryClient = useQueryClient();
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
@@ -488,7 +496,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
 		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
-		!workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget,
+		chatInFront,
 	), hostId);
 	const renderShellFallback = Boolean(shellTarget && session);
 	// A switch from the terminal shows the chat before the daemon has a

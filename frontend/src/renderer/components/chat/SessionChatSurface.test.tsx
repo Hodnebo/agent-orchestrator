@@ -299,6 +299,19 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(providerSwitchMock).not.toHaveBeenCalled();
 	});
 
+	it("drops a picked agent when another tab of the session comes to the front", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
+		});
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} shellTarget={{ kind: "shell", handleId: "shell-1" }} /></Wrapper>);
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
 	it("reports a refused switch as a switch failure, so the draft stays editable", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		conversationCommandState.send = vi.fn().mockRejectedValue(new switchFailure.ProviderSwitchFailed({ code: "PROVIDER_SWITCH_busy" }));
