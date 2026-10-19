@@ -1086,11 +1086,11 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 }
 
 const listTurnFailureCandidates = `-- name: ListTurnFailureCandidates :many
-SELECT id, harness, activity_state, activity_last_at, revision,
+SELECT id, harness, activity_state, activity_last_at, latest_user_prompt_at, revision,
     runtime_launch_id, native_transcript_path
 FROM sessions
 WHERE harness = ?1 AND is_terminated = 0 AND session_mode = 'tui'
-    AND activity_state IN ('active', 'waiting_input')
+    AND activity_state IN ('active', 'waiting_input', 'blocked')
     AND native_transcript_path <> ''
 ORDER BY id
 `
@@ -1100,6 +1100,7 @@ type ListTurnFailureCandidatesRow struct {
 	Harness              domain.AgentHarness
 	ActivityState        domain.ActivityState
 	ActivityLastAt       time.Time
+	LatestUserPromptAt   sql.NullTime
 	Revision             int64
 	RuntimeLaunchID      string
 	NativeTranscriptPath string
@@ -1121,6 +1122,7 @@ func (q *Queries) ListTurnFailureCandidates(ctx context.Context, harness domain.
 			&i.Harness,
 			&i.ActivityState,
 			&i.ActivityLastAt,
+			&i.LatestUserPromptAt,
 			&i.Revision,
 			&i.RuntimeLaunchID,
 			&i.NativeTranscriptPath,

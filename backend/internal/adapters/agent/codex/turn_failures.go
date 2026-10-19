@@ -5,13 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -36,6 +35,9 @@ var codexTurnBoundaryTypes = [][]byte{
 // a turn that ends on a usage limit, an unsupported model or an expired
 // sign-in fires no hook at all. Codex still persists every turn end to the
 // rollout as an event_msg task_complete, with an error when the turn failed.
+// An Esc interrupt fires no Stop either (only Codex 0.150+'s Interrupt hook,
+// which AO does not rely on); Codex records it as a turn_aborted with reason
+// interrupted.
 //
 // Only the newest turn boundary counts. A task_started after a failed
 // task_complete means a later turn is running, so the old failure is history.
@@ -50,7 +52,7 @@ func (p *Plugin) LastTurnFailure(ctx context.Context, transcriptPath string) (po
 	if !filepath.IsAbs(path) || !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
 		return ports.TurnFailure{}, false, nil
 	}
-	tail, err := readCodexRolloutTail(path, codexTurnTailWindow)
+	tail, err := hookutil.ReadJSONLTail(path, codexTurnTailWindow)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ports.TurnFailure{}, false, nil
 	}
@@ -59,44 +61,6 @@ func (p *Plugin) LastTurnFailure(ctx context.Context, transcriptPath string) (po
 	}
 	failure, ok := lastCodexTurnFailure(tail)
 	return failure, ok, nil
-}
-
-// readCodexRolloutTail returns the complete records in the last window bytes
-// of a rollout: a record cut by the window's start, and one Codex has not
-// finished writing, are dropped.
-func readCodexRolloutTail(path string, window int64) ([]byte, error) {
-	file, err := os.Open(path) //nolint:gosec // a Codex rollout path reported by Codex's own hook
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil
-	}
-	offset := info.Size() - window
-	if offset < 0 {
-		offset = 0
-	}
-	data, err := io.ReadAll(io.NewSectionReader(file, offset, info.Size()-offset))
-	if err != nil {
-		return nil, err
-	}
-	if offset > 0 {
-		first := bytes.IndexByte(data, '\n')
-		if first < 0 {
-			return nil, nil
-		}
-		data = data[first+1:]
-	}
-	last := bytes.LastIndexByte(data, '\n')
-	if last < 0 {
-		return nil, nil
-	}
-	return data[:last+1], nil
 }
 
 // lastCodexTurnFailure walks the records newest first and stops at the first
@@ -131,18 +95,29 @@ func codexTurnBoundary(line []byte) (failure ports.TurnFailure, boundary, failed
 		Timestamp string `json:"timestamp"`
 		Type      string `json:"type"`
 		Payload   struct {
-			Type  string          `json:"type"`
-			Error json.RawMessage `json:"error"`
+			Type   string          `json:"type"`
+			Reason string          `json:"reason"`
+			Error  json.RawMessage `json:"error"`
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &record) != nil || record.Type != "event_msg" {
 		return ports.TurnFailure{}, false, false
 	}
 	switch record.Payload.Type {
-	case "task_started", "turn_started", "turn_aborted":
-		// A newer turn is running, or the turn was interrupted: either way
-		// the newest boundary is not a failed turn.
+	case "task_started", "turn_started":
+		// A newer turn is running.
 		return ports.TurnFailure{}, true, false
+	case "turn_aborted":
+		// Esc. Other reasons (a turn replaced by a newer one, a review
+		// ending) are not a turn the user stopped.
+		if record.Payload.Reason != "interrupted" {
+			return ports.TurnFailure{}, true, false
+		}
+		at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
+		if err != nil {
+			return ports.TurnFailure{}, true, false
+		}
+		return ports.TurnFailure{At: at, Interrupted: true}, true, true
 	case "task_complete", "turn_complete":
 	default:
 		return ports.TurnFailure{}, false, false

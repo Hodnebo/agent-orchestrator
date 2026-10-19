@@ -509,19 +509,23 @@ type TerminalActivityDetector interface {
 type TurnFailure struct {
 	At      time.Time
 	Message string
+	// Interrupted marks a turn the user interrupted (Esc) rather than one
+	// that ended on an error.
+	Interrupted bool
 }
 
 // TranscriptTurnFailureDetector is implemented by adapters whose harness can
-// end a turn on a provider error (usage limit, unsupported model, expired
-// sign-in) without firing the hook that reports the turn's end, while still
+// end a turn without firing the hook that reports the turn's end, while still
 // recording that end in its native transcript. Codex runs its Stop hook only
-// after a successful turn, so without this a failed turn left the session
-// active until the stale-activity observer screen-proved it idle.
+// after a successful turn, and fires no Stop when Esc interrupts one; Claude
+// Code fires no hook at all for an Esc interrupt. Without this such a turn
+// left the session active until the stale-activity observer screen-proved it
+// idle.
 type TranscriptTurnFailureDetector interface {
 	// LastTurnFailure reports the newest turn end recorded in the transcript
-	// when that turn ended on an error and no later turn has started. ok is
-	// false for a successful, interrupted or still-running turn, and for a
-	// transcript that is missing or not the harness's own.
+	// when that turn ended on an error or was interrupted and no later turn
+	// has started. ok is false for a successful or still-running turn, and
+	// for a transcript that is missing or not the harness's own.
 	LastTurnFailure(ctx context.Context, transcriptPath string) (failure TurnFailure, ok bool, err error)
 }
 

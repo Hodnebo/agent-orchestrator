@@ -303,11 +303,11 @@ ORDER BY id;
 -- name: ListTurnFailureCandidates :many
 -- Terminal sessions of one harness that are in a turn and have a native
 -- transcript to check. Only the columns the failed-turn observer reads.
-SELECT id, harness, activity_state, activity_last_at, revision,
+SELECT id, harness, activity_state, activity_last_at, latest_user_prompt_at, revision,
     runtime_launch_id, native_transcript_path
 FROM sessions
 WHERE harness = sqlc.arg(harness) AND is_terminated = 0 AND session_mode = 'tui'
-    AND activity_state IN ('active', 'waiting_input')
+    AND activity_state IN ('active', 'waiting_input', 'blocked')
     AND native_transcript_path <> ''
 ORDER BY id;
 
