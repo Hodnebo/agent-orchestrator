@@ -230,8 +230,8 @@ Local use is free: unlimited local agents with any supported harness, plus the o
 | Plan | Price | Includes |
 | --- | --- | --- |
 | **Free** | $0 | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. 2 devices logged in at once. Connect over the same network, or from anywhere with your own Tailscale or the managed HTTPS tunnel (no cloud relay). No cloud agents. |
-| **Starter** | $20/month | Everything in Free, plus a cloud relay for connectivity across devices and unlimited devices, including mobile. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
-| **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
+| **Starter** | $20/month | Everything in Free. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 1 simultaneous cloud agent. Coming soon: a cloud relay for connectivity across devices, and unlimited devices including mobile. |
+| **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 15 simultaneous cloud agents. |
 | **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
 
 Plans are billed monthly. See [orchestrator.inc/pricing](https://orchestrator.inc/pricing), or choose and change a plan in the desktop app under **Settings → Upgrade** after you sign in to AO Cloud. For Enterprise, use **Talk to founder** on the same page.
