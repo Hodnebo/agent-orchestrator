@@ -190,7 +190,7 @@ func (h *host) execute(cmd Command) (response Response, err error) {
 			if h.deps.Configure == nil {
 				return response, errors.New("triage configuration is unavailable")
 			}
-			if err = h.deps.Configure(h.ctx, cmd.Choices); err != nil {
+			if err := h.deps.Configure(h.ctx, cmd.Choices); err != nil {
 				return response, err
 			}
 		}
