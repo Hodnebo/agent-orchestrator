@@ -60,8 +60,9 @@ func (c *Client) addLifecycleEnvironment(environment map[string]string, workspac
 // commands (the hook the worker installed) through the agent PTY in the
 // background and waits up to cleanuphook.InlineWait for it; while the run is still
 // going Delete returns false and the reconciler re-issues it on a later tick.
-// A workspace that is not running or reachable, or a
-// client without a durable root, has nothing to clean up. Cleanup never
+// A workspace that is not running or whose agent is not ready cannot run it:
+// its Cleanup is reported as not run (cleanuphook.Tracker.SkipOnce). A client
+// without a durable root has nothing to clean up. Cleanup never
 // blocks deletion: a failure or a run over cleanupBudget is only reported as
 // a stage. Like local cleanup it runs only before permanent removal, never on
 // stop or pause.
@@ -84,6 +85,12 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	}
 	agent, ok := c.selectAgent(view)
 	if normalizeState(view.LatestBuild.Status) != sandbox.StateRunning || !ok || !agentReady(agent) {
+		// Nothing can run in it; the session still says its Cleanup did not
+		// run, once per build.
+		plan, _ := cleanuphook.NewPlan(ctx, "workspace_id", string(id))
+		attrs := c.stageAttrs(string(id), agent.ID)
+		attrs["build_status"] = view.LatestBuild.Status
+		cleanupRuns.SkipOnce(ctx, key, attrs, plan.Steps)
 		return true
 	}
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")

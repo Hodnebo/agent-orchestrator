@@ -399,3 +399,37 @@ func TestDeleteRunsCleanupInlineWhenBackgroundIsRefused(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+// A Cleanup that does not run is never silent: a VM still starting and a hook
+// command that skipped the hook (with its reason) both mark each of the
+// project's Cleanup steps skipped on the session, and the VM is deleted.
+func TestDeleteShowsASkippedCleanupOnEveryStep(t *testing.T) {
+	t.Parallel()
+	commands := []string{"make down", "echo done"}
+	for name, test := range map[string]struct {
+		state, execOut, reason string
+	}{
+		"starting":     {state: "starting", reason: "not running"},
+		"hook skipped": {state: "running", execOut: "\n" + cleanuphook.Marker + ":" + cleanuphook.Skipped + " no_account\n", reason: "does not exist"},
+	} {
+		api, client, id := cleanupVM(t, test.state)
+		api.execOut = test.execOut
+		recorder := &cleanuphooktest.Recorder{}
+		ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+		if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+			t.Fatalf("%s: delete: %v", name, err)
+		}
+		if stage := recorder.WaitStage(t); stage.Err != nil || stage.Attrs["result"] != cleanuphook.Skipped {
+			t.Fatalf("%s: stage = %+v", name, stage)
+		}
+		events := recorder.Events(t)
+		if len(events) != len(commands) || api.exists(id) {
+			t.Fatalf("%s: events = %+v, calls = %v", name, events, api.calls())
+		}
+		for index, event := range events {
+			if event.Status != worker.ScriptStepSkipped || event.Command != commands[index] || !strings.Contains(event.Hint, test.reason) {
+				t.Fatalf("%s: step %d = %+v", name, index+1, event)
+			}
+		}
+	}
+}

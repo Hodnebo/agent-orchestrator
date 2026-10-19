@@ -86,16 +86,18 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if err != nil {
 		return true
 	}
+	plan, _ := cleanuphook.NewPlan(ctx, "provider_id", key)
 	resume := false
 	switch environment.State {
 	case sandbox.StateRunning:
 	case sandbox.StatePaused, sandbox.StateStopped:
 		resume = true
 	default:
-		// Starting or pausing: not a VM the hook can run in now.
+		// Starting or pausing: not a VM the hook can run in now. The session
+		// still says its Cleanup did not run.
+		cleanupRuns.SkipOnce(ctx, key, map[string]string{"provider_id": key, "state": string(environment.State)}, plan.Steps)
 		return true
 	}
-	plan, _ := cleanuphook.NewPlan(ctx, "provider_id", key)
 	// Detached from the reconcile pass's cancellation, but keeping its stage
 	// observer and session event recorder.
 	runCtx := context.WithoutCancel(ctx)

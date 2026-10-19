@@ -244,6 +244,24 @@ func TestReportAppendsStepsAndFinishesTheStage(t *testing.T) {
 	if len(skipped.events) != 0 || skipped.stages[0].Err != nil || skipped.stages[0].Attrs["result"] != Skipped {
 		t.Fatalf("skipped run: events %+v, stage %+v", skipped.events, skipped.stages[0])
 	}
+	// A run the hook command skipped with a reason says so on every step it
+	// knows, whether the current Cleanup or the installed commands.
+	for name, steps := range map[string]worker.CleanupRun{
+		"current":   {RunID: "run-5", Commands: commands},
+		"installed": {RunID: "run-5", KnownCommands: commands},
+	} {
+		noSudo := report("", Skipped+" "+skipNoSudo, nil, steps)
+		if len(noSudo.events) != 2 || noSudo.stages[0].Err != nil || noSudo.stages[0].Attrs["result"] != Skipped ||
+			noSudo.stages[0].Attrs["skip_reason"] != skipNoSudo {
+			t.Fatalf("%s: skipped run with a reason: events %+v, stage %+v", name, noSudo.events, noSudo.stages[0])
+		}
+		for index, event := range noSudo.events {
+			if event.Status != worker.ScriptStepSkipped || event.Command != commands[index] || event.Phase != worker.ScriptPhaseCleanup ||
+				event.Hint != SkippedReason(skipNoSudo) || !strings.Contains(event.Hint, "sudo") || !worker.ValidScriptStepEvent(event) {
+				t.Fatalf("%s: skipped step %d = %+v", name, index+1, event)
+			}
+		}
+	}
 	lost := report("partial", "", errors.New(`freestyle api returned 400: "timeout_ms cannot exceed 300000" token=abc123`),
 		worker.CleanupRun{RunID: "run-3", Commands: commands})
 	if lost.stages[0].Err == nil || !strings.Contains(lost.stages[0].Err.Error(), "did not report") || len(lost.events) != 2 {
@@ -589,5 +607,134 @@ func TestCleanupOfCommandsGivenAtLaunchMasksTheirSecrets(t *testing.T) {
 	plan, _ = NewPlan(sandbox.WithInstalledCleanupCommands(sandbox.WithCleanupCommands(context.Background(), []string{"make down"}), launched))
 	if plan.Override == "" || strings.Join(plan.Steps.Commands, "|") != "make down" || len(plan.Steps.KnownCommands) != 2 {
 		t.Fatalf("current and stored plan = %+v", plan.Steps)
+	}
+}
+
+// loginShims puts stand-ins for sudo and stat first on PATH. sudo needs -n,
+// fails outright with noSudo, and runs the command as the test user, saying on
+// stderr whom it was asked to run as. Asked to run test(1) as root, it fails,
+// as uutils coreutils (Ubuntu 25.10 and later) does for a file only its owner
+// may run. stat names owner as the owner of any file that exists.
+func loginShims(t *testing.T, owner string, noSudo bool) []string {
+	t.Helper()
+	bin := t.TempDir()
+	sudo := "#!/bin/sh\n[ \"$1\" = -n ] || { echo sudo without -n >&2; exit 91; }\nshift\n"
+	if noSudo {
+		sudo += "echo 'sudo: a password is required' >&2\nexit 1\n"
+	}
+	sudo += "user=root\nwhile :; do case \"$1\" in -H) shift ;; -u) user=$2; shift 2 ;; *) break ;; esac; done\n" +
+		"if [ \"$user\" = root ] && [ \"$1\" = test ]; then exit 1; fi\n" +
+		"[ \"$user\" = root ] || echo \"sudo-as:$user\" >&2\n" +
+		"exec \"$@\"\n"
+	shims := map[string]string{
+		"sudo": sudo,
+		"stat": "#!/bin/sh\n[ \"$1\" = -c ] && [ \"$2\" = %U ] || exit 92\n[ -e \"$3\" ] || exit 1\necho " + shellQuote(owner) + "\n",
+	}
+	for name, content := range shims {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// Run as a login user that does not own the hook (Coder's agent terminal, the
+// worker running as ao-worker), the hook command runs the hook as its owner
+// through sudo, asking whether it can run as that owner rather than as root:
+// prod's Ubuntu 26.04 Coder image skipped every Cleanup on a root test -x.
+// Each reason it cannot run is reported after Skipped.
+func TestCommandAsLoginUserRunsAnotherUsersHookAsItsOwner(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("needs a hook the test user does not own")
+	}
+	// A root-owned program stands in for the worker's hook.
+	hook, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("true is unavailable")
+	}
+	if hook, err = filepath.EvalSymlinks(hook); err != nil {
+		t.Fatal(err)
+	}
+	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsLoginUser})
+	if strings.Contains(command, "sudo -n test") {
+		t.Fatalf("the hook command checks the hook as root:\n%s", command)
+	}
+	output := runHookCommand(t, command, loginShims(t, "ao-worker", false))
+	if !strings.Contains(output, "sudo-as:ao-worker") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("hook output: %q", output)
+	}
+	for name, test := range map[string]struct {
+		hook, owner string
+		noSudo      bool
+		reason      string
+	}{
+		"no hook":      {hook: filepath.Join(t.TempDir(), worker.CleanupHookFile), owner: "ao-worker", reason: skipNoHook},
+		"not runnable": {hook: "/etc/hosts", owner: "ao-worker", reason: skipNotRunnable},
+		"root's hook":  {hook: hook, owner: "root", reason: skipOwner},
+		"no account":   {hook: hook, owner: "UNKNOWN", reason: skipOwner},
+		"no sudo":      {hook: hook, owner: "ao-worker", noSudo: true, reason: skipNoSudo},
+	} {
+		if _, err := os.Stat(test.hook); name == "not runnable" && err != nil {
+			continue
+		}
+		command := Command(HookWord(test.hook), 10*time.Second, "", Options{Runner: AsLoginUser})
+		output := runHookCommand(t, command, loginShims(t, test.owner, test.noSudo))
+		_, status, ok := Split(output)
+		if reason, skipped := SkipReason(status); !ok || !skipped || reason != test.reason || strings.Contains(output, "sudo-as:") {
+			t.Fatalf("%s: output = %q, want skipped %s without running the hook", name, output, test.reason)
+		}
+	}
+}
+
+// SkipReason reads the reason after Skipped, and none from an exit status.
+func TestSkipReasonReadsTheHookCommandsStatus(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[string][2]string{
+		Skipped:                    {"", "skipped"},
+		Skipped + " " + skipNoHook: {skipNoHook, "skipped"},
+		" skipped no_sudo \r":      {skipNoSudo, "skipped"},
+		"0":                        {"", ""},
+		"":                         {"", ""},
+		"skippedx":                 {"", ""},
+	} {
+		reason, skipped := SkipReason(status)
+		if reason != want[0] || skipped != (want[1] == "skipped") {
+			t.Fatalf("SkipReason(%q) = %q, %v", status, reason, skipped)
+		}
+	}
+	if SkippedReason("bogus") == "" || SkippedReason(skipNoHook) == SkippedReason("bogus") {
+		t.Fatal("every reason needs words for the user")
+	}
+}
+
+// SkipOnce reports a Cleanup that cannot run because the sandbox is not
+// running: each step skipped with NotRunningReason, the stage as skipped and
+// not failed, and only once for the sandbox.
+func TestSkipOnceReportsANotRunningSandboxOnce(t *testing.T) {
+	t.Parallel()
+	r := &recorder{}
+	ctx := r.context()
+	var tracker Tracker
+	steps := worker.CleanupRun{RunID: "run-1", Commands: []string{"make down", "docker compose down"}}
+	for range 2 {
+		tracker.SkipOnce(ctx, "vm-1", map[string]string{"provider_id": "vm-1"}, steps)
+	}
+	if len(r.events) != 2 || len(r.stages) != 1 {
+		t.Fatalf("events = %+v, stages = %+v", r.events, r.stages)
+	}
+	for _, event := range r.events {
+		if event.Status != worker.ScriptStepSkipped || event.Hint != NotRunningReason || !worker.ValidScriptStepEvent(event) {
+			t.Fatalf("event = %+v", event)
+		}
+	}
+	if stage := r.stages[0]; stage.Err != nil || stage.Attrs["result"] != Skipped {
+		t.Fatalf("stage = %+v", stage)
+	}
+	if run, ok := tracker.Lookup("vm-1"); !ok || !run.Await(ctx, time.Millisecond) {
+		t.Fatal("a re-issued Delete must find the finished record and proceed")
 	}
 }

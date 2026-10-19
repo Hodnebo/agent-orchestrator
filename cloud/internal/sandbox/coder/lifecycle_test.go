@@ -22,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook/cleanuphooktest"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -575,5 +576,44 @@ func TestCleanupSkippedDeletesAtOnce(t *testing.T) {
 	c := &Client{baseURL: "http://127.0.0.1:1", durableRoot: sandbox.CoderHomeDurableRoot}
 	if !c.cleanupFinished(sandbox.WithoutCleanup(context.Background()), "workspace-1") {
 		t.Fatal("a Delete that skips Cleanup waited for it")
+	}
+}
+
+// A Cleanup that does not run is never silent: the hook command's reason (here
+// the login user had no passwordless sudo) and a workspace that is not
+// running both mark each of the project's Cleanup steps skipped with a reason
+// on the session, once.
+func TestDeleteShowsASkippedCleanupOnEveryStep(t *testing.T) {
+	t.Parallel()
+	commands := []string{"docker compose down", "echo done"}
+	for name, test := range map[string]struct {
+		build, status, reason string
+	}{
+		"hook skipped": {build: "running", status: cleanupSkipped + " no_sudo", reason: "sudo"},
+		"stopped":      {build: "stopped", status: "0", reason: "not running"},
+	} {
+		fake, client := newCleanupCoder(t, test.build, test.status, "")
+		close(fake.release)
+		recorder := &cleanuphooktest.Recorder{}
+		ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+		if err := client.Delete(ctx, testWorkspaceID); err != nil {
+			t.Fatalf("%s: delete: %v", name, err)
+		}
+		stage := recorder.WaitStage(t)
+		if stage.Err != nil || stage.Attrs["result"] != cleanupSkipped {
+			t.Fatalf("%s: stage = %+v", name, stage)
+		}
+		// A re-issued Delete reports nothing again.
+		_ = client.Delete(ctx, testWorkspaceID)
+		events := recorder.Events(t)
+		if len(events) != len(commands) {
+			t.Fatalf("%s: events = %+v", name, events)
+		}
+		for index, event := range events {
+			if event.Status != worker.ScriptStepSkipped || event.Phase != worker.ScriptPhaseCleanup ||
+				event.Command != commands[index] || !strings.Contains(event.Hint, test.reason) {
+				t.Fatalf("%s: step %d = %+v", name, index+1, event)
+			}
+		}
 	}
 }
