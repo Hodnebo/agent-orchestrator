@@ -1276,35 +1276,35 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
-					<div className="flex w-full items-center gap-1">
-						<button
-							aria-label={t("settings.connectMobile")}
-							className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
-							onClick={() => selection.goConnectMobile()}
-							tabIndex={isCollapsed ? -1 : 0}
-							type="button"
-						>
-							<NavRowHighlight />
-							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-								<Smartphone aria-hidden="true" />
-								<span className="tracking-tight">{t("settings.connectMobile")}</span>
-							</span>
-						</button>
-						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
-					</div>
 					<button
-						aria-label={t("shell.settings")}
+						aria-label={t("settings.connectMobile")}
 						className={FOOTER_NAV_BUTTON_CLASS}
-						onClick={() => selection.goGlobalSettings()}
+						onClick={() => selection.goConnectMobile()}
 						tabIndex={isCollapsed ? -1 : 0}
 						type="button"
 					>
 						<NavRowHighlight />
 						<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
-							<Settings aria-hidden="true" />
-							<span className="tracking-tight">{t("shell.settings")}</span>
+							<Smartphone aria-hidden="true" />
+							<span className="tracking-tight">{t("settings.connectMobile")}</span>
 						</span>
 					</button>
+					<div className="flex w-full items-center gap-1">
+						<button
+							aria-label={t("shell.settings")}
+							className={cn(FOOTER_NAV_BUTTON_CLASS, "min-w-0 flex-1")}
+							onClick={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+							type="button"
+						>
+							<NavRowHighlight />
+							<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2.5 [&_svg]:size-icon-md [&_svg]:shrink-0">
+								<Settings aria-hidden="true" />
+								<span className="tracking-tight">{t("shell.settings")}</span>
+							</span>
+						</button>
+						<AwakeControl tabIndex={isCollapsed ? -1 : 0} />
+					</div>
 				</div>
 				<div
 					aria-hidden={!isCollapsed || undefined}

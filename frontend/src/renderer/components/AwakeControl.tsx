@@ -8,7 +8,7 @@ import { Button } from "./ui/button";
 
 type AwakeControlProps = { className?: string; tabIndex?: number };
 
-/** Square coffee toggle beside the sidebar Connect mobile row: keeps this Mac awake while on. */
+/** Square coffee toggle beside the sidebar Settings row: keeps this Mac awake while on. */
 export function AwakeControl(props: AwakeControlProps) {
 	if (!isMacPlatform()) return null;
 	return <MacAwakeControl {...props} />;
