@@ -1616,3 +1616,81 @@ func run(t *testing.T, binary string, args ...string) {
 		t.Fatalf("%s %s: %v\n%s", binary, strings.Join(args, " "), err, out)
 	}
 }
+
+// TestWorkspaceIntegrationReclaimsOrphanedWorktreeFromPreviousDataRoot proves
+// end-to-end that a worktree registered under a previous AO data root (same
+// project/session layout, different root) is reclaimed automatically and the
+// spawn succeeds.
+// TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot proves
+// end-to-end that a worktree registered under a previous AO data root is NOT
+// removed automatically, but the spawn fails with the typed 409 carrying the
+// remediation command, and the orphan is preserved intact.
+func TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old-managed")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if !strings.Contains(err.Error(), filepath.ToSlash(orphanInfo.Path)) {
+		t.Fatalf("err = %v, want orphan path %q", err, orphanInfo.Path)
+	}
+	if !strings.Contains(err.Error(), "remove it (`git worktree remove") {
+		t.Fatalf("err = %v, want remediation command", err)
+	}
+	if _, statErr := os.Stat(orphanInfo.Path); statErr != nil {
+		t.Fatalf("orphan was not preserved: %v", statErr)
+	}
+}
+func TestWorkspaceIntegrationPreservesDirtyOrphanedWorktree(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old-managed")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/dirty-orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanInfo.Path, "scratch.txt"), []byte("uncommitted\n"), 0o644); err != nil {
+		t.Fatalf("write scratch: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(orphanInfo.Path, "scratch.txt")); statErr != nil {
+		t.Fatalf("dirty orphan was not preserved: %v", statErr)
+	}
+}
