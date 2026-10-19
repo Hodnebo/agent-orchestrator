@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas mirrors the
+// TestMigration0216AllowsOpenInterpreterAndReversesBothHistoricalSchemas mirrors the
 // fx and DeepSeek coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, and the down
 // migration must restore the exact prior constraint.
-func TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration0216AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
@@ -19,7 +19,7 @@ func TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 			db := openMigratedDatabaseCopy(t, 206)
 			if legacyQM {
 				// The retained legacy 'qm' fixture harness sits before
-				// 'codewhale' in every variant 0214 rewrites, so anchor
+				// 'codewhale' in every variant 0216 rewrites, so anchor
 				// there to produce a schema the migration still recognizes.
 				mustExec(t, db, `PRAGMA writable_schema = ON`)
 				mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''openhands'', ''codewhale''', '''openhands'', ''qm'', ''codewhale''') WHERE type = 'table' AND name = 'sessions'`)
@@ -35,13 +35,13 @@ func TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 			if legacyQM {
 				mustExec(t, db, insert, "existing-qm", 2, "qm")
 			}
-			upTo(t, db, 214)
+			upTo(t, db, 216)
 			if _, err := db.Exec(insert, "cc-session", 3, "open-interpreter"); err != nil {
 				t.Fatalf("insert open-interpreter session after migration: %v", err)
 			}
 			var version int
-			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 214 {
-				t.Fatalf("migration version = %d, err = %v; want 214", version, err)
+			if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 216 {
+				t.Fatalf("migration version = %d, err = %v; want 216", version, err)
 			}
 			if _, err := db.Exec(insert, "unknown", 4, "unknown-agent"); err == nil {
 				t.Fatal("unknown harness bypassed the CHECK constraint")
@@ -64,7 +64,7 @@ func TestMigration0214AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *t
 	}
 }
 
-func TestMigration0214RepairsDraft0199History(t *testing.T) {
+func TestMigration0216RepairsDraft0199History(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 198)
 	// Earlier draft builds used 0199 for the Open Interpreter constraint. Main
 	// now uses it for conversation_messages.continuation, which goose otherwise
@@ -86,10 +86,10 @@ func TestMigration0214RepairsDraft0199History(t *testing.T) {
 	}
 }
 
-func TestMigration0214PreservesDraft0207History(t *testing.T) {
+func TestMigration0216PreservesDraft0207History(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 206)
 	// Previous draft builds recorded Open Interpreter's constraint at 0207.
-	// Renumbering must leave that schema usable and apply 0214 only once.
+	// Renumbering must leave that schema usable and apply 0216 only once.
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''open-interpreter'', ''fake''))') WHERE type = 'table' AND name = 'sessions'`)
 	mustExec(t, db, `PRAGMA writable_schema = RESET`)
@@ -105,7 +105,47 @@ func TestMigration0214PreservesDraft0207History(t *testing.T) {
 		t.Fatalf("open-interpreter constraint entries = %d; want 1", count)
 	}
 	var version int
-	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 214 {
-		t.Fatalf("migration version = %d, err = %v; want 214", version, err)
+	if err := db.QueryRow(`SELECT MAX(version_id) FROM goose_db_version WHERE is_applied = 1`).Scan(&version); err != nil || version != 216 {
+		t.Fatalf("migration version = %d, err = %v; want 216", version, err)
+	}
+}
+
+func TestMigration0216CoexistsWithCodeBuddy(t *testing.T) {
+	for _, draftOpenInterpreter := range []bool{false, true} {
+		name := "codebuddy_0207"
+		if draftOpenInterpreter {
+			name = "codebuddy_and_draft_open_interpreter_0207"
+		}
+		t.Run(name, func(t *testing.T) {
+			db := openMigratedDatabaseCopy(t, 206)
+			// CodeBuddy's old 0207 draft migration or startup repair adds its harness.
+			// Some draft databases also recorded Open Interpreter at 0207.
+			harnessTail := "'codebuddy', 'fake'))"
+			if draftOpenInterpreter {
+				harnessTail = "'codebuddy', 'open-interpreter', 'fake'))"
+			}
+			mustExec(t, db, `PRAGMA writable_schema = ON`)
+			mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', ?) WHERE type = 'table' AND name = 'sessions'`, harnessTail)
+			mustExec(t, db, `PRAGMA writable_schema = RESET`)
+			mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (207, 1)`)
+			for range 2 {
+				if err := migrate(db); err != nil {
+					t.Fatalf("migrate CodeBuddy and Open Interpreter history: %v", err)
+				}
+			}
+			var schema string
+			if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`).Scan(&schema); err != nil {
+				t.Fatal(err)
+			}
+			for _, harness := range []string{"codebuddy", "open-interpreter"} {
+				if count := strings.Count(schema, "'"+harness+"'"); count != 1 {
+					t.Fatalf("%s constraint entries = %d; want 1", harness, count)
+				}
+			}
+			mustExec(t, db, `INSERT INTO projects (id, path, registered_at) VALUES ('coexist-project', '/tmp/coexist-project', CURRENT_TIMESTAMP)`)
+			insert := `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'coexist-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+			mustExec(t, db, insert, "codebuddy-session", 1, "codebuddy")
+			mustExec(t, db, insert, "open-interpreter-session", 2, "open-interpreter")
+		})
 	}
 }
