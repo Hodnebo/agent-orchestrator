@@ -583,7 +583,7 @@ func (s *Store) CreateAndActivateConversationBranch(
 // CommitProviderSwitch atomically publishes the fresh provider branch and the
 // target harness/controller metadata. Provider startup happens before this
 // method; until it commits, the old branch remains the durable owner.
-func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, activity domain.ConversationActivity) error {
+func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "commit provider switch", func(q *gen.Queries) error {
@@ -600,6 +600,13 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 		}
 		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
 			return fmt.Errorf("update switched session: %w", err)
+		}
+		if err := q.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
+			Model: nullableString(settings.Model), ReasoningEffort: nullableString(settings.ReasoningEffort),
+			ApprovalMode: nullableString(string(settings.ApprovalMode)), OpencodeMode: settings.OpenCodeMode,
+			AutoCompactWindow: settings.AutoCompactWindow, UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID,
+		}); err != nil {
+			return fmt.Errorf("save switched conversation settings: %w", err)
 		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
 		if err != nil {

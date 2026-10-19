@@ -61,13 +61,6 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 			"handoff_note", noteReady, "total", time.Since(started))
 		return nil
 	}
-	record, err := s.requireChatSession(ctx, id)
-	if err != nil {
-		return err
-	}
-	if record.IsTerminated {
-		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "terminated sessions must be restored before switching"}
-	}
 	if !s.SupportsChat(request.TargetHarness) {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s does not support Chat", request.TargetHarness)}
 	}
@@ -77,6 +70,15 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		return err
 	}
 	defer gate.unlock()
+	// Read under the lock: a switch that ran while this one waited has moved the
+	// session to another agent and owner.
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if record.IsTerminated {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "terminated sessions must be restored before switching"}
+	}
 
 	source, err := s.Controller(id)
 	if err != nil {
@@ -179,8 +181,17 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	targetCfg.Model, targetCfg.Effort = request.Model, request.Effort
 	targetCfg.Permissions = permissions
 	targetCfg.ControllerReady = func(started StartResult) (ControllerCommit, error) {
-		targetRecord := record
+		// The target's launch wrote its browser credential to the session, and the
+		// user may have renamed or pinned it meanwhile, so the row is read again.
+		targetRecord, err := s.requireChatSession(operationCtx, id)
+		if err != nil {
+			return ControllerCommit{}, err
+		}
 		targetRecord.Harness = request.TargetHarness
+		// The source's native session belongs to the source.
+		targetRecord.Metadata.AgentSessionID = ""
+		targetRecord.Metadata.NativeTranscriptPath = ""
+		targetRecord.Metadata.NativeIdentityObservedAt = time.Time{}
 		targetRecord.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: s.now()}
 		targetRecord.Metadata.ProviderConversationID = started.ProviderConversationID
 		targetRecord.Metadata.ControllerGeneration = started.ControllerGeneration
@@ -199,7 +210,9 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 			Detail:  detail, RequestID: strings.TrimSpace(request.IdempotencyKey),
 			ProviderItemID: started.ProviderBoundary.ID + ":provider-switch",
 		}
-		if err := s.store.CommitProviderSwitch(operationCtx, targetRecord, *started.ProviderBoundary, started.ControllerGeneration, switchActivity); err != nil {
+		// The target's settings are saved with the switch, so the source never
+		// resumes with them, whether the target fails or the daemon dies first.
+		if err := s.store.CommitProviderSwitch(operationCtx, targetRecord, *started.ProviderBoundary, started.ControllerGeneration, started.Conversation.Settings, switchActivity); err != nil {
 			return ControllerCommit{}, err
 		}
 		committed := started.Conversation
@@ -220,11 +233,6 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	targetStarted := time.Now()
 	target, err := s.startLocked(operationCtx, targetCfg)
 	if err != nil {
-		// Starting the target saved its model, effort and permission mode on the
-		// conversation. The source keeps running on its own, so put them back.
-		if settingsErr := s.store.SetConversationSettings(operationCtx, conversation.ID, conversation.Settings, s.now()); settingsErr != nil {
-			err = errors.Join(err, fmt.Errorf("restore source settings: %w", settingsErr))
-		}
 		if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
 			err = errors.Join(err, restoreErr)
 		} else {

@@ -581,8 +581,10 @@ type editDriverState struct {
 	startErr     error
 	resumeErr    error
 	beforeResume func(ports.ChatResumeConfig) error
-	fresh        *fakeConversation
-	resumed      map[string]*fakeConversation
+	// beforeStart runs, unlocked, before every start after the first.
+	beforeStart func(ports.ChatStartConfig)
+	fresh       *fakeConversation
+	resumed     map[string]*fakeConversation
 	// refusedMode is a permission mode the agent will not run in; onlyMode, when
 	// set, is the one mode it runs in.
 	refusedMode ports.PermissionMode
@@ -672,6 +674,13 @@ func newEditHarnessWithOptions(
 		return (state.refusedMode == "" || mode != state.refusedMode) && (state.onlyMode == "" || mode == state.onlyMode)
 	}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		state.mu.Lock()
+		beforeStart := state.beforeStart
+		first := state.startCalls == 0
+		state.mu.Unlock()
+		if beforeStart != nil && !first {
+			beforeStart(cfg)
+		}
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.startConfigs = append(state.startConfigs, cfg)

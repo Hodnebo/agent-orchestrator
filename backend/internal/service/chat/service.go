@@ -769,8 +769,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		conversation.Settings.Model = cfg.Model
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
-		if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
-			return nil, fmt.Errorf("record initial conversation settings: %w", err)
+		// A switch target's settings are saved by the switch's commit.
+		if cfg.ProviderSwitch == nil {
+			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
+				return nil, fmt.Errorf("record initial conversation settings: %w", err)
+			}
 		}
 	}
 
@@ -791,22 +794,21 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderSwitch != nil {
 		handoffNote = cfg.ProviderSwitch.Bootstrap
 	}
-	providerSystemPrompt := cfg.SystemPrompt
-	if handoffNote != "" {
-		providerSystemPrompt = strings.TrimSpace(
-			strings.TrimSpace(cfg.SystemPrompt) + "\n\nAO provider handoff context:\n\n" + handoffNote)
-	}
+	providerSystemPrompt := withHandoffNote(cfg.SystemPrompt, handoffNote)
 
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
 	freshIfMissing := cfg.FreshIfProviderConversationMissing
 	if cfg.ProviderConversationID != "" {
-		freshIfMissing = freshIfMissing || s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
+		// A target that has not answered yet still needs its standing context, though
+		// the source's turns come before it.
+		unanswered := s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
+		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         freshIfMissing,
-			HasPriorTurns:          conversation.LatestSequence > 0,
+			HasPriorTurns:          conversation.LatestSequence > 0 && !unanswered,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -2300,6 +2302,15 @@ func (s *Service) rebindBranchOnReady(
 		}
 		return commit, nil
 	}
+}
+
+// withHandoffNote adds a switch's handoff note to the agent's system prompt. A
+// branch keeps its note for life, so every launch on it passes the note again.
+func withHandoffNote(systemPrompt, note string) string {
+	if note == "" {
+		return systemPrompt
+	}
+	return strings.TrimSpace(strings.TrimSpace(systemPrompt) + "\n\nAO provider handoff context:\n\n" + note)
 }
 
 // switchBranchUnanswered reports a branch a switch opened whose agent never

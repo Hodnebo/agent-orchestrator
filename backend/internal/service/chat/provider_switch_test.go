@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -168,7 +169,123 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	if got.Model != before.Model || got.ReasoningEffort != before.ReasoningEffort || got.ApprovalMode != domain.PermissionModeAcceptEdits {
 		t.Fatalf("settings after a failed switch = %+v, want the source's %+v", got, before)
 	}
+	// The restored source runs with the mode it had, not the one it was launched with.
+	driver.mu.Lock()
+	resumed := driver.resumeCalls[len(driver.resumeCalls)-1]
+	driver.mu.Unlock()
+	if resumed.Permissions != domain.PermissionModeAcceptEdits {
+		t.Fatalf("restored source permissions = %q, want accept-edits", resumed.Permissions)
+	}
+	if controller, err := h.svc.Controller(testSession); err != nil || controller.Settings().ApprovalMode != domain.PermissionModeAcceptEdits {
+		t.Fatalf("restored controller settings = %+v, %v; want accept-edits", controller.Settings(), err)
+	}
 }
+
+func TestProviderSwitchCommitsTheTargetsSettingsAndKeepsItsLaunchWrites(t *testing.T) {
+	ctx := context.Background()
+	var h *harness
+	var driver *editDriverState
+	h, _, driver = newEditHarnessWithControllerEnv(t, false, ownerCheckedLaunch(&h))
+	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{ApprovalMode: domain.PermissionModeAcceptEdits}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+	var whileStarting domain.ConversationSettings
+	driver.beforeStart = func(ports.ChatStartConfig) {
+		conversation, _ := h.st.ConversationForSession(ctx, testSession)
+		whileStarting = conversation.Settings
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "claude-target-model",
+	}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	// A daemon that dies while the target starts resumes the source with these.
+	if whileStarting.Model != "" || whileStarting.ApprovalMode != domain.PermissionModeAcceptEdits {
+		t.Fatalf("settings while the target starts = %+v, want the source's", whileStarting)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil || conversation.Settings.Model != "claude-target-model" {
+		t.Fatalf("settings after the switch = %+v, %v; want the target's model", conversation.Settings, err)
+	}
+	record, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil || record.Metadata.BrowserCapabilityVerifier != launchVerifier(2) {
+		t.Fatalf("browser verifier after the switch = %q, %v; want the target launch's", record.Metadata.BrowserCapabilityVerifier, err)
+	}
+}
+
+func TestProviderSwitchQueuedBehindAnotherStartsFromItsResult(t *testing.T) {
+	ctx := context.Background()
+	var h *harness
+	var driver *editDriverState
+	h, _, driver = newEditHarnessWithControllerEnv(t, false, ownerCheckedLaunch(&h))
+	second := make(chan error, 1)
+	driver.beforeStart = func(ports.ChatStartConfig) {
+		driver.mu.Lock()
+		driver.beforeStart = nil
+		driver.mu.Unlock()
+		go func() {
+			second <- h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode})
+		}()
+		time.Sleep(50 * time.Millisecond) // the second switch reaches the lock
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("first SwitchProvider: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second SwitchProvider: %v", err)
+	}
+	record, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil || record.Harness != domain.HarnessOpenCode {
+		t.Fatalf("session after both switches = %q, %v; want opencode", record.Harness, err)
+	}
+	if _, err := h.svc.Controller(testSession); err != nil {
+		t.Fatalf("no controller after both switches: %v", err)
+	}
+}
+
+func TestProviderSwitchRestoredTargetKeepsItsHandoffNote(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	driver.mu.Lock()
+	driver.startErr = errProviderSwitchTarget
+	driver.resumed[driver.fresh.providerConversationID] = driver.fresh
+	driver.mu.Unlock()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode}); err == nil {
+		t.Fatal("second SwitchProvider succeeded, want the target to fail")
+	}
+	driver.mu.Lock()
+	resumed := driver.resumeCalls[len(driver.resumeCalls)-1]
+	driver.mu.Unlock()
+	if !strings.Contains(resumed.SystemPrompt, domain.HandoffNotePrefix) {
+		t.Fatalf("restored Claude Code system prompt has no handoff note: %q", resumed.SystemPrompt)
+	}
+}
+
+// ownerCheckedLaunch stands in for the session manager: each launch writes its
+// own browser verifier, and only while the session still has the owner the
+// launch expects.
+func ownerCheckedLaunch(h **harness) func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
+	launches := 0
+	return func(ctx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+		launches++
+		if *h == nil {
+			return map[string]string{}, nil
+		}
+		applied, err := (*h).st.UpdateBrowserCapabilityVerifier(ctx, testSession, expected, launchVerifier(launches))
+		if err != nil {
+			return nil, err
+		}
+		if !applied {
+			return nil, errors.New("session controller ownership changed")
+		}
+		return map[string]string{}, nil
+	}
+}
+
+func launchVerifier(launch int) string { return fmt.Sprintf("verifier-%d", launch) }
 
 func TestProviderSwitchPublicationFailureRestoresSourceController(t *testing.T) {
 	h, _, _ := newEditHarnessWithStore(t, false, func(st *store.Store) chatsvc.Store {
@@ -191,7 +308,7 @@ type failingProviderSwitchStore struct {
 	err error
 }
 
-func (s failingProviderSwitchStore) CommitProviderSwitch(context.Context, domain.SessionRecord, domain.ConversationBranch, string, domain.ConversationActivity) error {
+func (s failingProviderSwitchStore) CommitProviderSwitch(context.Context, domain.SessionRecord, domain.ConversationBranch, string, domain.ConversationSettings, domain.ConversationActivity) error {
 	return s.err
 }
 
@@ -322,6 +439,11 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 		ProviderConversationID: record.Metadata.ProviderConversationID,
 	}); err != nil {
 		t.Fatalf("Start after an unanswered switch: %v", err)
+	}
+	// The switch marker gives the conversation a sequence, but the target's
+	// standing context has not been delivered yet.
+	if resumed.HasPriorTurns {
+		t.Fatal("resume of an unanswered switch target says it has prior turns, so its preamble is dropped")
 	}
 	if !resumed.FreshIfMissing || !strings.Contains(resumed.SystemPrompt, domain.HandoffNotePrefix) {
 		t.Fatalf("resume = fresh %v, handoff in prompt %v; want a fresh start carrying the handoff",
