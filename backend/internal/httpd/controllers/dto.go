@@ -118,6 +118,19 @@ type UnavailableChatAgent struct {
 	Reason string `json:"reason"`
 }
 
+// ChatPermissionModesResponse lists, for each asked agent that can run a chat,
+// the permission modes it runs in.
+type ChatPermissionModesResponse struct {
+	Agents []ChatAgentPermissionModes `json:"agents"`
+}
+
+// ChatAgentPermissionModes is one agent's permission modes, strictest first; a
+// switch to it from a chat in another mode starts it in the first.
+type ChatAgentPermissionModes struct {
+	Agent string   `json:"agent"`
+	Modes []string `json:"modes"`
+}
+
 // PrewarmChatAgentResponse acknowledges a background Chat readiness check.
 type PrewarmChatAgentResponse struct {
 	Agent string `json:"agent" description:"Agent adapter identifier whose Chat check was started."`

@@ -132,6 +132,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
 	r.Post("/agents/{agent}/chat/prewarm", c.prewarmAgent)
 	r.Get("/agents/chat/unavailable", c.unavailableChatAgents)
+	r.Get("/agents/chat/permission-modes", c.chatPermissionModes)
 	r.Get("/sessions/{sessionId}/conversation/models", c.models)
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
@@ -682,18 +683,53 @@ func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r
 		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/chat/unavailable")
 		return
 	}
-	var harnesses []domain.AgentHarness
-	for _, agent := range strings.Split(r.URL.Query().Get("agents"), ",") {
-		if agent = strings.TrimSpace(agent); agent != "" && len(harnesses) < 64 {
-			harnesses = append(harnesses, domain.AgentHarness(agent))
-		}
-	}
+	harnesses := queryHarnesses(r)
 	unavailable := checker.ChatUnavailable(r.Context(), harnesses)
 	response := UnavailableChatAgentsResponse{Agents: []UnavailableChatAgent{}}
 	for _, harness := range harnesses {
 		if reason, missing := unavailable[harness]; missing {
 			response.Agents = append(response.Agents, UnavailableChatAgent{Agent: string(harness), Reason: reason})
 		}
+	}
+	envelope.WriteJSON(w, http.StatusOK, response)
+}
+
+// queryHarnesses reads the comma-separated agents query, at most 64 of them.
+func queryHarnesses(r *http.Request) []domain.AgentHarness {
+	var harnesses []domain.AgentHarness
+	for _, agent := range strings.Split(r.URL.Query().Get("agents"), ",") {
+		if agent = strings.TrimSpace(agent); agent != "" && len(harnesses) < 64 {
+			harnesses = append(harnesses, domain.AgentHarness(agent))
+		}
+	}
+	return harnesses
+}
+
+// chatPermissionModesLister reports the permission modes a harness runs a chat in.
+type chatPermissionModesLister interface {
+	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
+}
+
+// chatPermissionModes lists the permission modes each asked agent runs a chat
+// in, so a picker can show beforehand the one a switch will start it in. It
+// starts nothing; an agent that cannot run a chat is left out.
+func (c *ConversationsController) chatPermissionModes(w http.ResponseWriter, r *http.Request) {
+	lister, ok := c.Svc.(chatPermissionModesLister)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/agents/chat/permission-modes")
+		return
+	}
+	response := ChatPermissionModesResponse{Agents: []ChatAgentPermissionModes{}}
+	for _, harness := range queryHarnesses(r) {
+		modes, err := lister.PermissionModes(r.Context(), harness)
+		if err != nil || len(modes) == 0 {
+			continue
+		}
+		entry := ChatAgentPermissionModes{Agent: string(harness), Modes: make([]string, 0, len(modes))}
+		for _, mode := range modes {
+			entry.Modes = append(entry.Modes, string(mode))
+		}
+		response.Agents = append(response.Agents, entry)
 	}
 	envelope.WriteJSON(w, http.StatusOK, response)
 }

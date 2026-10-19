@@ -363,6 +363,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/chat/permission-modes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the permission modes each agent can run a chat in, strictest first */
+        get: operations["listChatPermissionModes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/chat/unavailable": {
         parameters: {
             query?: never;
@@ -4644,6 +4661,13 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        ChatAgentPermissionModes: {
+            agent: string;
+            modes: string[];
+        };
+        ChatPermissionModesResponse: {
+            agents: components["schemas"]["ChatAgentPermissionModes"][];
+        };
         ClaimPRRequest: {
             allowTakeover?: null | boolean;
             pr: string;
@@ -8473,6 +8497,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listChatPermissionModes: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated agent adapter identifiers. */
+                agents?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPermissionModesResponse"];
                 };
             };
             /** @description Not Implemented */

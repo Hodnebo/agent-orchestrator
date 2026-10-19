@@ -199,3 +199,24 @@ func TestUnavailableChatAgentsRouteListsMissingAdapters(t *testing.T) {
 		t.Fatalf("asked = %v, want codex and pi", svc.asked)
 	}
 }
+
+type permissionModesChatService struct{ fakeConversationService }
+
+func (permissionModesChatService) PermissionModes(_ context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	switch harness {
+	case domain.HarnessPi:
+		return []ports.PermissionMode{ports.PermissionModeBypassPermissions}, nil
+	case domain.HarnessKimi:
+		return []ports.PermissionMode{ports.PermissionModeDefault}, nil
+	}
+	return nil, ports.ErrChatUnsupported
+}
+
+func TestChatPermissionModesRouteListsEachAgentsModes(t *testing.T) {
+	status, body := providerSwitchRouteRequest(t, &permissionModesChatService{}, http.MethodGet,
+		"/agents/chat/permission-modes?agents=pi,kimi,unknown", "")
+	want := `{"agents":[{"agent":"pi","modes":["bypass-permissions"]},{"agent":"kimi","modes":["default"]}]}`
+	if status != http.StatusOK || string(bytes.TrimSpace(body)) != want {
+		t.Fatalf("permission modes = %d %s\nwant 200 %s", status, body, want)
+	}
+}

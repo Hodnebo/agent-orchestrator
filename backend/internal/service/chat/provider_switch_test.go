@@ -241,6 +241,34 @@ func TestProviderSwitchStartsATargetThatRefusesTheChatsModeInDefault(t *testing.
 	}
 }
 
+func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
+		ApprovalMode: domain.PermissionModeAuto,
+	}); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+	// Like Pi, the target cannot ask before acting.
+	driver.mu.Lock()
+	driver.onlyMode = ports.PermissionModeBypassPermissions
+	driver.mu.Unlock()
+	modes, err := h.svc.PermissionModes(ctx, domain.HarnessPi)
+	if err != nil || len(modes) != 1 || modes[0] != ports.PermissionModeBypassPermissions {
+		t.Fatalf("PermissionModes = %v, %v; want only bypass-permissions", modes, err)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessPi}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	driver.mu.Lock()
+	target := driver.startConfigs[len(driver.startConfigs)-1]
+	driver.mu.Unlock()
+	if target.Permissions != ports.PermissionModeBypassPermissions {
+		t.Fatalf("target permissions = %q, want the only mode the agent runs in", target.Permissions)
+	}
+}
+
 func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	h, _, _ := newEditHarness(t, false)
 	ctx := context.Background()

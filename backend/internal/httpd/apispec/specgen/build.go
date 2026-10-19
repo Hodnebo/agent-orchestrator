@@ -267,6 +267,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersPrewarmChatAgentResponse":                  "PrewarmChatAgentResponse",
 	"ControllersUnavailableChatAgentsResponse":             "UnavailableChatAgentsResponse",
 	"ControllersUnavailableChatAgent":                      "UnavailableChatAgent",
+	"ControllersChatPermissionModesResponse":               "ChatPermissionModesResponse",
+	"ControllersChatAgentPermissionModes":                  "ChatAgentPermissionModes",
 	"ControllersProviderSwitchResponse":                    "ProviderSwitchResponse",
 	"ControllersProviderSwitchRequest":                     "ProviderSwitchRequest",
 	"ControllersSessionHistoryQuery":                       "SessionHistoryQuery",
@@ -1748,6 +1750,15 @@ func agentOperations() []operation {
 			pathParams: []any{controllers.UnavailableChatAgentsQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.UnavailableChatAgentsResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/agents/chat/permission-modes", id: "listChatPermissionModes", tag: "conversations",
+			summary:    "List the permission modes each agent can run a chat in, strictest first",
+			pathParams: []any{controllers.UnavailableChatAgentsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ChatPermissionModesResponse{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

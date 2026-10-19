@@ -2165,6 +2165,28 @@ func (s *Service) PreflightChat(
 	return capabilityAdmissionError(harness, caps, permissions)
 }
 
+// PermissionModes lists, strictest first, the permission modes harness can run a
+// chat in: the ones its capabilities admit (Pi cannot ask, so only bypass) and
+// its agent accepts (Kimi runs only in its default). It starts nothing.
+func (s *Service) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	caps, err := s.driverCapabilities(ctx, harness, driver)
+	if err != nil {
+		return nil, err
+	}
+	checker, _ := driver.(ports.ChatPermissionModeChecker)
+	var modes []ports.PermissionMode
+	for _, mode := range ports.PermissionModesStrictestFirst {
+		if len(ports.MissingCapabilitiesForPermissions(caps, mode)) == 0 && (checker == nil || checker.SupportsPermissionMode(mode)) {
+			modes = append(modes, mode)
+		}
+	}
+	return modes, nil
+}
+
 func capabilityAdmissionError(
 	harness domain.AgentHarness,
 	caps ports.ChatCapabilities,

@@ -898,6 +898,32 @@ paths:
       summary: Return display-safe native authentication plans for supported agents
       tags:
       - agents
+  /api/v1/agents/chat/permission-modes:
+    get:
+      operationId: listChatPermissionModes
+      parameters:
+      - description: Comma-separated agent adapter identifiers.
+        in: query
+        name: agents
+        schema:
+          description: Comma-separated agent adapter identifiers.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatPermissionModesResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the permission modes each agent can run a chat in, strictest first
+      tags:
+      - conversations
   /api/v1/agents/chat/unavailable:
     get:
       operationId: listUnavailableChatAgents
@@ -13402,6 +13428,27 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    ChatAgentPermissionModes:
+      properties:
+        agent:
+          type: string
+        modes:
+          items:
+            type: string
+          type: array
+      required:
+      - agent
+      - modes
+      type: object
+    ChatPermissionModesResponse:
+      properties:
+        agents:
+          items:
+            $ref: '#/components/schemas/ChatAgentPermissionModes'
+          type: array
+      required:
+      - agents
       type: object
     ClaimPRRequest:
       properties:

@@ -282,6 +282,12 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 	return out
 }
 
+// PermissionModesStrictestFirst is AO's permission modes from the one that asks
+// before every action to the one that never asks.
+var PermissionModesStrictestFirst = []PermissionMode{
+	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
