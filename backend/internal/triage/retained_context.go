@@ -97,7 +97,7 @@ func InvestigationPaths(ctx context.Context, dataDir string, origin Origin) map[
 		key := "workspace:" + root.Name
 		if root.Name == domain.RootWorkspaceRepoName {
 			key = "workspace"
-		} else if !usableRetainedRepoName(root.Name) {
+		} else if root.Name == "." || root.Name == ".." || !retainedRepoName.MatchString(root.Name) {
 			continue
 		}
 		if path, ok := validatedWorkspacePath(dataDir, root.Path); ok {
@@ -158,10 +158,6 @@ func pathContains(parent, child string) bool {
 }
 
 var retainedRepoName = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
-
-func usableRetainedRepoName(name string) bool {
-	return name != "." && name != ".." && retainedRepoName.MatchString(name)
-}
 
 func unavailableItem(id, source, text string) Evidence {
 	return Evidence{ID: id, Kind: id, Source: source, CollectedAt: time.Now().UTC(), Status: "unavailable", Text: text}

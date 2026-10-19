@@ -40,7 +40,10 @@ function NativeChat({ run }: { run: TriageRun }) {
 		busy={!!busy} commandError={sanitizeReportText(error || run.error || "") || undefined}
 		headerActions={<div className="flex items-center gap-2"><span role="status" className="max-w-sm truncate text-xs text-muted-foreground">{sanitizeReportText(run.activity)}</span>
 			{isTriageActive(run) ? <Button size="sm" variant="ghost" onClick={() => void useTriageStore.getState().cancel(run.id)}>{t("triage.stop")}</Button> : null}</div>}
-		onSend={(text) => useTriageStore.getState().reply(run.id, text)}
+		onSend={(text, attachments) => {
+			if (attachments?.length) return Promise.reject(new Error("Reconnect AO to send files. Your message is still in the composer."));
+			return useTriageStore.getState().reply(run.id, text);
+		}}
 		onDecide={decide}
 		onResolveInput={resolve}
 		onLinkOpen={(url) => { void aoBridge.app.openExternal(url); }}

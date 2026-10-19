@@ -6,8 +6,10 @@ import { useTriageStore } from "../../stores/triage-store";
 import { TriageConversation } from "./TriageConversation";
 
 const mock = vi.hoisted(() => ({ get: vi.fn(), cancel: vi.fn(), terminalInput: vi.fn(), terminalResize: vi.fn(), subscribeTerminal: vi.fn(), write: vi.fn(),
+	reply: vi.fn(), send: undefined as ((text: string, attachments?: { mimeType: string; data: string }[]) => unknown) | undefined,
 	input: undefined as ((data: string) => boolean | void) | undefined }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { ...window.ao, triage: mock } }));
+vi.mock("../chat/ChatWorkspace", () => ({ ChatWorkspace: ({ onSend }: { onSend: typeof mock.send }) => { mock.send = onSend; return null; } }));
 vi.mock("../XtermTerminal", () => ({ XtermTerminal: ({ onReady, onVisibleSize }: import("../XtermTerminal").XtermTerminalProps) => {
 	const terminal: AttachableTerminal = {
 		cols: 80, rows: 24, hasMeasuredGrid: true, write: mock.write, writeln: () => {}, showLatestOutput: () => {},
@@ -50,4 +52,14 @@ it("subscribes before loading replay, forwards raw input and resize, and keeps S
 	view.unmount();
 	expect(unsubscribe).toHaveBeenCalledOnce();
 	expect(mock.input).toBeUndefined();
+});
+
+it("rejects attachments instead of silently sending only their accompanying text", async () => {
+	const chat: TriageRun = { ...run, transport: "chat", state: "completed" };
+	mock.get.mockResolvedValue(chat);
+	useTriageStore.getState().receive(chat);
+	render(<TriageConversation runId={chat.id} />);
+	expect(mock.send).toBeDefined();
+	await expect(mock.send!("See this screenshot", [{ mimeType: "image/png", data: "aW1hZ2U=" }])).rejects.toThrow("Reconnect AO to send files");
+	expect(mock.reply).not.toHaveBeenCalled();
 });
