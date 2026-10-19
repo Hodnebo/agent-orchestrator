@@ -277,7 +277,9 @@ func normalizeSessionOptions(
 			Current: ports.ChatConfigOptionValue{Select: models.CurrentModelID}, Choices: choices,
 		})
 	}
-	if modes != nil && !seen["mode"] {
+	// pi-acp sends its thinking levels both as a config option and as legacy
+	// session modes. Shown as a mode, they would sit where permissions go.
+	if modes != nil && !seen["mode"] && !modesRepeatAnOption(out, modes) {
 		choices := make([]ports.ChatConfigOptionChoice, 0, len(modes.AvailableModes))
 		for _, mode := range modes.AvailableModes {
 			choices = append(choices, ports.ChatConfigOptionChoice{
@@ -290,6 +292,34 @@ func normalizeSessionOptions(
 		})
 	}
 	return out
+}
+
+// modesRepeatAnOption reports legacy session modes whose ids are exactly the
+// choices of a config option the agent already sent.
+func modesRepeatAnOption(options []ports.ChatConfigOption, modes *acpsdk.SessionModeState) bool {
+	if len(modes.AvailableModes) == 0 {
+		return false
+	}
+	for _, option := range options {
+		if len(option.Choices) != len(modes.AvailableModes) {
+			continue
+		}
+		values := make(map[string]bool, len(option.Choices))
+		for _, choice := range option.Choices {
+			values[choice.Value] = true
+		}
+		same := true
+		for _, mode := range modes.AvailableModes {
+			if !values[string(mode.Id)] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSelectChoices(options acpsdk.SessionConfigSelectOptions) []ports.ChatConfigOptionChoice {

@@ -347,6 +347,24 @@ describe("ACP session config options", () => {
 		expect(screen.queryByRole("button", { name: "Mode" })).not.toBeInTheDocument();
 	});
 
+	it("keeps an agent's own Default mode, with Plan as a toggle beside its permissions", () => {
+		render(<TurnSettingsBar harness="kimi" models={[]} settings={{}} onChangeConfigOption={vi.fn()}
+			configOptions={[
+				{ id: "model", name: "Model", category: "model", type: "select", currentValue: "k3", choices: [{ value: "k3", name: "K3" }, { value: "k3-256k", name: "K3-256k" }] },
+				{ id: "thinking", name: "Thinking", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "low", name: "Thinking Low" }, { value: "high", name: "Thinking High" }] },
+				{
+					id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "yolo",
+					choices: [
+						{ value: "default", name: "Default" }, { value: "plan", name: "Plan" },
+						{ value: "auto", name: "Auto" }, { value: "yolo", name: "YOLO" },
+					],
+				},
+			]} />);
+		// Plan pairs with the agent's Default, so it is the Plan Mode toggle, not a picker named "Mode".
+		expect(screen.queryByRole("button", { name: "Model mode for the next turn" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Mode" })).toHaveTextContent("YOLO");
+	});
+
 	it("keeps a mapped permission default selectable under its meaningful label", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();

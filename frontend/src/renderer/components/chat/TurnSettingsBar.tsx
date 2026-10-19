@@ -1630,10 +1630,15 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 				: choice,
 		),
 	} : option;
+	// An agent's mode named Default is its own when the other modes are too
+	// (Kimi's Default, Plan, Auto and YOLO). It stands in for "the agent decides"
+	// only alone, or beside modes the daemon matched to AO's.
+	const placeholderMode = (choice: ChatConfigOption["choices"][number]) =>
+		choice.permissionMode !== "default" &&
+		(isDefaultPlaceholderLabel(choice.name) || /^use agent permissions$/i.test(choice.name.trim())) &&
+		(mapped.choices.length === 1 || mapped.choices.some((other) => other !== choice && other.permissionMode));
 	const implicit = mapped.choices.find((choice) =>
-		choice.value === "default" && (
-			!isModeOption(mapped) || (choice.permissionMode !== "default" && (isDefaultPlaceholderLabel(choice.name) || /^use agent permissions$/i.test(choice.name.trim())))
-		),
+		choice.value === "default" && (!isModeOption(mapped) || placeholderMode(choice)),
 	);
 	if (!implicit) return mapped;
 	if (isModeOption(mapped)) return { ...mapped, choices: mapped.choices.filter((choice) => choice !== implicit) };
