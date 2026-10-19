@@ -59,7 +59,6 @@ export function splitPath(path: string): { name: string; dir: string } {
 	return slash < 0 ? { name: path, dir: "" } : { name: path.slice(slash + 1), dir: path.slice(0, slash) };
 }
 
-export const statusGlyph: Record<WorkspaceFileStatus, string> = { modified: "M", added: "A", deleted: "D", renamed: "R", unmodified: "·" };
 export const statusLabel: Record<WorkspaceFileStatus, string> = { modified: "Modified", added: "Added", deleted: "Deleted", renamed: "Renamed", unmodified: "Unchanged" };
 export const sectionLabel: Record<WorkspaceSection, string> = { staged: "Staged", unstaged: "Unstaged", untracked: "Untracked", committed: "Committed" };
 
@@ -127,7 +126,9 @@ export type DisplayRow =
 		/** The function or section git names in the hunk header, when it names one. */
 		section?: string;
 		expandable: boolean;
-	};
+	}
+	/** A comment drawn under the line it is about. */
+	| { type: "comment"; key: string; commentId: string };
 
 /** Lines one tap on a fold reveals. */
 export const CONTEXT_STEP = 20;
@@ -212,6 +213,42 @@ export function fileDisplayRows(lines: string[]): DisplayRow[] {
 }
 
 // ---- Selection → feedback -----------------------------------------------------
+
+/** Where a comment on these lines is drawn: under the last of them, on the side it shows. */
+export function commentAnchor(lines: LineRow[]): { side: "old" | "new"; line: number } | undefined {
+	const last = lines[lines.length - 1];
+	if (!last) return undefined;
+	if (last.kind === "del") return last.oldNo == null ? undefined : { side: "old", line: last.oldNo };
+	return last.newNo == null ? undefined : { side: "new", line: last.newNo };
+}
+
+/**
+ * Inserts a comment row after the line each comment is anchored to, oldest
+ * first. A comment whose line is folded away or gone from the diff is not
+ * drawn; the review sheet still lists it.
+ */
+export function withInlineComments(rows: DisplayRow[], notes: ReadonlyArray<{ id: string; anchor?: { side: "old" | "new"; line: number } }>): DisplayRow[] {
+	if (!notes.length) return rows;
+	const byLine = new Map<string, string[]>();
+	for (const note of notes) {
+		if (!note.anchor) continue;
+		const key = `${note.anchor.side}:${note.anchor.line}`;
+		byLine.set(key, [...(byLine.get(key) ?? []), note.id]);
+	}
+	if (!byLine.size) return rows;
+	const out: DisplayRow[] = [];
+	for (const row of rows) {
+		out.push(row);
+		if (row.type !== "line") continue;
+		const key = row.row.kind === "del" ? `old:${row.row.oldNo}` : `new:${row.row.newNo}`;
+		const ids = byLine.get(key);
+		if (!ids) continue;
+		// A context line has both numbers; draw its comments once, under the new side.
+		byLine.delete(key);
+		for (const commentId of ids) out.push({ type: "comment", key: `comment:${commentId}`, commentId });
+	}
+	return out;
+}
 
 /** The line rows between two display indexes, inclusive, in reading order. */
 export function selectedLines(rows: DisplayRow[], anchor: number, focus: number): LineRow[] {

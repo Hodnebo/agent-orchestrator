@@ -5,6 +5,7 @@ import {
 	annotationTarget,
 	changeAccessibilityLabel,
 	changeGroups,
+	commentAnchor,
 	compactCount,
 	contentLines,
 	diffDisplayRows,
@@ -14,6 +15,7 @@ import {
 	selectedLines,
 	selectionLabel,
 	splitPath,
+	withInlineComments,
 	type DisplayRow,
 } from "./model";
 
@@ -96,7 +98,9 @@ const fileLines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
 
 const summarize = (rows: DisplayRow[]) => rows.map((row) => row.type === "fold"
 	? `fold ${row.id} ${row.hidden}${row.expandable ? "" : " locked"}`
-	: `${row.row.kind} ${row.row.oldNo ?? "-"}/${row.row.newNo ?? "-"}`);
+	: row.type === "comment"
+		? `comment ${row.commentId}`
+		: `${row.row.kind} ${row.row.oldNo ?? "-"}/${row.row.newNo ?? "-"}`);
 
 describe("diffDisplayRows", () => {
 	it("folds the unchanged code before, between and after hunks", () => {
@@ -176,5 +180,35 @@ describe("file rows", () => {
 		expect(lines).toEqual(["a", "b"]);
 		expect(summarize(fileDisplayRows(lines ?? []))).toEqual(["context 1/1", "context 2/2"]);
 		expect(contentLines("a", true)).toBeNull();
+	});
+});
+
+describe("inline comments", () => {
+	const rows = diffDisplayRows(parseUnifiedDiff(twoHunks), fileLines);
+	const firstAdd = rows.findIndex((row) => row.type === "line" && row.row.kind === "add");
+
+	it("anchors a comment under the last selected line, on the side it shows", () => {
+		expect(commentAnchor(selectedLines(rows, firstAdd - 1, firstAdd + 1))).toEqual({ side: "new", line: 5 });
+		expect(commentAnchor(selectedLines(rows, firstAdd - 1, firstAdd - 1))).toEqual({ side: "old", line: 4 });
+		expect(commentAnchor([])).toBeUndefined();
+	});
+
+	it("draws comments under their lines, in order, and skips ones whose line is hidden", () => {
+		const out = summarize(withInlineComments(rows, [
+			{ id: "a", anchor: { side: "new", line: 4 } },
+			{ id: "b", anchor: { side: "old", line: 4 } },
+			{ id: "c", anchor: { side: "new", line: 4 } },
+			{ id: "folded", anchor: { side: "new", line: 12 } },
+		]));
+		const at = (label: string) => out.indexOf(label);
+		expect(at("comment b")).toBe(at("del 4/-") + 1);
+		expect(at("comment a")).toBe(at("add -/4") + 1);
+		expect(at("comment c")).toBe(at("comment a") + 1);
+		expect(out).not.toContain("comment folded");
+	});
+
+	it("draws a context line's comment once, though it has both numbers", () => {
+		const out = summarize(withInlineComments(rows, [{ id: "ctx", anchor: { side: "new", line: 5 } }]));
+		expect(out.filter((row) => row === "comment ctx")).toHaveLength(1);
 	});
 });

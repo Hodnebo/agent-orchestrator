@@ -42,6 +42,10 @@ import FeatherGlyph from "lucide-react-native/icons/feather";
 import File from "lucide-react-native/icons/file";
 import FileText from "lucide-react-native/icons/file-text";
 import FileDiff from "lucide-react-native/icons/file-diff";
+import FileMinus from "lucide-react-native/icons/file-minus";
+import FilePen from "lucide-react-native/icons/file-pen";
+import FilePlus from "lucide-react-native/icons/file-plus";
+import FileSymlink from "lucide-react-native/icons/file-symlink";
 import ListTree from "lucide-react-native/icons/list-tree";
 import MessageSquareText from "lucide-react-native/icons/message-square-text";
 import Sparkles from "lucide-react-native/icons/sparkles";
@@ -173,6 +177,10 @@ export const glyphs = {
 	"file": File,
 	"file-text": FileText,
 	"file-diff": FileDiff,
+	"file-minus": FileMinus,
+	"file-pen": FilePen,
+	"file-plus": FilePlus,
+	"file-symlink": FileSymlink,
 	"folder": Folder,
 	"folder-open": FolderOpen,
 	"flag": Flag,

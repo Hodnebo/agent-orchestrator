@@ -313,7 +313,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	sectionHead: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xs },
 	sectionTitle: { fontFamily: font.semibold, fontSize: type.caption2.fontSize, letterSpacing: 0.9, textTransform: "uppercase", color: t.textTertiary },
 	sectionCount: { fontFamily: font.medium, fontSize: type.caption2.fontSize, color: t.textFaint },
-	divider: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: space.lg + 20 + space.md },
+	divider: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: space.lg + iconSize.lg + space.xs + space.md },
 	search: { flexDirection: "row", alignItems: "center", gap: space.sm, marginHorizontal: space.lg, marginTop: space.md, paddingHorizontal: space.md, minHeight: 40, borderRadius: radius.md, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
 	searchInput: { flex: 1, ...type.subheadline, color: t.textPrimary, paddingVertical: space.xs },
 	crumbs: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.xs },

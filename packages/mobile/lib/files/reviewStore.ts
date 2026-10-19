@@ -1,13 +1,24 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { FileAnnotationTarget } from "../../../shared/files/file-annotations";
 
-/** A comment written against a file and waiting to be sent with the rest of the review. */
+/** Where a comment sits in the diff: under this line, on this side. */
+export type CommentAnchor = { side: "old" | "new"; line: number };
+
+/**
+ * A note written against a file. `queued` ones wait to go with the rest of the
+ * review; `sent` ones stay on the line, GitHub-style, so the reader still sees
+ * what was asked where. `kind` names what was sent: a comment, or an immediate
+ * Explain / Make change request.
+ */
 export type ReviewComment = {
 	id: string;
 	/** "pkce.ts · Lines 39–40", for the queue and for screen readers. */
 	label: string;
 	feedback: string;
 	target: FileAnnotationTarget;
+	anchor?: CommentAnchor;
+	status: "queued" | "sent";
+	kind: "comment" | "explain" | "change";
 };
 
 const EMPTY: readonly ReviewComment[] = [];
@@ -16,9 +27,9 @@ const listeners = new Set<() => void>();
 let nextId = 0;
 
 /**
- * Queued comments are keyed by machine and session so moving between files,
- * or between the list and the viewer, never loses one. They live for the app
- * process: a review is short-lived, and an unsent note is cheap to retype.
+ * Comments are keyed by machine and session so moving between files, or between
+ * the list and the viewer, never loses one. They live for the app process: a
+ * review is short-lived, and an unsent note is cheap to retype.
  */
 export function reviewKey(hostId: string | undefined, sessionId: string): string {
 	return `${hostId ?? ""}|${sessionId}`;
@@ -34,14 +45,23 @@ export function reviewComments(key: string): readonly ReviewComment[] {
 	return comments.get(key) ?? EMPTY;
 }
 
-export function addReviewComment(key: string, comment: Omit<ReviewComment, "id">): ReviewComment {
-	const created = { ...comment, id: `c${++nextId}` };
+export function queuedComments(all: readonly ReviewComment[]): readonly ReviewComment[] {
+	return all.filter((comment) => comment.status === "queued");
+}
+
+export function addReviewComment(key: string, comment: Omit<ReviewComment, "id" | "status" | "kind"> & Partial<Pick<ReviewComment, "status" | "kind">>): ReviewComment {
+	const created: ReviewComment = { status: "queued", kind: "comment", ...comment, id: `c${++nextId}` };
 	emit(key, [...reviewComments(key), created]);
 	return created;
 }
 
 export function updateReviewComment(key: string, id: string, feedback: string) {
 	emit(key, reviewComments(key).map((comment) => comment.id === id ? { ...comment, feedback } : comment));
+}
+
+export function markReviewCommentsSent(key: string, ids: readonly string[]) {
+	const sent = new Set(ids);
+	emit(key, reviewComments(key).map((comment) => sent.has(comment.id) ? { ...comment, status: "sent" as const } : comment));
 }
 
 export function removeReviewComments(key: string, ids: readonly string[]) {

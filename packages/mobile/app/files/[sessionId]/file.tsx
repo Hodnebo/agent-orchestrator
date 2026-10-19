@@ -1,7 +1,8 @@
 import * as Clipboard from "expo-clipboard";
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { FlatList, GestureDetector } from "react-native-gesture-handler";
 import { SvgXml } from "react-native-svg";
 import { parseUnifiedDiff } from "../../../../shared/files/diff-parser";
 import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
@@ -16,10 +17,11 @@ import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { getWorkspaceFile, sendFileFeedback, sendSelectionRequest, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { codeContentWidth, DiffLine, FoldRow, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, StatusGlyph, type ComposerAction } from "../../../lib/files/components";
+import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, StatusGlyph, type ComposerAction } from "../../../lib/files/components";
 import {
 	annotationTarget,
 	changeGroups,
+	commentAnchor,
 	CONTEXT_STEP,
 	contentLines,
 	diffDisplayRows,
@@ -34,10 +36,12 @@ import {
 	selectionPayloadLines,
 	splitPath,
 	statusLabel,
+	withInlineComments,
 	type DisplayRow,
 } from "../../../lib/files/model";
 import { addReviewComment, reviewKey } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
+import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
@@ -127,10 +131,14 @@ function SessionFileContent() {
 	const effectiveMode: Mode = !changed ? "file" : detail?.deleted ? "diff" : mode;
 	const lines = useMemo(() => detail ? contentLines(detail.deleted ? undefined : detail.content, detail.contentTruncated || detail.binary) : null, [detail]);
 	const parsed = useMemo(() => detail?.diff ? parseUnifiedDiff(detail.diff) : [], [detail?.diff]);
-	const rows = useMemo<DisplayRow[]>(() => {
+	const baseRows = useMemo<DisplayRow[]>(() => {
 		if (!detail || detail.binary) return [];
 		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? []);
 	}, [detail, effectiveMode, lines, parsed, revealed]);
+	// Comments on this file, queued and sent, drawn under the lines they are about.
+	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path), [path, review.all]);
+	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
+	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
 	const language = languageForPath(path);
 	const { name, dir } = splitPath(path);
@@ -138,15 +146,8 @@ function SessionFileContent() {
 	const image = isImagePath(path);
 	const svg = isSvgPath(path);
 
-	const commented = useMemo(() => {
-		const marks = new Set<string>();
-		for (const comment of review.comments) {
-			if (comment.target.path !== path) continue;
-			if (comment.target.side === "old" && comment.target.oldLine != null) marks.add(`old:${comment.target.oldLine}`);
-			else if (comment.target.line != null) marks.add(`${comment.target.side}:${comment.target.line}`);
-		}
-		return marks;
-	}, [path, review.comments]);
+	// Lines with a comment card under them, so a screen reader hears "has a comment" there.
+	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({
@@ -193,6 +194,32 @@ function SessionFileContent() {
 	}, []);
 
 	const chosen = useMemo(() => selection ? selectedLines(rows, selection.anchor, selection.focus) : [], [rows, selection]);
+	const selectionStart = selection ? Math.min(selection.anchor, selection.focus) : -1;
+	const selectionEnd = selection ? Math.max(selection.anchor, selection.focus) : -1;
+
+	// Hold-and-drag, or drag the line numbers, to select a range. Starting on an
+	// end of the current selection picks that end up instead of starting over.
+	const drag = useLineDrag({
+		listRef: list,
+		gutterWidth: gutterWidth(digits) + 16,
+		enabled: rows.length > 0,
+		onStart: (index) => {
+			setActionError(undefined);
+			setSelection((current) => {
+				if (current) {
+					const low = Math.min(current.anchor, current.focus);
+					const high = Math.max(current.anchor, current.focus);
+					if (index === low && low !== high) return { anchor: high, focus: index };
+					if (index === high && low !== high) return { anchor: low, focus: index };
+				}
+				return { anchor: index, focus: index };
+			});
+		},
+		onMove: (index) => setSelection((current) => current ? { anchor: current.anchor, focus: index } : { anchor: index, focus: index }),
+		onEnd: () => {},
+	});
+	const resetDrag = drag.reset;
+	useEffect(() => { resetDrag(); }, [path, effectiveMode, resetDrag]);
 
 	// The composer covers the bottom of the list. When the end of a selection
 	// lands among the last rows on screen, lift it into view above the composer.
@@ -201,18 +228,20 @@ function SessionFileContent() {
 		lastVisible.current = viewableItems.reduce((max, item) => Math.max(max, item.index ?? 0), 0);
 	}).current;
 	useEffect(() => {
-		if (!selection || selection.focus < lastVisible.current - 10) return;
+		// Mid-drag the finger drives the scroll; lift the selection only once it lands.
+		if (!selection || drag.dragging || selection.focus < lastVisible.current - 10) return;
 		const timer = setTimeout(() => list.current?.scrollToIndex({ index: selection.focus, viewPosition: 0.3, animated: true }), 60);
 		return () => clearTimeout(timer);
-	}, [selection]);
+	}, [drag.dragging, selection]);
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
 		if (!config || !detail || !chosen.length) return;
 		const feedback = text.trim();
 		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
+		const anchor = commentAnchor(chosen);
 		if (action === "comment") {
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target });
+			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor });
 			haptics.success();
 			setSelection(null);
 			setNotice(`Comment added to the review.`);
@@ -233,6 +262,9 @@ function SessionFileContent() {
 					fileFingerprint: detail.fileFingerprint || undefined,
 				});
 			}
+			// What was asked stays on the line, like a posted review comment.
+			const asked = action === "explain" ? (feedback || EXPLAIN_INSTRUCTION) : feedback;
+			addReviewComment(key, { label: `${name} · ${label}`, feedback: asked, target, anchor, status: "sent", kind: action === "send" ? "comment" : action });
 			haptics.success();
 			setSelection(null);
 			setNotice("Sent. The agent's reply appears in the session.");
@@ -283,7 +315,7 @@ function SessionFileContent() {
 					options={[{ key: "rendered", label: "Preview", icon: "eye" }, { key: "source", label: "Source", icon: "code" }]}
 				/>
 			) : null}
-			{rows.length > 0 && !selection && !review.comments.length && !image && !detail?.binary && !(markdown && rendered && effectiveMode === "file") && !(svg && effectiveMode === "file") ? <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.hint}>Tap a line to comment · long-press another to select a range</Text> : null}
+			{rows.length > 0 && !selection && !image && !detail?.binary && !(markdown && rendered && effectiveMode === "file") && !(svg && effectiveMode === "file") ? <Text accessibilityElementsHidden importantForAccessibility="no-hide-descendants" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.hint}>Tap a line to comment · hold and drag, or drag the line numbers, to select more</Text> : null}
 			{detail?.diffTruncated && effectiveMode === "diff" ? <Text style={styles.warn}>This diff is too large to show in full; the end is cut off.</Text> : null}
 			{detail?.contentTruncated && effectiveMode === "file" ? <Text style={styles.warn}>This file is too large to show in full.</Text> : null}
 		</View>
@@ -323,12 +355,15 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" ? "It matches the base branch." : undefined} /></View>;
 	} else {
 		const listView = (
+			<GestureDetector gesture={drag.gesture}>
 			<FlatList
 				key={`${path}:${effectiveMode}`}
 				ref={list}
+				{...drag.listProps}
+				scrollEnabled={!drag.dragging}
 				data={rows}
 				keyExtractor={(row) => row.key}
-				extraData={`${selection?.anchor}:${selection?.focus}:${wrap}:${commented.size}`}
+				extraData={`${selection?.anchor}:${selection?.focus}:${wrap}:${commented.size}:${commentById.size}`}
 				initialNumToRender={60}
 				maxToRenderPerBatch={60}
 				windowSize={15}
@@ -337,6 +372,8 @@ function SessionFileContent() {
 				contentContainerStyle={{ paddingBottom: selection ? 260 : review.comments.length ? 140 : 96 }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
 					<FoldRow hidden={item.hidden} section={item.section} expandable={item.expandable} onExpand={() => expand(item.id)} />
+				) : item.type === "comment" ? (
+					commentById.get(item.commentId) ? <InlineComment comment={commentById.get(item.commentId)!} digits={digits} onRemove={review.remove} /> : null
 				) : (
 					<DiffLine
 						row={item.row}
@@ -344,7 +381,8 @@ function SessionFileContent() {
 						language={language}
 						wrap={wrap}
 						digits={digits}
-						selected={Boolean(selection && index >= Math.min(selection.anchor, selection.focus) && index <= Math.max(selection.anchor, selection.focus))}
+						selected={index >= selectionStart && index <= selectionEnd}
+						edge={index === selectionStart && index === selectionEnd ? "both" : index === selectionStart ? "start" : index === selectionEnd ? "end" : undefined}
 						commented={commented.has(item.row.kind === "del" ? `old:${item.row.oldNo}` : `new:${item.row.newNo}`)}
 						selectionActive={Boolean(selection)}
 						onSelect={onSelect}
@@ -352,6 +390,7 @@ function SessionFileContent() {
 					/>
 				)}
 			/>
+			</GestureDetector>
 		);
 		body = wrap ? listView : (
 			<ScrollView horizontal bounces={false} contentContainerStyle={{ minWidth: width }}>
@@ -365,7 +404,7 @@ function SessionFileContent() {
 			{pathBar}
 			<View style={styles.body}>{body}</View>
 			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
-			{selection && chosen.length ? (
+			{selection && chosen.length && !drag.dragging ? (
 				<SelectionComposer
 					label={`${name} · ${label}`}
 					busy={busy}

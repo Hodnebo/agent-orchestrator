@@ -21,7 +21,7 @@ import { textSelectionColors } from "../textSelection";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../tokens";
 import type { WorkspaceFileStatus } from "./api";
-import { changeAccessibilityLabel, plural, sectionLabel, splitPath, statusGlyph, statusLabel, type ChangeEntry, type DisplayRow, type LineRow } from "./model";
+import { changeAccessibilityLabel, plural, sectionLabel, splitPath, statusLabel, type ChangeEntry, type DisplayRow, type LineRow } from "./model";
 import type { ReviewComment } from "./reviewStore";
 
 // ---- Segmented tabs -----------------------------------------------------------
@@ -63,17 +63,31 @@ export function statusColor(status: WorkspaceFileStatus, t: Theme): string {
 		case "added": return t.green;
 		case "deleted": return t.red;
 		case "renamed": return t.blue;
-		default: return t.textSecondary;
+		case "modified": return t.amber;
+		default: return t.textTertiary;
 	}
 }
 
-export function StatusGlyph({ status }: { status: WorkspaceFileStatus }) {
+const STATUS_ICON: Record<WorkspaceFileStatus, FeatherIconName> = {
+	added: "file-plus",
+	deleted: "file-minus",
+	modified: "file-pen",
+	renamed: "file-symlink",
+	unmodified: "file",
+};
+
+/**
+ * A file's change as a tinted file icon — plus, minus, pen, arrow — the way
+ * code hosts mark files, instead of a boxed letter. Decorative: the row's own
+ * label already names the status for screen readers.
+ */
+export function StatusGlyph({ status, size = iconSize.lg }: { status: WorkspaceFileStatus; size?: number }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const color = statusColor(status, t);
 	return (
-		<View accessible={false} style={[styles.statusGlyph, { borderColor: color }]}>
-			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.statusGlyphText, { color }]}>{statusGlyph[status]}</Text>
+		<View accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.statusGlyph, { width: size + space.xs, height: size + space.xs }]}>
+			<Feather name={STATUS_ICON[status]} size={size} color={color} />
 		</View>
 	);
 }
@@ -168,9 +182,12 @@ export const DiffLine = memo(function DiffLine({
 	selected,
 	commented,
 	selectionActive,
+	edge,
 	onSelect,
 	onExtend,
 }: {
+	/** The ends of a selection get a knob in the gutter: where a drag picks the range back up. */
+	edge?: "start" | "end" | "both";
 	row: LineRow;
 	index: number;
 	language?: string;
@@ -197,17 +214,16 @@ export const DiffLine = memo(function DiffLine({
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={`${lineWord(row)} ${number ?? ""}${commented ? ", has a comment" : ""}: ${row.text.trim() || "blank line"}`}
-			accessibilityHint={selectionActive ? "Selects this line. Use the extend action to grow the selection." : "Selects this line to comment or ask about it"}
+			accessibilityHint={selectionActive ? "Selects this line. Use the extend action to grow the selection." : "Selects this line to comment or ask about it. Hold and drag to select more lines."}
 			accessibilityState={{ selected }}
 			accessibilityActions={[{ name: "activate" }, { name: "extend", label: "Extend selection to this line" }]}
 			onAccessibilityAction={onAction}
 			onPress={() => { haptics.select(); onSelect(index); }}
-			onLongPress={() => { haptics.select(); onExtend(index); }}
-			delayLongPress={300}
 			style={[styles.line, tint ? { backgroundColor: tint } : null, selected && styles.lineSelected]}
 		>
+			{edge === "start" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobTop]} /> : null}
+			{edge === "end" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobBottom]} /> : null}
 			<View style={[styles.gutter, { width: gutterWidth(digits) }]}>
-				{commented ? <View style={styles.commentDot} /> : null}
 				<Text maxFontSizeMultiplier={1} style={styles.gutterText}>{number ?? ""}</Text>
 			</View>
 			<Text maxFontSizeMultiplier={1} style={[styles.marker, { color: row.kind === "add" ? t.green : row.kind === "del" ? t.red : t.textFaint }]}>{marker}</Text>
@@ -359,6 +375,46 @@ function QuickAction({ icon, label, disabled, onPress }: { icon: FeatherIconName
 	);
 }
 
+// ---- Inline comment -----------------------------------------------------------------
+
+const KIND_LABEL: Record<ReviewComment["kind"], string> = { comment: "Comment", explain: "Asked to explain", change: "Asked for a change" };
+
+/**
+ * A comment drawn under the line it is about, the way GitHub threads sit in a
+ * diff. Queued ones can be removed before sending; sent ones stay as a record of
+ * what the agent was asked here, and can be hidden.
+ */
+export const InlineComment = memo(function InlineComment({ comment, digits, onRemove }: { comment: ReviewComment; digits: number; onRemove: (id: string) => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const sent = comment.status === "sent";
+	const range = comment.label.split(" · ").pop() ?? comment.label;
+	return (
+		<View style={[styles.inlineWrap, { paddingLeft: gutterWidth(digits) + MARKER_WIDTH - space.xs }]}>
+			<View accessible accessibilityLabel={`${KIND_LABEL[comment.kind]} on ${range}, ${sent ? "sent to the agent" : "waiting to send"}: ${comment.feedback}`} style={[styles.inlineCard, sent && styles.inlineCardSent]}>
+				<View style={styles.inlineHead}>
+					<Feather name={comment.kind === "comment" ? "message-square" : comment.kind === "explain" ? "sparkles" : "edit-3"} size={iconSize.xs} color={t.textSecondary} />
+					<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.inlineMeta}>{`${KIND_LABEL[comment.kind]} · ${range}`}</Text>
+					<View style={[styles.inlineStatus, sent ? { backgroundColor: t.tintGreen } : { backgroundColor: t.bgSubtle }]}>
+						{sent ? <Feather name="check" size={10} color={t.green} /> : null}
+						<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.inlineStatusText, { color: sent ? t.green : t.textSecondary }]}>{sent ? "Sent" : "Queued"}</Text>
+					</View>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel={sent ? `Hide comment on ${range}` : `Remove comment on ${range}`}
+						hitSlop={10}
+						onPress={() => { haptics.tap(); onRemove(comment.id); }}
+						style={styles.inlineAction}
+					>
+						<Feather name={sent ? "x" : "trash-2"} size={iconSize.sm} color={t.textTertiary} />
+					</Pressable>
+				</View>
+				<Text selectable maxFontSizeMultiplier={fontScaleCap.body} style={styles.inlineText}>{comment.feedback}</Text>
+			</View>
+		</View>
+	);
+});
+
 // ---- Review tray ---------------------------------------------------------------------
 
 /**
@@ -402,7 +458,8 @@ export function ReviewTray({
 				</Pressable>
 			</View>
 			<Modal visible={open} animationType="slide" presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined} onRequestClose={() => setOpen(false)}>
-				<View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, space.lg) }]}>
+				{/* Android draws the modal edge to edge, under the status bar; iOS's page sheet starts below it. */}
+				<View style={[styles.sheet, { paddingTop: Platform.OS === "android" ? insets.top + space.lg : space.xl, paddingBottom: Math.max(insets.bottom, space.lg) }]}>
 					<View style={styles.sheetHead}>
 						<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} style={styles.sheetTitle}>Review comments</Text>
 						<Pressable accessibilityRole="button" accessibilityLabel="Close" hitSlop={10} onPress={() => setOpen(false)} style={styles.composerIcon}>
@@ -454,8 +511,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	segmentLabelOn: { color: t.textPrimary },
 	segmentBadge: { fontFamily: font.medium, fontSize: type.caption2.fontSize, color: t.textSecondary, backgroundColor: t.bgSubtle, borderRadius: radius.pill, paddingHorizontal: space.xs, overflow: "hidden" },
 
-	statusGlyph: { width: 20, height: 20, borderRadius: radius.xs, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-	statusGlyphText: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600" },
+	statusGlyph: { alignItems: "center", justifyContent: "center" },
 	counts: { fontFamily: t.fontMono, fontSize: type.caption1.fontSize, color: t.textSecondary },
 
 	fileRow: { minHeight: touchTarget + space.sm, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm },
@@ -470,7 +526,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	lineSelected: { backgroundColor: t.accentTint, borderLeftWidth: 3, borderLeftColor: t.accent },
 	gutter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", paddingRight: space.xs, minHeight: CODE_LINE_HEIGHT },
 	gutterText: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE - 1.5, lineHeight: CODE_LINE_HEIGHT, color: t.textFaint },
-	commentDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: t.accent, marginRight: space.xxs },
+	knob: { position: "absolute", left: -4, width: 9, height: 9, borderRadius: 5, backgroundColor: t.accent, zIndex: 1 },
+	knobTop: { top: -4 },
+	knobBottom: { bottom: -4 },
 	marker: { width: MARKER_WIDTH, textAlign: "center", fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT },
 	code: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT, color: t.textPrimary },
 	codeWrap: { flex: 1, flexShrink: 1 },
@@ -494,11 +552,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	quickText: { fontFamily: font.medium, fontSize: type.caption1.fontSize, color: t.textSecondary },
 	disabled: { opacity: 0.45 },
 
+	inlineWrap: { paddingRight: space.md, paddingVertical: space.xs, backgroundColor: t.bgBase },
+	inlineCard: { borderRadius: radius.md, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderLeftWidth: 3, borderLeftColor: t.accent, backgroundColor: t.bgElevated, paddingHorizontal: space.md, paddingVertical: space.sm, gap: space.xxs },
+	inlineCardSent: { borderLeftColor: t.green },
+	inlineHead: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	inlineMeta: { flex: 1, fontFamily: font.medium, fontSize: type.caption1.fontSize, color: t.textSecondary },
+	inlineStatus: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: space.xs, paddingVertical: 1, borderRadius: radius.pill },
+	inlineStatusText: { fontFamily: font.medium, fontSize: type.caption2.fontSize },
+	inlineAction: { minWidth: 28, minHeight: 28, alignItems: "center", justifyContent: "center" },
+	inlineText: { ...type.subheadline, color: t.textPrimary },
 	trayDock: { position: "absolute", left: 0, right: 0, alignItems: "center" },
 	trayPill: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl, borderRadius: radius.pill, backgroundColor: t.accent, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
 	trayPillText: { fontFamily: font.semibold, fontSize: type.subheadline.fontSize, color: t.onAccent },
 
-	sheet: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.lg, paddingTop: space.xl },
+	sheet: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.lg },
 	sheetHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
 	sheetTitle: { ...type.title3, color: t.textPrimary },
 	sheetLead: { ...type.footnote, color: t.textTertiary, marginTop: space.xxs, marginBottom: space.md },
