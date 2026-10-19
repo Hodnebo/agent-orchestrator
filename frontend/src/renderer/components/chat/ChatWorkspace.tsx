@@ -335,6 +335,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 export interface ChatWorkspaceProps {
 	/** A standalone conversation can ask without a daemon-owned turn. */
 	inputRequest?: ConversationActivity;
+	/** Pending interaction for a native recovery conversation without a daemon turn. */
+	pendingInteraction?: ConversationActivity;
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
@@ -625,6 +627,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	inputRequest,
+	pendingInteraction,
 	onAddToSideChat,
 	annotationNavigationRequest,
 	snapshot,
@@ -1337,12 +1340,12 @@ function ChatWorkspaceContent({
 	);
 	const editHumanMessage = onEditMessage;
 	const pendingApproval = useMemo(
-		() => latestPendingInteraction(snapshot.items, "approval", turn),
-		[snapshot.items, turn],
+		() => pendingInteraction?.activityKind === "approval" ? pendingInteraction : latestPendingInteraction(snapshot.items, "approval", turn),
+		[pendingInteraction, snapshot.items, turn],
 	);
 	const pendingUserInput = useMemo(
-		() => inputRequest ?? latestPendingInteraction(snapshot.items, "user_input", turn),
-		[inputRequest, snapshot.items, turn],
+		() => inputRequest ?? (pendingInteraction?.activityKind === "user_input" ? pendingInteraction : latestPendingInteraction(snapshot.items, "user_input", turn)),
+		[inputRequest, pendingInteraction, snapshot.items, turn],
 	);
 	const stableSettings = useStableValue(snapshot.settings);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);

@@ -6,14 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -22,18 +18,17 @@ const (
 )
 
 type host struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	deps        Dependencies
-	store       *runStore
-	out         io.Writer
-	outMu       sync.Mutex
-	outErr      error
-	mu          sync.Mutex
-	active      *investigation
-	handoffMu   sync.Mutex
-	preparation *preparationResult
-	work        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	deps      Dependencies
+	store     *runStore
+	out       io.Writer
+	outMu     sync.Mutex
+	outErr    error
+	mu        sync.Mutex
+	active    *investigation
+	handoffMu sync.Mutex
+	work      sync.WaitGroup
 }
 
 // Serve runs the private newline-JSON support protocol. It owns only the
@@ -43,6 +38,12 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) error
 	if err != nil {
 		return err
 	}
+	// One helper owns all private reporting writes and native provider cleanup.
+	release, err := claim(filepath.Join(store.root, "active.lock"))
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := store.recoverInterrupted(ctx, opts.Deps.RecoverConversation); err != nil {
 		return err
 	}
@@ -56,27 +57,21 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) error
 	if closer, ok := in.(io.Closer); ok {
 		defer func() { _ = closer.Close() }()
 	}
-	type inputLine struct {
-		data []byte
-		err  error
-	}
-	lines := make(chan inputLine)
+	lines := make(chan []byte)
+	readErr := make(chan error, 1)
 	go func() {
+		defer close(lines)
+		defer close(readErr)
 		scanner := bufio.NewScanner(in)
 		scanner.Buffer(make([]byte, 64<<10), maxCommandBytes+1)
 		for scanner.Scan() {
-			line := append([]byte(nil), scanner.Bytes()...)
 			select {
-			case lines <- inputLine{data: line}:
+			case lines <- append([]byte(nil), scanner.Bytes()...):
 			case <-ctx.Done():
 				return
 			}
 		}
-		select {
-		case lines <- inputLine{err: scanner.Err()}:
-		case <-ctx.Done():
-		}
-		close(lines)
+		readErr <- scanner.Err()
 	}()
 	for {
 		select {
@@ -84,26 +79,15 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, opts Options) error
 			return h.outputError()
 		case line, ok := <-lines:
 			if !ok {
-				return h.outputError()
-			}
-			if line.data == nil {
-				if line.err != nil {
+				if err := <-readErr; err != nil {
 					h.emit(Response{Type: "error", Error: "triage command input failed or exceeded 1 MiB"})
-					return line.err
+					return err
 				}
 				return h.outputError()
 			}
 			var cmd Command
-			decoder := json.NewDecoder(bytes.NewReader(line.data))
-			decoder.DisallowUnknownFields()
-			err := decoder.Decode(&cmd)
-			if err == nil {
-				var extra any
-				if decoder.Decode(&extra) != io.EOF {
-					err = errors.New("expected one command per line")
-				}
-			}
-			if err != nil || cmd.Type == "" || len(line.data) > maxCommandBytes {
+			err := decodeJSON(line, &cmd, true)
+			if err != nil || cmd.Type == "" || len(line) > maxCommandBytes {
 				h.emit(Response{ID: cmd.ID, Type: "error", Error: "invalid triage command"})
 				continue
 			}
@@ -122,36 +106,32 @@ func (h *host) outputError() error {
 
 func (h *host) emit(response Response) {
 	response.Version = ProtocolVersion
-	raw, err := sanitizeJSON(response)
-	if err == nil {
-		var compact bytes.Buffer
-		err = json.Compact(&compact, raw)
-		raw = append(compact.Bytes(), '\n')
+	// Frozen attachments are desktop-main input, not renderer run state.
+	if response.Run != nil {
+		run := *response.Run
+		run.Launch = nil
+		response.Run = &run
 	}
-	if err == nil {
-		h.outMu.Lock()
-		if h.outErr == nil {
-			var written int
-			written, h.outErr = h.out.Write(raw)
-			if h.outErr == nil && written != len(raw) {
-				h.outErr = io.ErrShortWrite
-			}
-		}
-		err = h.outErr
-		h.outMu.Unlock()
+	for n := range response.Runs {
+		response.Runs[n].Launch = nil
 	}
-	if err != nil {
-		h.outMu.Lock()
-		if h.outErr == nil {
-			h.outErr = err
+	raw, err := json.Marshal(response)
+	h.outMu.Lock()
+	if h.outErr == nil {
+		if err == nil {
+			_, err = io.Copy(h.out, bytes.NewReader(append(raw, '\n')))
 		}
-		h.outMu.Unlock()
+		h.outErr = err
+	}
+	failed := h.outErr != nil
+	h.outMu.Unlock()
+	if failed {
 		h.cancel()
 	}
 }
 
 func (h *host) fail(id string, err error) {
-	h.emit(Response{ID: id, Type: "error", Error: err.Error()})
+	h.emit(Response{ID: id, Type: "error", Error: Redact(err.Error())})
 }
 
 func (h *host) catalog() ([]Choice, error) {
@@ -161,148 +141,12 @@ func (h *host) catalog() ([]Choice, error) {
 	return h.deps.Catalog(h.ctx)
 }
 
-func validateSelection(selection Selection, choices []Choice) error {
-	if !selection.Permissions.Valid() {
-		return errors.New("invalid configured permission mode")
-	}
-	for _, choice := range choices {
-		if choice.Harness != selection.Harness {
-			continue
-		}
-		if !choice.Available {
-			return fmt.Errorf("selected harness is unavailable: %s", choice.UnavailableReason)
-		}
-		if choice.Permissions != "" && choice.Permissions != selection.Permissions {
-			return errors.New("permission mode does not match the configured agent")
-		}
-		if choice.Mode != "" && choice.Mode != selection.Mode {
-			return errors.New("agent mode does not match the configured agent")
-		}
-		var model *ModelChoice
-		for index := range choice.Models {
-			if choice.Models[index].ID == selection.Model {
-				model = &choice.Models[index]
-				break
-			}
-		}
-		if model == nil {
-			return errors.New("model is not in the configured catalog")
-		}
-		if selection.Effort != "" {
-			found := false
-			for _, effort := range model.Efforts {
-				found = found || effort == selection.Effort
-			}
-			if !found {
-				return errors.New("effort is not in the configured catalog")
-			}
-		}
-		if selection.AccountID != "" {
-			found := false
-			for _, account := range choice.Accounts {
-				found = found || account.ID == selection.AccountID
-			}
-			if !found {
-				return errors.New("account is not in the configured catalog")
-			}
-		}
-		return nil
-	}
-	return errors.New("harness is not configured for triage")
-}
-
 func (h *host) command(cmd Command) bool {
-	switch cmd.Type {
-	case "catalog":
-		choices, err := h.catalog()
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "catalog", Choices: choices})
-		}
-	case "configure":
-		if h.deps.Configure == nil {
-			h.fail(cmd.ID, errors.New("triage configuration is unavailable"))
-			break
-		}
-		if err := h.deps.Configure(h.ctx, cmd.Choices); err != nil {
-			h.fail(cmd.ID, err)
-			break
-		}
-		choices, err := h.catalog()
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "configured", Choices: choices})
-		}
-	case "preference":
-		if cmd.Selection != nil {
-			choices, err := h.catalog()
-			if err == nil {
-				err = validateSelection(*cmd.Selection, choices)
-			}
-			if err == nil {
-				err = atomicPrivateJSON(filepath.Join(h.store.root, "selection.json"), cmd.Selection)
-			}
-			if err != nil {
-				h.fail(cmd.ID, err)
-				break
-			}
-		}
-		selection, err := h.store.selection()
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "selection", Selection: selection})
-		}
-	case "list":
-		runs, err := h.store.list()
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "runs", Runs: runs})
-		}
-	case "get":
-		run, err := h.store.get(cmd.RunID)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-		}
-	case "prepare":
-		run, launch, err := h.prepare(cmd.Origin)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-			if launch != nil {
-				go launch()
-			}
-		}
-	case "github-auth-store":
-		if cmd.GitHubCredential == nil || h.deps.StoreGitHubCredential == nil {
-			h.fail(cmd.ID, errors.New("GitHub sign-in storage is unavailable"))
-			break
-		}
-		identity, err := h.deps.StoreGitHubCredential(h.ctx, *cmd.GitHubCredential)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "github-auth-stored", GitHubIdentity: &identity})
-		}
-	case "start":
-		run, launch, err := h.start(cmd.Start)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-			if launch != nil {
-				go launch()
-			}
-		}
-	case "handoff":
-		// Collection may still be running. Keep the command loop available for
-		// cancellation while the durable launch payload is being prepared.
+	if cmd.Type == "quit" {
+		h.emit(Response{ID: cmd.ID, Type: "quit"})
+		return true
+	}
+	if cmd.Type == "handoff" {
 		h.work.Add(1)
 		go func() {
 			defer h.work.Done()
@@ -313,97 +157,88 @@ func (h *host) command(cmd Command) bool {
 				h.emit(Response{ID: cmd.ID, Type: "session-launch", Run: &run, Launch: &launch})
 			}
 		}()
-	case "session-linked":
-		h.work.Add(1)
-		go func() {
-			defer h.work.Done()
-			run, err := h.store.linkSession(h.ctx, cmd.RunID, cmd.SessionID, h.deps.Now)
-			if err != nil {
-				h.fail(cmd.ID, err)
-			} else {
-				h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-			}
-		}()
-	case "session-create-intent":
-		run, err := h.store.sessionCreateIntent(cmd.RunID, h.deps.Now)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-		}
-	case "reply", "native-input":
+		return false
+	}
+	if cmd.Type == "reply" || cmd.Type == "terminal-input" || cmd.Type == "terminal-resize" {
 		i := h.current(cmd.RunID)
 		if i == nil {
 			h.fail(cmd.ID, errors.New("triage run is not active in this host"))
-			break
-		}
-		if cmd.Type == "reply" {
-			if err := validateReply(cmd); err != nil {
-				h.fail(cmd.ID, err)
-				break
-			}
+			return false
 		}
 		select {
 		case i.replies <- cmd:
 		default:
-			h.fail(cmd.ID, errors.New("a reply is already being sent"))
+			h.fail(cmd.ID, errors.New("an agent action is already being sent"))
 		}
-	case "cancel":
-		i := h.current(cmd.RunID)
-		if i == nil {
-			h.fail(cmd.ID, errors.New("triage run is not active in this host"))
-			break
-		}
-		i.stop()
-		run := i.snapshot()
-		h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-	case "publish":
-		if !validRunID(cmd.RunID) {
-			h.fail(cmd.ID, errors.New("publication requires a triage run ID"))
-			break
-		}
-		if active := h.current(cmd.RunID); active != nil {
-			run := active.snapshot()
-			if !run.Request.PublishAuthorized || run.Draft == nil {
-				h.fail(cmd.ID, errors.New("an authorized saved report draft is required"))
-				break
-			}
-			cmd.Type = "retry-publication"
-			select {
-			case active.replies <- cmd:
-			default:
-				h.fail(cmd.ID, errors.New("a report action is already being sent"))
-			}
-			break
-		}
-		run, launch, err := h.retryPublication(cmd.RunID)
-		if err != nil {
-			h.fail(cmd.ID, err)
-		} else {
-			h.emit(Response{ID: cmd.ID, Type: "run", Run: &run})
-			if launch != nil {
-				h.work.Add(1)
-				go func() { defer h.work.Done(); launch() }()
-			}
-		}
-	case "quit":
-		h.emit(Response{ID: cmd.ID, Type: "quit"})
-		return true
-	default:
-		h.fail(cmd.ID, errors.New("unknown triage command"))
+		return false
+	}
+	response, err := h.execute(cmd)
+	if err != nil {
+		h.fail(cmd.ID, err)
+	} else {
+		response.ID = cmd.ID
+		h.emit(response)
 	}
 	return false
 }
 
-func validateReply(cmd Command) error {
-	raw, err := json.Marshal(cmd.Answers)
-	if err != nil || len(cmd.Text)+len(raw) > maxReplyBytes {
-		return errors.New("triage reply exceeds 8 KiB")
+func (h *host) execute(cmd Command) (response Response, err error) {
+	response.Type = "run"
+	switch cmd.Type {
+	case "catalog", "configure":
+		if cmd.Type == "configure" {
+			if h.deps.Configure == nil {
+				return response, errors.New("triage configuration is unavailable")
+			}
+			if err = h.deps.Configure(h.ctx, cmd.Choices); err != nil {
+				return
+			}
+		}
+		response.Type = "catalog"
+		response.Choices, err = h.catalog()
+	case "list":
+		response.Type = "runs"
+		response.Runs, err = h.store.list()
+	case "get":
+		h.mu.Lock()
+		i := h.active
+		h.mu.Unlock()
+		var run Run
+		if i != nil && i.id == cmd.RunID {
+			run = i.snapshot()
+		}
+		if run.ID == "" || run.Execution == "session" {
+			run, err = h.store.get(cmd.RunID)
+		}
+		response.Run = &run
+	case "prepare", "start":
+		var run Run
+		if cmd.Type == "prepare" {
+			run, err = h.prepare(cmd.Origin)
+		} else {
+			run, err = h.start(cmd.Start)
+		}
+		response.Run = &run
+	case "session-create-intent", "session-linked":
+		if !h.handoffMu.TryLock() {
+			return response, errors.New("ordinary session handoff is still being prepared")
+		}
+		defer h.handoffMu.Unlock()
+		var run Run
+		run, err = h.store.sessionCheckpoint(cmd.RunID, cmd.SessionID, cmd.Type == "session-create-intent", h.deps.Now)
+		response.Run = &run
+	case "cancel":
+		i := h.current(cmd.RunID)
+		if i == nil {
+			return response, errors.New("triage run is not active in this host")
+		}
+		i.stop()
+		run := i.snapshot()
+		response.Run = &run
+	default:
+		err = errors.New("unknown triage command")
 	}
-	if strings.TrimSpace(cmd.Text) == "" && len(cmd.Answers) == 0 {
-		return errors.New("a reply is required")
-	}
-	return nil
+	return
 }
 
 func (h *host) current(id string) *investigation {
@@ -420,124 +255,21 @@ func (h *host) current(id string) *investigation {
 	}
 }
 
-func (h *host) start(request *StartRequest) (Run, func(), error) {
-	if request == nil {
-		return Run{}, nil, errors.New("triage start request is required")
-	}
-	if len(request.Observation) > maxReplyBytes {
-		return Run{}, nil, errors.New("triage observation exceeds 8 KiB")
-	}
-	if request.PreparationID != "" {
-		if saved, err := h.store.get(request.PreparationID); err == nil && saved.Execution == "session" {
-			return h.adoptUnsentSession(*request)
-		}
-	}
+func (h *host) selection(selection Selection) (Selection, error) {
 	choices, err := h.catalog()
 	if err != nil {
-		return Run{}, nil, err
+		return Selection{}, err
 	}
-	for _, choice := range choices {
-		if choice.Harness == request.Harness {
-			if request.Permissions == "" {
-				request.Permissions = choice.Permissions
-			}
-			if request.Mode == "" {
-				request.Mode = choice.Mode
-			}
-			break
-		}
-	}
-	if err := validateSelection(request.Selection, choices); err != nil {
-		return Run{}, nil, err
-	}
-	if active := h.current(""); active != nil {
-		if active.snapshot().Execution == "session" {
-			return Run{}, nil, errors.New("this preparation is reserved for an ordinary session handoff")
-		}
-		if active.snapshot().Preparation {
-			return active.activate(*request)
-		}
-		return active.snapshot(), nil, nil
-	}
-	if request.PreparationID != "" {
-		return Run{}, nil, errors.New("the diagnostic preparation is no longer active; open Report a Problem again")
-	}
-	now := h.deps.Now().UTC()
-	run := Run{ID: uuid.NewString(), Version: ProtocolVersion, CreatedAt: now, UpdatedAt: now,
-		Request: *request, State: "collecting", Activity: "Collecting relevant local evidence.", Messages: []Message{}}
-	if strings.TrimSpace(request.Observation) != "" {
-		run.Messages = append(run.Messages, Message{ID: newMessageID(1), Role: "user", Text: request.Observation, At: now})
-	}
-	release, owner, err := h.store.claimRun(run.ID)
-	if errors.Is(err, errRunOwned) && owner != nil && owner.RunID != "" {
-		existing, readErr := h.store.get(owner.RunID)
-		return existing, nil, readErr
-	}
-	if err != nil {
-		return Run{}, nil, err
-	}
-	if err := h.store.save(run); err != nil {
-		release()
-		return Run{}, nil, err
-	}
-	run, err = h.store.get(run.ID)
-	if err != nil {
-		release()
-		return Run{}, nil, err
-	}
-	i := h.newInvestigation(run, release)
-	return i.snapshot(), i.investigate, nil
+	return configuredSelection(selection, choices)
 }
 
-func (h *host) newInvestigation(run Run, release func()) *investigation {
+func (h *host) newInvestigation(run Run) *investigation {
 	ctx, cancel := context.WithCancel(h.ctx)
-	i := &investigation{host: h, id: run.ID, ctx: ctx, cancel: cancel, run: run,
-		replies: make(chan Command, 1), activation: make(chan struct{}, 1), done: make(chan struct{}), release: release}
+	i := &investigation{host: h, id: run.ID, ctx: ctx, cancel: cancel, run: run, replies: make(chan Command, 8), activation: make(chan struct{}, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	h.active = i
-	if run.Preparation {
-		h.preparation = &preparationResult{id: run.ID, ready: make(chan struct{})}
-	}
 	h.mu.Unlock()
 	return i
-}
-
-func (h *host) retryPublication(id string) (Run, func(), error) {
-	if active := h.current(""); active != nil {
-		if active.id == id {
-			run := active.snapshot()
-			if !run.Request.PublishAuthorized {
-				return Run{}, nil, errors.New("publication was not authorized for this report")
-			}
-			if run.Draft == nil {
-				return Run{}, nil, errors.New("this report has no completed issue draft")
-			}
-			return run, nil, nil
-		}
-		return Run{}, nil, errRunOwned
-	}
-	run, err := h.store.get(id)
-	if err != nil {
-		return Run{}, nil, err
-	}
-	if run.Execution == "session" {
-		return h.retrySessionPublication(run)
-	}
-	if !run.Request.PublishAuthorized {
-		return Run{}, nil, errors.New("publication was not authorized for this report")
-	}
-	if run.Draft == nil {
-		return Run{}, nil, errors.New("this report has no completed issue draft")
-	}
-	release, _, err := h.store.claimRun(id)
-	if err != nil {
-		return Run{}, nil, err
-	}
-	i := h.newInvestigation(run, release)
-	if run.Publication.State == PublicationAuthRequired && !run.SearchCompleted && run.Publication.IssueURL == "" && h.deps.SearchReports != nil {
-		return i.snapshot(), i.investigate, nil
-	}
-	return i.snapshot(), func() { defer i.finish(); i.publish() }, nil
 }
 
 func (h *host) shutdown() {

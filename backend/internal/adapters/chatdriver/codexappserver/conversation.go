@@ -235,19 +235,12 @@ func (c *conversation) pump() {
 				c.contextAtTurnStart = c.contextTokens
 				c.mu.Unlock()
 			}
-			ready := false
-			if ev.Kind == ports.ChatEventTurnCompleted && ev.TurnState.Terminal() && ev.ProviderTurnID != "" && rootConversation {
-				// A fast completion can arrive before SendTurn records its response.
-				// Settle after dispatch releases its lock so that response cannot
-				// restore the completed turn as active after readiness is announced.
-				c.sendMu.Lock()
+			if ev.Kind == ports.ChatEventTurnCompleted && ev.ProviderTurnID != "" && rootConversation {
 				c.mu.Lock()
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
-				ready = c.activeTurn == ""
 				c.mu.Unlock()
-				c.sendMu.Unlock()
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)
@@ -262,12 +255,6 @@ func (c *conversation) pump() {
 				c.discardPending(ev.RequestID)
 			}
 			c.emit(ev)
-			if ready {
-				// Consumers may dispatch immediately on Ready. Publish the settled
-				// turn first and release both dispatch and state locks before it.
-				c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady,
-					ProviderConversationID: c.threadID, ProviderTurnID: ev.ProviderTurnID})
-			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go

@@ -97,7 +97,7 @@ function DaemonFailureContent({ status }: { status: DaemonStatus }) {
 						</button>
 					) : null}
 					{restartError ? <p className="mt-2 text-error">{restartError}</p> : null}
-					<TriageReportButton className="mt-3" origin={{ surface: "daemon-error", daemonState: status.state, daemonCode: status.code, daemonOutput: status.details }} observation={status.message} />
+					<TriageReportButton className="mt-3" origin={{ surface: "daemon-error", daemonState: status.state, daemonCode: status.code, daemonOutput: status.details }} />
 					{details ? (
 						<div className="mt-2 flex items-center gap-3">
 							<button

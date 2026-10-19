@@ -105,10 +105,10 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
-		triage: { catalog: triageCatalog, getPreference: async () => null, start: triageStart },
+		triage: { ...window.ao.triage, catalog: triageCatalog, start: triageStart },
 		app: { getVersion, openExternal },
 		clipboard: { writeText },
-		daemon: { getStatus: getDaemonStatus },
+		daemon: { ...window.ao.daemon, getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
 		cliLink: {
 			setEnabled: vi.fn(async () => undefined),
@@ -792,23 +792,16 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.queryByRole("dialog", { name: "Report a problem" })).not.toBeInTheDocument();
 	});
 
-	it("offers a scrubbed GitHub fallback from Help when the helper cannot run", async () => {
+	it("shows the scrubbed helper failure in Help without launching an agent", async () => {
 		const user = userEvent.setup();
 		triageCatalog.mockRejectedValue(new Error("Support helper missing in /Users/alice/private-repo"));
-		getVersion.mockResolvedValue("9.9.9-test");
-		getDaemonStatus.mockRejectedValue(new Error("daemon unavailable"));
 		renderForm("help");
 		await user.click(await screen.findByRole("button", { name: "Report a problem" }));
-		await screen.findByRole("button", { name: "Open GitHub draft" });
-		await user.click(screen.getByRole("button", { name: "Open GitHub draft" }));
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		const copied = writeText.mock.calls[0][0] as string;
-		expect(copied).toContain("AO 9.9.9-test");
-		expect(copied).toContain("Daemon: unknown");
-		expect(copied).toContain("[redacted-local-path]");
-		expect(copied).not.toContain("/Users/alice");
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://github.com/OrchestratorInc/agent-orchestrator/issues/new"));
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent("Support helper missing");
+		expect(error.textContent).not.toContain("/Users/alice");
 		expect(triageStart).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
 	});
 
 	it("surfaces a Return action for a persisted feature pin", async () => {

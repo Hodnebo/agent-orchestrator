@@ -1,22 +1,21 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { IpcMain } from "electron";
 import { resolveDaemonLaunch } from "../shared/daemon-launch";
 import type { DaemonStatus } from "../shared/daemon-status";
-import type { ProviderAuthCredential } from "./provider-auth-flow";
 import {
 	TRIAGE_CHANNELS,
-	TRIAGE_APPROVAL_REQUIRED,
 	type TriageBridge,
 	type TriageChoice,
 	type TriageOrigin,
+	type TriageReplyInput,
 	type TriageRun,
-	type TriageSelection,
 	type TriageStartRequest,
+	type TriageTerminalOutput,
 } from "../shared/triage";
 
 export const MAX_TRIAGE_COMMAND_BYTES = 1024 * 1024;
@@ -25,18 +24,16 @@ const MAX_PENDING_REQUESTS = 64;
 const MAX_BUFFERED_COMMAND_BYTES = 4 * MAX_TRIAGE_COMMAND_BYTES;
 const MAX_DIAGNOSTIC_BYTES = 16 * 1024;
 
-type Command = {
+type Command = Partial<TriageReplyInput> & {
 	type: string;
 	runId?: string;
 	sessionId?: string;
 	start?: TriageStartRequest;
 	origin?: TriageOrigin;
-	githubCredential?: { accessToken: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number };
 	choices?: TriageChoice[];
-	selection?: TriageSelection;
 	text?: string;
-	requestId?: string;
-	answers?: Record<string, string[]>;
+	rows?: number;
+	cols?: number;
 };
 type Response = {
 	version: 1;
@@ -46,8 +43,9 @@ type Response = {
 	launch?: SessionLaunch;
 	runs?: TriageRun[];
 	choices?: TriageChoice[];
-	selection?: TriageSelection;
-	githubIdentity?: { login: string; id: number };
+	runId?: string;
+	data?: string;
+	sequence?: number;
 	error?: string;
 };
 type SessionLaunch = {
@@ -55,7 +53,7 @@ type SessionLaunch = {
 	prompt: string;
 	attachments: Array<{ mimeType: string; data: string }>;
 };
-type DaemonRequest = (port: number, method: "GET" | "POST", endpoint: "/healthz" | "/api/v1/sessions" | `/api/v1/sessions/${string}/send`, body?: Record<string, unknown>) => Promise<{ status: number; body: Record<string, unknown> }>;
+type DaemonRequest = (port: number, method: "GET" | "POST", endpoint: "/healthz" | "/api/v1/sessions", body?: Record<string, unknown>) => Promise<{ status: number; body: Record<string, unknown> }>;
 type SpawnHelper = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export type TriageServiceOptions = {
 	dataDir: string;
@@ -67,7 +65,6 @@ export type TriageServiceOptions = {
 	binaryExists?: (binary: string) => boolean;
 	requestTimeoutMs?: number;
 	shutdownTimeoutMs?: number;
-	authenticateGitHub?: (dataDir: string, signal: AbortSignal) => Promise<ProviderAuthCredential>;
 	requestDaemon?: DaemonRequest;
 };
 
@@ -154,60 +151,11 @@ function cachedSnapshot(value: unknown): Record<string, unknown> {
 	return JSON.parse(json) as Record<string, unknown>;
 }
 
-function selection(value: unknown): TriageSelection {
-	const source = record(value);
-	return {
-		harness: text(source.harness, 128, true),
-		...(source.model === undefined ? {} : { model: text(source.model, 512) }),
-		...(source.effort === undefined ? {} : { effort: text(source.effort, 128) }),
-		...(source.accountId === undefined ? {} : { accountId: text(source.accountId, 512) }),
-		...(source.mode === undefined ? {} : { mode: text(source.mode, 128) }),
-		...(source.permissions === undefined ? {} : { permissions: text(source.permissions, 128) }),
-	};
-}
-
 function choices(value: unknown): TriageChoice[] {
 	if (!Array.isArray(value) || value.length > 64) throw new Error("Invalid configured support agents.");
-	return value.map((entry) => {
-		const source = record(entry);
-		const sourceModels = source.models ?? [];
-		if (!Array.isArray(sourceModels) || sourceModels.length > 512 || typeof source.available !== "boolean") {
-			throw new Error("Invalid configured support agent.");
-		}
-		if (source.modelsMissing !== undefined && typeof source.modelsMissing !== "boolean") throw new Error("Invalid support model availability.");
-		const models = sourceModels.map((entry) => {
-			const model = record(entry);
-			if (model.default !== undefined && typeof model.default !== "boolean") throw new Error("Invalid support model default.");
-			let efforts: string[] | undefined;
-			if (model.efforts !== undefined) {
-				if (!Array.isArray(model.efforts) || model.efforts.length > 32) throw new Error("Invalid support model efforts.");
-				efforts = model.efforts.map((effort) => text(effort, 128, true));
-			}
-			if (model.id === undefined) throw new Error("Invalid configured model.");
-			return { id: text(model.id, 512), label: text(model.label, 512, true), ...(efforts ? { efforts } : {}), ...(model.default === undefined ? {} : { default: model.default }) };
-		});
-		let accounts: TriageChoice["accounts"];
-		if (source.accounts !== undefined) {
-			if (!Array.isArray(source.accounts) || source.accounts.length > 128) throw new Error("Invalid support accounts.");
-			accounts = source.accounts.map((entry) => {
-				const account = record(entry);
-				if (account.default !== undefined && typeof account.default !== "boolean") throw new Error("Invalid support account default.");
-				return { id: text(account.id, 512, true), label: text(account.label, 512, true), ...(account.default === undefined ? {} : { default: account.default }) };
-			});
-		}
-		const updatedAt = text(source.updatedAt, 64, true);
-		if (!Number.isFinite(Date.parse(updatedAt))) throw new Error("Invalid support agent update time.");
-		return {
-			harness: text(source.harness, 128, true), label: text(source.label, 512, true), models,
-			available: source.available, updatedAt,
-			...(source.modelsMissing === undefined ? {} : { modelsMissing: source.modelsMissing }),
-			...(accounts ? { accounts } : {}),
-			...(source.unavailableReason === undefined ? {} : { unavailableReason: scrubTriageDiagnostics(text(source.unavailableReason, 2048)) }),
-			...(source.source === undefined ? {} : { source: text(source.source, 128) }),
-			...(source.mode === undefined ? {} : { mode: text(source.mode, 128) }),
-			...(source.permissions === undefined ? {} : { permissions: text(source.permissions, 128) }),
-		};
-	});
+	const serialized = JSON.stringify(value);
+	if (Buffer.byteLength(serialized) > MAX_TRIAGE_COMMAND_BYTES) throw new Error("Configured support agents exceed 1 MiB.");
+	return value as TriageChoice[];
 }
 
 function isRun(value: unknown): value is TriageRun {
@@ -215,8 +163,7 @@ function isRun(value: unknown): value is TriageRun {
 	const run = value as Partial<TriageRun>;
 	return typeof run.id === "string" && run.version === 1 && typeof run.state === "string"
 		&& typeof run.activity === "string" && typeof run.createdAt === "string" && typeof run.updatedAt === "string"
-		&& Array.isArray(run.messages) && !!run.request && typeof run.request === "object"
-		&& !!run.publication && typeof run.publication.state === "string";
+		&& Array.isArray(run.messages) && !!run.request && typeof run.request === "object";
 }
 
 function parseResponse(line: string): Response {
@@ -233,26 +180,18 @@ function parseResponse(line: string): Response {
 				text(launch.clientRequestId, 128, true);
 				text(launch.prompt, 16 * 1024, true);
 				if (!Array.isArray(launch.attachments) || !launch.attachments.length || launch.attachments.length > 8) throw new Error("Invalid investigation attachments.");
-				let bytes = 0;
-				for (const entry of launch.attachments) {
-					const attachment = record(entry);
-					if (!["text/plain", "text/markdown", "application/json"].includes(String(attachment.mimeType)) || typeof attachment.data !== "string" || !attachment.data.length || Buffer.from(attachment.data, "base64").toString("base64") !== attachment.data) throw new Error("Invalid investigation attachment.");
-					bytes += Buffer.byteLength(attachment.data, "base64");
-					if (bytes > 1024 * 1024) throw new Error("Investigation attachments exceed 1 MiB.");
-				}
 			} else if (!value.run.sessionId) throw new Error("The investigation has no launch payload.");
 			break;
 		}
 		case "runs": if (value.runs !== undefined && (!Array.isArray(value.runs) || !value.runs.every(isRun))) throw new Error("Invalid support runs."); break;
 		case "catalog": if (value.choices !== undefined) value.choices = choices(value.choices); break;
-		case "selection": if (value.selection !== undefined && value.selection !== null) value.selection = selection(value.selection); break;
 		case "error": if (typeof value.error !== "string") throw new Error("Invalid support helper error."); break;
-		case "github-auth-stored": {
-			const identity = record(value.githubIdentity);
-			if (typeof identity.login !== "string" || !Number.isSafeInteger(identity.id) || Number(identity.id) <= 0) throw new Error("Invalid GitHub identity.");
+		case "terminal-output":
+			if (typeof value.runId !== "string" || typeof value.data !== "string" ||
+				Buffer.from(value.data, "base64").toString("base64") !== value.data ||
+				!Number.isSafeInteger(value.sequence) || Number(value.sequence) < 0) throw new Error("Invalid terminal output.");
 			break;
-		}
-		case "configured": case "quit": break;
+		case "ack": case "quit": break;
 		default: throw new Error("Unknown support helper response.");
 	}
 	return value as Response;
@@ -274,65 +213,20 @@ export class TriageService implements TriageBridge {
 	private output = Buffer.alloc(0);
 	private stderr = "";
 	private listeners = new Set<(run: TriageRun) => void>();
-	private pending = new Map<string, { expected: string; resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+	private terminalListeners = new Set<(output: TriageTerminalOutput) => void>();
+	private pending = new Map<string, { expected: string | readonly string[]; resolve: (response: Response) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	private terminationTimer: ReturnType<typeof setTimeout> | undefined;
 	private exited: Promise<void> = Promise.resolve();
-	private githubSignIns = new Map<string, { controller: AbortController; promise: Promise<TriageRun> }>();
-	private reportWatchers = new Map<string, FSWatcher>();
-	private reportRefreshes = new Map<string, { dirty: boolean }>();
-	private knownSessions = new Map<string, string>();
 
 	constructor(private readonly options: TriageServiceOptions) {}
 
-	private watchSessionReport(run: TriageRun): void {
-		if (this.closing || run.execution !== "session" || !/^[a-zA-Z0-9_-]{1,128}$/.test(run.id) || this.reportWatchers.has(run.id)) return;
-		// The ordinary agent's reporting tool writes the same private manifest.
-		// Watch only that filename, and read it through the existing helper so
-		// publication/auth updates reach the UI without a second conversation.
-		try {
-			if (this.reportWatchers.size >= 64) {
-				const oldest = this.reportWatchers.keys().next().value as string;
-				this.reportWatchers.get(oldest)?.close();
-				this.reportWatchers.delete(oldest);
-			}
-			const watcher = watch(path.join(this.options.dataDir, "reports", "triage", "runs", run.id), { persistent: false }, (_event, filename) => {
-				if (filename?.toString() === "manifest.json") void this.refreshSessionReport(run.id);
-			});
-			watcher.on("error", () => { watcher.close(); this.reportWatchers.delete(run.id); });
-			this.reportWatchers.set(run.id, watcher);
-		} catch { /* A removed saved report does not affect its ordinary session. */ }
-	}
-
-	private async refreshSessionReport(id: string): Promise<void> {
-		const pending = this.reportRefreshes.get(id);
-		if (pending) { pending.dirty = true; return; }
-		const refresh = { dirty: true };
-		this.reportRefreshes.set(id, refresh);
-		try {
-			while (refresh.dirty && !this.closing) {
-				refresh.dirty = false;
-				const run = await this.get(id);
-				for (const listener of this.listeners) { try { listener(run); } catch { /* Views are independent. */ } }
-			}
-		} catch { /* Preserve the last saved status when the helper is unavailable. */ }
-		finally { this.reportRefreshes.delete(id); }
-	}
-
-	private closeReportWatchers(): void {
-		for (const watcher of this.reportWatchers.values()) watcher.close();
-		this.reportWatchers.clear();
-	}
-
 	private diagnostics(): string {
 		const context = this.options.context();
-		const summary = scrubTriageDiagnostics([
+		return scrubTriageDiagnostics([
 			`AO ${context.appVersion}, ${context.buildMode}, ${process.platform}/${process.arch}`,
 			`Daemon: ${context.daemonStatus.state}${context.daemonStatus.code ? ` (${context.daemonStatus.code})` : ""}`,
-		].join("\n"));
-		const details = scrubTriageDiagnostics([
 			context.daemonStatus.message, context.daemonStatus.details, context.daemonOutput, this.stderr,
 		].filter(Boolean).join("\n"));
-		return `${summary}\n${details}`;
 	}
 
 	private error(message: string): Error {
@@ -403,17 +297,13 @@ export class TriageService implements TriageBridge {
 			let response: Response;
 			try { response = parseResponse(line); }
 			catch { this.endFailedHelper("The support helper sent an invalid response."); return; }
-			const retainSession = (run: TriageRun) => {
-				const sessionId = this.knownSessions.get(run.id);
-				return sessionId && run.execution === "session" && !run.sessionId ? { ...run, sessionId } : run;
-			};
-			if (response.run) response.run = retainSession(response.run);
-			if (response.runs) response.runs = response.runs.map(retainSession);
-			if (response.run) this.watchSessionReport(response.run);
-			for (const run of response.runs?.slice(0, 64).reverse() ?? []) this.watchSessionReport(run);
+
 			if (!response.id) {
 				if (response.type === "run" && response.run) {
 					for (const listener of this.listeners) { try { listener(response.run); } catch { /* A view cannot stop another subscriber. */ } }
+				} else if (response.type === "terminal-output" && response.runId && response.data !== undefined && response.sequence !== undefined) {
+					const output = { runId: response.runId, data: response.data, sequence: response.sequence };
+					for (const listener of this.terminalListeners) { try { listener(output); } catch { /* A terminal view cannot stop another subscriber. */ } }
 				} else if (response.type === "error") {
 					this.endFailedHelper("The support helper reported a protocol error."); return;
 				}
@@ -424,14 +314,14 @@ export class TriageService implements TriageBridge {
 			this.pending.delete(response.id);
 			clearTimeout(request.timer);
 			if (response.type === "error") request.reject(new Error(scrubTriageDiagnostics(response.error ?? "Support request failed.")));
-			else if (response.type !== request.expected) {
+			else if (!(Array.isArray(request.expected) ? request.expected.includes(response.type) : response.type === request.expected)) {
 				request.reject(this.error("The support helper returned the wrong response."));
 				this.endFailedHelper("The support helper returned the wrong response."); return;
 			} else request.resolve(response);
 		}
 	}
 
-	private request(command: Command, expected: string, timeoutMs = this.options.requestTimeoutMs ?? 30_000, quitting = false): Promise<Response> {
+	private request(command: Command, expected: string | readonly string[], timeoutMs = this.options.requestTimeoutMs ?? 30_000, quitting = false): Promise<Response> {
 		if (this.closing && !quitting) return Promise.reject(new Error("The support helper is shutting down."));
 		const id = randomUUID();
 		const frame = JSON.stringify({ ...command, id }) + "\n";
@@ -452,9 +342,7 @@ export class TriageService implements TriageBridge {
 	}
 
 	async catalog(): Promise<TriageChoice[]> { return (await this.request({ type: "catalog" }, "catalog")).choices ?? []; }
-	async configure(value: TriageChoice[]): Promise<void> { await this.request({ type: "configure", choices: choices(value) }, "configured"); }
-	async getPreference(): Promise<TriageSelection | null> { return (await this.request({ type: "preference" }, "selection")).selection ?? null; }
-	async setPreference(value: TriageSelection): Promise<void> { await this.request({ type: "preference", selection: selection(value) }, "selection"); }
+	async configure(value: TriageChoice[]): Promise<void> { await this.request({ type: "configure", choices: choices(value) }, "catalog"); }
 	async list(): Promise<TriageRun[]> { return (await this.request({ type: "list" }, "runs")).runs ?? []; }
 	async get(runId: string): Promise<TriageRun> { return (await this.request({ type: "get", runId: text(runId, 128, true) }, "run")).run!; }
 	private origin(value: unknown, context = this.options.context()): TriageOrigin {
@@ -470,8 +358,11 @@ export class TriageService implements TriageBridge {
 			daemonOutput: scrubTriageDiagnostics([context.daemonStatus.message, context.daemonStatus.details, context.daemonOutput].filter(Boolean).join("\n")),
 			machine: { platform: process.platform, arch: process.arch, release: os.release(),
 				...(cachedMachine.app === undefined ? {} : { app: cachedSnapshot(cachedMachine.app) }),
-				...(cachedMachine.system === undefined ? {} : { system: cachedSnapshot(cachedMachine.system) }),
-				...(cachedMachine.fetchedAt === undefined ? {} : { fetchedAt: text(cachedMachine.fetchedAt, 128) }),
+				system: cachedMachine.system === undefined ? {
+					cpuCount: os.cpus().length, totalmem: os.totalmem(), freemem: os.freemem(), load1: os.loadavg()[0],
+					cpuMeasured: false, cpuPercent: null, measuredAt: new Date().toISOString(), source: "electron-main",
+				} : cachedSnapshot(cachedMachine.system),
+				fetchedAt: cachedMachine.fetchedAt === undefined ? new Date().toISOString() : text(cachedMachine.fetchedAt, 128),
 			},
 			...(provided.session === undefined ? {} : { session: cachedSnapshot(provided.session) }),
 		};
@@ -483,11 +374,9 @@ export class TriageService implements TriageBridge {
 		const source = record(value);
 		if (typeof source.publishAuthorized !== "boolean") throw new Error("Choose whether to authorize publishing this report.");
 		const context = this.options.context();
-		const start: TriageStartRequest = {
-			...selection(source), observation: text(source.observation, MAX_TRIAGE_COMMAND_BYTES), origin: this.origin(source.origin, context),
-			...(source.preparationId === undefined ? {} : { preparationId: text(source.preparationId, 128, true) }),
-			publishAuthorized: source.publishAuthorized,
-		};
+		// The bundled helper validates selection and preparation fields. Main owns
+		// only desktop context and the daemon boundary.
+		const start: TriageStartRequest = { ...value, origin: this.origin(value.origin, context) };
 		const status = context.daemonStatus;
 		// Select the owner once. A stopped daemon may use the independent helper,
 		// but a normal session's uncertain launch must never start another agent.
@@ -505,7 +394,6 @@ export class TriageService implements TriageBridge {
 
 	private async startSession(start: TriageStartRequest, status: DaemonStatus): Promise<TriageRun> {
 		if (!Number.isInteger(status.port) || !status.port || status.port < 1 || status.port > 65535 || !Number.isInteger(status.pid) || !status.pid || status.pid < 1) throw new Error("The daemon identity is not ready. Try again when AO reconnects.");
-		if (start.harness === "unreal-agent" && start.permissions !== "bypass-permissions") throw new Error(TRIAGE_APPROVAL_REQUIRED);
 		if (!start.preparationId) start.preparationId = (await this.prepare(start.origin ?? {})).id;
 		const handoff = await this.request({ type: "handoff", start }, "session-launch");
 		if (handoff.run!.sessionId) return handoff.run!;
@@ -528,8 +416,7 @@ export class TriageService implements TriageBridge {
 			const selected = handoff.run!.request;
 			const response = await request(status.port, "POST", "/api/v1/sessions", {
 				clientRequestId: launch.clientRequestId, kind: "worker", harness: selected.harness,
-				displayName: "Report a Problem", prompt: launch.prompt, attachments: launch.attachments,
-				...(selected.harness === "unreal-agent" ? { mode: "chat" } : {}),
+				displayName: "Report a Problem", mode: selected.sessionMode ?? "chat", prompt: launch.prompt, attachments: launch.attachments,
 				...(selected.model ? { model: selected.model } : {}), ...(selected.effort ? { effort: selected.effort } : {}),
 				...(selected.permissions ? { approvalMode: selected.permissions } : {}),
 			});
@@ -540,7 +427,6 @@ export class TriageService implements TriageBridge {
 			const session = record(response.body.session);
 			const sessionId = text(session.id, 255, true);
 			createdSessionId = sessionId;
-			this.knownSessions.set(handoff.run!.id, sessionId);
 			const linked = (await this.request({ type: "session-linked", runId: handoff.run!.id, sessionId }, "run")).run!;
 			if (linked.id !== handoff.run!.id || linked.sessionId !== sessionId) throw new Error("The helper could not confirm the standalone session link.");
 			return linked;
@@ -560,74 +446,35 @@ export class TriageService implements TriageBridge {
 			throw new Error(`${reason} Press Start investigation again to check or retry the same standalone session.`);
 		}
 	}
-	async reply(runId: string, value: string, requestId?: string, valueAnswers?: Record<string, string[]>): Promise<TriageRun> {
-		let answers: Record<string, string[]> | undefined;
-		if (valueAnswers !== undefined) {
-			const source = record(valueAnswers);
-			if (Object.keys(source).length > 64) throw new Error("Too many support answers.");
-			answers = Object.create(null) as Record<string, string[]>;
-			for (const [key, entries] of Object.entries(source)) {
-				if (!Array.isArray(entries) || entries.length > 64) throw new Error("Invalid support answers.");
-				answers[text(key, 128, true)] = entries.map((entry) => text(entry, 16 * 1024));
-			}
-		}
-		return (await this.request({ type: "reply", runId: text(runId, 128, true), text: text(value, MAX_TRIAGE_COMMAND_BYTES), requestId: requestId === undefined ? undefined : text(requestId, 128), answers }, "run")).run!;
-	}
-	async cancel(runId: string): Promise<TriageRun> {
-		this.githubSignIns.get(runId)?.controller.abort();
-		return (await this.request({ type: "cancel", runId: text(runId, 128, true) }, "run")).run!;
-	}
-	async publish(runId: string): Promise<TriageRun> { return (await this.request({ type: "publish", runId: text(runId, 128, true) }, "run")).run!; }
-	async nativeInput(runId: string): Promise<TriageRun> { return (await this.request({ type: "native-input", runId: text(runId, 128, true) }, "run")).run!; }
-	signInGitHub(runId: string): Promise<TriageRun> {
+	async reply(runId: string, value: string, input?: TriageReplyInput): Promise<TriageRun> {
 		const id = text(runId, 128, true);
-		const existing = this.githubSignIns.get(id);
-		if (existing) return existing.promise;
-		const controller = new AbortController();
-		const promise = (async () => {
-			const run = await this.get(id);
-			if (run.publication.state !== "auth_required" && !run.searchAuthRequired) throw new Error("GitHub sign-in is only needed when this report requests authentication.");
-			const authenticate = this.options.authenticateGitHub ?? (async (dataDir: string, signal: AbortSignal) =>
-				(await import("./provider-auth-flow")).providerAuthFlow("github").authenticate(dataDir, signal));
-			const credential = await authenticate(this.options.dataDir, controller.signal);
-			if (controller.signal.aborted) throw new Error("GitHub sign-in was cancelled.");
-			if (credential.provider !== "github" || credential.credentialType !== "access_token") throw new Error("GitHub did not return a usable credential.");
-			await this.request({ type: "github-auth-store", githubCredential: {
-				accessToken: text(credential.secret, 16 * 1024, true),
-				...(credential.refreshToken ? { refreshToken: text(credential.refreshToken, 16 * 1024, true) } : {}),
-				...(credential.expiresIn === undefined ? {} : { expiresIn: credential.expiresIn }),
-				...(credential.refreshTokenExpiresIn === undefined ? {} : { refreshTokenExpiresIn: credential.refreshTokenExpiresIn }),
-			} }, "github-auth-stored");
-			if (controller.signal.aborted) throw new Error("GitHub sign-in was cancelled.");
-			if (run.execution === "session" && run.searchAuthRequired) {
-				const status = this.options.context().daemonStatus;
-				if (status.state !== "ready" || !status.port || !status.pid || !run.sessionId) throw new Error("GitHub sign-in is saved. Reopen the investigation when AO reconnects and ask the agent to continue its issue and PR search.");
-				const request = this.options.requestDaemon ?? requestDaemon;
-				const health = await request(status.port, "GET", "/healthz");
-				const current = this.options.context().daemonStatus;
-				if (health.status !== 200 || health.body.service !== "agent-orchestrator-daemon" || health.body.pid !== status.pid ||
-					(status.executablePath && health.body.executablePath !== status.executablePath) || current.state !== "ready" || current.pid !== status.pid || current.port !== status.port) throw new Error("GitHub sign-in is saved, but AO reconnected during sign-in. Continue in the existing investigation.");
-				const sent = await request(status.port, "POST", `/api/v1/sessions/${encodeURIComponent(run.sessionId)}/send`, {
-					message: "GitHub sign-in completed for this report. Retry the bounded issue and PR search with the reporting tool, then continue the existing investigation. Do not start another agent or bypass duplicate search.",
-				});
-				if (sent.status < 200 || sent.status >= 300) throw new Error("GitHub sign-in is saved. Continue in the existing agent to retry its issue and PR search.");
-				return this.get(id);
-			}
-			return this.publish(id);
-		})().finally(() => { this.githubSignIns.delete(id); });
-		this.githubSignIns.set(id, { controller, promise });
-		return promise;
+		const response = await this.request({ type: "reply", runId: id, text: text(value, MAX_TRIAGE_COMMAND_BYTES),
+			...(input ? { ...input, requestId: text(input.requestId, 128, true) } : {}) }, ["run", "ack"]);
+		return response.run ?? this.get(id);
+	}
+	async cancel(runId: string): Promise<TriageRun> { return (await this.request({ type: "cancel", runId: text(runId, 128, true) }, "run")).run!; }
+	async terminalInput(runId: string, value: string): Promise<void> {
+		if (typeof value !== "string" || Buffer.byteLength(value) > MAX_TRIAGE_COMMAND_BYTES) throw new Error("Invalid terminal input.");
+		await this.request({ type: "terminal-input", runId: text(runId, 128, true), text: value }, "ack");
+	}
+	async terminalResize(runId: string, rows: number, cols: number): Promise<void> {
+		if (!Number.isInteger(rows) || rows < 1 || rows > 1000 || !Number.isInteger(cols) || cols < 1 || cols > 1000) throw new Error("Invalid terminal size.");
+		await this.request({ type: "terminal-resize", runId: text(runId, 128, true), rows, cols }, "ack");
 	}
 	subscribe(listener: (run: TriageRun) => void): () => void {
 		this.listeners.add(listener);
 		return () => { this.listeners.delete(listener); };
 	}
+	subscribeTerminal(runId: string, listener: (data: string, sequence: number) => void): () => void {
+		const id = text(runId, 128, true);
+		const wrapped = (output: TriageTerminalOutput) => { if (output.runId === id) listener(output.data, output.sequence); };
+		this.terminalListeners.add(wrapped);
+		return () => { this.terminalListeners.delete(wrapped); };
+	}
 
 	shutdown(): Promise<void> {
 		if (this.shutdownPromise) return this.shutdownPromise;
 		this.closing = true;
-		this.closeReportWatchers();
-		for (const { controller } of this.githubSignIns.values()) controller.abort();
 		const child = this.child;
 		if (!child) return Promise.resolve();
 		this.shutdownPromise = (async () => {
@@ -645,8 +492,6 @@ export class TriageService implements TriageBridge {
 	}
 
 	closeOnExit(): void {
-		this.closeReportWatchers();
-		for (const { controller } of this.githubSignIns.values()) controller.abort();
 		if (this.child) { this.child.stdin.end(); (this.options.terminateProcess ?? terminateHelper)(this.child); }
 	}
 }
@@ -657,21 +502,11 @@ export function registerTriageIpc(input: {
 	service: TriageService;
 	isTrustedSender: (event: Parameters<Parameters<IpcMain["handle"]>[1]>[0]) => boolean;
 }): void {
-	const handlers = {
-		catalog: () => input.service.catalog(), configure: (choices: TriageChoice[]) => input.service.configure(choices),
-		getPreference: () => input.service.getPreference(), setPreference: (selection: TriageSelection) => input.service.setPreference(selection),
-		list: () => input.service.list(), get: (runId: string) => input.service.get(runId),
-		prepare: (origin: TriageOrigin) => input.service.prepare(origin),
-		start: (request: TriageStartRequest) => input.service.start(request),
-		reply: (runId: string, text: string, requestId?: string, answers?: Record<string, string[]>) => input.service.reply(runId, text, requestId, answers),
-		cancel: (runId: string) => input.service.cancel(runId), publish: (runId: string) => input.service.publish(runId),
-		signInGitHub: (runId: string) => input.service.signInGitHub(runId),
-		nativeInput: (runId: string) => input.service.nativeInput(runId),
-	};
-	for (const name of Object.keys(handlers) as Array<keyof typeof handlers>) {
+	const methods = ["catalog", "configure", "list", "get", "prepare", "start", "reply", "cancel", "terminalInput", "terminalResize"] as const;
+	for (const name of methods) {
 		input.ipcMain.handle(TRIAGE_CHANNELS[name], (event, ...args: unknown[]) => {
 			if (!input.isTrustedSender(event)) throw new Error("Untrusted support request.");
-			return Reflect.apply(handlers[name], undefined, args);
+			return Reflect.apply(input.service[name], input.service, args);
 		});
 	}
 }

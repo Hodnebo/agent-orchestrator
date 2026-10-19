@@ -1049,7 +1049,7 @@ describe("Sidebar", () => {
 	});
 
 	it.each([undefined, "Projects could not be loaded"])("keeps a saved support report reachable without standalone agents, workspace error: %s", (workspaceError) => {
-		useTriageStore.setState({ runs: [{ id: "saved-support", version: 1, state: "report_saved", activity: "Saved", createdAt: "2026-10-19T00:00:00Z", updatedAt: "2026-10-19T00:00:00Z", request: { harness: "claude-code", observation: "", origin: {}, publishAuthorized: false }, messages: [], evidence: [], publication: { state: "prepared" } }] });
+		useTriageStore.setState({ runs: [{ id: "saved-support", version: 1, state: "report_saved", activity: "Saved", createdAt: "2026-10-19T00:00:00Z", updatedAt: "2026-10-19T00:00:00Z", request: { harness: "claude-code", observation: "", origin: {}, publishAuthorized: false }, messages: [], transport: "chat" }] });
 		renderSidebar({ workspaces: [], workspaceError });
 		expect(screen.getByTestId("triage-agent-rows")).toContainElement(screen.getByRole("link", { name: /AO support/ }));
 		expect(screen.getByRole("link", { name: /AO support/ })).toHaveAttribute("href", "#/triage?run=saved-support");

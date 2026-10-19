@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	chatregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const (
@@ -24,20 +27,8 @@ const (
 )
 
 type configuredCatalog struct {
-	Version   int                `json:"version"`
-	UpdatedAt time.Time          `json:"updatedAt"`
-	Choices   []configuredChoice `json:"choices"`
-}
-
-// The stored projection has no credential, executable, environment or path
-// fields. Availability is checked when the chooser is opened.
-type configuredChoice struct {
-	Harness       string                `json:"harness"`
-	Models        []ModelChoice         `json:"models"`
-	ModelsMissing bool                  `json:"modelsMissing,omitempty"`
-	Accounts      []Account             `json:"accounts,omitempty"`
-	Permissions   domain.PermissionMode `json:"permissions,omitempty"`
-	Mode          string                `json:"mode,omitempty"`
+	Version int      `json:"version"`
+	Choices []Choice `json:"choices"`
 }
 
 // Catalog reads a small configuration snapshot without opening AO's database
@@ -48,9 +39,8 @@ type Catalog struct {
 	mu      sync.Mutex
 	labels  map[string]string
 	resolve map[string]func(context.Context) (string, error)
-	support func(string) (bool, string)
+	chat    *chatregistry.Registry
 	native  func(context.Context) []Choice
-	now     func() time.Time
 }
 
 // NewCatalog builds the daemon-independent configured-agent chooser.
@@ -58,69 +48,20 @@ func NewCatalog(dataDir string) *Catalog {
 	c := &Catalog{
 		dataDir: dataDir, labels: map[string]string{},
 		resolve: map[string]func(context.Context) (string, error){},
-		support: defaultTriageSupport, now: func() time.Time { return time.Now().UTC() },
+		chat:    chatregistry.Build(slog.Default(), nil),
 	}
 	for _, item := range agentregistry.Harnessed() {
 		id := string(item.Harness)
 		c.labels[id] = item.Manifest.Name
-		if resolver, ok := item.Agent.(interface {
-			ResolveBinary(context.Context) (string, error)
-		}); ok {
+		if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
 			c.resolve[id] = resolver.ResolveBinary
 		}
-		if resolver, ok := item.Agent.(interface {
-			ResolveBinaryPresence(context.Context) (string, error)
-		}); ok {
+		if resolver, ok := item.Agent.(ports.AgentBinaryPresenceResolver); ok {
 			c.resolve[id] = resolver.ResolveBinaryPresence
 		}
 	}
 	c.native = nativeConfiguredChoices
 	return c
-}
-
-// SetSupport supplies the host's transport compatibility check. The selected
-// provider's normal permission admission runs before its first turn.
-func (c *Catalog) SetSupport(support func(string) (bool, string)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if support == nil {
-		support = defaultTriageSupport
-	}
-	c.support = support
-}
-
-func defaultTriageSupport(string) (bool, string) {
-	return false, "Agent compatibility has not been loaded by the support helper."
-}
-
-func sameNativeAccount(saved, native []Account) bool {
-	if saved == nil {
-		return true
-	}
-	if len(saved) == 0 {
-		return len(native) == 0
-	}
-	selected := ""
-	for _, account := range saved {
-		if account.Default {
-			if selected != "" {
-				return false
-			}
-			selected = account.ID
-		}
-	}
-	if selected == "" && len(saved) == 1 {
-		selected = saved[0].ID
-	}
-	if selected == "" {
-		return false
-	}
-	for _, account := range native {
-		if account.ID == selected {
-			return true
-		}
-	}
-	return false
 }
 
 // Configure replaces the explicitly configured choices. It never supplements
@@ -129,15 +70,17 @@ func (c *Catalog) Configure(ctx context.Context, choices []Choice) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := configuredCatalogWithinLimits(choices); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if strings.TrimSpace(c.dataDir) == "" {
 		return errors.New("triage data directory is required")
 	}
-	snapshot := configuredCatalog{Version: configuredCatalogVersion, UpdatedAt: c.now(), Choices: c.filter(choices)}
-	raw, err := json.Marshal(snapshot)
-	if err != nil || len(raw) > maxConfiguredCatalogSize {
-		return errors.New("configured triage choices exceed the size limit")
+	snapshot := configuredCatalog{Version: configuredCatalogVersion, Choices: c.filter(choices)}
+	if err := configuredCatalogWithinLimits(snapshot); err != nil {
+		return err
 	}
 	for _, dir := range []string{c.dataDir, filepath.Join(c.dataDir, "reports"), c.root()} {
 		if err := privateDir(dir); err != nil {
@@ -153,8 +96,7 @@ func (c *Catalog) Configure(ctx context.Context, choices []Choice) error {
 func (c *Catalog) root() string { return filepath.Join(c.dataDir, "reports", "triage") }
 func (c *Catalog) path() string { return filepath.Join(c.root(), "configured.json") }
 
-// Choices returns only configured entries. Saved timestamps are retained even
-// when old so a disconnected chooser can show the age of its configuration.
+// Choices uses the configured snapshot, or local native settings on first use.
 func (c *Catalog) Choices(ctx context.Context) ([]Choice, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -165,84 +107,40 @@ func (c *Catalog) Choices(ctx context.Context) ([]Choice, error) {
 		return nil, errors.New("triage data directory is required")
 	}
 	snapshot, err := c.load(ctx)
-	choices := make([]Choice, 0, len(snapshot.Choices))
-	source := "configured-snapshot"
-	updatedAt := snapshot.UpdatedAt
-	nativeModels := map[string]bool{}
+	choices := snapshot.Choices
 	if errors.Is(err, os.ErrNotExist) {
-		source, updatedAt = "native-configuration", c.now()
 		choices = c.native(ctx)
 	} else if err != nil {
 		return nil, err
-	} else {
-		missing := false
-		for _, choice := range snapshot.Choices {
-			choices = append(choices, Choice{Harness: choice.Harness, Models: choice.Models, ModelsMissing: choice.ModelsMissing, Accounts: choice.Accounts, Permissions: choice.Permissions, Mode: choice.Mode})
-			missing = missing || choice.ModelsMissing
-		}
-		// Only an explicitly marked absent catalog permits native discovery.
-		// Omitted harnesses and intentional empty model/account lists never
-		// acquire replacement configuration from another login.
-		if missing {
-			native := map[string]Choice{}
-			for _, choice := range c.native(ctx) {
-				native[choice.Harness] = choice
-			}
-			for index := range choices {
-				choice := &choices[index]
-				configured, ok := native[choice.Harness]
-				if !choice.ModelsMissing || len(choice.Models) != 0 || !ok || len(configured.Models) == 0 || !sameNativeAccount(choice.Accounts, configured.Accounts) {
-					continue
-				}
-				choice.Models = configured.Models
-				choice.ModelsMissing = false
-				if choice.Accounts == nil {
-					choice.Accounts = configured.Accounts
-				}
-				nativeModels[choice.Harness] = true
-			}
-		}
 	}
-	filtered := c.filter(choices)
-	out := make([]Choice, 0, len(filtered))
-	for _, item := range filtered {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	choices = c.filter(choices)
+	for index := range choices {
+		choice := &choices[index]
+		if choice.ModelsMissing {
+			choice.Models = []ModelChoice{{ID: "", Label: "Configured default", Default: true}}
+			choice.ModelsMissing = false
 		}
-		choice := Choice{Harness: item.Harness, Label: c.labels[item.Harness], Models: item.Models, ModelsMissing: item.ModelsMissing,
-			Accounts: item.Accounts, Source: source, UpdatedAt: updatedAt, Permissions: item.Permissions, Mode: item.Mode}
-		if nativeModels[item.Harness] {
-			choice.Source = "native-configuration"
-			choice.UpdatedAt = c.now()
-		}
-		choice.Available, choice.UnavailableReason = c.support(item.Harness)
+		choice.Label = c.labels[choice.Harness]
+		choice.Available = false
 		if len(choice.Models) == 0 {
-			choice.Available = false
 			choice.UnavailableReason = "No configured models are available for this agent."
-		} else if _, usesAccounts := domain.AgentAccountProviderFor(domain.AgentHarness(choice.Harness)); usesAccounts && len(choice.Accounts) == 0 {
-			choice.Available = false
+			continue
+		}
+		if _, usesAccounts := domain.AgentAccountProviderFor(domain.AgentHarness(choice.Harness)); usesAccounts && len(choice.Accounts) == 0 {
 			choice.UnavailableReason = "Configured account information is unavailable; refresh this agent in AO."
+			continue
 		}
-		if choice.Available {
-			resolve := c.resolve[item.Harness]
-			if resolve == nil {
-				choice.Available = false
-			} else {
-				probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				_, resolveErr := resolve(probeCtx)
-				cancel()
-				choice.Available = resolveErr == nil
-			}
-			if !choice.Available {
-				choice.UnavailableReason = "The configured agent executable is unavailable."
-			}
+		if resolve := c.resolve[choice.Harness]; resolve != nil {
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			_, err = resolve(probeCtx)
+			cancel()
+			choice.Available = err == nil
 		}
-		if !choice.Available && choice.UnavailableReason == "" {
-			choice.UnavailableReason = "This configured agent is unavailable for triage."
+		if !choice.Available {
+			choice.UnavailableReason = "The configured agent executable is unavailable."
 		}
-		out = append(out, choice)
 	}
-	return out, nil
+	return choices, configuredCatalogWithinLimits(choices)
 }
 
 func (c *Catalog) load(ctx context.Context) (configuredCatalog, error) {
@@ -259,45 +157,37 @@ func (c *Catalog) load(ctx context.Context) (configuredCatalog, error) {
 			return snapshot, errors.New("saved triage configuration directory is unavailable or unsafe")
 		}
 	}
-	info, err := os.Lstat(c.path())
-	if err != nil {
+	if err := readPrivateJSON(c.path(), maxConfiguredCatalogSize, &snapshot); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return snapshot, os.ErrNotExist
 		}
-		return snapshot, errors.New("cannot read saved triage configuration")
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxConfiguredCatalogSize {
-		return snapshot, errors.New("saved triage configuration is invalid; refresh configured agents")
-	}
-	file, err := os.Open(c.path()) //nolint:gosec // Fixed file beneath the supplied AO data directory.
-	if err != nil {
-		return snapshot, errors.New("cannot read saved triage configuration")
-	}
-	defer func() { _ = file.Close() }()
-	decoder := json.NewDecoder(io.LimitReader(file, maxConfiguredCatalogSize+1))
-	if decoder.Decode(&snapshot) != nil || snapshot.Version != configuredCatalogVersion || snapshot.UpdatedAt.IsZero() {
 		return configuredCatalog{}, errors.New("saved triage configuration is invalid; refresh configured agents")
 	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
+	if snapshot.Version != configuredCatalogVersion {
 		return configuredCatalog{}, errors.New("saved triage configuration is invalid; refresh configured agents")
 	}
 	return snapshot, nil
 }
 
-func (c *Catalog) filter(choices []Choice) []configuredChoice {
-	out := make([]configuredChoice, 0, len(choices))
+func (c *Catalog) filter(choices []Choice) []Choice {
+	out := make([]Choice, 0, len(choices))
 	seen := map[string]bool{}
 	for _, choice := range choices {
 		if _, known := c.labels[choice.Harness]; !known || seen[choice.Harness] {
 			continue
 		}
 		config := domain.AgentConfig{Permissions: choice.Permissions, Mode: choice.Mode}
-		if config.Validate() != nil {
+		if config.Validate() != nil || choice.SessionMode != "" && !choice.SessionMode.Valid() {
 			continue
 		}
-		item := configuredChoice{Harness: choice.Harness, Models: []ModelChoice{}, ModelsMissing: choice.ModelsMissing && len(choice.Models) == 0, Permissions: choice.Permissions, Mode: choice.Mode}
+		item := Choice{Harness: choice.Harness, Models: []ModelChoice{}, ModelsMissing: choice.ModelsMissing && len(choice.Models) == 0, Permissions: choice.Permissions, Mode: choice.Mode, SessionMode: choice.SessionMode}
+		if item.Mode != "" || !c.chat.SupportsChat(domain.AgentHarness(item.Harness)) {
+			item.SessionMode = domain.SessionModeTUI
+		} else if item.SessionMode == "" || item.Harness == string(domain.HarnessUnreal) {
+			item.SessionMode = domain.SessionModeChat
+		}
 		models := map[string]bool{}
+		modelDefaults := 0
 		for _, model := range choice.Models {
 			if models[model.ID] || !validConfiguredModel(choice.Harness, model.ID) {
 				continue
@@ -314,14 +204,11 @@ func (c *Catalog) filter(choices []Choice) []configuredChoice {
 					efforts[effort] = true
 				}
 			}
-			item.Models = append(item.Models, clean)
-			models[model.ID] = true
-		}
-		modelDefaults := 0
-		for _, model := range item.Models {
-			if model.Default {
+			if clean.Default {
 				modelDefaults++
 			}
+			item.Models = append(item.Models, clean)
+			models[model.ID] = true
 		}
 		if modelDefaults > 1 {
 			for i := range item.Models {
@@ -329,20 +216,18 @@ func (c *Catalog) filter(choices []Choice) []configuredChoice {
 			}
 		}
 		accounts := map[string]bool{}
+		accountDefaults := 0
 		for _, account := range choice.Accounts {
 			if validConfiguredAccount(choice.Harness, account.ID) && !accounts[account.ID] {
 				item.Accounts = append(item.Accounts, Account{ID: account.ID, Label: catalogLabel(account.Label, "Saved account"), Default: account.Default})
 				accounts[account.ID] = true
+				if account.Default {
+					accountDefaults++
+				}
 			}
 		}
 		if len(choice.Accounts) > 0 && len(item.Accounts) == 0 {
 			continue
-		}
-		accountDefaults := 0
-		for _, account := range item.Accounts {
-			if account.Default {
-				accountDefaults++
-			}
 		}
 		if accountDefaults > 1 {
 			for i := range item.Accounts {
@@ -357,6 +242,14 @@ func (c *Catalog) filter(choices []Choice) []configuredChoice {
 
 func validConfiguredModel(harness, id string) bool {
 	return (id == "" || validCatalogID(id, true)) && modelcatalog.Accepts(harness, id)
+}
+
+func configuredCatalogWithinLimits(value any) error {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil || len(raw)+1 > maxConfiguredCatalogSize {
+		return errors.New("configured triage choices exceed 256 KiB")
+	}
+	return nil
 }
 
 func validCatalogID(id string, slash bool) bool {
@@ -376,68 +269,66 @@ func catalogLabel(label, fallback string) string {
 	if label == "" || len(label) > 160 || !utf8.ValidString(label) || Redact(label) != label || strings.ContainsAny(label, "/\\~") {
 		return fallback
 	}
-	for _, r := range label {
-		if unicode.IsControl(r) {
-			return fallback
-		}
+	if strings.IndexFunc(label, unicode.IsControl) >= 0 {
+		return fallback
 	}
 	return label
 }
 
-// LaunchEnv validates the exact advertised selection and resolves only its
-// explicit account. It never chooses a model, account or provider on failure.
-func (c *Catalog) LaunchEnv(ctx context.Context, selection Selection) (map[string]string, error) {
-	_, env, err := c.ResolveSelection(ctx, selection)
-	return env, err
-}
-
 // ResolveSelection inherits only this configured choice's own saved settings.
-// A caller cannot change its permission policy or agent-owned mode at launch.
+// Native model, account and interface choices remain fixed at launch.
 func (c *Catalog) ResolveSelection(ctx context.Context, selection Selection) (Selection, map[string]string, error) {
 	choices, err := c.Choices(ctx)
 	if err != nil {
 		return selection, nil, err
 	}
+	selected, err := configuredSelection(selection, choices)
+	if err != nil {
+		return selection, nil, err
+	}
+	if selected.AccountID == "" {
+		return selected, map[string]string{}, nil
+	}
+	env, err := configuredAccountEnv(ctx, c.dataDir, selected.Harness, selected.AccountID)
+	return selected, env, err
+}
+
+// configuredSelection accepts only the saved harness, model, effort and account.
+// An explicit valid permission mode may override that harness's default.
+func configuredSelection(selection Selection, choices []Choice) (Selection, error) {
 	for _, choice := range choices {
 		if choice.Harness != selection.Harness {
 			continue
 		}
 		if !choice.Available {
-			return selection, nil, errors.New(choice.UnavailableReason)
+			return selection, errors.New(choice.UnavailableReason)
 		}
-		if selection.Permissions != "" && selection.Permissions != choice.Permissions || selection.Mode != "" && selection.Mode != choice.Mode {
-			return selection, nil, errors.New("the selected agent settings have changed; choose the agent again")
+		if selection.Mode != "" && selection.Mode != choice.Mode {
+			return selection, errors.New("the selected agent mode has changed; choose the agent again")
 		}
-		selection.Permissions, selection.Mode = choice.Permissions, choice.Mode
-		var model *ModelChoice
-		for i := range choice.Models {
-			if choice.Models[i].ID == selection.Model {
-				model = &choice.Models[i]
-				break
-			}
+		if selection.Permissions == "" {
+			selection.Permissions = choice.Permissions
+		} else if !selection.Permissions.Valid() {
+			return selection, errors.New("the selected permission mode is invalid")
 		}
-		if model == nil {
-			return selection, nil, errors.New("the selected model is not configured for triage")
+		if selection.SessionMode != "" && selection.SessionMode != choice.SessionMode {
+			return selection, errors.New("the selected interface has changed; choose the agent again")
 		}
-		if selection.Effort != "" {
-			found := false
-			for _, effort := range model.Efforts {
-				found = found || effort == selection.Effort
-			}
-			if !found {
-				return selection, nil, errors.New("the selected effort is not configured for this model")
-			}
+		selection.Mode, selection.SessionMode = choice.Mode, choice.SessionMode
+		model := slices.IndexFunc(choice.Models, func(model ModelChoice) bool { return model.ID == selection.Model })
+		if model < 0 {
+			return selection, errors.New("the selected model is not configured for triage")
+		}
+		if selection.Effort != "" && !slices.Contains(choice.Models[model].Efforts, selection.Effort) {
+			return selection, errors.New("the selected effort is not configured for this model")
 		}
 		if selection.AccountID == "" && len(choice.Accounts) == 0 {
-			return selection, map[string]string{}, nil
+			return selection, nil
 		}
-		for _, account := range choice.Accounts {
-			if selection.AccountID != "" && account.ID == selection.AccountID {
-				env, err := configuredAccountEnv(ctx, c.dataDir, selection.Harness, account.ID)
-				return selection, env, err
-			}
+		if slices.ContainsFunc(choice.Accounts, func(account Account) bool { return account.ID == selection.AccountID }) {
+			return selection, nil
 		}
-		return selection, nil, errors.New("select a configured account for triage")
+		return selection, errors.New("select a configured account for triage")
 	}
-	return selection, nil, errors.New("the selected agent is not configured for triage")
+	return selection, errors.New("the selected agent is not configured for triage")
 }

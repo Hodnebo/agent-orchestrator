@@ -17,16 +17,15 @@ const ProtocolVersion = 1
 // provider catalog. Credential values must never appear in this projection.
 type Choice struct {
 	Harness           string                `json:"harness"`
-	Label             string                `json:"label"`
+	Label             string                `json:"label,omitempty"`
 	Models            []ModelChoice         `json:"models"`
 	ModelsMissing     bool                  `json:"modelsMissing,omitempty"`
 	Accounts          []Account             `json:"accounts,omitempty"`
 	Available         bool                  `json:"available"`
 	UnavailableReason string                `json:"unavailableReason,omitempty"`
-	Source            string                `json:"source,omitempty"`
-	UpdatedAt         time.Time             `json:"updatedAt"`
 	Permissions       domain.PermissionMode `json:"permissions,omitempty"`
 	Mode              string                `json:"mode,omitempty"`
+	SessionMode       domain.SessionMode    `json:"sessionMode,omitempty"`
 }
 
 // ModelChoice is a model explicitly present in the user's configuration.
@@ -52,6 +51,7 @@ type Selection struct {
 	AccountID   string                `json:"accountId,omitempty"`
 	Permissions domain.PermissionMode `json:"permissions,omitempty"`
 	Mode        string                `json:"mode,omitempty"`
+	SessionMode domain.SessionMode    `json:"sessionMode,omitempty"`
 }
 
 // Origin contains the context available at the initiating UI action.
@@ -77,45 +77,46 @@ type StartRequest struct {
 	PreparationID     string `json:"preparationId,omitempty"`
 }
 
-// Command and Response are newline-delimited JSON on private process pipes.
+// Command and Response use newline-delimited JSON over private process pipes.
 type Command struct {
-	ID               string              `json:"id"`
-	Type             string              `json:"type"`
-	RunID            string              `json:"runId,omitempty"`
-	SessionID        string              `json:"sessionId,omitempty"`
-	Start            *StartRequest       `json:"start,omitempty"`
-	Choices          []Choice            `json:"choices,omitempty"`
-	Selection        *Selection          `json:"selection,omitempty"`
-	Text             string              `json:"text,omitempty"`
-	RequestID        string              `json:"requestId,omitempty"`
-	Answers          map[string][]string `json:"answers,omitempty"`
-	Origin           *Origin             `json:"origin,omitempty"`
-	GitHubCredential *GitHubCredential   `json:"githubCredential,omitempty"`
+	ID         string                `json:"id"`
+	Type       string                `json:"type"`
+	RunID      string                `json:"runId,omitempty"`
+	SessionID  string                `json:"sessionId,omitempty"`
+	Start      *StartRequest         `json:"start,omitempty"`
+	Choices    []Choice              `json:"choices,omitempty"`
+	Origin     *Origin               `json:"origin,omitempty"`
+	Text       string                `json:"text,omitempty"`
+	RequestID  string                `json:"requestId,omitempty"`
+	DecisionID string                `json:"decisionId,omitempty"`
+	Action     ports.ChatInputAction `json:"action,omitempty"`
+	Content    map[string]any        `json:"content,omitempty"`
+	Rows       int                   `json:"rows,omitempty"`
+	Cols       int                   `json:"cols,omitempty"`
 }
 
-// Response is a command result or unsolicited committed run update.
+// Response is a command result or an unsolicited run or terminal update.
 type Response struct {
-	Version        int             `json:"version"`
-	ID             string          `json:"id,omitempty"`
-	Type           string          `json:"type"`
-	Run            *Run            `json:"run,omitempty"`
-	Runs           []Run           `json:"runs,omitempty"`
-	Choices        []Choice        `json:"choices,omitempty"`
-	Selection      *Selection      `json:"selection,omitempty"`
-	Error          string          `json:"error,omitempty"`
-	GitHubIdentity *GitHubIdentity `json:"githubIdentity,omitempty"`
-	Launch         *SessionLaunch  `json:"launch,omitempty"`
+	Version  int            `json:"version"`
+	ID       string         `json:"id,omitempty"`
+	Type     string         `json:"type"`
+	RunID    string         `json:"runId,omitempty"`
+	Data     string         `json:"data,omitempty"`
+	Sequence int64          `json:"sequence,omitempty"`
+	Run      *Run           `json:"run,omitempty"`
+	Runs     []Run          `json:"runs,omitempty"`
+	Choices  []Choice       `json:"choices,omitempty"`
+	Launch   *SessionLaunch `json:"launch,omitempty"`
+	Error    string         `json:"error,omitempty"`
 }
 
-// SessionLaunch is private desktop-main input to the ordinary session API.
-// Its immutable bytes, including attachment order, are reused on POST retries.
+// SessionLaunch is immutable desktop-main input for ordinary session retries.
 type SessionLaunch struct {
 	ClientRequestID string             `json:"clientRequestId"`
 	Prompt          string             `json:"prompt"`
 	Attachments     []LaunchAttachment `json:"attachments"`
 }
 
-// LaunchAttachment matches the ordinary session API's base64 file input.
 type LaunchAttachment struct {
 	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
@@ -129,20 +130,13 @@ type Message struct {
 	At   time.Time `json:"at"`
 }
 
-// Question is a provider question projected into the desktop reply controls.
-type Question struct {
-	ID        string   `json:"id"`
-	Prompt    string   `json:"prompt"`
-	Options   []string `json:"options,omitempty"`
-	Multiple  bool     `json:"multiple,omitempty"`
-	AllowText bool     `json:"allowText,omitempty"`
-}
-
-// PendingInput groups questions belonging to one provider input request.
+// PendingInput carries the selected driver's native approval or input request.
+// Detail remains opaque so IDs, URLs and schemas reach the normal UI unchanged.
 type PendingInput struct {
-	ID        string     `json:"id"`
-	Questions []Question `json:"questions"`
-	Origin    string     `json:"origin,omitempty"`
+	ID      string          `json:"id"`
+	Kind    string          `json:"kind"`
+	Summary string          `json:"summary"`
+	Detail  json.RawMessage `json:"detail"`
 }
 
 // Evidence records a diagnostic fact, its source, time and availability.
@@ -156,85 +150,42 @@ type Evidence struct {
 	Values      map[string]any `json:"values,omitempty"`
 }
 
-// Draft keeps the human report separate from agent-collected evidence.
-type Draft struct {
-	Title                string `json:"title"`
-	Body                 string `json:"body"`
-	Evidence             string `json:"evidence,omitempty"`
-	ExistingReportURL    string `json:"existingReportUrl,omitempty"`
-	ExistingReportReason string `json:"existingReportReason,omitempty"`
-}
-
-// ContextRead requests a bounded chunk from a source owned by the affected session.
-// Source is an opaque root ID, never a model-supplied absolute directory.
-type ContextRead struct {
-	Source string `json:"source"`
-	Path   string `json:"path,omitempty"`
-	Offset int64  `json:"offset,omitempty"`
-	List   bool   `json:"list,omitempty"`
-}
-
-// Publication stores frozen GitHub intent and its known or uncertain outcome.
-type Publication struct {
-	State                string `json:"state"`
-	Repository           string `json:"repository,omitempty"`
-	Marker               string `json:"marker,omitempty"`
-	Identity             string `json:"identity,omitempty"`
-	IssueURL             string `json:"issueUrl,omitempty"`
-	EvidenceURL          string `json:"evidenceUrl,omitempty"`
-	Title                string `json:"title,omitempty"`
-	Body                 string `json:"body,omitempty"`
-	Evidence             string `json:"evidence,omitempty"`
-	Error                string `json:"error,omitempty"`
-	ExistingReportURL    string `json:"existingReportUrl,omitempty"`
-	ExistingReportReason string `json:"existingReportReason,omitempty"`
-}
-
-// Run is the persisted support investigation and its desktop projection.
+// Run is the private saved investigation and its desktop projection.
 type Run struct {
-	ID                      string        `json:"id"`
-	Version                 int           `json:"version"`
-	CreatedAt               time.Time     `json:"createdAt"`
-	UpdatedAt               time.Time     `json:"updatedAt"`
-	Request                 StartRequest  `json:"request"`
-	State                   string        `json:"state"`
-	Activity                string        `json:"activity"`
-	Messages                []Message     `json:"messages"`
-	Evidence                []Evidence    `json:"evidence,omitempty"`
-	PendingInput            *PendingInput `json:"pendingInput,omitempty"`
-	Draft                   *Draft        `json:"draft,omitempty"`
-	Publication             Publication   `json:"publication"`
-	ProviderConversationID  string        `json:"providerConversationId,omitempty"`
-	ProviderTurnID          string        `json:"providerTurnId,omitempty"`
-	Error                   string        `json:"error,omitempty"`
-	Preparation             bool          `json:"preparation,omitempty"`
-	SearchCompleted         bool          `json:"searchCompleted,omitempty"`
-	NativeControlsAvailable bool          `json:"nativeControlsAvailable,omitempty"`
-	Execution               string        `json:"execution,omitempty"`
-	SessionID               string        `json:"sessionId,omitempty"`
-	SessionLaunchStarted    bool          `json:"sessionLaunchStarted,omitempty"`
-	SearchAuthRequired      bool          `json:"searchAuthRequired,omitempty"`
+	ID                     string         `json:"id"`
+	Version                int            `json:"version"`
+	CreatedAt              time.Time      `json:"createdAt"`
+	UpdatedAt              time.Time      `json:"updatedAt"`
+	Request                StartRequest   `json:"request"`
+	State                  string         `json:"state"`
+	Activity               string         `json:"activity"`
+	Messages               []Message      `json:"messages"`
+	Evidence               []Evidence     `json:"evidence,omitempty"`
+	PendingInput           *PendingInput  `json:"pendingInput,omitempty"`
+	Error                  string         `json:"error,omitempty"`
+	Preparation            bool           `json:"preparation,omitempty"`
+	Execution              string         `json:"execution,omitempty"`
+	SessionID              string         `json:"sessionId,omitempty"`
+	SessionLaunchStarted   bool           `json:"sessionLaunchStarted,omitempty"`
+	Launch                 *SessionLaunch `json:"launch,omitempty"`
+	ProviderConversationID string         `json:"providerConversationId,omitempty"`
+	ProviderTurnID         string         `json:"providerTurnId,omitempty"`
+	Transport              string         `json:"transport,omitempty"`
+	TerminalReplay         string         `json:"terminalReplay,omitempty"`
+	TerminalSequence       int64          `json:"terminalSequence,omitempty"`
 }
 
-// Dependencies keeps the host testable without a daemon or real provider.
+// Dependencies keep local collection and native agent I/O testable.
 type Dependencies struct {
-	Catalog               func(context.Context) ([]Choice, error)
-	Configure             func(context.Context, []Choice) error
-	Collect               func(context.Context, Origin) ([]Evidence, error)
-	ReadContext           func(context.Context, Origin, ContextRead) (Evidence, error)
-	StartConversation     func(context.Context, Run) (ports.ChatConversation, error)
-	RecoverConversation   func(context.Context, Run) error
-	Publish               func(context.Context, Run, func(Publication) error) (Publication, error)
-	SearchReports         func(context.Context, string) (ReportSearch, error)
-	ListSessions          func(context.Context) ([]DiagnosticSession, error)
-	ValidateSession       func(context.Context, string) error
-	StoreGitHubCredential func(context.Context, GitHubCredential) (GitHubIdentity, error)
-	Now                   func() time.Time
+	Catalog             func(context.Context) ([]Choice, error)
+	Configure           func(context.Context, []Choice) error
+	Collect             func(context.Context, Origin) ([]Evidence, error)
+	StartAgent          func(context.Context, Run) (AgentTransport, error)
+	RecoverConversation func(context.Context, Run) error
+	Now                 func() time.Time
 }
 
-// Options configures a standalone support process and its dependencies.
 type Options struct {
-	DataDir         string
-	CallerSessionID string
-	Deps            Dependencies
+	DataDir string
+	Deps    Dependencies
 }

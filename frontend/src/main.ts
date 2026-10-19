@@ -373,6 +373,11 @@ triageService.subscribe((run) => {
 		if (!contents.isDestroyed()) contents.send(TRIAGE_CHANNELS.run, run);
 	}
 });
+triageService.subscribeTerminal((output) => {
+	for (const contents of trustedShellWebContents.values()) {
+		if (!contents.isDestroyed()) contents.send(TRIAGE_CHANNELS.terminal, output);
+	}
+});
 let browserViewHost: BrowserViewHost | null = null;
 let browserProfileIpc: BrowserProfileIpc | null = null;
 let browserProfileImporter: BrowserProfileImportService | null = null;

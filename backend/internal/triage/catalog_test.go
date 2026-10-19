@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 const catalogAccountID = "12345678-1234-4234-8234-123456789abc"
@@ -20,14 +19,7 @@ func catalogFixture(t *testing.T) *Catalog {
 	if err := os.Chmod(c.dataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	c.now = func() time.Time { return time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC) }
 	c.native = func(context.Context) []Choice { return nil }
-	c.SetSupport(func(harness string) (bool, string) {
-		if harness == "codex" {
-			return true, ""
-		}
-		return false, "Read-only triage is unavailable for this agent."
-	})
 	c.resolve["codex"] = func(context.Context) (string, error) { return "/fixture/codex", nil }
 	return c
 }
@@ -41,7 +33,6 @@ func TestCatalogPersistsOnlyConfiguredChoices(t *testing.T) {
 	c := catalogFixture(t)
 	choice := configuredCodexFixture()
 	choice.Label = "sk-secret-value-that-must-not-persist"
-	choice.Source = "/private/credential/location"
 	choice.UnavailableReason = "Bearer credential-value-that-must-not-persist"
 	choice.Models = append(choice.Models,
 		ModelChoice{ID: "gpt-6.1-sol", Label: "duplicate"},
@@ -69,7 +60,7 @@ func TestCatalogPersistsOnlyConfiguredChoices(t *testing.T) {
 	if len(got) != 3 || got[0].Harness != "codex" || len(got[0].Models) != 1 || got[0].Models[0].ID != "gpt-6.1-sol" {
 		t.Fatalf("configured choices = %#v", got)
 	}
-	if !got[0].Available || got[0].Label != "Codex" || got[0].Source != "configured-snapshot" || !got[0].UpdatedAt.Equal(c.now()) {
+	if !got[0].Available || got[0].Label != "Codex" {
 		t.Fatalf("choice metadata = %#v", got[0])
 	}
 	if got[1].Available || len(got[1].Models) != 0 || !strings.Contains(got[1].UnavailableReason, "No configured models") {
@@ -85,7 +76,7 @@ func TestCatalogPersistsOnlyConfiguredChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"secret-value", "credential-value", "/private/credential", "/tmp/private", "unavailableReason", "available", "source", "unknown-agent", "not-an-amp-mode", "../../"} {
+	for _, forbidden := range []string{"secret-value", "credential-value", "/private/credential", "/tmp/private", "unavailableReason", "source", "unknown-agent", "not-an-amp-mode", "../../"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("configuration retained %q: %s", forbidden, raw)
 		}
@@ -113,10 +104,8 @@ func TestCatalogEmptyAndStaleSnapshotsWorkWithoutDaemon(t *testing.T) {
 	if err := c.Configure(context.Background(), []Choice{configuredCodexFixture()}); err != nil {
 		t.Fatal(err)
 	}
-	oldTime := c.now()
-	c.now = func() time.Time { return oldTime.AddDate(1, 0, 0) }
 	got, err = c.Choices(context.Background())
-	if err != nil || len(got) != 1 || !got[0].UpdatedAt.Equal(oldTime) {
+	if err != nil || len(got) != 1 {
 		t.Fatalf("stale offline catalog = %#v, %v", got, err)
 	}
 	c.native = func(context.Context) []Choice { return []Choice{configuredCodexFixture()} }
@@ -135,7 +124,7 @@ func TestCatalogNativeFallbackDoesNotEnumerateModels(t *testing.T) {
 		return []Choice{{Harness: "codex", Models: []ModelChoice{{ID: ""}}}}
 	}
 	got, err := c.Choices(context.Background())
-	if err != nil || len(got) != 1 || len(got[0].Models) != 1 || got[0].Models[0].ID != "" || got[0].Models[0].Label != "Configured default" || got[0].Source != "native-configuration" {
+	if err != nil || len(got) != 1 || len(got[0].Models) != 1 || got[0].Models[0].ID != "" || got[0].Models[0].Label != "Configured default" {
 		t.Fatalf("native default = %#v, %v", got, err)
 	}
 }
@@ -153,7 +142,7 @@ func TestCatalogExplicitZeroModelsCannotLaunchNativeDefault(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Available || len(got[0].Models) != 0 || !strings.Contains(got[0].UnavailableReason, "No configured models") {
 		t.Fatalf("zero-model snapshot = %#v, %v", got, err)
 	}
-	if _, err := c.LaunchEnv(context.Background(), Selection{Harness: "codex"}); err == nil {
+	if _, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: "codex"}); err == nil {
 		t.Fatal("zero-model snapshot launched an implicit native default")
 	}
 }
@@ -169,7 +158,7 @@ func TestCatalogMissingAccountMetadataCannotUseNativeLogin(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Available || !strings.Contains(got[0].UnavailableReason, "account information is unavailable") {
 		t.Fatalf("accountless snapshot = %#v, %v", got, err)
 	}
-	if env, err := c.LaunchEnv(context.Background(), Selection{Harness: "codex", Model: choice.Models[0].ID}); err == nil || env != nil {
+	if env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: "codex", Model: choice.Models[0].ID}); err == nil || env != nil {
 		t.Fatalf("missing account metadata used native login: %#v, %v", env, err)
 	}
 }
@@ -206,7 +195,7 @@ func TestCatalogPreservesExplicitDefaultsAndClearsConflicts(t *testing.T) {
 }
 
 func TestCatalogInvalidSnapshotDoesNotReadDaemonOrFallback(t *testing.T) {
-	for _, raw := range []string{"{", `{"version":99,"updatedAt":"2026-10-19T10:00:00Z","choices":[]}`, `{"version":1,"choices":[]}`, `{"version":1,"updatedAt":"2026-10-19T10:00:00Z","choices":[]} {}`} {
+	for _, raw := range []string{"{", `{"version":99,"choices":[]}`, `{"version":1,"choices":[]} {}`} {
 		t.Run(raw, func(t *testing.T) {
 			c := catalogFixture(t)
 			if err := c.Configure(context.Background(), nil); err != nil {
@@ -230,7 +219,7 @@ func TestCatalogLaunchRequiresExactConfiguredSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := Selection{Harness: "codex", Model: "gpt-6.1-sol", Effort: "xhigh", AccountID: "device-codex"}
-	env, err := c.LaunchEnv(context.Background(), valid)
+	env, err := catalogLaunchEnv(c, context.Background(), valid)
 	if err != nil || len(env) != 0 {
 		t.Fatalf("native launch env = %#v, %v", env, err)
 	}
@@ -243,18 +232,17 @@ func TestCatalogLaunchRequiresExactConfiguredSelection(t *testing.T) {
 		{Harness: "codex", Model: valid.Model, AccountID: "device-claude"},
 		{Harness: "amp", Model: "high"},
 	} {
-		if _, err := c.LaunchEnv(context.Background(), selection); err == nil {
+		if _, err := catalogLaunchEnv(c, context.Background(), selection); err == nil {
 			t.Errorf("selection unexpectedly accepted: %#v", selection)
 		}
 	}
 	c.resolve["codex"] = func(context.Context) (string, error) { return "", errors.New("secret provider diagnostic") }
-	if _, err := c.LaunchEnv(context.Background(), valid); err == nil || strings.Contains(err.Error(), "secret") {
+	if _, err := catalogLaunchEnv(c, context.Background(), valid); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("missing executable error = %v", err)
 	}
-	c.SetSupport(nil)
 	got, err := c.Choices(context.Background())
 	if err != nil || got[0].Available {
-		t.Fatalf("unset host policy must fail closed: %#v, %v", got, err)
+		t.Fatalf("missing configured executable should be unavailable: %#v, %v", got, err)
 	}
 }
 
@@ -311,7 +299,6 @@ func TestFirstOutageDiscoversConfiguredTerminalAndChatHarnesses(t *testing.T) {
 	c.native = func(ctx context.Context) []Choice {
 		return additionalConfiguredChoices(ctx, func(key string) string { return env[key] }, home)
 	}
-	c.SetSupport(func(string) (bool, string) { return true, "" })
 	for _, harness := range []string{"pi", "continue", "aider", "amp"} {
 		c.resolve[harness] = func(context.Context) (string, error) { return "/fixture/selected", nil }
 	}
@@ -325,7 +312,7 @@ func TestFirstOutageDiscoversConfiguredTerminalAndChatHarnesses(t *testing.T) {
 	}
 	for harness, model := range map[string]string{"pi": "openai/private-selected-model", "continue": "user-model", "aider": "custom-user-model", "amp": ""} {
 		choice, ok := got[harness]
-		if !ok || !choice.Available || len(choice.Models) != 1 || choice.Models[0].ID != model || !choice.Models[0].Default || choice.Source != "native-configuration" {
+		if !ok || !choice.Available || len(choice.Models) != 1 || choice.Models[0].ID != model || !choice.Models[0].Default {
 			t.Fatalf("first-outage %s = %#v", harness, choice)
 		}
 	}
@@ -336,7 +323,6 @@ func TestFirstOutageDiscoversConfiguredTerminalAndChatHarnesses(t *testing.T) {
 
 func TestCatalogInheritsOnlyExactConfiguredPermissionAndMode(t *testing.T) {
 	c := catalogFixture(t)
-	c.SetSupport(func(string) (bool, string) { return true, "" })
 	c.resolve["amp"] = func(context.Context) (string, error) { return "/fixture/amp", nil }
 	choice := Choice{Harness: "amp", Mode: "high", Permissions: "auto", Models: []ModelChoice{{ID: "", Default: true}}}
 	if err := c.Configure(context.Background(), []Choice{choice}); err != nil {
@@ -346,62 +332,63 @@ func TestCatalogInheritsOnlyExactConfiguredPermissionAndMode(t *testing.T) {
 	if err != nil || selection.Mode != "high" || selection.Permissions != "auto" {
 		t.Fatalf("native settings = %#v %v", selection, err)
 	}
-	for _, selection := range []Selection{{Harness: "amp", Mode: "ultra"}, {Harness: "amp", Permissions: "bypass-permissions"}} {
+	for _, selection := range []Selection{{Harness: "amp", Mode: "ultra"}, {Harness: "amp", Permissions: "invalid"}} {
 		if _, _, err := c.ResolveSelection(context.Background(), selection); err == nil {
 			t.Fatalf("unconfigured settings admitted: %#v", selection)
 		}
 	}
 }
 
-func TestCatalogFillsOnlyExplicitlyMissingModelCatalogFromSameNativeAccount(t *testing.T) {
+func TestCatalogMissingModelsUseOnlyConfiguredAccountDefault(t *testing.T) {
 	c := catalogFixture(t)
-	c.SetSupport(func(string) (bool, string) { return true, "" })
-	c.resolve["claude-code"] = func(context.Context) (string, error) { return "/fixture/claude", nil }
-	claude := Choice{Harness: "claude-code", Models: []ModelChoice{{ID: "", Default: true}}, Accounts: []Account{{ID: "device-claude", Default: true}}}
-	c.native = func(context.Context) []Choice { return []Choice{configuredCodexFixture()} }
-	if err := c.Configure(context.Background(), []Choice{claude}); err != nil {
-		t.Fatal(err)
-	}
-	choices, err := c.Choices(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(choices) != 1 || choices[0].Harness != "claude-code" {
-		t.Fatalf("absent native harness was resurrected: %#v", choices)
-	}
-	missing := Choice{Harness: "codex", ModelsMissing: true, Permissions: "auto"}
-	if err := c.Configure(context.Background(), []Choice{claude, missing}); err != nil {
-		t.Fatal(err)
-	}
-	choices, err = c.Choices(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(choices) != 2 || !choices[1].Available || choices[1].ModelsMissing || choices[1].Source != "native-configuration" || choices[1].Models[0].ID != "gpt-6.1-sol" || choices[1].Permissions != "auto" || len(choices[1].Accounts) != 1 || choices[1].Accounts[0].ID != "device-codex" {
-		t.Fatalf("marked missing catalog did not use exact native configuration: %#v", choices)
-	}
-	for _, disabled := range []Choice{{Harness: "codex"}, {Harness: "codex", Models: []ModelChoice{{ID: "gpt-6.1-sol"}}}, {Harness: "codex", ModelsMissing: true, Accounts: []Account{{ID: catalogAccountID, Default: true}}}} {
-		if err := c.Configure(context.Background(), []Choice{claude, disabled}); err != nil {
+	c.native = func(context.Context) []Choice { t.Fatal("saved choices must not rediscover another login"); return nil }
+	for _, test := range []struct {
+		choice    Choice
+		available bool
+		models    int
+	}{
+		{Choice{Harness: "codex", ModelsMissing: true, Accounts: []Account{{ID: catalogAccountID}}}, true, 1},
+		{Choice{Harness: "codex", ModelsMissing: true}, false, 1},
+		{Choice{Harness: "codex", Accounts: []Account{{ID: "device-codex"}}}, false, 0},
+	} {
+		if err := c.Configure(context.Background(), []Choice{test.choice}); err != nil {
 			t.Fatal(err)
 		}
-		choices, err = c.Choices(context.Background())
-		if err != nil {
+		choices, err := c.Choices(context.Background())
+		if err != nil || len(choices) != 1 || choices[0].Available != test.available || len(choices[0].Models) != test.models || len(choices[0].Accounts) != len(test.choice.Accounts) {
+			t.Fatalf("configured default = %#v, %v", choices, err)
+		}
+		if len(test.choice.Accounts) > 0 && choices[0].Accounts[0].ID != test.choice.Accounts[0].ID {
+			t.Fatal("changed the selected account")
+		}
+		if test.models > 0 && choices[0].Models[0].ID != "" {
+			t.Fatal("invented a model instead of using the selected account's native default")
+		}
+	}
+}
+
+func TestCatalogSeparatesSessionInterfaceFromAgentMode(t *testing.T) {
+	c := catalogFixture(t)
+	c.resolve["amp"] = c.resolve["codex"]
+	for _, choice := range []Choice{
+		{Harness: "codex", SessionMode: "tui", Models: []ModelChoice{{ID: ""}}, Accounts: []Account{{ID: "device-codex"}}},
+		{Harness: "amp", Mode: "high", SessionMode: "chat", Models: []ModelChoice{{ID: ""}}},
+	} {
+		if err := c.Configure(context.Background(), []Choice{choice}); err != nil {
 			t.Fatal(err)
 		}
-		if len(choices) != 2 || choices[1].Available || choices[1].Source != "configured-snapshot" || len(choices[1].Models) != len(disabled.Models) || len(choices[1].Accounts) != len(disabled.Accounts) {
-			t.Fatalf("explicit disabled/saved-account row was replaced: %#v", choices)
+		selection, _, err := c.ResolveSelection(context.Background(), Selection{Harness: choice.Harness, AccountID: func() string {
+			if len(choice.Accounts) > 0 {
+				return choice.Accounts[0].ID
+			}
+			return ""
+		}()})
+		if err != nil || selection.SessionMode != "tui" || selection.Mode != choice.Mode {
+			t.Fatalf("selection = %#v, %v", selection, err)
 		}
-	}
-	c.resolve["amp"] = func(context.Context) (string, error) { return "/fixture/amp", nil }
-	c.native = func(context.Context) []Choice {
-		return []Choice{{Harness: "amp", Models: []ModelChoice{{ID: "", Default: true}}}}
-	}
-	if err := c.Configure(context.Background(), []Choice{{Harness: "amp", ModelsMissing: true, Mode: "high", Permissions: "auto"}}); err != nil {
-		t.Fatal(err)
-	}
-	choices, err = c.Choices(context.Background())
-	if err != nil || len(choices) != 1 || !choices[0].Available || choices[0].Mode != "high" || choices[0].Permissions != "auto" {
-		t.Fatalf("native model discovery changed configured settings: %#v %v", choices, err)
+		if _, _, err := c.ResolveSelection(context.Background(), Selection{Harness: choice.Harness, SessionMode: "chat"}); err == nil {
+			t.Fatal("changed a frozen native interface")
+		}
 	}
 }
 
@@ -409,7 +396,6 @@ func TestSavedAccountLaunchDoesNotSwitchNativeAccount(t *testing.T) {
 	for _, harness := range []string{"codex", "claude-code"} {
 		t.Run(harness, func(t *testing.T) {
 			c := catalogFixture(t)
-			c.SetSupport(func(string) (bool, string) { return true, "" })
 			c.resolve[harness] = func(context.Context) (string, error) { return "/fixture/provider", nil }
 			provider, envKey, credentialFile := "codex", "CODEX_HOME", "auth.json"
 			credential := `{"tokens":{"access_token":"saved-profile-token"}}`
@@ -426,7 +412,7 @@ func TestSavedAccountLaunchDoesNotSwitchNativeAccount(t *testing.T) {
 			if err := c.Configure(context.Background(), []Choice{choice}); err != nil {
 				t.Fatal(err)
 			}
-			env, err := c.LaunchEnv(context.Background(), Selection{Harness: harness, AccountID: catalogAccountID})
+			env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: harness, AccountID: catalogAccountID})
 			if err != nil || env[envKey] != home {
 				t.Fatalf("saved launch env = %#v, %v", env, err)
 			}
@@ -439,44 +425,47 @@ func TestSavedAccountLaunchDoesNotSwitchNativeAccount(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatal("saved account launch changed native credentials")
 			}
-			if err := os.Remove(filepath.Join(home, credentialFile)); err != nil {
+			if err := os.RemoveAll(home); err != nil {
 				t.Fatal(err)
 			}
-			if env, err := c.LaunchEnv(context.Background(), Selection{Harness: harness, AccountID: catalogAccountID}); err == nil || env != nil {
+			if env, err := catalogLaunchEnv(c, context.Background(), Selection{Harness: harness, AccountID: catalogAccountID}); err == nil || env != nil {
 				t.Fatalf("missing saved credential silently fell back: %#v, %v", env, err)
 			}
 		})
 	}
 }
 
-func TestManagedCodexAccountDescriptorAndPathChecks(t *testing.T) {
+func TestManagedCodexAccountUsesExactPrivateProfile(t *testing.T) {
 	c := catalogFixture(t)
-	managed := filepath.Join(c.dataDir, "harnesses", "codex", "accounts", catalogAccountID)
-	home := filepath.Join(managed, "credential-home")
-	catalogWriteFixture(t, filepath.Join(home, "auth.json"), `{"OPENAI_API_KEY":"saved-api-key"}`)
-	descriptor := `{"version":2,"id":"` + catalogAccountID + `","source":"managed","authMethod":"api_key","createdAt":"2026-10-19T00:00:00Z","verifiedAt":"2026-10-19T00:00:00Z"}`
-	catalogWriteFixture(t, filepath.Join(managed, "account.json"), descriptor)
+	home := filepath.Join(c.dataDir, "harnesses", "codex", "accounts", catalogAccountID, "credential-home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The native CLI owns descriptor and credential validation, including login.
 	env, err := configuredAccountEnv(context.Background(), c.dataDir, "codex", catalogAccountID)
 	if err != nil || env["CODEX_HOME"] != home {
 		t.Fatalf("managed Codex account = %#v, %v", env, err)
 	}
-	if err := os.Chmod(filepath.Join(home, "auth.json"), 0o644); err != nil {
+	if err := os.Chmod(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := configuredAccountEnv(context.Background(), c.dataDir, "codex", catalogAccountID); err == nil {
-		t.Fatal("accepted publicly readable saved credential")
+		t.Fatal("accepted nonprivate account directory")
 	}
-	if err := os.Chmod(filepath.Join(home, "auth.json"), 0o600); err != nil {
+	if err := os.Chmod(home, 0o700); err != nil {
 		t.Fatal(err)
-	}
-	catalogWriteFixture(t, filepath.Join(managed, "account.json"), strings.Replace(descriptor, catalogAccountID, "87654321-1234-4234-8234-123456789abc", 1))
-	if _, err := configuredAccountEnv(context.Background(), c.dataDir, "codex", catalogAccountID); err == nil {
-		t.Fatal("accepted descriptor for a different account")
 	}
 	for _, id := range []string{"../" + catalogAccountID, "/tmp/account", "device-claude", "not-an-account"} {
 		if _, err := configuredAccountEnv(context.Background(), c.dataDir, "codex", id); err == nil {
 			t.Errorf("accepted unsafe account ref %q", id)
 		}
+	}
+	legacy := filepath.Join(c.dataDir, "agent-accounts", "codex", catalogAccountID)
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configuredAccountEnv(context.Background(), c.dataDir, "codex", catalogAccountID); err == nil {
+		t.Fatal("accepted ambiguous managed and legacy profiles")
 	}
 }
 
@@ -527,4 +516,9 @@ func catalogWriteFixture(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func catalogLaunchEnv(c *Catalog, ctx context.Context, selection Selection) (map[string]string, error) {
+	_, env, err := c.ResolveSelection(ctx, selection)
+	return env, err
 }

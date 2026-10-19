@@ -47,16 +47,3 @@ func TestConversationProtocolMismatchSignalsReadyAndStopped(t *testing.T) {
 		t.Fatal("protocol mismatch emitted no stopped event")
 	}
 }
-
-func TestConversationMutableTurnsStillRejectDefaultPermissions(t *testing.T) {
-	conv := &conversation{cfg: providerConfig{ReadOnly: false}}
-	for _, approval := range []ports.PermissionMode{
-		ports.PermissionModeDefault, ports.PermissionModeAcceptEdits, ports.PermissionModeAuto,
-	} {
-		if _, err := conv.SendTurn(t.Context(), ports.ChatUserMessage{
-			Text: "change a file", Settings: ports.ChatTurnSettings{Approval: approval},
-		}); err == nil || !strings.Contains(err.Error(), "requires bypass-permissions") {
-			t.Errorf("mutable SendTurn(%q) = %v, want bypass validation", approval, err)
-		}
-	}
-}

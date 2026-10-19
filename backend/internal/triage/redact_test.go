@@ -3,7 +3,6 @@ package triage
 import (
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -57,16 +56,19 @@ func TestRedactEvidenceKeepsMeasurementsAndFiltersNestedValues(t *testing.T) {
 		"cpuMeasured": false, "cpuPercent": float64(0), "cpuCount": 8, "availableBytes": uint64(123), "load1": nil,
 		"nested": []any{map[string]any{"apiKey": "key-secret", "source": "/home/alice/private/file"}, json.RawMessage(`{"cpuMeasured":false,"cpuPercent":0,"refreshToken":"refresh-secret"}`)},
 		"typed":  map[string]string{"Authorization": "unlabelled-secret"}, "struct": credentials{"struct-secret", 4},
-		"error": errors.New("failed at /Users/alice/file with token=error-secret"),
+		"error": "failed at /Users/alice/file with token=error-secret",
 	}}}
-	out := RedactEvidence(input)
-	values := out[0].Values
-	if values["cpuMeasured"] != false || values["cpuPercent"] != float64(0) || values["cpuCount"] != 8 || values["availableBytes"] != uint64(123) || values["load1"] != nil {
-		t.Fatalf("measurement values or types changed: %#v", values)
-	}
-	data, err := json.Marshal(out)
+	data, err := sanitizeJSON(input)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var out []Evidence
+	if err := decodeJSON(data, &out, false); err != nil {
+		t.Fatal(err)
+	}
+	values := out[0].Values
+	if values["cpuMeasured"] != false || values["cpuPercent"] != json.Number("0") || values["cpuCount"] != json.Number("8") || values["availableBytes"] != json.Number("123") || values["load1"] != nil {
+		t.Fatalf("measurement values or types changed: %#v", values)
 	}
 	for _, secret := range []string{"alice", "text-secret", "key-secret", "refresh-secret", "unlabelled-secret", "struct-secret", "error-secret"} {
 		if strings.Contains(string(data), secret) {
@@ -76,9 +78,6 @@ func TestRedactEvidenceKeepsMeasurementsAndFiltersNestedValues(t *testing.T) {
 	if input[0].Source != "/Users/alice/private/file" || input[0].Values["nested"].([]any)[0].(map[string]any)["apiKey"] != "key-secret" {
 		t.Fatal("redaction mutated the caller's evidence")
 	}
-	if RedactEvidence(nil) != nil {
-		t.Fatal("nil evidence changed")
-	}
 }
 
 func TestRedactConfiguredHomeAndMalformedStructuredData(t *testing.T) {
@@ -87,8 +86,9 @@ func TestRedactConfiguredHomeAndMalformedStructuredData(t *testing.T) {
 	if got := Redact("failed /opt/custom-home/test-user/project/file"); strings.Contains(got, "test-user") {
 		t.Fatalf("configured home remains: %q", got)
 	}
-	out := RedactEvidence([]Evidence{{Values: map[string]any{"snapshot": json.RawMessage(`{"secret":"broken`), "failure": make(chan int)}}})
-	if _, err := json.Marshal(out); err != nil {
-		t.Fatalf("unsafe structured value survived: %v", err)
+	for _, value := range []any{json.RawMessage(`{"secret":"broken`), make(chan int)} {
+		if _, err := sanitizeJSON([]Evidence{{Values: map[string]any{"snapshot": value}}}); err == nil {
+			t.Fatal("unsafe structured value survived")
+		}
 	}
 }

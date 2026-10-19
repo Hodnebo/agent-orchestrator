@@ -5,140 +5,111 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
 const (
 	collectTimeout  = 10 * time.Second
-	requestTimeout  = 2 * time.Second
 	collectMaxBytes = 64 << 10
 )
 
-type processIdentity struct {
-	PID        int
-	Start      string
-	Name       string
-	Executable string
-}
-
-type collectorDeps struct {
-	now        func() time.Time
-	paths      func() (config.Paths, error)
-	executable func() (string, error)
-	lookPath   func(string) (string, error)
-	identity   func(context.Context, int) (processIdentity, error)
-	machine    func(context.Context) (map[string]any, error)
-	client     func(int) *http.Client
-}
-
-// Collect gathers a small read-only snapshot without opening the normal AO
-// database, invoking a subprocess, or starting or repairing the daemon. Missing
-// facts are separate unavailable evidence, so a broken daemon remains useful.
-func Collect(ctx context.Context, dataDir string, origin Origin) ([]Evidence, error) {
-	return collect(ctx, dataDir, origin, collectorDeps{
-		now: time.Now, paths: config.ResolvePaths, executable: os.Executable,
-		lookPath: exec.LookPath, identity: readProcessIdentity,
-		machine: readMachine, client: loopbackProbeClient,
-	})
-}
-
-func collect(parent context.Context, dataDir string, origin Origin, deps collectorDeps) ([]Evidence, error) {
+// Collect builds one bounded, read-only snapshot. Daemon health is taken from
+// the initiating desktop; the run-file is evidence only and is never probed.
+func Collect(parent context.Context, dataDir string, origin Origin) ([]Evidence, error) {
 	ctx, cancel := context.WithTimeout(parent, collectTimeout)
 	defer cancel()
-	at := deps.now().UTC()
+	at := time.Now().UTC()
 	var evidence []Evidence
 	add := func(id, source, status, text string, values map[string]any) {
-		evidence = append(evidence, Evidence{ID: id, Kind: id, Source: source, CollectedAt: at, Status: status, Text: text, Values: values})
+		evidence = append(evidence, Evidence{ID: id, Kind: id, Source: source, CollectedAt: at, Status: status, Text: Redact(text), Values: values})
 	}
 	add("collector", "triage host", "collected", "", buildFacts(at))
-	executable, err := within(ctx, deps.executable)
-	if err != nil {
-		add("collector-executable", "os.Executable", "unavailable", err.Error(), nil)
+
+	if executable, err := os.Executable(); err != nil {
+		add("collector-executable", "os.Executable", "unavailable", "The desktop executable path could not be read.", nil)
 	} else {
-		add("collector-executable", "os.Executable", "collected", "", map[string]any{"path": executable})
+		add("collector-executable", "os.Executable", "collected", "", map[string]any{"path": executable, "name": filepath.Base(executable)})
 	}
-	add("origin", "initiating desktop action", "collected", "", map[string]any{
-		"appVersion": origin.AppVersion, "buildMode": origin.BuildMode,
-		"surface": origin.Surface, "sessionId": origin.SessionID,
-		"daemonState": origin.DaemonState, "daemonCode": origin.DaemonCode,
-	})
+	if executable, err := exec.LookPath("ao"); err != nil {
+		add("path-ao", "PATH lookup without execution", "unavailable", "No ao executable was found on PATH.", nil)
+	} else {
+		add("path-ao", "PATH lookup without execution", "collected", "This lookup did not execute ao and may differ from the desktop executable.", map[string]any{"path": executable, "name": filepath.Base(executable)})
+	}
+
+	paths, pathErr := config.ResolvePaths()
+	pathValues := map[string]any{"triageDataDir": dataDir, "dataDir": paths.DataDir, "dataDirSource": paths.DataDirSource,
+		"runFile": paths.RunFilePath, "runFileSource": paths.RunFileSource,
+		"triageDataDirMatchesResolved": filepath.Clean(dataDir) == filepath.Clean(paths.DataDir)}
+	if pathErr != nil {
+		add("paths", "independent AO path resolution", "unavailable", "AO paths could not all be resolved.", pathValues)
+	} else {
+		add("paths", "independent AO path resolution", "collected", "Resolved independently from the daemon and retained with their configuration sources.", pathValues)
+	}
+	evidence = append(evidence, readRunFile(ctx, paths.RunFilePath, at))
+
+	originValues := map[string]any{"appVersion": origin.AppVersion, "buildMode": origin.BuildMode,
+		"surface": origin.Surface, "sessionId": origin.SessionID, "daemonState": origin.DaemonState, "daemonCode": origin.DaemonCode}
+	add("origin", "initiating desktop action", "collected", "Daemon state and code were supplied by the desktop supervisor.", originValues)
 	if origin.DaemonOutput != "" {
-		output, truncated := limitText(origin.DaemonOutput)
+		output := origin.DaemonOutput
 		status := "collected"
-		if truncated {
+		if len(output) > 24<<10 {
+			output = strings.ToValidUTF8(output[:24<<10], "")
 			status = "truncated"
 		}
-		add("daemon-output", "output retained by initiating desktop action", status, output, nil)
+		add("daemon-output", "desktop supervisor's retained startup and daemon output", status, output, nil)
 	}
 	if len(origin.Machine) != 0 {
 		if len(origin.Machine) > collectMaxBytes {
-			add("origin-machine", "initiating desktop action", "truncated", "Machine snapshot exceeded the 64 KiB limit and was omitted.", nil)
+			add("machine", "cached desktop machine snapshot", "truncated", "The cached snapshot exceeded its size limit and was omitted.", nil)
 		} else {
-			var value any
-			if err := decodeJSON(origin.Machine, &value); err != nil {
-				add("origin-machine", "initiating desktop action", "unavailable", err.Error(), nil)
+			var snapshot any
+			if err := decodeJSON(origin.Machine, &snapshot, false); err != nil {
+				add("machine", "cached desktop machine snapshot", "unavailable", "The cached machine snapshot was invalid.", nil)
 			} else {
-				add("origin-machine", "initiating desktop action", "collected", "Supplied snapshot; its measurement flags and sample time are retained.", map[string]any{"snapshot": value})
+				add("machine", "cached desktop machine snapshot", "collected", "Measurements and sample time are cached desktop values.", map[string]any{"snapshot": unknownCPU(snapshot)})
 			}
 		}
 	}
-	paths, pathErr := within(ctx, deps.paths)
-	pathValues := map[string]any{"dataDir": paths.DataDir, "dataDirSource": paths.DataDirSource, "runFile": paths.RunFilePath, "runFileSource": paths.RunFileSource, "triageDataDir": dataDir}
-	if pathErr != nil {
-		add("paths", "configuration path resolvers", "unavailable", pathErr.Error(), pathValues)
-	} else {
-		add("paths", "configuration path resolvers", "collected", "Paths resolved without loading daemon configuration or reading SQLite.", pathValues)
-	}
-	aoPath, err := within(ctx, func() (string, error) { return deps.lookPath("ao") })
-	if err != nil {
-		add("path-ao", "PATH lookup without execution", "unavailable", err.Error(), nil)
-	} else {
-		add("path-ao", "PATH lookup without execution", "collected", "This may differ from the executable used by the desktop app.", map[string]any{"path": aoPath})
-	}
-	machine, err := within(ctx, func() (map[string]any, error) { return deps.machine(ctx) })
-	if err != nil {
-		add("machine", "independent operating-system snapshot", "unavailable", err.Error(), machine)
-	} else {
-		add("machine", "independent operating-system snapshot", "collected", "A single sample does not measure CPU utilization.", machine)
-	}
-	probeEvidence, daemonReady := collectDaemon(ctx, paths.RunFilePath, at, deps)
-	evidence = append(evidence, probeEvidence...)
-	if len(origin.Session) != 0 {
-		var value any
-		if len(origin.Session) > collectMaxBytes {
-			add("session-origin", "initiating desktop's cached session", "truncated", "Cached session details exceeded the 64 KiB limit and were omitted.", nil)
-		} else if err := decodeJSON(origin.Session, &value); err != nil {
-			add("session-origin", "initiating desktop's cached session", "unavailable", err.Error(), nil)
-		} else {
-			add("session-origin", "initiating desktop's cached session", "collected", "Previously displayed session details, not a fresh daemon read. They may be stale.", map[string]any{"snapshot": value})
+
+	evidence = append(evidence, readRetainedLog(ctx, dataDir, "daemon.log", "daemon-log", 24<<10, ""))
+	if localContextAllowed(origin) {
+		if validRunID(origin.SessionID) {
+			evidence = append(evidence,
+				readRetainedLog(ctx, dataDir, "chat-hosts/"+origin.SessionID+"/acp-prompt.journal", "provider-journal", 12<<10, ""),
+				readRetainedLog(ctx, dataDir, "hooks.log", "session-hook-errors", 12<<10, origin.SessionID))
+		}
+		retained, err := readRetainedContext(ctx, dataDir, origin)
+		evidence = append(evidence, retained...)
+		if err != nil {
+			add("retained-context", "existing local session database", "unavailable", "Some retained session context could not be read. No database was created or migrated.", nil)
 		}
 	} else if origin.SessionID != "" {
-		text := "Session records were not read by the independent collector."
-		if !daemonReady {
-			text = "Session records are unavailable because daemon readiness was not verified."
-		}
-		add("session-origin", "initiating session context", "unavailable", text, map[string]any{"sessionId": origin.SessionID})
+		add("retained-context", "local session database", "unavailable", "Local retained data was skipped because the selected session is remote or its identity did not match.", nil)
 	}
 	if ctx.Err() != nil {
-		add("snapshot-limit", "triage host", "unavailable", ctx.Err().Error(), nil)
+		add("snapshot-limit", "triage host", "unavailable", "The bounded collection deadline expired; remaining sources were skipped.", nil)
 	}
-	return RedactEvidence(evidence), parent.Err()
+
+	raw, err := sanitizeJSON(evidence)
+	if err != nil {
+		return nil, errors.New("diagnostic evidence could not be serialized safely")
+	}
+	evidence = nil // Decode fresh maps so renamed sensitive keys cannot survive.
+	if err := decodeJSON(raw, &evidence, false); err != nil {
+		return nil, err
+	}
+	return evidence, parent.Err()
 }
 
 func buildFacts(at time.Time) map[string]any {
@@ -159,184 +130,43 @@ func buildFacts(at time.Time) map[string]any {
 	return facts
 }
 
-func unknownMachine() map[string]any {
-	return map[string]any{"cpuCount": runtime.NumCPU(), "cpuMeasured": false, "cpuPercent": nil, "memoryTotalBytes": nil, "memoryAvailableBytes": nil, "load1": nil}
-}
-
-func collectDaemon(ctx context.Context, path string, at time.Time, deps collectorDeps) ([]Evidence, bool) {
-	item := func(id, status, text string, values map[string]any) Evidence {
-		return Evidence{ID: id, Kind: id, Source: "existing daemon run-file and fixed loopback probes", CollectedAt: at, Status: status, Text: text, Values: values}
+func readRunFile(ctx context.Context, path string, at time.Time) Evidence {
+	item := Evidence{ID: "run-file", Kind: "run-file", Source: "bounded existing AO run-file", CollectedAt: at, Status: "unavailable"}
+	if path == "" || ctx.Err() != nil {
+		item.Text = "No readable run-file path was available."
+		return item
 	}
-	unavailable := func(reason string) ([]Evidence, bool) {
-		return []Evidence{item("daemon-healthz", "unavailable", reason, nil), item("daemon-readyz", "unavailable", reason, nil)}, false
+	raw, err := readPrivateBytes(path, collectMaxBytes)
+	if errors.Is(err, errSnapshotTooLarge) {
+		item.Status, item.Text = "truncated", "The run-file exceeded its size limit."
+		return item
 	}
-	if path == "" {
-		return unavailable("Run-file path is unavailable.")
-	}
-	raw, err := within(ctx, func() ([]byte, error) { return readBoundedFile(path) })
 	if err != nil {
-		status := "unavailable"
-		if errors.Is(err, errSnapshotTooLarge) {
-			status = "truncated"
-		}
-		out, ready := unavailable(err.Error())
-		return append([]Evidence{item("run-file", status, err.Error(), nil)}, out...), ready
+		item.Text = "The existing run-file could not be read."
+		return item
 	}
 	var info runfile.Info
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	err = decoder.Decode(&info)
-	if err == nil {
-		err = requireEOF(decoder)
+	if err := decodeJSON(raw, &info, false); err != nil || info.PID <= 0 || info.Port < 1 || info.Port > 65535 || info.StartedAt.IsZero() || info.StartedAt.After(at.Add(time.Minute)) {
+		item.Text = "The existing run-file was invalid."
+		return item
 	}
-	if err == nil && (info.PID <= 0 || int64(info.PID) >= 1<<31 || info.Port < 1 || info.Port > 65535 || info.StartedAt.IsZero() || info.StartedAt.After(at.Add(time.Minute))) {
-		err = errors.New("invalid run-file PID, port, or start time")
-	}
-	if err != nil {
-		out, ready := unavailable("Run-file could not be validated: " + err.Error())
-		return append([]Evidence{item("run-file", "unavailable", err.Error(), nil)}, out...), ready
-	}
-	out := []Evidence{item("run-file", "collected", "Validated bounded run-file snapshot; its target is frozen for this collection.", map[string]any{"pid": info.PID, "port": info.Port, "startedAt": info.StartedAt.Format(time.RFC3339Nano), "owner": info.Owner})}
-	identity, err := within(ctx, func() (processIdentity, error) { return deps.identity(ctx, info.PID) })
-	if err == nil {
-		err = validateProcess(identity, info.PID)
-	}
-	if err != nil {
-		missing, ready := unavailable("Daemon process identity is unavailable: " + err.Error())
-		return append(out, missing...), ready
-	}
-	client := deps.client(info.Port)
-	client.Timeout = requestTimeout
-	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-	if transport, ok := client.Transport.(*http.Transport); ok {
-		defer transport.CloseIdleConnections()
-	}
-	ready := false
-	healthOK := false
-	for _, endpoint := range []string{"healthz", "readyz"} {
-		before, identityErr := within(ctx, func() (processIdentity, error) { return deps.identity(ctx, info.PID) })
-		if identityErr == nil && before != identity {
-			identityErr = errors.New("daemon process identity changed")
-		}
-		if identityErr != nil {
-			out = append(out, item("daemon-"+endpoint, "unavailable", identityErr.Error(), nil))
-			continue
-		}
-		values, probeErr := readDaemonProbe(ctx, client, info.Port, endpoint, identity)
-		status := "collected"
-		text := ""
-		if probeErr != nil {
-			status = "unavailable"
-			if errors.Is(probeErr, errSnapshotTooLarge) {
-				status = "truncated"
-			}
-			text = probeErr.Error()
-			values = nil
-		}
-		after, afterErr := within(ctx, func() (processIdentity, error) { return deps.identity(ctx, info.PID) })
-		if afterErr != nil || after != identity {
-			status, text, values = "unavailable", "Daemon process identity changed or became unavailable during the probe.", nil
-		}
-		out = append(out, item("daemon-"+endpoint, status, text, values))
-		if endpoint == "healthz" && status == "collected" && values["status"] == "ok" {
-			healthOK = true
-		}
-		if endpoint == "readyz" && healthOK && status == "collected" && values["status"] == "ready" {
-			ready = true
-		}
-	}
-	finalRaw, finalErr := within(ctx, func() ([]byte, error) { return readBoundedFile(path) })
-	finalIdentity, finalIdentityErr := within(ctx, func() (processIdentity, error) { return deps.identity(ctx, info.PID) })
-	if finalErr != nil || !bytes.Equal(raw, finalRaw) || finalIdentityErr != nil || finalIdentity != identity {
-		for i := range out {
-			if strings.HasPrefix(out[i].ID, "daemon-") {
-				out[i].Status, out[i].Text, out[i].Values = "unavailable", "Run-file or daemon process identity changed or became unavailable during collection.", nil
-			}
-		}
-		ready = false
-	}
-	return out, ready
+	item.Status = "collected"
+	item.Text = "Validated run-file metadata only. It was not used to contact or control the daemon."
+	item.Values = map[string]any{"pid": info.PID, "port": info.Port, "startedAt": info.StartedAt.UTC(), "owner": info.Owner}
+	return item
 }
 
-func validateProcess(identity processIdentity, pid int) error {
-	name := strings.ToLower(identity.Name)
-	if identity.PID != pid || identity.Start == "" || (name != "ao" && name != "ao.exe") {
-		return errors.New("recorded PID is not a verified AO process")
-	}
-	return nil
-}
+var errSnapshotTooLarge = errors.New("snapshot exceeded limit")
 
-func loopbackProbeClient(port int) *http.Client {
-	address := net.JoinHostPort(config.LoopbackHost, strconv.Itoa(port))
-	dialer := &net.Dialer{Timeout: requestTimeout}
-	transport := &http.Transport{
-		Proxy: nil, DisableKeepAlives: true, MaxResponseHeaderBytes: 16 << 10,
-		DialContext: func(ctx context.Context, network, target string) (net.Conn, error) {
-			if network != "tcp" || target != address {
-				return nil, errors.New("probe target is not the frozen loopback address")
-			}
-			return dialer.DialContext(ctx, "tcp4", address)
-		},
-	}
-	return &http.Client{Transport: transport, Timeout: requestTimeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
-func readDaemonProbe(ctx context.Context, client *http.Client, port int, endpoint string, identity processIdentity) (map[string]any, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	if endpoint != "healthz" && endpoint != "readyz" {
-		return nil, errors.New("unsupported probe endpoint")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort(config.LoopbackHost, strconv.Itoa(port))+"/"+endpoint, http.NoBody)
+func readPrivateBytes(path string, limit int64) ([]byte, error) {
+	before, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("file is not regular")
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s returned HTTP %d", endpoint, resp.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, collectMaxBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > collectMaxBytes {
-		return nil, errSnapshotTooLarge
-	}
-	var value map[string]any
-	if err := decodeJSON(raw, &value); err != nil {
-		return nil, err
-	}
-	pid, ok := value["pid"].(json.Number)
-	if value["service"] != daemonmeta.ServiceName || !ok || string(pid) != strconv.Itoa(identity.PID) {
-		return nil, errors.New("probe service or PID did not match the verified daemon")
-	}
-	status, ok := value["status"].(string)
-	if !ok || status == "" {
-		return nil, errors.New("probe status was missing")
-	}
-	if identity.Executable != "" {
-		if executable, ok := value["executablePath"].(string); ok && filepath.Clean(executable) != filepath.Clean(identity.Executable) {
-			return nil, errors.New("probe executable did not match the verified process")
-		}
-	}
-	return value, nil
-}
-
-var errSnapshotTooLarge = errors.New("snapshot exceeded the 64 KiB limit")
-
-func readBoundedFile(path string) ([]byte, error) {
-	stat, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !stat.Mode().IsRegular() {
-		return nil, errors.New("run-file is not a regular file")
-	}
-	if stat.Size() > collectMaxBytes {
+	if before.Size() > limit {
 		return nil, errSnapshotTooLarge
 	}
 	file, err := os.Open(path)
@@ -345,65 +175,50 @@ func readBoundedFile(path string) ([]byte, error) {
 	}
 	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(stat, opened) {
-		return nil, errors.New("run-file changed while opening")
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return nil, errors.New("file changed while opening")
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, collectMaxBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > collectMaxBytes {
+	if int64(len(raw)) > limit {
 		return nil, errSnapshotTooLarge
 	}
 	return raw, nil
 }
 
-func decodeJSON(data []byte, value any) error {
+func decodeJSON(data []byte, value any, strict bool) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
 	if err := decoder.Decode(value); err != nil {
 		return err
 	}
-	return requireEOF(decoder)
-}
-
-func requireEOF(decoder *json.Decoder) error {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("snapshot contains trailing JSON")
+		return errors.New("trailing JSON")
 	}
 	return nil
 }
 
-func limitText(text string) (string, bool) {
-	if len(text) <= collectMaxBytes {
-		return text, false
+// This snapshot was just decoded from private JSON, so it has no shared owners.
+func unknownCPU(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if key == "cpuPercent" && v["cpuMeasured"] != true {
+				v[key] = nil
+			} else {
+				v[key] = unknownCPU(child)
+			}
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = unknownCPU(child)
+		}
 	}
-	text = text[:collectMaxBytes]
-	for !utf8.ValidString(text) {
-		text = text[:len(text)-1]
-	}
-	return text, true
-}
-
-func within[T any](ctx context.Context, fn func() (T, error)) (T, error) {
-	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, err
-	}
-	type result struct {
-		value T
-		err   error
-	}
-	done := make(chan result, 1)
-	go func() {
-		value, err := fn()
-		done <- result{value, err}
-	}()
-	select {
-	case result := <-done:
-		return result.value, result.err
-	case <-ctx.Done():
-		return zero, ctx.Err()
-	}
+	return value
 }

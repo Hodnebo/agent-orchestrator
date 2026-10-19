@@ -38,7 +38,7 @@ export function DaemonStartupLoader() {
 			{failed && status ? <section className="w-full max-w-md px-6" aria-label={t("triage.startupFailure")}>
 				<p className="text-sm font-medium">{daemonFailureTitle(status, t)}</p>
 				<p className="mt-1 text-xs text-muted-foreground">{daemonFailureMessage(status, t)}</p>
-				<TriageReportButton className="mt-4" origin={{ surface: "startup-error", daemonState: status.state, daemonCode: status.code, daemonOutput: status.details }} observation={status.message} />
+				<TriageReportButton className="mt-4" origin={{ surface: "startup-error", daemonState: status.state, daemonCode: status.code, daemonOutput: status.details }} />
 			</section> : null}
 			{requirementsBlocked ? (
 				<InstallDependencyDialog requirements={requirements} onRefetchRequirements={() => requirementsQuery.refetch()} />

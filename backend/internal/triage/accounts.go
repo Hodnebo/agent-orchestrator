@@ -2,9 +2,7 @@ package triage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +74,7 @@ func localConfiguredChoices(ctx context.Context, getenv func(string) string, hom
 	for _, key := range []string{"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"} {
 		configuredCodex = configuredCodex || strings.TrimSpace(getenv(key)) != ""
 	}
-	if configuredCodex || codexCredentialPresent(filepath.Join(codexHome, "auth.json"), false) {
+	if configuredCodex || codexCredentialPresent(filepath.Join(codexHome, "auth.json")) {
 		add(string(domain.HarnessCodex), domain.AgentAccountProviderCodex)
 	}
 	if ctx.Err() != nil {
@@ -129,35 +127,22 @@ func configuredAccountEnv(ctx context.Context, dataDir, harness, id string) (map
 		managed := filepath.Join(dataDir, "harnesses", "codex", "accounts", id)
 		_, legacyErr := os.Lstat(legacy)
 		_, managedErr := os.Lstat(managed)
-		if legacyErr == nil && managedErr == nil {
+		legacyPresent, managedPresent := legacyErr == nil, managedErr == nil
+		if legacyPresent && managedPresent {
 			return nil, errors.New("the saved Codex account has conflicting profiles; choose it again in AO")
 		}
-		if managedErr == nil {
-			if !safeAccountDirectory(dataDir, "harnesses", "codex", "accounts", id, "credential-home") || !validManagedCodexDescriptor(filepath.Join(managed, "account.json"), id) {
+		if managedPresent {
+			if !safeAccountDirectory(dataDir, "harnesses", "codex", "accounts", id, "credential-home") {
 				return nil, errors.New("the saved Codex account profile is unavailable or unsafe")
 			}
 			home = filepath.Join(managed, "credential-home")
-		} else if !safeAccountDirectory(dataDir, "agent-accounts", string(provider), id) {
+		} else if !legacyPresent || !safeAccountDirectory(dataDir, "agent-accounts", string(provider), id) {
 			return nil, errors.New("the saved Codex account profile is unavailable; select or sign in to it in AO")
-		}
-		if !codexCredentialPresent(filepath.Join(home, "auth.json"), true) {
-			return nil, errors.New("the saved Codex account credential is unavailable; sign in to that account in AO")
 		}
 		return (&agentaccount.Codex{}).LaunchEnv(home), nil
 	}
 	if !safeAccountDirectory(dataDir, "agent-accounts", string(provider), id) {
 		return nil, errors.New("the saved Claude account profile is unavailable; select or sign in to it in AO")
-	}
-	// The shared local resolver's keychain source is the native login, not a
-	// saved profile's path-specific keychain item. Never substitute it here.
-	if !privateCredentialFile(filepath.Join(home, ".credentials.json")) {
-		return nil, errors.New("the saved Claude account cannot be verified without its profile credential; select or sign in to it in AO")
-	}
-	_, configured := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, agentcreds.ResolveOptions{
-		ConfigDir: home, Env: func(string) string { return "" },
-	})
-	if !configured {
-		return nil, errors.New("the saved Claude account credential is unavailable; sign in to that account in AO")
 	}
 	return (&agentaccount.Claude{}).LaunchEnv(home), nil
 }
@@ -176,64 +161,12 @@ func safeAccountDirectory(root string, parts ...string) bool {
 	return true
 }
 
-func privateCredentialFile(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && info.Size() > 0 && info.Size() <= 1<<20
-}
-
-func codexCredentialPresent(path string, private bool) bool {
-	if private && !privateCredentialFile(path) {
-		return false
-	}
-	var auth struct {
+func codexCredentialPresent(path string) bool {
+	var credentials struct {
 		APIKey string `json:"OPENAI_API_KEY"`
 		Tokens struct {
 			AccessToken string `json:"access_token"`
 		} `json:"tokens"`
 	}
-	return readSmallJSON(path, 1<<20, &auth) == nil && (strings.TrimSpace(auth.APIKey) != "" || strings.TrimSpace(auth.Tokens.AccessToken) != "")
-}
-
-func validManagedCodexDescriptor(path, id string) bool {
-	if !privateCredentialFile(path) {
-		return false
-	}
-	var descriptor struct {
-		Version    int       `json:"version"`
-		ID         string    `json:"id"`
-		Source     string    `json:"source"`
-		AuthMethod string    `json:"authMethod"`
-		CreatedAt  time.Time `json:"createdAt"`
-		VerifiedAt time.Time `json:"verifiedAt"`
-	}
-	if readSmallJSON(path, 16<<10, &descriptor) != nil || descriptor.ID != id || descriptor.Source != "managed" || (descriptor.Version != 1 && descriptor.Version != 2) || descriptor.CreatedAt.IsZero() || descriptor.VerifiedAt.IsZero() {
-		return false
-	}
-	switch descriptor.AuthMethod {
-	case "chatgpt", "api_key", "other", "unknown":
-		return true
-	default:
-		return false
-	}
-}
-
-func readSmallJSON(path string, limit int64, target any) error {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
-		return errors.New("configuration file is unavailable")
-	}
-	file, err := os.Open(path) //nolint:gosec // Only fixed native credential files and validated UUID profiles reach this helper.
-	if err != nil {
-		return errors.New("configuration file is unavailable")
-	}
-	defer func() { _ = file.Close() }()
-	decoder := json.NewDecoder(io.LimitReader(file, limit+1))
-	if decoder.Decode(target) != nil {
-		return errors.New("configuration file is invalid")
-	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
-		return errors.New("configuration file is invalid")
-	}
-	return nil
+	return readPrivateJSON(path, 1<<20, &credentials) == nil && (credentials.APIKey != "" || credentials.Tokens.AccessToken != "")
 }

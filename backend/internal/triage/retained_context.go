@@ -4,185 +4,165 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
-	"sort"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-type retainedContext struct {
-	Evidence []Evidence
-	Roots    map[string]string `json:"-"`
-}
-
-// readRetainedContext is optional evidence enrichment after the independent
-// snapshot. No normal service, provider, migration or writable open is used.
-func readRetainedContext(ctx context.Context, dataDir string, origin Origin) (retainedContext, error) {
-	result := retainedContext{Roots: map[string]string{}}
-	at := time.Now().UTC()
-	unavailable := func(id, text string) {
-		item := Evidence{ID: id, Kind: "retained-session", Source: "selected local session's retained SQLite facts", CollectedAt: at, Status: "unavailable", Text: text}
-		if validateRetainedRead(origin, ContextRead{}) == nil {
-			item.Values = map[string]any{"sources": []string{"daemon-log", "provider-log", "session-history", "session-hook-errors"}}
-		}
-		result.Evidence = append(result.Evidence, item)
-	}
-	if origin.SessionID == "" {
-		if localContextAllowed(origin) {
-			result.Evidence = append(result.Evidence, Evidence{ID: "retained-context-sources", Kind: "retained-session", Source: "local diagnostic source registry", CollectedAt: at, Status: "collected", Values: map[string]any{"sources": []string{"daemon-log"}}})
-		}
-		return result, nil
-	}
-	if len(origin.Session) > collectMaxBytes {
-		unavailable("retained-session", "The initiating session identity could not be established. Local retained data was not read.")
-		return result, errors.New("retained session identity snapshot exceeded its limit")
-	}
-	if !localContextAllowed(origin) {
-		unavailable("retained-session", "This report concerns a remote or cloud session. Local retained session data was not read.")
-		return result, nil
-	}
-	var snapshot struct {
-		ID string `json:"id"`
-	}
-	if len(origin.Session) != 0 {
-		if err := json.Unmarshal(origin.Session, &snapshot); err != nil || snapshot.ID != "" && snapshot.ID != origin.SessionID {
-			unavailable("retained-session", "The initiating session snapshot belongs to a different session. Local retained data was not read.")
-			return result, errors.New("retained session identity snapshot is mismatched")
-		}
-	}
-	if len(origin.SessionID) > 255 || strings.ContainsRune(origin.SessionID, 0) {
-		unavailable("retained-session", "The selected session identity is invalid. Local retained data was not read.")
-		return result, errors.New("invalid retained session identity")
-	}
-	if err := ctx.Err(); err != nil {
-		unavailable("retained-session", "The retained session read was cancelled or timed out.")
-		return result, err
+func readRetainedContext(ctx context.Context, dataDir string, origin Origin) ([]Evidence, error) {
+	if !filepath.IsAbs(dataDir) || !localContextAllowed(origin) || origin.SessionID != "" && !validRunID(origin.SessionID) {
+		return nil, errors.New("selected session is not local or has an invalid identity")
 	}
 	db, err := sqlite.OpenReadOnly(ctx, dataDir)
 	if err != nil {
-		unavailable("retained-session", "The existing local session database could not be read. No database was created or repaired.")
-		return result, errors.New("retained session database unavailable")
+		id := "retained-session"
+		if origin.SessionID == "" {
+			id = "session-candidates"
+		}
+		return []Evidence{unavailableItem(id, "existing local SQLite records", err.Error())}, err
 	}
 	defer func() { _ = db.Close() }()
-	id := domain.SessionID(origin.SessionID)
-	facts, found, err := db.ReadTriageSessionFacts(ctx, id)
-	if err != nil {
-		unavailable("retained-session", "The selected session's retained facts could not be read. The database may be unavailable or use an older schema.")
-		return result, errors.New("retained session facts unavailable")
+	roots, _ := db.ReadTriageWorkspaceRoots(ctx, domain.SessionID(origin.SessionID))
+	paths := make([]string, 0, len(roots)+1)
+	for _, root := range roots {
+		paths = append(paths, root.Path)
 	}
-	if !found {
-		unavailable("retained-session", "No retained local row exists for the selected session.")
-		return result, nil
-	}
-	paths := []string{facts.WorkspacePath.Value}
-	if !facts.WorkspacePath.Truncated && usableRetainedRoot(facts.WorkspacePath.Value) {
-		result.Roots["workspace"] = filepath.Clean(facts.WorkspacePath.Value)
-	}
-	var failures []error
-	worktrees, omitted, rootsErr := db.ReadTriageWorkspaceRoots(ctx, id)
-	if rootsErr != nil {
-		unavailable("retained-workspaces", "The selected session's registered workspace roots could not be read.")
-		failures = append(failures, errors.New("retained workspace roots unavailable"))
-	}
-	for _, root := range worktrees {
-		paths = append(paths, root.Path.Value)
-		if root.Name.Truncated || root.Path.Truncated || !usableRetainedRoot(root.Path.Value) {
-			omitted = true
+	var evidence []Evidence
+	for _, part := range db.ReadTriageSnapshot(ctx, domain.SessionID(origin.SessionID)) {
+		if part.Err != nil {
+			evidence = append(evidence, unavailableItem(part.Kind, "selected local SQLite records", part.Err.Error()))
 			continue
 		}
-		name := root.Name.Value
-		if name == domain.RootWorkspaceRepoName {
-			if result.Roots["workspace"] == "" {
-				result.Roots["workspace"] = filepath.Clean(root.Path.Value)
+		entries := make([]map[string]any, 0, len(part.Entries))
+		for _, raw := range part.Entries {
+			var entry map[string]any
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return evidence, err
 			}
-		} else if usableRetainedRepoName(name) {
-			result.Roots["workspace:"+name] = filepath.Clean(root.Path.Value)
-		} else {
-			omitted = true
+			if path, ok := entry["workspacePath"].(string); ok {
+				paths = append(paths, path)
+			}
+			delete(entry, "workspacePath")
+			for _, key := range []string{"detail", "payload"} {
+				if text, ok := entry[key].(string); ok {
+					var value any
+					if decodeJSON([]byte(text), &value, false) == nil {
+						entry[key] = value
+					} else {
+						entry[key] = "Invalid or truncated JSON excerpt omitted."
+					}
+				}
+			}
+			entries = append(entries, entry)
 		}
-	}
-	if facts.WorkspacePath.Truncated || facts.WorkspacePath.Value != "" && !usableRetainedRoot(facts.WorkspacePath.Value) {
-		omitted = true
-	}
-	sources := []string{"daemon-log", "provider-log", "session-history", "session-hook-errors"}
-	for source := range result.Roots {
-		sources = append(sources, source)
-	}
-	sort.Strings(sources)
-	values := map[string]any{"sessionId": origin.SessionID, "terminated": facts.IsTerminated, "sources": sources, "workspaceRootsOmitted": omitted}
-	truncated := retainedFields(values, map[string]sqlitestore.TriageDiagnosticText{
-		"agent": facts.Harness, "mode": facts.Mode, "activityState": facts.Activity,
-		"provisionState": facts.ProvisionState, "provisionError": facts.ProvisionError,
-		"createdAt": facts.CreatedAt, "updatedAt": facts.UpdatedAt, "activityLastAt": facts.ActivityLastAt,
-	}, paths)
-	status := "collected"
-	if truncated {
-		status = "truncated"
-	}
-	result.Evidence = append(result.Evidence, Evidence{ID: "retained-session", Kind: "retained-session", Source: "selected local session's retained SQLite row", CollectedAt: at, Status: status,
-		Text: "Persisted session facts only. These do not establish current process health. Workspace paths remain private file-source references.", Values: values})
-	turn, found, turnErr := db.ReadTriageLatestTurn(ctx, id)
-	if turnErr != nil {
-		unavailable("retained-turn", "The selected session's latest owned turn could not be read.")
-		failures = append(failures, errors.New("retained owned turn unavailable"))
-	} else if !found {
-		unavailable("retained-turn", "No retained turn owned by the selected session was found in its currently linked conversation.")
-	} else {
-		values := map[string]any{}
-		truncated := retainedFields(values, map[string]sqlitestore.TriageDiagnosticText{
-			"state": turn.State, "error": turn.Error, "requestedAt": turn.RequestedAt,
-			"startedAt": turn.StartedAt, "completedAt": turn.CompletedAt,
-		}, paths)
-		status := "collected"
-		if truncated {
-			status = "truncated"
+		raw, err := json.Marshal(entries)
+		if err != nil {
+			return evidence, err
 		}
-		result.Evidence = append(result.Evidence, Evidence{ID: "retained-turn", Kind: "retained-turn", Source: "latest retained turn owned by the selected local session", CollectedAt: at, Status: status,
-			Text: "Selected-session ownership was checked. Other sessions in a shared project conversation were excluded.", Values: values})
-	}
-	result.Evidence = RedactEvidence(result.Evidence)
-	return result, errors.Join(failures...)
-}
-
-func usableRetainedRoot(path string) bool {
-	return path != "" && utf8.ValidString(path) && !strings.ContainsRune(path, 0) && filepath.IsAbs(path) && filepath.Dir(filepath.Clean(path)) != filepath.Clean(path)
-}
-
-func usableRetainedRepoName(name string) bool {
-	if name == "" || name == "." || name == ".." {
-		return false
-	}
-	for _, r := range name {
-		if r != '.' && r != '-' && r != '_' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
-			return false
-		}
-	}
-	return true
-}
-
-func retainedFields(values map[string]any, fields map[string]sqlitestore.TriageDiagnosticText, paths []string) bool {
-	sort.Slice(paths, func(i, j int) bool { return len(paths[i]) > len(paths[j]) })
-	var truncated []string
-	for key, field := range fields {
-		text := field.Value
 		for _, path := range paths {
 			if path != "" {
-				text = strings.ReplaceAll(text, path, "[workspace]")
+				encoded, _ := json.Marshal(path)
+				raw = []byte(strings.ReplaceAll(string(raw), string(encoded[1:len(encoded)-1]), "[workspace]"))
 			}
 		}
-		values[key] = Redact(text)
-		if field.Truncated {
-			truncated = append(truncated, key)
+		evidence = append(evidence, Evidence{ID: part.Kind, Kind: part.Kind, Source: "selected local SQLite records", CollectedAt: time.Now().UTC(), Status: "collected", Text: "Bounded retained excerpts. Fields and older entries may be omitted; these records are not live measurements.", Values: map[string]any{"entries": json.RawMessage(raw), "bounded": true}})
+	}
+	return evidence, ctx.Err()
+}
+
+// InvestigationPaths gives native read tools complete, registered local roots.
+func InvestigationPaths(ctx context.Context, dataDir string, origin Origin) map[string]string {
+	paths := map[string]string{}
+	if !filepath.IsAbs(dataDir) || !validRunID(origin.SessionID) || !localContextAllowed(origin) {
+		return paths
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	db, err := sqlite.OpenReadOnly(ctx, dataDir)
+	if err != nil {
+		return paths
+	}
+	defer func() { _ = db.Close() }()
+	roots, err := db.ReadTriageWorkspaceRoots(ctx, domain.SessionID(origin.SessionID))
+	if err != nil {
+		return paths
+	}
+	for _, root := range roots {
+		key := "workspace:" + root.Name
+		if root.Name == domain.RootWorkspaceRepoName {
+			key = "workspace"
+		} else if !usableRetainedRepoName(root.Name) {
+			continue
+		}
+		if path, ok := validatedWorkspacePath(dataDir, root.Path); ok {
+			paths[key] = path
 		}
 	}
-	if len(truncated) > 0 {
-		sort.Strings(truncated)
-		values["truncatedFields"] = truncated
+	return paths
+}
+
+func validatedWorkspacePath(dataDir, path string) (string, bool) {
+	if path == "" || !utf8.ValidString(path) || strings.ContainsRune(path, 0) || !filepath.IsAbs(path) {
+		return "", false
 	}
-	return len(truncated) > 0
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", false
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	canonical = filepath.Clean(canonical)
+	if filepath.Dir(canonical) == canonical {
+		return "", false
+	}
+	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == canonical {
+		return "", false
+	}
+	if sensitivePath(canonical) {
+		return "", false
+	}
+	if dataRoot, err := filepath.EvalSymlinks(dataDir); err == nil {
+		dataRoot = filepath.Clean(dataRoot)
+		worktrees := filepath.Join(dataRoot, "worktrees")
+		if pathContains(canonical, dataRoot) || canonical == dataRoot || pathContains(dataRoot, canonical) && (canonical == worktrees || !pathContains(canonical, worktrees)) {
+			return "", false
+		}
+	}
+	return canonical, true
+}
+
+func sensitivePath(path string) bool {
+	for _, part := range strings.Split(strings.ToLower(filepath.Clean(path)), string(filepath.Separator)) {
+		switch part {
+		case ".ssh", ".aws", ".azure", ".config", ".codex", ".claude", ".npmrc", ".netrc", "credentials", "browser", "browser profiles", "cookies", "local storage", "session storage", "login data", "web data":
+			return true
+		}
+		if strings.HasPrefix(part, ".env") || strings.Contains(part, "credential") || strings.HasPrefix(part, "id_rsa") || strings.HasPrefix(part, "id_ed25519") {
+			return true
+		}
+	}
+	return false
+}
+
+func pathContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+var retainedRepoName = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+
+func usableRetainedRepoName(name string) bool {
+	return name != "." && name != ".." && retainedRepoName.MatchString(name)
+}
+
+func unavailableItem(id, source, text string) Evidence {
+	return Evidence{ID: id, Kind: id, Source: source, CollectedAt: time.Now().UTC(), Status: "unavailable", Text: text}
 }

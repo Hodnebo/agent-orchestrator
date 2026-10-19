@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -35,13 +35,13 @@ function run(id = "run-1"): TriageRun {
 	return {
 		id, version: 1, createdAt: "2026-10-19T10:00:00Z", updatedAt: "2026-10-19T10:00:00Z",
 		request: { harness: "codex", model: "configured-model", publishAuthorized: false },
-		state: "running", activity: "Investigating", messages: [], publication: { state: "not_started" },
+		state: "running", activity: "Investigating", messages: [],
 	};
 }
 
 const configured: TriageChoice = {
 	harness: "codex", label: "Codex", models: [{ id: "configured-model", label: "Configured model", efforts: ["high"], default: true }],
-	accounts: [{ id: "account-1", label: "Work", default: true }], available: true, updatedAt: "2026-10-19T10:00:00Z",
+	accounts: [{ id: "account-1", label: "Work", default: true }], available: true, sessionMode: "chat",
 };
 
 const directories: string[] = [];
@@ -52,7 +52,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function setup(extra: { missing?: boolean; timeout?: number; authenticateGitHub?: TriageServiceOptions["authenticateGitHub"]; requestDaemon?: TriageServiceOptions["requestDaemon"] } = {}) {
+function setup(extra: { missing?: boolean; timeout?: number; requestDaemon?: TriageServiceOptions["requestDaemon"] } = {}) {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "ao-triage-bridge-"));
 	directories.push(directory);
 	const binary = path.join(directory, process.platform === "win32" ? "ao.exe" : "ao");
@@ -65,7 +65,6 @@ function setup(extra: { missing?: boolean; timeout?: number; authenticateGitHub?
 	const service = new TriageService({
 		dataDir: path.join(directory, "data"), resolveBinary: () => binary, context,
 		spawnProcess, terminateProcess, requestTimeoutMs: extra.timeout ?? 30_000, shutdownTimeoutMs: 100,
-		authenticateGitHub: extra.authenticateGitHub,
 		requestDaemon: extra.requestDaemon,
 	});
 	services.push(service);
@@ -244,7 +243,7 @@ describe("support origin and configured choices", () => {
 		const choice = { ...configured, models: [{ id: "", label: "Configured default" }] };
 		const pending = service.configure([choice]);
 		expect(child.commands[0].choices).toEqual([choice]);
-		child.respond(child.commands[0], "configured");
+		child.respond(child.commands[0], "catalog", { choices: [choice] });
 		await pending;
 	});
 
@@ -253,17 +252,11 @@ describe("support origin and configured choices", () => {
 		const choice = { ...configured, models: [], modelsMissing };
 		const pending = service.configure([choice]);
 		expect(child.commands[0].choices).toEqual([choice]);
-		child.respond(child.commands[0], "configured");
+		child.respond(child.commands[0], "catalog", { choices: [choice] });
 		await pending;
 		const catalog = service.catalog();
 		child.respond(child.commands[1], "catalog", { choices: [choice] });
 		await expect(catalog).resolves.toEqual([choice]);
-	});
-
-	it("rejects a non-boolean model-cache marker before starting the helper", async () => {
-		const { service, spawnProcess } = setup();
-		await expect(service.configure([{ ...configured, modelsMissing: "yes" } as unknown as TriageChoice])).rejects.toThrow("Invalid support model availability");
-		expect(spawnProcess).not.toHaveBeenCalled();
 	});
 
 	it("fills origin from the existing desktop snapshot and ignores renderer machine or daemon overrides", async () => {
@@ -285,43 +278,36 @@ describe("support origin and configured choices", () => {
 		await pending;
 	});
 
-	it("copies only protocol fields when snapshotting configured choices and preference", async () => {
-		const { service, child } = setup();
-		const configure = service.configure([{ ...configured, apiKey: "private-secret", executablePath: "/private/path" } as TriageChoice]);
-		expect(child.commands[0].choices).toEqual([configured]);
-		child.respond(child.commands[0], "configured");
-		await configure;
-		const setPreference = service.setPreference({ harness: "codex", model: "configured-model", accountId: "account-1" });
-		child.respond(child.commands[1], "selection", { selection: { harness: "codex", model: "configured-model", accountId: "account-1" } });
-		await setPreference;
-		const preference = service.getPreference();
-		expect(child.commands[2].selection).toBeUndefined();
-		child.respond(child.commands[2], "selection");
-		await expect(preference).resolves.toBeNull();
-	});
-
-	it("rejects invalid input before spawning and carries structured replies", async () => {
+	it("carries ordinary input responses and reads a snapshot after an acknowledgement", async () => {
 		const { service, child, spawnProcess } = setup();
-		await expect(service.configure([{ ...configured, models: "invalid" } as unknown as TriageChoice])).rejects.toThrow("Invalid configured");
 		await expect(service.get("../\0bad")).rejects.toThrow("Invalid support request");
 		expect(spawnProcess).not.toHaveBeenCalled();
-		const pending = service.reply("run-1", "Confirmed", "request-1", { symptom: ["blank board"] });
-		expect(child.commands[0]).toMatchObject({ type: "reply", runId: "run-1", text: "Confirmed", requestId: "request-1", answers: { symptom: ["blank board"] } });
-		child.respond(child.commands[0], "run", { run: run() });
-		await pending;
+		const input = { requestId: "approval", decisionId: "allow-once" };
+		const pending = service.reply("run-1", "", input);
+		expect(child.commands[0]).toMatchObject({ type: "reply", runId: "run-1", text: "", ...input });
+		child.respond(child.commands[0], "ack");
+		await vi.waitFor(() => expect(child.commands[1]?.type).toBe("get"));
+		child.respond(child.commands[1], "run", { run: run() });
+		await expect(pending).resolves.toEqual(run());
 	});
 
-	it("requests literal native controls only when explicitly asked, with a validated run ID", async () => {
-		const { service, child, spawnProcess } = setup();
-		await expect(service.nativeInput("")).rejects.toThrow("Invalid support request");
-		expect(spawnProcess).not.toHaveBeenCalled();
-		const pending = service.nativeInput("run-1");
-		expect(child.commands[0]).toMatchObject({ type: "native-input", runId: "run-1" });
-		expect(child.commands[0]).not.toHaveProperty("answers");
-		const input = { ...run(), state: "needs_input", nativeControlsAvailable: true, pendingInput: { id: "native-input", origin: "native" as const,
-			questions: [{ id: "action", prompt: "Continue?\n> Yes\n  No", options: ["Press Enter", "Press Escape"], multiple: false }] } };
-		child.respond(child.commands[0], "run", { run: input });
-		await expect(pending).resolves.toEqual(input);
+	it("routes terminal bytes and dimensions without a semantic answer protocol", async () => {
+		const { service, child } = setup();
+		const output = vi.fn();
+		const dispose = service.subscribeTerminal("run-1", output);
+		const input = service.terminalInput("run-1", "\r");
+		expect(child.commands[0]).toMatchObject({ type: "terminal-input", runId: "run-1", text: "\r" });
+		child.respond(child.commands[0], "ack");
+		await input;
+		const resize = service.terminalResize("run-1", 24, 80);
+		expect(child.commands[1]).toMatchObject({ type: "terminal-resize", rows: 24, cols: 80 });
+		child.respond(child.commands[1], "ack");
+		await resize;
+		const data = Buffer.from("hello").toString("base64");
+		child.stdout.write(JSON.stringify({ version: 1, type: "terminal-output", runId: "run-1", data, sequence: 5 }) + "\n");
+		expect(output).toHaveBeenCalledExactlyOnceWith(data, 5);
+		dispose();
+		await expect(service.terminalResize("run-1", 0, 80)).rejects.toThrow("Invalid terminal size");
 	});
 
 	it("includes scrubbed startup details when the bundled binary is unavailable", async () => {
@@ -347,7 +333,7 @@ describe("ordinary standalone investigation launch", () => {
 	const launch = { clientRequestId: "triage-run-1", prompt: "Follow the attached playbook and read the diagnostics.",
 		attachments: [{ mimeType: "text/plain", data: Buffer.from("private diagnostic bundle").toString("base64") }] };
 	const handedOff = (): TriageRun => ({ ...run(), state: "session_starting", execution: "session",
-		request: { harness: "codex", model: "configured-model", effort: "high", permissions: "accept-edits", mode: "native-agent-mode", accountId: "configured-default", publishAuthorized: false } });
+		request: { harness: "codex", model: "configured-model", effort: "high", permissions: "accept-edits", mode: "native-agent-mode", sessionMode: "tui", accountId: "configured-default", publishAuthorized: false } });
 	const health = () => ({ status: 200, body: { service: "agent-orchestrator-daemon", status: "ok", pid: ready.pid, executablePath: ready.executablePath } });
 	const request = { harness: "codex", preparationId: "run-1", publishAuthorized: false };
 
@@ -369,7 +355,7 @@ describe("ordinary standalone investigation launch", () => {
 		expect(result).not.toHaveProperty("launch");
 		expect(requestDaemon.mock.calls).toEqual([
 			[3037, "GET", "/healthz"],
-			[3037, "POST", "/api/v1/sessions", { clientRequestId: launch.clientRequestId, kind: "worker", harness: "codex", displayName: "Report a Problem", prompt: launch.prompt, attachments: launch.attachments, model: "configured-model", effort: "high", approvalMode: "accept-edits" }],
+			[3037, "POST", "/api/v1/sessions", { clientRequestId: launch.clientRequestId, kind: "worker", harness: "codex", displayName: "Report a Problem", mode: "tui", prompt: launch.prompt, attachments: launch.attachments, model: "configured-model", effort: "high", approvalMode: "accept-edits" }],
 		]);
 		expect(child.commands.some((command) => command.type === "start")).toBe(false);
 	});
@@ -465,114 +451,10 @@ describe("ordinary standalone investigation launch", () => {
 		await expect(starting).resolves.toMatchObject({ execution: "session", sessionId: "standalone-12" });
 		const reopening = service.get("run-1");
 		child.respond(child.commands[3], "run", { run: handedOff() });
-		await expect(reopening).resolves.toHaveProperty("sessionId", "standalone-12");
+		await expect(reopening).resolves.toEqual(handedOff());
 		expect(child.commands.some((command) => command.type === "start")).toBe(false);
 	});
 
-	it("requires the normal explicit Unreal permission choice before reserving a launch", async () => {
-		const { service, child, spawnProcess, setDaemonStatus } = setup();
-		setDaemonStatus(ready);
-		await expect(service.start({ ...request, harness: "unreal-agent" })).rejects.toThrow("Choose Start without approvals");
-		expect(spawnProcess).not.toHaveBeenCalled();
-		expect(child.commands).toHaveLength(0);
-	});
-
-	it("keeps explicitly authorized Unreal launches in normal Chat even under a TUI default", async () => {
-		const requestDaemon = vi.fn<NonNullable<TriageServiceOptions["requestDaemon"]>>().mockResolvedValueOnce(health()).mockResolvedValueOnce({ status: 201, body: { session: { id: "standalone-12" } } });
-		const { service, child, setDaemonStatus } = setup({ requestDaemon });
-		setDaemonStatus(ready);
-		const selected = { ...handedOff(), request: { ...handedOff().request, harness: "unreal-agent", permissions: "bypass-permissions" } };
-		const starting = service.start({ ...request, harness: "unreal-agent", permissions: "bypass-permissions" });
-		child.respond(child.commands[0], "session-launch", { run: selected, launch });
-		await vi.waitFor(() => expect(child.commands[1]?.type).toBe("session-create-intent"));
-		child.respond(child.commands[1], "run", { run: { ...selected, sessionLaunchStarted: true } });
-		await vi.waitFor(() => expect(child.commands[2]?.type).toBe("session-linked"));
-		child.respond(child.commands[2], "run", { run: { ...selected, sessionId: "standalone-12" } });
-		await starting;
-		expect(requestDaemon.mock.calls[1][3]).toMatchObject({ harness: "unreal-agent", mode: "chat", approvalMode: "bypass-permissions" });
-	});
-
-	it("forwards externally saved publication status without opening another conversation", async () => {
-		const { service, child, directory } = setup();
-		const reportDir = path.join(directory, "data", "reports", "triage", "runs", "run-1");
-		mkdirSync(reportDir, { recursive: true });
-		const changed = vi.fn();
-		service.subscribe(changed);
-		const loading = service.get("run-1");
-		child.respond(child.commands[0], "run", { run: { ...handedOff(), sessionId: "standalone-12" } });
-		await loading;
-		writeFileSync(path.join(reportDir, "manifest.json"), "{}\n");
-		await vi.waitFor(() => expect(child.commands[1]).toMatchObject({ type: "get", runId: "run-1" }));
-		const updated = { ...handedOff(), sessionId: "standalone-12", publication: { state: "auth_required" } };
-		child.respond(child.commands[1], "run", { run: updated });
-		await vi.waitFor(() => expect(changed).toHaveBeenCalledWith(updated));
-		expect(child.commands.every((command) => command.type === "get")).toBe(true);
-	});
-
-	it("resumes the same ordinary agent after search sign-in without publishing or starting a provider", async () => {
-		const authenticateGitHub = vi.fn().mockResolvedValue({ provider: "github", credentialType: "access_token", secret: "test-only-auth-value" });
-		const requestDaemon = vi.fn<NonNullable<TriageServiceOptions["requestDaemon"]>>().mockResolvedValueOnce(health()).mockResolvedValueOnce({ status: 204, body: {} });
-		const { service, child, setDaemonStatus } = setup({ authenticateGitHub, requestDaemon });
-		setDaemonStatus(ready);
-		const awaitingAuth = { ...handedOff(), sessionId: "standalone-12", searchAuthRequired: true };
-		const signingIn = service.signInGitHub("run-1");
-		child.respond(child.commands[0], "run", { run: awaitingAuth });
-		await vi.waitFor(() => expect(child.commands[1]?.type).toBe("github-auth-store"));
-		child.respond(child.commands[1], "github-auth-stored", { githubIdentity: { login: "test-user", id: 123 } });
-		await vi.waitFor(() => expect(child.commands[2]?.type).toBe("get"));
-		child.respond(child.commands[2], "run", { run: awaitingAuth });
-		await signingIn;
-		expect(requestDaemon.mock.calls[1]).toEqual([3037, "POST", "/api/v1/sessions/standalone-12/send", { message: expect.stringContaining("Retry the bounded issue and PR search") }]);
-		expect(child.commands.map((command) => command.type)).toEqual(["get", "github-auth-store", "get"]);
-		expect(JSON.stringify(requestDaemon.mock.calls)).not.toContain("test-only-auth-value");
-	});
-});
-
-describe("daemon-independent GitHub sign-in", () => {
-	it("reuses desktop browser authentication, stores credentials privately, then retries the saved publication", async () => {
-		const authenticate = vi.fn(async () => ({ provider: "github", credentialType: "access_token", secret: "test-private-access-token", refreshToken: "test-private-refresh-token", expiresIn: 3600, refreshTokenExpiresIn: 7200 }));
-		const { service, child, directory } = setup({ authenticateGitHub: authenticate });
-		const signingIn = service.signInGitHub("run-1");
-		expect(service.signInGitHub("run-1")).toBe(signingIn);
-		child.respond(child.commands[0], "run", { run: { ...run(), publication: { state: "auth_required" } } });
-		await vi.waitFor(() => expect(child.commands).toHaveLength(2));
-		expect(authenticate).toHaveBeenCalledWith(path.join(directory, "data"), expect.any(AbortSignal));
-		expect(child.commands[1]).toMatchObject({ type: "github-auth-store", githubCredential: { accessToken: "test-private-access-token", refreshToken: "test-private-refresh-token", expiresIn: 3600, refreshTokenExpiresIn: 7200 } });
-		child.respond(child.commands[1], "github-auth-stored", { githubIdentity: { login: "test-user", id: 42 } });
-		await vi.waitFor(() => expect(child.commands).toHaveLength(3));
-		expect(child.commands[2]).toMatchObject({ type: "publish", runId: "run-1" });
-		child.respond(child.commands[2], "run", { run: { ...run(), publication: { state: "published" } } });
-		const result = await signingIn;
-		expect(result.publication.state).toBe("published");
-		expect(JSON.stringify(result)).not.toContain("test-private");
-		expect(child.commands.map((command) => command.type)).toEqual(["get", "github-auth-store", "publish"]);
-	});
-
-	it("does not launch authentication for a run which has not requested it", async () => {
-		const authenticate = vi.fn();
-		const { service, child } = setup({ authenticateGitHub: authenticate });
-		const pending = service.signInGitHub("run-1");
-		child.respond(child.commands[0], "run", { run: run() });
-		await expect(pending).rejects.toThrow("only needed");
-		expect(authenticate).not.toHaveBeenCalled();
-		expect(child.commands).toHaveLength(1);
-	});
-
-	it("cancels an in-flight browser sign-in without storing credentials or publishing", async () => {
-		const authenticate = vi.fn((_directory: string, signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
-			signal.addEventListener("abort", () => reject(new Error("GitHub sign-in was cancelled.")), { once: true });
-		}));
-		const { service, child } = setup({ authenticateGitHub: authenticate });
-		const pending = service.signInGitHub("run-1");
-		const rejection = expect(pending).rejects.toThrow("cancelled");
-		child.respond(child.commands[0], "run", { run: { ...run(), publication: { state: "auth_required" } } });
-		await vi.waitFor(() => expect(authenticate).toHaveBeenCalledOnce());
-		const cancelling = service.cancel("run-1");
-		child.respond(child.commands[1], "run", { run: { ...run(), state: "cancelled" } });
-		await cancelling;
-		await rejection;
-		expect(child.commands.map((command) => command.type)).toEqual(["get", "cancel"]);
-	});
 });
 
 describe("desktop support IPC", () => {
@@ -584,7 +466,7 @@ describe("desktop support IPC", () => {
 			ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler as never); } }, service,
 			isTrustedSender: (event) => event === trusted,
 		});
-		expect(handlers.size).toBe(13);
+		expect(handlers.size).toBe(10);
 		for (const handler of handlers.values()) expect(() => handler({})).toThrow("Untrusted support request");
 		expect(spawnProcess).not.toHaveBeenCalled();
 		const pending = handlers.get(TRIAGE_CHANNELS.list)!(trusted);

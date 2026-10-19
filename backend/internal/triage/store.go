@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
@@ -48,17 +47,9 @@ func privateDir(path string) error {
 	return os.Chmod(path, 0o700) //nolint:gosec // Owner-only directory needs traversal permission.
 }
 
-func validRunID(id string) bool {
-	if id == "" || len(id) > 128 {
-		return false
-	}
-	for _, c := range id {
-		if c != '-' && c != '_' && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
-			return false
-		}
-	}
-	return true
-}
+var runIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
+func validRunID(id string) bool { return runIDPattern.MatchString(id) }
 
 func (s *runStore) runDir(id string) (string, error) {
 	return RunDir(filepath.Dir(filepath.Dir(s.root)), id)
@@ -90,36 +81,18 @@ func sanitizeJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	var decoded any
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&decoded); err != nil {
+	if err := decodeJSON(raw, &decoded, false); err != nil {
 		return nil, err
 	}
 	return json.MarshalIndent(redactValue(decoded), "", "  ")
 }
 
 func atomicPrivateJSON(path string, value any) error {
-	raw, err := sanitizeJSON(value)
+	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".triage-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	if _, err = f.Write(append(raw, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return hookutil.AtomicWriteFile(path, append(raw, '\n'), 0o600)
 }
 
 func (s *runStore) save(run Run) error {
@@ -127,10 +100,24 @@ func (s *runStore) save(run Run) error {
 	if err != nil {
 		return err
 	}
-	if err := privateDir(dir); err != nil {
+	if err = privateDir(dir); err != nil {
 		return err
 	}
-	return atomicPrivateJSON(filepath.Join(dir, "manifest.json"), run)
+	run.PendingInput, run.TerminalReplay, run.TerminalSequence = nil, "", 0
+	raw, err := sanitizeJSON(run)
+	if err != nil {
+		return err
+	}
+	return hookutil.AtomicWriteFile(filepath.Join(dir, "manifest.json"), append(raw, '\n'), 0o600)
+}
+
+// Bound every retained manifest read and reject symlinks and special files.
+func readPrivateJSON(path string, limit int64, value any) error {
+	raw, err := readPrivateBytes(path, limit)
+	if err != nil {
+		return err
+	}
+	return decodeJSON(raw, value, false)
 }
 
 func (s *runStore) get(id string) (Run, error) {
@@ -138,16 +125,15 @@ func (s *runStore) get(id string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json")) //nolint:gosec // Run id and directory validated above.
-	if err != nil {
-		return Run{}, err
-	}
 	var run Run
-	if err := json.Unmarshal(raw, &run); err != nil {
+	if err := readPrivateJSON(filepath.Join(dir, "manifest.json"), 2<<20, &run); err != nil {
 		return Run{}, fmt.Errorf("read triage report: %w", err)
 	}
 	if run.ID != id {
 		return Run{}, errors.New("triage manifest has a different run id")
+	}
+	if run.Launch != nil && (run.Request.PreparationID != id || run.Launch.ClientRequestID != "triage-"+id || len(run.Launch.Attachments) != 2) {
+		return Run{}, errors.New("invalid saved session launch")
 	}
 	return run, nil
 }
@@ -175,94 +161,48 @@ func (s *runStore) list() ([]Run, error) {
 	return runs, nil
 }
 
-func (s *runStore) selection() (*Selection, error) {
-	raw, err := os.ReadFile(filepath.Join(s.root, "selection.json")) //nolint:gosec // Private host-owned file.
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var selection Selection
-	if err := json.Unmarshal(raw, &selection); err != nil {
-		return nil, err
-	}
-	return &selection, nil
-}
-
-type runOwner struct {
-	PID   int    `json:"pid"`
-	RunID string `json:"runId"`
-}
-
 var errRunOwned = errors.New("a triage investigation is already running")
 
 // Each contender publishes a unique claim before checking the other claims.
 // Two contenders cannot both observe an empty set. A stale claim has a unique
 // name, so removing it cannot unlink a replacement owner's lock. A simultaneous
 // collision may reject both starts, but it never launches two providers.
-func claim(path, runID string) (func(), *runOwner, error) {
+func claim(path string) (func(), error) {
 	if err := privateDir(path); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	slot := filepath.Join(path, uuid.NewString()+".json")
-	owner := runOwner{PID: os.Getpid(), RunID: runID}
-	if err := atomicPrivateJSON(slot, owner); err != nil {
-		return nil, nil, err
+	slot, err := os.MkdirTemp(path, strconv.Itoa(os.Getpid())+"-")
+	if err != nil {
+		return nil, err
 	}
-	var once sync.Once
-	release := func() { once.Do(func() { _ = os.Remove(slot) }) }
+	release := func() { _ = os.Remove(slot) }
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		release()
-		return nil, nil, err
+		return nil, err
 	}
 	for _, entry := range entries {
 		otherPath := filepath.Join(path, entry.Name())
-		if otherPath == slot || !strings.HasSuffix(entry.Name(), ".json") {
+		if otherPath == slot {
 			continue
 		}
-		raw, readErr := os.ReadFile(otherPath) //nolint:gosec // Private host-owned claim directory.
-		if errors.Is(readErr, os.ErrNotExist) {
-			continue
-		}
-		var other runOwner
-		if readErr != nil || json.Unmarshal(raw, &other) != nil || other.PID <= 0 || processalive.Alive(other.PID) {
+		pidText, _, _ := strings.Cut(entry.Name(), "-")
+		pid, err := strconv.Atoi(pidText)
+		if err != nil || pid <= 0 || !entry.IsDir() || processalive.Alive(pid) {
 			release()
-			return nil, &other, errRunOwned
+			return nil, errRunOwned
 		}
 		if err := os.Remove(otherPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			release()
-			return nil, &other, errRunOwned
+			return nil, errRunOwned
 		}
 	}
-	return release, &owner, nil
-}
-
-func (s *runStore) claimRun(id string) (func(), *runOwner, error) {
-	release, owner, err := claim(filepath.Join(s.root, "active.lock"), id)
-	if err != nil {
-		return nil, owner, err
-	}
-	dir, err := s.runDir(id)
-	if err == nil {
-		err = privateDir(dir)
-	}
-	if err != nil {
-		release()
-		return nil, nil, err
-	}
-	releaseRun, _, err := claim(filepath.Join(dir, "owner.lock"), id)
-	if err != nil {
-		release()
-		return nil, nil, err
-	}
-	return func() { releaseRun(); release() }, owner, nil
+	return release, nil
 }
 
 func runIsActive(state string) bool {
 	switch state {
-	case "collecting", "prepared", "starting", "dispatching", "running", "working", "needs_input", "publishing":
+	case "collecting", "prepared", "starting", "dispatching", "running", "working", "needs_input":
 		return true
 	default:
 		return false
@@ -283,13 +223,6 @@ func (s *runStore) recoverInterrupted(ctx context.Context, cleanup func(context.
 		if !runIsActive(run.State) {
 			continue
 		}
-		release, _, err := s.claimRun(run.ID)
-		if errors.Is(err, errRunOwned) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
 		if cleanup != nil && run.Execution != "session" {
 			cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			cleanupErr := cleanup(cleanupCtx, run)
@@ -299,14 +232,9 @@ func (s *runStore) recoverInterrupted(ctx context.Context, cleanup func(context.
 			}
 		}
 		run.State = "interrupted"
-		if run.Preparation {
-			run.State = "cancelled"
-		}
 		run.Activity = "Investigation interrupted. The saved report is available."
 		run.PendingInput = nil
-		err = s.save(run)
-		release()
-		if err != nil {
+		if err := s.save(run); err != nil {
 			return err
 		}
 	}

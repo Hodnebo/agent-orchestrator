@@ -309,30 +309,24 @@ func (runtime *providerRuntime) startCoordinator() error {
 		seenInputs[id] = struct{}{}
 	}
 	runtime.mu.Unlock()
-	// With no enabled names, the pinned registry advertises no tools and rejects
-	// unexpected tool calls. Do not discover workspace skills or construct native
-	// tool translators for read-only conversations.
-	registry := tool.NewRegistry(tool.StaticTranslators{})
-	if !runtime.cfg.ReadOnly {
-		skills, skillErrors := tool.DiscoverSkills(filepath.Join(runtime.cfg.WorkspacePath, ".harness", "skills"))
-		if err := errors.Join(skillErrors...); err != nil {
-			return fmt.Errorf("discover Unreal Agent skills: %w", err)
-		}
-		toolNames := []string{tool.BashName, tool.ViewImageName}
-		if len(skills) != 0 {
-			toolNames = append(toolNames, tool.SkillUseName)
-		}
-		registry = tool.NewRegistry(tool.StaticTranslators{
-			Bash: bash.New(bash.Config{
-				Shell: shell(), Directory: runtime.cfg.WorkspacePath,
-				BaseDirectory: filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID),
-			}),
-			ViewImage: viewimage.New(viewimage.Config{Directory: runtime.cfg.WorkspacePath}),
-		}, toolNames...)
-		for _, skill := range skills {
-			if _, err := registry.RegisterSkill(skill); err != nil {
-				return fmt.Errorf("register Unreal Agent skill %q: %w", skill.Path, err)
-			}
+	skills, skillErrors := tool.DiscoverSkills(filepath.Join(runtime.cfg.WorkspacePath, ".harness", "skills"))
+	if err := errors.Join(skillErrors...); err != nil {
+		return fmt.Errorf("discover Unreal Agent skills: %w", err)
+	}
+	toolNames := []string{tool.BashName, tool.ViewImageName}
+	if len(skills) != 0 {
+		toolNames = append(toolNames, tool.SkillUseName)
+	}
+	registry := tool.NewRegistry(tool.StaticTranslators{
+		Bash: bash.New(bash.Config{
+			Shell: shell(), Directory: runtime.cfg.WorkspacePath,
+			BaseDirectory: filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID),
+		}),
+		ViewImage: viewimage.New(viewimage.Config{Directory: runtime.cfg.WorkspacePath}),
+	}, toolNames...)
+	for _, skill := range skills {
+		if _, err := registry.RegisterSkill(skill); err != nil {
+			return fmt.Errorf("register Unreal Agent skill %q: %w", skill.Path, err)
 		}
 	}
 	builder := contextbuilder.NewBuilder(registry.Skills()...)

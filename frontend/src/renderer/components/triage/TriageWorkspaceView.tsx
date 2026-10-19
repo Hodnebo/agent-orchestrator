@@ -12,10 +12,8 @@ export function TriageWorkspaceView({ runId, recovery = false }: { runId?: strin
 		{recovery ? <>
 			<TooltipProvider><WindowTitlebar /></TooltipProvider>
 			{isMacPlatform() ? <div aria-hidden="true" className="h-traffic-light-clearance shrink-0" style={{ WebkitAppRegion: "drag" } as CSSProperties} /> : null}
+			<div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2 text-xs text-muted-foreground"><p className="flex-1">{t("triage.recovery")}</p><a href="#/">{t("triage.back")}</a></div>
 		</> : null}
-		{recovery ? <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2 text-xs text-muted-foreground"><p className="flex-1">{t("triage.recovery")}</p><a href="#/">{t("triage.back")}</a></div> : null}
-		<div className="min-h-0 flex-1">
-			{runId ? <TriageConversation runId={runId} /> : <div className="p-6"><TriageLauncher /></div>}
-		</div>
+		<div className="min-h-0 flex-1">{runId ? <TriageConversation runId={runId} /> : <div className="p-6"><TriageLauncher /></div>}</div>
 	</section>;
 }

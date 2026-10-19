@@ -20,7 +20,6 @@ type providerConfig struct {
 	Model                  string `json:"model,omitempty"`
 	Effort                 string `json:"effort,omitempty"`
 	SystemPrompt           string `json:"systemPrompt,omitempty"`
-	ReadOnly               bool   `json:"readOnly,omitempty"`
 }
 
 func writeProviderConfig(cfg providerConfig) (string, error) {

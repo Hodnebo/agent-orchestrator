@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -91,32 +92,35 @@ func TestRunStoreExclusiveOwnerAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	release, owner, err := store.claimRun("first")
-	if err != nil || owner.RunID != "first" {
+	path := filepath.Join(store.root, "active.lock")
+	release, err := claim(path)
+	if err != nil {
 		t.Fatalf("first claim failed: %v", err)
 	}
 	defer release()
-	if _, secondOwner, err := store.claimRun("second"); !errors.Is(err, errRunOwned) || secondOwner.RunID != "first" {
-		t.Fatalf("second owner accepted: %#v, %v", secondOwner, err)
+	if _, err := claim(path); !errors.Is(err, errRunOwned) {
+		t.Fatalf("second helper accepted: %v", err)
 	}
 	now := time.Now().UTC()
-	if err := store.save(Run{ID: "first", CreatedAt: now, State: "running", Publication: Publication{State: "issue_unknown", Marker: "same"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.recoverInterrupted(context.Background(), nil); err != nil {
+	if err := store.save(Run{ID: "first", CreatedAt: now, State: "running"}); err != nil {
 		t.Fatal(err)
 	}
 	active, _ := store.get("first")
 	if active.State != "running" {
-		t.Fatal("recovery changed a live owner's run")
+		t.Fatal("second helper changed a live owner's run")
 	}
 	release()
+	release, err = claim(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
 	if err := store.recoverInterrupted(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
 	saved, _ := store.get("first")
-	if saved.State != "interrupted" || saved.Publication.State != "issue_unknown" || saved.Publication.Marker != "same" {
-		t.Fatalf("recovery changed publication identity: %#v", saved)
+	if saved.State != "interrupted" {
+		t.Fatalf("recovery did not mark the interrupted run: %#v", saved)
 	}
 }
 
@@ -147,18 +151,18 @@ func TestRunStoreConcurrentDeadOwnerCleanupCannotRemoveReplacement(t *testing.T)
 	if err := privateDir(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := atomicPrivateJSON(filepath.Join(path, "dead-owner.json"), runOwner{PID: 2147483647, RunID: "dead"}); err != nil {
+	if err := os.Mkdir(filepath.Join(path, "2147483647-dead"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	start := make(chan struct{})
 	releases := make(chan func(), 8)
 	var workers sync.WaitGroup
-	for n := range 8 {
+	for range 8 {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			<-start
-			release, _, err := claim(path, newMessageID(n))
+			release, err := claim(path)
 			if err == nil {
 				releases <- release
 			} else if !errors.Is(err, errRunOwned) {
@@ -177,18 +181,68 @@ func TestRunStoreConcurrentDeadOwnerCleanupCannotRemoveReplacement(t *testing.T)
 	if owners > 1 {
 		t.Fatalf("dead-owner recovery granted %d concurrent owners", owners)
 	}
-	releaseOld, _, err := claim(path, "old")
+	releaseOld, err := claim(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	releaseOld()
-	releaseNew, _, err := claim(path, "replacement")
+	releaseNew, err := claim(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer releaseNew()
 	releaseOld()
-	if _, owner, err := claim(path, "third"); !errors.Is(err, errRunOwned) || owner == nil || owner.RunID != "replacement" {
-		t.Fatalf("old release removed replacement ownership: %#v, %v", owner, err)
+	if _, err := claim(path); !errors.Is(err, errRunOwned) {
+		t.Fatalf("old release removed replacement ownership: %v", err)
+	}
+}
+
+func TestRejectedTransitionCannotOverwriteDurableSessionCheckpoint(t *testing.T) {
+	store, err := openRunStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := *startCommand("", true).Start
+	request.PreparationID = "stale-run"
+	run := Run{ID: request.PreparationID, Request: request, Execution: "session", State: "session_launch", Messages: []Message{}}
+	if err := store.save(run); err != nil {
+		t.Fatal(err)
+	}
+	launch, err := buildSessionLaunch(context.Background(), run, filepath.Dir(filepath.Dir(store.root)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Launch = &launch
+	if err := store.save(run); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := &host{ctx: ctx, cancel: cancel, store: store, out: io.Discard, deps: Dependencies{Now: time.Now}}
+	i := h.newInvestigation(run)
+	if _, err := store.sessionCheckpoint(run.ID, "", true, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	if err := i.commitIf(func(*Run) bool { return false }); !errors.Is(err, errTransitionRejected) {
+		t.Fatalf("transition was not rejected: %v", err)
+	}
+	saved, err := store.get(run.ID)
+	if err != nil || !saved.SessionLaunchStarted {
+		t.Fatal("rejected stale transition overwrote POST intent")
+	}
+}
+
+func TestStoreOmitsLiveNativeRequestsAndTerminalBytes(t *testing.T) {
+	store, err := openRunStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{ID: "ephemeral", State: "running", PendingInput: &PendingInput{ID: "native", Kind: "approval", Detail: json.RawMessage(`{"native":"ephemeral-form"}`)}, TerminalReplay: "ephemeral-terminal", TerminalSequence: 100}
+	if err := store.save(run); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.get(run.ID)
+	if err != nil || saved.PendingInput != nil || saved.TerminalReplay != "" || saved.TerminalSequence != 0 {
+		t.Fatalf("live state entered saved manifest: %#v %v", saved, err)
 	}
 }

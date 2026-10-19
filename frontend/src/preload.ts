@@ -25,7 +25,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
-import { TRIAGE_CHANNELS, type TriageBridge, type TriageRun } from "./shared/triage";
+import { TRIAGE_CHANNELS, type TriageBridge, type TriageRun, type TriageTerminalOutput } from "./shared/triage";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -189,21 +189,25 @@ const api = {
 	triage: {
 		catalog: () => ipcRenderer.invoke(TRIAGE_CHANNELS.catalog),
 		configure: (choices) => ipcRenderer.invoke(TRIAGE_CHANNELS.configure, choices),
-		getPreference: () => ipcRenderer.invoke(TRIAGE_CHANNELS.getPreference),
-		setPreference: (selection) => ipcRenderer.invoke(TRIAGE_CHANNELS.setPreference, selection),
 		list: () => ipcRenderer.invoke(TRIAGE_CHANNELS.list),
 		get: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.get, runId),
 		prepare: (origin) => ipcRenderer.invoke(TRIAGE_CHANNELS.prepare, origin),
 		start: (request) => ipcRenderer.invoke(TRIAGE_CHANNELS.start, request),
-		reply: (runId, text, requestId, answers) => ipcRenderer.invoke(TRIAGE_CHANNELS.reply, runId, text, requestId, answers),
+		reply: (runId, text, input) => ipcRenderer.invoke(TRIAGE_CHANNELS.reply, runId, text, input),
 		cancel: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.cancel, runId),
-		publish: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.publish, runId),
-		signInGitHub: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.signInGitHub, runId),
-		nativeInput: (runId) => ipcRenderer.invoke(TRIAGE_CHANNELS.nativeInput, runId),
+		terminalInput: (runId, text) => ipcRenderer.invoke(TRIAGE_CHANNELS.terminalInput, runId, text),
+		terminalResize: (runId, rows, cols) => ipcRenderer.invoke(TRIAGE_CHANNELS.terminalResize, runId, rows, cols),
 		subscribe: (listener) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, run: TriageRun) => listener(run);
 			ipcRenderer.on(TRIAGE_CHANNELS.run, wrapped);
 			return () => { ipcRenderer.off(TRIAGE_CHANNELS.run, wrapped); };
+		},
+		subscribeTerminal: (runId, listener) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, output: TriageTerminalOutput) => {
+				if (output.runId === runId) listener(output.data, output.sequence);
+			};
+			ipcRenderer.on(TRIAGE_CHANNELS.terminal, wrapped);
+			return () => { ipcRenderer.off(TRIAGE_CHANNELS.terminal, wrapped); };
 		},
 	} satisfies TriageBridge,
 	app: {

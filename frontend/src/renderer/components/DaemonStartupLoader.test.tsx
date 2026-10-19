@@ -31,9 +31,9 @@ describe("DaemonStartupLoader", () => {
 		const start = vi.spyOn(aoBridge.triage, "start");
 		render(<DaemonStartupLoader />);
 		fireEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
-		await waitFor(() => expect(screen.getByRole("button", { name: "Copy report" })).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Start investigation" })).toBeDisabled());
 		expect(start).not.toHaveBeenCalled();
-		expect(screen.getByRole("button", { name: "Open GitHub draft" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Report a problem" })).toBeInTheDocument();
 		vi.restoreAllMocks();
 	});
 });
