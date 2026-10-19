@@ -85,6 +85,11 @@ async function expectNarrowLayout(page: Page) {
 	await expect(inspector.getByRole("button", { name: "More actions" })).toBeVisible();
  await expect(inspector.getByRole("button", {name:"Open full file"})).toBeVisible();
  await expect(inspector.getByRole("button", {name:"Open diff in center"})).toBeVisible();
+ const rail=await inspector.boundingBox();
+ for(const label of ["Open full file","Open diff in center"]) {
+  const action=await inspector.getByRole("button",{name:label}).boundingBox();
+  expect(action).not.toBeNull();expect(action!.x+action!.width).toBeLessThanOrEqual(rail!.x+rail!.width+1);
+ }
 	await expectFileNameUntruncated(page);
 }
 
