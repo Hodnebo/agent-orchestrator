@@ -24,7 +24,10 @@ const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
 export const POLICY_KEY = "aoSitePolicy";
 
-type FrameSelection = { logicalTabId: string; frameId: number; parentFrameId: number; ref: string };
+type FrameLink = { frameId: number; parentFrameId: number; ref: string };
+// The selected frame, plus every frame between it and the page (outermost
+// first): trusted input needs the sum of all their offsets.
+type FrameSelection = { logicalTabId: string; frameId: number; chain: FrameLink[] };
 type SessionExtras = {
 	frame?: FrameSelection;
 	baseline?: SnapshotState & { logicalTabId: string; interactive: boolean };
@@ -383,7 +386,9 @@ export class Executor {
 					matches.length === 0 ? "That frame has not loaded" : "Several frames load the same address; AO cannot tell them apart",
 				);
 			}
-			ctx.extras.frame = { logicalTabId: page.logicalId, frameId: matches[0]!.frameId, parentFrameId, ref: target };
+			const current = ctx.extras.frame && ctx.extras.frame.logicalTabId === page.logicalId ? ctx.extras.frame.chain : [];
+			const frameId = matches[0]!.frameId;
+			ctx.extras.frame = { logicalTabId: page.logicalId, frameId, chain: [...current, { frameId, parentFrameId, ref: target }] };
 			ctx.extras.baseline = undefined;
 			return { frame: target, name: info.name, url: sanitizeBrowserURL(matches[0]!.url), target: this.target(page) };
 		});
@@ -537,10 +542,16 @@ export class Executor {
 		}
 		const frame = ctx.extras.frame;
 		if (!frame || frame.logicalTabId !== page.logicalId) return { x: geometry.x, y: geometry.y };
-		// Child frame coordinates are relative to the frame; add the iframe's
-		// offset in its parent (one level of nesting).
-		const offset = (await this.content(page, ctx, { op: "frameOffset", ref: frame.ref }, frame.parentFrameId)) as { x: number; y: number };
-		return { x: geometry.x + offset.x, y: geometry.y + offset.y };
+		// Frame coordinates are relative to the frame; trusted input uses the
+		// page's. Add each enclosing iframe's offset within its own parent.
+		let x = geometry.x;
+		let y = geometry.y;
+		for (const link of frame.chain) {
+			const offset = (await this.content(page, ctx, { op: "frameOffset", ref: link.ref }, link.parentFrameId)) as { x: number; y: number };
+			x += offset.x;
+			y += offset.y;
+		}
+		return { x, y };
 	}
 
 	private async elementAction(ctx: Context, action: string, ref: string, args: Record<string, unknown>): Promise<unknown> {

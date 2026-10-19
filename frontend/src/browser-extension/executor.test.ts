@@ -63,6 +63,9 @@ class FakeChrome {
 	};
 	local = storage();
 	session = storage();
+	frames = [{ frameId: 0, parentFrameId: -1, url: "" }];
+	/** Answers content requests for specific frames (tabId, frameId). */
+	frameResponder?: (frameId: number, message: Record<string, unknown>) => unknown;
 
 	load(tabId: number, url: string) {
 		const tab = this.tabs.get(tabId)!;
@@ -131,7 +134,9 @@ class FakeChrome {
 				ungroup: async (ids) => {
 					for (const id of Array.isArray(ids) ? ids : [ids]) self.tabs.get(id)!.groupId = -1;
 				},
-				sendMessage: async (tabId, message) => {
+				sendMessage: async (tabId, message, options) => {
+					const answer = self.frameResponder?.(options?.frameId ?? 0, message as Record<string, unknown>);
+					if (answer !== undefined) return { ok: true, value: answer };
 					if (!self.injected.has(tabId)) throw new Error("Could not establish connection. Receiving end does not exist.");
 					try {
 						const value = await handleContentRequest(document, self.registries.get(tabId)!, message as never);
@@ -186,7 +191,7 @@ class FakeChrome {
 			},
 			storage: { local: self.local, session: self.session },
 			webNavigation: {
-				getAllFrames: async () => [{ frameId: 0, parentFrameId: -1, url: "" }],
+				getAllFrames: async () => self.frames,
 				onCommitted: self.events.navCommitted,
 				onCompleted: self.events.navCompleted,
 				onErrorOccurred: self.events.navError,
@@ -323,6 +328,37 @@ describe("Executor", () => {
 		expect(remaining).toHaveLength(1);
 		expect(remaining[0]).toMatchObject({ url: "https://shop.test/", groupId: -1 });
 		expect(await consent.approvals()).toEqual({});
+	});
+
+	it("adds every enclosing frame's offset to trusted pointer coordinates", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		fake.frames = [
+			{ frameId: 0, parentFrameId: -1, url: "https://shop.test/" },
+			{ frameId: 1, parentFrameId: 0, url: "https://shop.test/outer" },
+			{ frameId: 2, parentFrameId: 1, url: "https://shop.test/inner" },
+		];
+		fake.frameResponder = (frameId, message) => {
+			if (message.op === "frameOffset" && frameId === 0 && message.ref === "eOuter") return { x: 100, y: 200, src: "https://shop.test/outer", name: "Outer" };
+			if (message.op === "frameOffset" && frameId === 1 && message.ref === "eInner") return { x: 20, y: 30, src: "https://shop.test/inner", name: "Inner" };
+			if (message.op === "geometry" && frameId === 2) return { x: 10, y: 15, width: 4, height: 4, inViewport: true };
+			if (message.op === "ping" && frameId === 0) return { visibility: "visible" };
+			return undefined;
+		};
+		expect(await run("frame", { target: "eOuter" })).toMatchObject({ frame: "eOuter", name: "Outer" });
+		expect(await run("frame", { target: "eInner" })).toMatchObject({ frame: "eInner", name: "Inner" });
+		await run("click", { ref: "eButton" });
+		const pressed = fake.debuggerCalls.find((call) => call.params?.type === "mousePressed");
+		expect(pressed?.params).toMatchObject({ x: 130, y: 245 });
+
+		// Back to the page clears the whole chain.
+		await run("frame", { target: "main" });
+		fake.debuggerCalls.length = 0;
+		fake.frameResponder = (frameId, message) =>
+			message.op === "geometry" && frameId === 0 ? { x: 10, y: 15, width: 4, height: 4, inViewport: true } : message.op === "ping" ? { visibility: "visible" } : undefined;
+		await run("click", { ref: "eButton" });
+		expect(fake.debuggerCalls.find((call) => call.params?.type === "mousePressed")?.params).toMatchObject({ x: 10, y: 15 });
 	});
 
 	it("refuses panel-only actions", async () => {
