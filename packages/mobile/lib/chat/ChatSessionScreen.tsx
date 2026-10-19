@@ -62,7 +62,7 @@ import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from
 import { iconSize, type, space } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
-import { archiveSessionMessage } from "../worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -540,13 +540,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			onDelete: () => {
 				haptics.warning();
 				Alert.alert(
-					"Archive session?",
-					archiveSessionMessage(sessionName),
+					ARCHIVE_SESSION_CONFIRM.title,
+					ARCHIVE_SESSION_CONFIRM.message,
 					[
-						{ text: "Cancel", style: "cancel" },
+						{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
 						// Leave first: the session this screen is showing is about to stop
 						// existing, and the board is where its row disappears from.
-						{ text: "Archive session", style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+						{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
 					],
 				);
 			},
