@@ -171,8 +171,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							t("settings.billing.freeLocal"),
 							t("settings.billing.freeAgents"),
 							t("settings.billing.freeOrchestrator"),
+							t("settings.billing.freeDevices"),
+							t("settings.billing.freeNetwork"),
 						]}
-						excluded={[t("settings.billing.freeNoCloud"), t("settings.billing.freeHosts")]}
+						excluded={[t("settings.billing.freeNoCloud")]}
 						current={currentPlan === "free"}
 						action={endsAt ? (
 							<span className="text-control text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
@@ -231,8 +233,8 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							t("settings.billing.enterpriseSupport"),
 						]}
 						cloudLimits={[
+							t("settings.billing.enterpriseProjects"),
 							t("settings.billing.enterpriseSessions"),
-							t("settings.billing.enterpriseOrchestrators"),
 							t("settings.billing.enterpriseHours"),
 						]}
 						current={false}
@@ -468,7 +470,7 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 			<div className="flex h-8 flex-col justify-center">{action}</div>
 			<p className="min-h-4 text-xs text-settings-muted">{intro}</p>
 			<div className="flex flex-1 flex-col gap-4 border-t border-border pt-3">
-				<ul className="flex flex-col gap-2">
+				{features.length + excluded.length > 0 ? <ul className="flex flex-col gap-2">
 					{features.map((feature) => (
 						<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-label">
 							<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
@@ -481,7 +483,7 @@ function PlanCard({ plan, name, amount, interval, intro, features, excluded = []
 							{feature}
 						</li>
 					))}
-				</ul>
+				</ul> : null}
 				{cloudLimits.length > 0 ? (
 					<div className="flex flex-col gap-2">
 						<p id={cloudLabelId} className="text-xs text-settings-muted">{t("settings.billing.cloudLimits")}</p>
@@ -555,22 +557,22 @@ function planName(plan: string): string {
  * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
  * builds on Starter), then the limits from its Stripe product. The control
  * plane enforces those limits only on cloud sessions, so they are listed apart.
+ * Session-hour windows and resets are left to the Usage section.
  */
 function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[]; cloudLimits: string[] } {
 	const starter = plan === RECOMMENDED_PLAN;
 	const pro = plan === "pro";
 	const included = starter
-		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"), t("settings.billing.starterHosts")]
-		: pro
-			? [t("settings.billing.proHosts")]
-			: [];
+		? [
+			t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"),
+			t("settings.billing.starterRelay"), t("settings.billing.starterDevices"),
+		]
+		: [];
 	const cloudLimits = [
-		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
+		t("settings.billing.featureProjects", { count: limits.orchestratorSlots }),
+		// Orchestrators hold their own running slots; this is what is left for agents.
+		t("settings.billing.featureAgents", { count: runningSlots(limits) - limits.orchestratorSlots }),
 		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
-		t("settings.billing.featureOrchestrators", { count: limits.orchestratorSlots }),
-		t("settings.billing.featureWindow", { hours: limits.windowSessionHours, window: limits.windowHours }),
-		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
-		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
 	];
 	return {
 		intro: starter ? t("settings.billing.everythingInFree") : pro ? t("settings.billing.everythingInStarter") : undefined,
