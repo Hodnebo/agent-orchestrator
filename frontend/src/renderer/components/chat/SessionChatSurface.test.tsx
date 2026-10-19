@@ -329,6 +329,17 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
+	it("drops the outgoing agent's cached models when the chat's agent changes elsewhere", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(clearCatalogsMock).not.toHaveBeenCalled();
+		// Switched from another window: this one only sees the new agent.
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		expect(clearCatalogsMock).toHaveBeenCalledWith(client, session.id, undefined);
+	});
+
 	it("keeps the pick when a switch got no clear answer, until the chat shows its agent", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		conversationCommandState.send = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));

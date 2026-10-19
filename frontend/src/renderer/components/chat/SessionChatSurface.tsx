@@ -19,7 +19,9 @@ import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
 import { useOfferedModels } from "../../hooks/useOfferedModels";
 import {
+	clearConversationProviderCatalogs,
 	conversationQueryKey,
+	invalidateConversationProviderCatalogs,
 	ProviderSwitchFailed,
 	useConversation,
 	useConversationCommands,
@@ -247,6 +249,19 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	// The agent's model and option lists are cached by session. A switch made
+	// elsewhere (another window or device) leaves the outgoing agent's, so they
+	// follow the agent the chat reports.
+	useEffect(() => {
+		if (!currentHarness) return;
+		const key = ["conversation-catalog-harness", hostId ?? "", session.id];
+		const seen = queryClient.getQueryData<string>(key);
+		queryClient.setQueryData(key, currentHarness);
+		if (seen && seen !== currentHarness) {
+			clearConversationProviderCatalogs(queryClient, session.id, hostId);
+			invalidateConversationProviderCatalogs(queryClient, session.id, hostId);
+		}
+	}, [currentHarness, hostId, queryClient, session.id]);
 	// A pick whose agent the chat now runs is done, however the switch's answer went.
 	useEffect(() => {
 		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
