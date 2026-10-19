@@ -1316,7 +1316,7 @@ func (s *Service) Send(
 	// A concurrent wake can clear the sleep marker and fail before this send
 	// queues. Durable refresh intent still admits the message until replacement.
 	pendingRefresh := false
-	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil && !s.HasLiveChatController(id) {
+	if !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
 		pendingRefresh, err = s.launchRefreshPending(ctx, id)
 		if err != nil {
 			return domain.ConversationTurn{}, err
