@@ -1521,6 +1521,56 @@ func (s *Store) RecordSandboxProviderFailure(
 	})
 }
 
+// RecordInstalledCleanupCommands stores the Cleanup commands a session's worker
+// was just given (its launch context's PreRemove, which it installs as its
+// Cleanup hook's commands) under domain.InstalledCleanupKey of the sandbox's
+// bootstrap_context, bounded by domain.InstalledCleanupLimit. Parsing the
+// output of a Cleanup that ran those commands (the control plane's current
+// Cleanup could not be passed in, or the project's config changed since)
+// then knows the values they assign to secret-named variables. It replaces
+// only that key, as RecordSandboxProviderFailure replaces only its own, so
+// neither clobbers the other. It is fenced by the worker's live connection,
+// as the reconciler's writes are by its lease: a replaced worker returns
+// ErrStaleWorker and changes nothing. The commands are the project's own
+// config, stored as is under the same row security.
+func (s *Store) RecordInstalledCleanupCommands(
+	ctx context.Context,
+	orgID, sessionID, workerID string,
+	epoch int64,
+	commands []string,
+) error {
+	commands = domain.BoundInstalledCleanup(commands)
+	if commands == nil {
+		commands = []string{}
+	}
+	encoded, err := json.Marshal(commands)
+	if err != nil {
+		return err
+	}
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(
+			ctx,
+			`UPDATE ao_sandboxes
+			SET bootstrap_context = bootstrap_context || jsonb_build_object($5::text, $6::jsonb)
+			WHERE session_id = $1 AND org_id = $2
+				AND EXISTS (
+					SELECT 1 FROM ao_worker_connections
+					WHERE session_id = $1 AND org_id = $2
+						AND worker_id = $3 AND epoch = $4
+						AND disconnected_at IS NULL
+				)`,
+			sessionID, orgID, workerID, epoch, domain.InstalledCleanupKey, string(encoded),
+		)
+		if err != nil {
+			return fmt.Errorf("record installed cleanup commands: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrStaleWorker
+		}
+		return nil
+	})
+}
+
 // RetrySessionStartup re-arms a session whose worker never started: it resets
 // the startup window, repair count, failure backoff and startup error, and
 // puts a parked (terminated) or failed sandbox back into provisioning so the

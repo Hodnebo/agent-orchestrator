@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,5 +226,82 @@ func TestSandboxProviderFailureIsFencedAndClaimed(t *testing.T) {
 	}
 	if stored != "build-2" || other != "yes" {
 		t.Fatalf("bootstrap_context providerFailureId = %q kept = %q", stored, other)
+	}
+}
+
+// The Cleanup commands a worker was given are stored as one key of
+// bootstrap_context, fenced by the worker's live connection: the reconciler's
+// providerFailureId (written either side of it) and the rest of the object
+// are kept, a stale worker writes nothing, a long Cleanup is bounded, and the
+// reconciler's claim reads them back.
+func TestInstalledCleanupCommandsAreFencedAndKeyOnly(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	const owner = "installed-cleanup-test-owner"
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running',
+		bootstrap_context = bootstrap_context || '{"kept": "yes"}'::jsonb,
+		reconcile_lease_owner = $3, reconcile_lease_until = now() + interval '1 minute'
+		WHERE session_id = $1 AND org_id = $2`, fixture.sessionID, fixture.orgID, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, owner, fixture.orgID, fixture.sessionID, "build-1"); err != nil {
+		t.Fatal(err)
+	}
+	launched := []string{`export DEPLOY_TOKEN=FAKEVAL97x; printf '%s\n' "$DEPLOY_TOKEN"`, "make down"}
+	if err := store.RecordInstalledCleanupCommands(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch+1,
+		launched); !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("record for a replaced worker = %v, want ErrStaleWorker", err)
+	}
+	if err := store.RecordInstalledCleanupCommands(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, launched); err != nil {
+		t.Fatalf("record installed cleanup: %v", err)
+	}
+	if err := store.RecordSandboxProviderFailure(ctx, owner, fixture.orgID, fixture.sessionID, "build-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET reconcile_lease_owner = '', reconcile_lease_until = NULL,
+		reconcile_after = now() - interval '1 hour' WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimSandboxes(ctx, owner, 100, time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	found := false
+	for _, record := range claimed {
+		if record.SessionID != fixture.sessionID {
+			continue
+		}
+		found = true
+		installed, ok := domain.InstalledCleanupCommands(record.BootstrapContext)
+		if !ok || strings.Join(installed, "\n") != strings.Join(launched, "\n") || record.ProviderFailureID != "build-2" {
+			t.Fatalf("claimed installed cleanup = %q (%v), provider failure = %q", installed, ok, record.ProviderFailureID)
+		}
+	}
+	if !found {
+		t.Fatal("sandbox was not claimed")
+	}
+	var kept string
+	if err := admin.QueryRow(ctx, `SELECT bootstrap_context ->> 'kept' FROM ao_sandboxes WHERE session_id = $1`,
+		fixture.sessionID).Scan(&kept); err != nil || kept != "yes" {
+		t.Fatalf("bootstrap_context kept = %q, %v", kept, err)
+	}
+
+	// A Cleanup longer than the limit keeps its first commands that fit.
+	long := make([]string, 40)
+	for index := range long {
+		long[index] = strings.Repeat("x", 1000)
+	}
+	if err := store.RecordInstalledCleanupCommands(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, long); err != nil {
+		t.Fatal(err)
+	}
+	var stored []byte
+	if err := admin.QueryRow(ctx, `SELECT bootstrap_context -> $2 FROM ao_sandboxes WHERE session_id = $1`,
+		fixture.sessionID, domain.InstalledCleanupKey).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	var bounded []string
+	if err := json.Unmarshal(stored, &bounded); err != nil || len(bounded) == 0 || len(bounded) >= len(long) ||
+		len(stored) > domain.InstalledCleanupLimit+len(bounded) {
+		t.Fatalf("bounded cleanup: %d commands, %d bytes, %v", len(bounded), len(stored), err)
 	}
 }

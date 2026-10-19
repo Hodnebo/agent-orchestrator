@@ -169,6 +169,8 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.recordInstalledCleanup(r, ticket.OrgID, ticket.SessionID, workerID, ticket.WorkerEpoch, launchContext.PreRemove)
+
 	scopes := issuedWorkerScopes(ticket.Scopes, launch)
 	token, err := s.workerTokens.Issue(worker.Claims{
 		OrgID:     ticket.OrgID,
@@ -246,6 +248,9 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "RECONNECT_FAILED", "The project's role instructions are invalid.")
 		return
 	}
+	// A reconnecting worker (a restart, or a reopened session refreshing its
+	// scripts) reinstalls its Cleanup hook with these commands.
+	s.recordInstalledCleanup(r, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, launchContext.PreRemove)
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerID:  claims.WorkerID,
 		Epoch:     claims.Epoch,
@@ -253,6 +258,28 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		SessionID: claims.SessionID,
 		Launch:    launchContext,
 	})
+}
+
+// installedCleanupRecorder is the optional Store capability that stores the
+// Cleanup commands a worker was given (postgres.Store.RecordInstalledCleanupCommands).
+type installedCleanupRecorder interface {
+	RecordInstalledCleanupCommands(ctx context.Context, orgID, sessionID, workerID string, epoch int64, commands []string) error
+}
+
+// recordInstalledCleanup stores the Cleanup commands a worker is being given,
+// which it installs as its Cleanup hook's commands, so a Cleanup that runs
+// them after the project's config changed is read knowing the values they
+// assign to secret-named variables. A failure only loses that knowledge
+// (the project's current Cleanup is used instead) and never fails the
+// worker's connection.
+func (s *Server) recordInstalledCleanup(r *http.Request, orgID, sessionID, workerID string, epoch int64, commands []string) {
+	recorder, ok := s.store.(installedCleanupRecorder)
+	if !ok {
+		return
+	}
+	if err := recorder.RecordInstalledCleanupCommands(r.Context(), orgID, sessionID, workerID, epoch, commands); err != nil {
+		s.logger.Warn("record the worker's cleanup commands", "error", err, "session_id", sessionID, "request_id", requestID(r))
+	}
 }
 
 // headerReportsCapability reports whether a worker request's

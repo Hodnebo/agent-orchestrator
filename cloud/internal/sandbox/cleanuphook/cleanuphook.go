@@ -263,6 +263,14 @@ func NewPlan(ctx context.Context, logArgs ...any) (Plan, bool) {
 	// The current Cleanup's commands script marks its steps with a nonce
 	// made for this run, so its step events are read only from those markers.
 	plan := Plan{Steps: worker.CleanupRun{RunID: uuid.NewString()}}
+	// What the hook runs if the current Cleanup is not installed: the
+	// commands the worker was last given, else (a sandbox from before they
+	// were stored) the current ones, the best guess left.
+	if installed, ok := sandbox.InstalledCleanupCommands(ctx); ok {
+		plan.Steps.KnownCommands = installed
+	} else if known {
+		plan.Steps.KnownCommands = current
+	}
 	if known {
 		nonce := worker.NewScriptMarkerNonce()
 		if payload, fits := CommandsPayload(current, nonce); fits {
@@ -342,7 +350,7 @@ func Report(
 	case exitCode != 0:
 		// The tail carries the failed step, its command, the user and groups
 		// it ran as, and where its full output is (worker.CleanupCommandsScript).
-		output := boundedOutput(printed)
+		output := boundedOutput(printed, steps)
 		attrs["output"] = activity.Excerpt(output, stageOutputLimit)
 		if hint := worker.ScriptFailureHint(output, exitCode, ""); hint != "" {
 			attrs["hint"] = hint
@@ -391,10 +399,11 @@ func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason str
 }
 
 // boundedOutput is the hook's output for the stage: redacted as its step
-// events are (worker.RedactScriptOutput), without carriage returns or control
+// events are (the run's redaction, which also knows the values its commands
+// assign to secret-named variables), without carriage returns or control
 // characters, at most stageOutputLimit bytes.
-func boundedOutput(output string) string {
-	output = worker.RedactScriptOutput(strings.ReplaceAll(output, "\r", ""))
+func boundedOutput(output string, steps worker.CleanupRun) string {
+	output = steps.RedactOutput(strings.ReplaceAll(output, "\r", ""))
 	output = strings.Map(func(character rune) rune {
 		if character == '\n' || character == '\t' || character >= ' ' {
 			return character
