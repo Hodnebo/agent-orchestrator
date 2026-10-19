@@ -93,6 +93,6 @@ export function useStayAwake(enabled = true) {
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
 		supported: (awakeCapability(awake.state, "idle")?.available ?? false) && (!!mobile.data || desktopOn),
-		starting: (intent?.on ?? desktopOn) && !awake.state?.active,
+		starting: intent?.on === true && !awake.state?.active,
 	};
 }

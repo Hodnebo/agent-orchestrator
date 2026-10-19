@@ -106,6 +106,15 @@ describe("shared Stay Awake controls", () => {
 		fireEvent.click(coffee());
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 	});
+	it.each(["mobile", "session", "rule"])("does not report a persisted %s wake request as starting", async (source) => {
+		if (source === "mobile") mobile.keepAwake.enabled = true;
+		if (source === "session") state.sessions = [awakeSession({})];
+		if (source === "rule") state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];
+		await show();
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(coffee()).not.toHaveAttribute("aria-busy");
+	});
+
 	it("fetches restored mobile wake with an empty cache and clears its cached response", async () => {
 		mobile.keepAwake.enabled = true;
 		await show();
@@ -119,11 +128,13 @@ describe("shared Stay Awake controls", () => {
 		await show();
 		fireEvent.click(coffee());
 		await waitFor(() => expect(release).toBeDefined());
+		expect(coffee()).toHaveAttribute("aria-busy", "true");
 		expect(coffee()).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Mobile wake" })).toBeDisabled();
 		fireEvent.click(coffee());
 		await act(async () => release!());
 		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(coffee()).not.toHaveAttribute("aria-busy");
 		fireEvent.click(coffee());
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(0);
@@ -200,6 +211,7 @@ describe("shared Stay Awake controls", () => {
 		await show();
 		fireEvent.click(coffee());
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("low_battery"));
+		expect(coffee()).not.toHaveAttribute("aria-busy");
 		expect(test.post).toHaveBeenCalledTimes(1);
 		expect(mobile.keepAwake.enabled).toBe(false);
 	});
