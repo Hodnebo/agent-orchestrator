@@ -150,7 +150,7 @@ From the phone you can open any project and worker, use structured Chat or the a
 
 Another Orchestrator.inc desktop can also connect to this computer as a remote host. Run `ao remote-host` on this computer. On the other one, turn on **Settings → General → Developer mode** and use **Settings → Remote hosts → Add host**. See [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) for step-by-step setup, the security model and troubleshooting.
 
-**AO Cloud is generally available:** sign in from the desktop app and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start: turn on **Developer mode** and **Cloud** in **Settings → General**, then choose **Sign in to AO Cloud**. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) and [Plans](#plans).
+**AO Cloud is generally available:** sign in from the desktop app and run agents in the cloud, in hosted sandboxes instead of on your computer. Anyone can sign in and start: turn on **Developer mode** and **Cloud** in **Settings → General**, then choose **Sign in to AO Cloud**. Cloud sessions run in remote sandboxes that can be slow to start or lose uncommitted work, so commit and push often. See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) and [Plans](#plans).
 
 ## Supported agents
 
@@ -229,7 +229,7 @@ Local use is free: unlimited local agents with any supported harness, plus the o
 
 | Plan | Price | Includes |
 | --- | --- | --- |
-| **Free** | $0 | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. 2 devices logged in at once, with same-network connectivity (no cloud relay). No cloud agents. |
+| **Free** | $0 | Unlimited local agents on your machine. Orchestrator, workers and PR reviews. 2 devices logged in at once. Connect over the same network, or from anywhere with your own Tailscale or the managed HTTPS tunnel (no cloud relay). No cloud agents. |
 | **Starter** | $20/month | Everything in Free, plus a cloud relay for connectivity across devices and unlimited devices, including mobile. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
 | **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
 | **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
