@@ -16,7 +16,7 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -355,11 +355,15 @@ function handoffModelName(harness: string, model: string, models: Array<{ id: st
 	return agentModelDisplayLabel(harness, label ?? id);
 }
 
+/** The remote host a chat's session runs on, whose catalogs name its models. */
+export const ChatHostId = createContext<string | undefined>(undefined);
+
 /** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
-	// The marker stores the model id. Its name comes from the agent's catalog.
-	const catalog = useQuery({ ...agentModelsQueryOptions(harness, ""), enabled: Boolean(model) }).data;
+	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
+	const hostId = useContext(ChatHostId);
+	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
 	const name = model ? handoffModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>

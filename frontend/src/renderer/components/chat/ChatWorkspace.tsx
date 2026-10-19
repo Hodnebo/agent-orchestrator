@@ -125,6 +125,7 @@ import {
 	TurnOutcome,
 	LiveResponseStatus,
 	type TurnOutcomeRetryControl,
+	ChatHostId,
 } from "./ChatTimelineItems";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
@@ -1755,6 +1756,7 @@ function ChatWorkspaceContent({
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+							<ChatHostId.Provider value={activeRemoteHostId}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -1788,6 +1790,7 @@ function ChatWorkspaceContent({
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									arriving={arrivingInChat}
 								/>
+							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
