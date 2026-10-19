@@ -5,7 +5,7 @@ description: Set up a hosted project and work on a remote session from the deskt
 
 **Orchestrator Cloud is generally available.** Sign in from the desktop app and run agents in the cloud. Anyone can sign in and start; no invitation is needed.
 
-Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Sessions run in remote sandboxes, so commit and push important work often. The local product works the same with or without Cloud.
+Orchestrator Cloud is the hosted service for running a project's worker in a remote workspace. Its control plane handles sign-in, projects, sessions, messages, and worker connections. Cloud is separate from a local desktop project and from Connect Mobile, which reaches your own computer. Sessions run in remote sandboxes that can be slow to start or lose uncommitted work, so commit and push important work often. The local product works the same with or without Cloud.
 
 ## Get started
 
@@ -40,7 +40,7 @@ Local use is free. Local agents have no plan limits; the local daemon has no pla
 
 | Plan | Price | Includes |
 | --- | --- | --- |
-| **Free** | $0 | Unlimited local agents on your machine with any supported harness. Orchestrator, workers, and PR reviews. 2 devices logged in at once, with same-network connectivity (no cloud relay). No cloud agents. |
+| **Free** | $0 | Unlimited local agents on your machine with any supported harness. Orchestrator, workers, and PR reviews. 2 devices logged in at once. Connect over the same network, or from anywhere with your own Tailscale or the managed HTTPS tunnel (no cloud relay); see [Remote access and mobile](/configuration/remote-access). No cloud agents. |
 | **Starter** | $20/month | Everything in Free, plus a cloud relay for connectivity across devices and unlimited devices, including mobile. Cloud agents keep working when your computer sleeps, with pull requests, CI fixes, and reviews in the cloud. 1 cloud project and 2 simultaneous cloud agents. |
 | **Pro** | $40/month | Everything in Starter. Bring your own Coder deployment. 5 cloud projects and 20 simultaneous cloud agents. |
 | **Enterprise** | Custom | Unlimited cloud projects and simultaneous cloud agents, no session-hour caps, collaboration on cloud agents, SSO and team management, and priority support with an SLA. |
