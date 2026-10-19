@@ -401,6 +401,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudOrgId,
 		sessionId,
 		cloudLookupEnabled,
+		!listedSession,
 	);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||

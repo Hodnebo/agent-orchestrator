@@ -1058,6 +1058,34 @@ describe("TerminalCacheProvider", () => {
 		}
 	});
 
+	it("keeps the terminal on screen for a session the snapshot does not list yet", async () => {
+		// A session opened before the snapshot lists it (created through the API,
+		// or in a project the list has not fetched yet): its slot activates an
+		// entry only when it mounts, so disposing it would leave the pane empty
+		// (and the startup loader up) until the user navigated away and back.
+		const view = renderCachedPane({ session: sessionA, sessions: [sessionB] });
+		try {
+			const terminalA = await waitFor(() => activeXterm());
+			act(() => {
+				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([{ ...sessionB, title: "renamed" }]));
+			});
+			await act(async () => {});
+			expect(terminalA.isConnected).toBe(true);
+			expect(activeXterm()).toBe(terminalA);
+			expect(xtermUnmounts.value).toBe(0);
+
+			// Once parked, a snapshot without it still disposes it.
+			view.show(sessionB);
+			await waitFor(() => expect(activeXterm()).not.toBe(terminalA));
+			act(() => {
+				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionB]));
+			});
+			await waitFor(() => expect(terminalA.isConnected).toBe(false));
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("disposes a parked shell when the shell lifecycle removes its handle", async () => {
 		const shell: ShellTerminal = {
 			handleId: "shell-handle",

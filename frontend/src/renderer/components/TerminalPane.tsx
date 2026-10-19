@@ -568,6 +568,13 @@ export function TerminalCacheProvider({
 		for (const entry of entriesRef.current.values()) {
 			const session = entry.sessionId ? sessions.get(entry.sessionId) : undefined;
 			if (entry.sessionId && !session) {
+				// The terminal on screen is kept: its slot activates an entry only
+				// when it mounts, so disposing it would leave the pane empty for as
+				// long as the session stays open. A session can be on screen before
+				// the snapshot lists it (opened right after it was created, or in a
+				// project created elsewhere that the project list has not fetched
+				// yet). Once it is parked, a later snapshot without it disposes it.
+				if (activeRef.current?.key === entry.cacheKey) continue;
 				removeEntry(entry.cacheKey);
 				continue;
 			}

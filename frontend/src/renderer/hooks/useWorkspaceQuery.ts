@@ -604,12 +604,17 @@ export function useCloudSessionQuery(
 	orgId: string | undefined,
 	sessionId: string,
 	enabled = true,
+	// Poll like the sessions list does while the caller shows this lookup
+	// rather than the list's row (a session opened before the list has it):
+	// otherwise its lifecycle stays where it was when the view opened.
+	poll = false,
 ) {
 	const { client, ready, baseUrl } = useCloudCp();
 	return useQuery({
 		queryKey: ["cloud-session", baseUrl, orgId ?? "", sessionId],
 		enabled: enabled && ready && orgId !== undefined && sessionId !== "",
 		retry: 1,
+		refetchInterval: poll ? 5000 : false,
 		queryFn: async (): Promise<CloudCpSession | undefined> => {
 			if (orgId === undefined) return undefined;
 			const response = await client.getSession(orgId, sessionId);
