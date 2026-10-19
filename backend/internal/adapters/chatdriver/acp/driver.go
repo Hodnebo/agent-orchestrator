@@ -675,7 +675,13 @@ func isACPPeerDisconnected(err error) bool {
 	}
 	data, _ := requestErr.Data.(map[string]any)
 	reason, _ := data["error"].(string)
-	return strings.HasPrefix(reason, "peer disconnected")
+	// The handshake can also fail writing to the gone process's input.
+	for _, gone := range []string{"peer disconnected", "io: read/write on closed pipe", "broken pipe", "file already closed"} {
+		if strings.Contains(reason, gone) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Driver) initialize(
