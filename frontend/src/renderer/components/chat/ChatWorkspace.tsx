@@ -4681,14 +4681,25 @@ const itemKey = (item: ConversationItem): string =>
  * "Switched" instead of one line unmounting for the other.
  */
 function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
-	return items.map((item) => {
-		if (item.kind !== "activity" || item.detail?.event !== "provider_switch") return item;
+	const nextMessageId = (marker: ConversationItem) => {
 		let next: ConversationMessage | undefined;
 		for (const candidate of items) {
 			if (candidate.kind !== "message" || candidate.role !== "user" || !candidate.clientMessageId) continue;
-			if (candidate.sequence > item.sequence && (!next || candidate.sequence < next.sequence)) next = candidate;
+			if (candidate.sequence > marker.sequence && (!next || candidate.sequence < next.sequence)) next = candidate;
 		}
-		return next?.clientMessageId ? { ...item, id: `local-switch:${next.clientMessageId}` } : item;
+		return next?.clientMessageId;
+	};
+	const isMarker = (item: ConversationItem) => item.kind === "activity" && item.detail?.event === "provider_switch";
+	// Only the marker nearest before a message was drawn with it: a switch whose
+	// send failed, then another, leaves two markers before the same message.
+	const nearest = new Map<string, number>();
+	for (const item of items) {
+		const id = isMarker(item) ? nextMessageId(item) : undefined;
+		if (id && item.sequence > (nearest.get(id) ?? -Infinity)) nearest.set(id, item.sequence);
+	}
+	return items.map((item) => {
+		const id = isMarker(item) ? nextMessageId(item) : undefined;
+		return id && nearest.get(id) === item.sequence ? { ...item, id: `local-switch:${id}` } : item;
 	});
 }
 

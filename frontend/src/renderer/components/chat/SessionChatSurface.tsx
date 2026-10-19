@@ -245,6 +245,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	// A pick whose agent the chat now runs is done, however the switch's answer went.
+	useEffect(() => {
+		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
+	}, [chosenSwitch, currentHarness]);
 	const pendingHarness = pendingSwitch?.harness;
 	// The daemon checks an agent can run as a chat the first time it starts one,
 	// which can take a second; run that check now so the send does not wait on it.
@@ -661,6 +665,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							text: excerpt.text,
 						})),
 					};
+					// A new message replaces an earlier switch's failure.
+					setSendSwitchError(undefined);
+					providerSwitch.reset();
 					if (!pendingSwitch) return commands.send(message);
 					const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
 					// Match the displayed effort, as the terminal switch does. Cursor's
@@ -674,9 +681,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// Nothing was sent if the switch fails, so the draft must stay editable
 					// instead of being held as a delivery that might have gone through.
 					const switchFailed = (error: unknown) => {
-						// The daemon keeps the previous agent and puts its settings back, so
-						// the composer shows that agent and its permission mode again.
-						setChosenSwitch(undefined);
+						// A refused switch leaves the previous agent and its settings, so the
+						// composer shows them again. With no clear answer the pick stays until
+						// the chat shows which agent it has.
+						if (error instanceof ProviderSwitchFailed) setChosenSwitch(undefined);
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
 						return Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
 					};
@@ -702,7 +710,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						return commands.send(message);
 					}
 					// The daemon switches and sends in one request; the message shows at once.
-					setSendSwitchError(undefined);
 					try {
 						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
@@ -710,11 +717,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					} catch (error) {
 						if (error instanceof ProviderSwitchFailed) {
 							setSendSwitchError(error.reason);
-							throw switchFailed(error.reason);
+							throw switchFailed(error);
 						}
-						// The switch went through and only the send failed: the composer
-						// retries the message as an ordinary send.
-						switched();
+						// The switch went through and only the send failed, or no answer came.
+						// The chat is read back, and once it runs the picked agent the pick is
+						// dropped, so a retry goes as an ordinary send to that agent.
+						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
 						throw error;
 					}
 				}}

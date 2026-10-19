@@ -878,6 +878,24 @@ describe("conversation branching commands", () => {
 		});
 	});
 
+	it("does not call a switch refused when no clear answer came back", async () => {
+		postMock
+			.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE" }, response: new Response(null, { status: 502 }) })
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex" };
+		// A remote daemon's gateway gave up, but the daemon may still switch and send.
+		await act(async () => {
+			const failure = await result.current.send({ text: "a", clientMessageId: "m1", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The request never got an answer.
+		await act(async () => {
+			const failure = await result.current.send({ text: "b", clientMessageId: "m2", providerSwitch }).catch((error) => error);
+			expect(failure).toBeInstanceOf(TypeError);
+		});
+	});
+
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
 		postMock.mockResolvedValue({ data: {}, error: undefined });
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });

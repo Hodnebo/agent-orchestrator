@@ -329,6 +329,28 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
+	it("keeps the pick when a switch got no clear answer, until the chat shows its agent", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		conversationCommandState.send = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "codex" });
+		});
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message").catch(() => undefined);
+		});
+		// The daemon may not have switched, so a retry still asks for Codex.
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
+		// It had: the chat now runs Codex, and the pick is done.
+		// A new session object re-renders the memoized surface with the new snapshot.
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
 	it("shows a message with attachments while the switch runs, and takes it back when the switch fails", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		let failSwitch: (error: Error) => void = () => {};

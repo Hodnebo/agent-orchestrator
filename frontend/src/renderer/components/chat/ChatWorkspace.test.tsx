@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, type ReactElement } from "react";
@@ -2060,6 +2061,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("group", { name: "Turn settings" })).not.toBeInTheDocument();
 		view.rerender(<ChatWorkspace {...props} settingsReady />);
 		expect(screen.getByRole("group", { name: "Turn settings" })).toBeInTheDocument();
+	});
+
+	it("keys only the switch marker nearest a message with that message", () => {
+		const marker = (id: string, sequence: number, targetHarness: string) => ({
+			kind: "activity" as const, id, sequence, revision: 1, activityKind: "system" as const, status: "completed" as const,
+			summary: "Switched provider", detail: { event: "provider_switch" as const, sourceHarness: "codex", targetHarness },
+			createdAt: "2026-08-08T00:00:00Z",
+		});
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		// A switch whose send failed, then another switch, then the message.
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace
+					snapshot={{
+						...chatFixtureEmpty, latestSequence: 3,
+						items: [marker("switch-1", 1, "claude-code"), marker("switch-2", 2, "opencode"), { ...humanMessage("hello"), sequence: 3, clientMessageId: "m1" }],
+					}}
+				/>
+			</QueryClientProvider>,
+		);
+		expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+		errors.mockRestore();
 	});
 
 	it("keeps the interface switch in the composer while the agent is stopped", () => {

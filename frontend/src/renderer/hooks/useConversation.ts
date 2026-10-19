@@ -94,6 +94,12 @@ export class ProviderSwitchFailed extends Error {
 	}
 }
 
+/**
+ * A remote daemon's gateway answers 502–504 while the daemon may still finish
+ * the switch, so those say nothing about whether it happened.
+ */
+const switchOutcomeUnknown = (status: number) => status === 502 || status === 503 || status === 504;
+
 interface ConversationSendMutationInput {
 	targetSessionId: string;
 	clientMessageId: string;
@@ -471,9 +477,10 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 /** Drops what was cached from a session's outgoing agent once it switched. */
 async function refreshAfterProviderSwitch(queryClient: QueryClient, sessionId: string, hostId?: string) {
-	await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-	// Provider catalogs are keyed by the AO session id, so the outgoing provider's must go first.
+	// Provider catalogs are keyed by the AO session id, so the outgoing provider's
+	// go first, before the new agent can show them as its own.
 	clearConversationProviderCatalogs(queryClient, sessionId, hostId);
+	await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 	await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 	invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
 }
@@ -483,14 +490,18 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (request: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey">) => {
-			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
+			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
 				params: { path: { sessionId } },
 				body: { ...request, idempotencyKey: crypto.randomUUID() },
 			});
-			if (error) throw error;
+			if (error) throw switchOutcomeUnknown(response.status) ? error : new ProviderSwitchFailed(error);
 			return data;
 		},
 		onSuccess: () => refreshAfterProviderSwitch(queryClient, sessionId, hostId),
+		// With no clear answer the daemon may have switched, so what it runs is read back.
+		onError: (error) => {
+			if (!(error instanceof ProviderSwitchFailed)) void refreshAfterProviderSwitch(queryClient, sessionId, hostId).catch(() => {});
+		},
 	});
 }
 
@@ -601,13 +612,19 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (providerSwitch) {
 				// One request: the daemon switches, then sends, so the message does not
 				// wait on this renderer refetching between the two.
+				const refresh = () => void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
 				const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
 					params: { path: { sessionId: targetSessionId } },
 					body: { ...providerSwitch, idempotencyKey: crypto.randomUUID(), message: { ...message, clientMessageId } },
+				}).catch((failure: unknown) => {
+					// No answer: the daemon may have switched, so what it runs is read back.
+					refresh();
+					throw failure;
 				});
 				const switched = !error || response.headers.get("X-AO-Provider-Switched") === "1";
-				if (switched) void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
-				if (error) throw switched ? error : new ProviderSwitchFailed(error);
+				const refused = Boolean(error) && !switched && !switchOutcomeUnknown(response.status);
+				if (!refused) refresh();
+				if (error) throw refused ? new ProviderSwitchFailed(error) : error;
 				const accepted: components["schemas"]["SendConversationMessageResponse"] = data.message ?? { duplicate: true };
 				return accepted;
 			}
