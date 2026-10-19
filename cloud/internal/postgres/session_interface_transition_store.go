@@ -480,6 +480,9 @@ type CoordinatedInterfaceTransition struct {
 	// typed a message into the terminal and that no provider hook has
 	// confirmed since (activity_source_request_id is still set).
 	SessionActivityUnconfirmed bool
+	// SessionTerminated reports that the session was deleted (archived) when
+	// the transition was claimed: no worker will ever run its handoff steps.
+	SessionTerminated bool
 }
 
 // ClaimCoordinatedInterfaceTransitions atomically claims one active or
@@ -499,7 +502,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 			ctx,
 			`WITH candidate AS (
 				SELECT t.id, session.harness, session.activity_state,
-					session.activity_source_request_id IS NOT NULL AS activity_unconfirmed
+					session.activity_source_request_id IS NOT NULL AS activity_unconfirmed,
+					session.is_terminated
 				FROM ao_interface_transitions t
 				JOIN ao_sessions session
 					ON session.org_id = t.org_id AND session.id = t.session_id
@@ -524,7 +528,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				t.selected_model, t.selected_effort,
 				t.error_code, t.error_detail, t.notice_acknowledged_at,
 				t.created_at, t.updated_at, t.completed_at, candidate.harness,
-				candidate.activity_state, candidate.activity_unconfirmed`,
+				candidate.activity_state, candidate.activity_unconfirmed,
+				candidate.is_terminated`,
 			owner,
 			limit,
 			lease,
@@ -536,7 +541,7 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 		for rows.Next() {
 			var transition domain.SessionInterfaceTransition
 			var harness, activityState string
-			var activityUnconfirmed bool
+			var activityUnconfirmed, terminated bool
 			if err := rows.Scan(
 				&transition.ID,
 				&transition.OrgID,
@@ -557,6 +562,7 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				&harness,
 				&activityState,
 				&activityUnconfirmed,
+				&terminated,
 			); err != nil {
 				return err
 			}
@@ -565,6 +571,7 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				Harness:                    harness,
 				SessionActivityState:       activityState,
 				SessionActivityUnconfirmed: activityUnconfirmed,
+				SessionTerminated:          terminated,
 			})
 		}
 		return rows.Err()

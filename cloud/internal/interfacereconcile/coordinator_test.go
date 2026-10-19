@@ -137,6 +137,7 @@ type fakeDriver struct {
 	startedInterfaces []domain.SessionInterface
 	readyCalls        int
 	readyErr          error
+	readyInterfaces   []domain.SessionInterface
 
 	startedWithNativeID string
 }
@@ -182,8 +183,9 @@ func (f *fakeDriver) StartTarget(_ context.Context, transition postgres.Coordina
 	}
 	return nil
 }
-func (f *fakeDriver) VerifyControllerReady(context.Context, postgres.CoordinatedInterfaceTransition) error {
+func (f *fakeDriver) VerifyControllerReady(_ context.Context, transition postgres.CoordinatedInterfaceTransition) error {
 	f.readyCalls++
+	f.readyInterfaces = append(f.readyInterfaces, transition.TargetInterface)
 	return f.readyErr
 }
 
@@ -587,6 +589,8 @@ func TestReconcileTargetStartFailureKeepsWorkFencedUntilSourceRestarts(t *testin
 		t.Fatalf("source restart failure released work: phase=%q released=%t", store.transitions[0].Phase, store.heldMessagesReleased)
 	}
 	driver.restoreErr = nil
+	// The failed restart backs off before the next recovery attempt.
+	coordinator.now = func() time.Time { return time.Now().Add(time.Minute) }
 	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -791,5 +795,152 @@ func TestReconcileDrainRestartsProofWindowWhenATurnStarts(t *testing.T) {
 	step("idle", time.Second)
 	if got := store.transitions[0].Phase; got != domain.SessionInterfaceTransitionCompleted {
 		t.Fatalf("phase once the source proves idle = %q, want completed", got)
+	}
+}
+
+// A handoff on a deleted session can never get a worker again. It used to
+// stay recovery_required and ask for one on every tick forever (prod: seven
+// such sessions logged "dispatch interface.ready: worker unavailable" about
+// eight times a second for two weeks). It now ends as failed without touching
+// the worker and without turning its held prompts into turns.
+func TestReconcileEndsHandoffOfDeletedSession(t *testing.T) {
+	for _, phase := range []domain.SessionInterfaceTransitionPhase{
+		domain.SessionInterfaceTransitionRecovery,
+		domain.SessionInterfaceTransitionDraining,
+	} {
+		transition := testTransition(phase)
+		transition.Policy = domain.SessionInterfaceTransitionInterrupt
+		transition.ErrorCode = "SOURCE_DRAIN_FAILED"
+		transition.ErrorDetail = "worker interface command interface.interrupt failed: boom"
+		transition.SessionTerminated = true
+		store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+		driver := &fakeDriver{readyErr: errors.New("dispatch interface.ready: worker unavailable")}
+		coordinator := newCoordinator(store, driver)
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatalf("%s: %v", phase, err)
+		}
+		got := store.transitions[0]
+		if got.Phase != domain.SessionInterfaceTransitionFailed || got.ErrorCode != SessionTerminatedCode {
+			t.Fatalf("%s: phase=%q code=%q, want failed/%s", phase, got.Phase, got.ErrorCode, SessionTerminatedCode)
+		}
+		if !strings.Contains(got.ErrorDetail, "deleted") || !strings.Contains(got.ErrorDetail, "SOURCE_DRAIN_FAILED") {
+			t.Fatalf("%s: detail %q does not explain the deletion and keep the earlier failure", phase, got.ErrorDetail)
+		}
+		if store.heldMessagesReleased {
+			t.Fatalf("%s: held prompts of a deleted session were turned into turns", phase)
+		}
+		if driver.readyCalls+driver.interruptCalls+driver.inspectCalls+driver.startCalls != 0 {
+			t.Fatalf("%s: a deleted session's worker was asked to act: %+v", phase, driver)
+		}
+		claims := len(store.claimLimits)
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if driver.readyCalls != 0 || len(store.claimLimits) != claims+1 {
+			t.Fatalf("%s: ended handoff was claimed again", phase)
+		}
+	}
+}
+
+// A recovery whose worker cannot prove a controller (no worker connected, as
+// for a paused sandbox) stays fenced but is retried with a doubling backoff,
+// not on every tick, and completes once the controller is ready.
+func TestReconcileRecoveryBacksOffWhileControllerUnavailable(t *testing.T) {
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRecovery)}}
+	driver := &fakeDriver{readyErr: errors.New("dispatch interface.ready: worker unavailable")}
+	coordinator := New(store, driver, Options{
+		Interval: time.Millisecond, Logger: slog.New(slog.DiscardHandler),
+		RecoveryRetryBase: 2 * time.Second, RecoveryRetryMax: 8 * time.Second,
+	})
+	now := time.Unix(1_800_000_000, 0)
+	coordinator.now = func() time.Time { return now }
+	pass := func(advance time.Duration) {
+		t.Helper()
+		now = now.Add(advance)
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Attempts at 0s, 2s, 6s (+4s), 14s (+8s), 22s (+8s, capped).
+	for _, step := range []struct {
+		advance time.Duration
+		calls   int
+	}{
+		{0, 1}, {time.Second, 1}, {time.Second, 2}, {3 * time.Second, 2}, {time.Second, 3},
+		{7 * time.Second, 3}, {time.Second, 4}, {7 * time.Second, 4}, {time.Second, 5},
+	} {
+		pass(step.advance)
+		if driver.readyCalls != step.calls {
+			t.Fatalf("after %s: readiness calls = %d, want %d", now.Sub(time.Unix(1_800_000_000, 0)), driver.readyCalls, step.calls)
+		}
+	}
+	if store.transitions[0].Phase != domain.SessionInterfaceTransitionRecovery || store.heldMessagesReleased {
+		t.Fatalf("recovery left its fence without proof: phase=%q released=%t", store.transitions[0].Phase, store.heldMessagesReleased)
+	}
+	driver.readyErr = nil
+	pass(8 * time.Second)
+	if store.transitions[0].Phase != domain.SessionInterfaceTransitionCompleted || !store.heldMessagesReleased {
+		t.Fatalf("ready recovery did not complete: phase=%q released=%t", store.transitions[0].Phase, store.heldMessagesReleased)
+	}
+	if len(coordinator.recoveryRetries) != 0 {
+		t.Fatalf("backoff kept after the recovery completed: %v", coordinator.recoveryRetries)
+	}
+}
+
+// Recoveries waiting out their backoff do not take MaxConcurrent slots, so a
+// new switch on another session still runs in the next pass.
+func TestReconcileBackedOffRecoveriesDoNotDelayOtherHandoffs(t *testing.T) {
+	var transitions []postgres.CoordinatedInterfaceTransition
+	for index := range defaultMaxConcurrent {
+		transition := testTransition(domain.SessionInterfaceTransitionRecovery)
+		transition.ID = "recovery-" + string(rune('a'+index))
+		transition.SessionID = "recovery-session-" + string(rune('a'+index))
+		transitions = append(transitions, transition)
+	}
+	fresh := testTransition(domain.SessionInterfaceTransitionRequested)
+	fresh.ID, fresh.SessionID = "fresh", "fresh-session"
+	store := &fakeStore{transitions: append(transitions, fresh)}
+	driver := &fakeDriver{Inspection: SourceInspection{Idle: true}, readyErr: errors.New("dispatch interface.ready: worker unavailable")}
+	coordinator := newCoordinator(store, driver)
+	// The first pass spends every slot on the recoveries, which back off.
+	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if driver.readyCalls != defaultMaxConcurrent || store.transitions[len(transitions)].Phase != domain.SessionInterfaceTransitionRequested {
+		t.Fatalf("first pass: ready=%d fresh=%q", driver.readyCalls, store.transitions[len(transitions)].Phase)
+	}
+	if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.transitions[len(transitions)].Phase; got != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("fresh handoff phase = %q, want completed while the recoveries back off", got)
+	}
+	if driver.readyCalls != defaultMaxConcurrent {
+		t.Fatalf("backed-off recoveries were retried early: ready=%d", driver.readyCalls)
+	}
+}
+
+// A drain failure is recovered before the session row is committed to the
+// target, so recovery restores and verifies the source controller (the one
+// the session row still names), never the target that was never started.
+func TestReconcileDrainFailureRecoveryVerifiesUncommittedSource(t *testing.T) {
+	transition := testTransition(domain.SessionInterfaceTransitionRecovery)
+	transition.Policy = domain.SessionInterfaceTransitionInterrupt
+	transition.ErrorCode = "SOURCE_DRAIN_FAILED"
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{transition}}
+	driver := &fakeDriver{}
+	if err := newCoordinator(store, driver).ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(driver.readyInterfaces) != 1 || driver.readyInterfaces[0] != domain.SessionInterfaceTUI {
+		t.Fatalf("verified interfaces = %v, want the source (tui)", driver.readyInterfaces)
+	}
+	got := store.transitions[0]
+	if got.Phase != domain.SessionInterfaceTransitionFailed || got.ErrorCode != "SOURCE_DRAIN_FAILED" || !store.heldMessagesReleased {
+		t.Fatalf("drain recovery: phase=%q code=%q released=%t, want failed/SOURCE_DRAIN_FAILED/released",
+			got.Phase, got.ErrorCode, store.heldMessagesReleased)
+	}
+	if store.committed != "" {
+		t.Fatalf("drain recovery committed an interface: %q", store.committed)
 	}
 }

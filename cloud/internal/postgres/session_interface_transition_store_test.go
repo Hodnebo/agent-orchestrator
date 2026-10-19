@@ -216,8 +216,19 @@ func TestClaimedTransitionCarriesProviderActivity(t *testing.T) {
 		t.Fatalf("typed-message activity = %q unconfirmed=%t, want active/true", got.SessionActivityState, got.SessionActivityUnconfirmed)
 	}
 	time.Sleep(5 * time.Millisecond)
-	if got := claim("idle", nil); got.SessionActivityState != "idle" || got.SessionActivityUnconfirmed {
-		t.Fatalf("hook-reported activity = %q unconfirmed=%t, want idle/false", got.SessionActivityState, got.SessionActivityUnconfirmed)
+	if got := claim("idle", nil); got.SessionActivityState != "idle" || got.SessionActivityUnconfirmed || got.SessionTerminated {
+		t.Fatalf("hook-reported activity = %q unconfirmed=%t terminated=%t, want idle/false/false",
+			got.SessionActivityState, got.SessionActivityUnconfirmed, got.SessionTerminated)
+	}
+	// A deleted session's handoff is still claimed, carrying the deletion, so
+	// the coordinator can end it instead of waiting for a worker forever.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true
+		WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if got := claim("exited", nil); !got.SessionTerminated {
+		t.Fatal("claimed transition of a deleted session does not report it terminated")
 	}
 }
 
