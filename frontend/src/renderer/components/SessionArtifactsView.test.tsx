@@ -16,6 +16,7 @@ const { cloudAccessMock, deleteArtifactMock, openPreviewMock } = vi.hoisted(() =
 
 vi.mock("../hooks/useOpenArtifactPreview", () => ({ useOpenArtifactPreview: () => openPreviewMock }));
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
+	CloudArtifactAccessError: class extends Error {},
 	deleteSessionArtifactFile: deleteArtifactMock,
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
 		queryKey: ["artifact-file", sessionId, path],
@@ -28,12 +29,16 @@ vi.mock("./ArtifactFileView", () => ({
 	),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
-	CloudArtifactFrame: ({ url }: { url: string }) => <div data-testid="cloud-frame">{url}</div>,
+	CloudArtifactFrame: ({ url, onAccessRefused }: { url: string; onAccessRefused?: () => void }) => (
+		<div data-testid="cloud-frame">
+			{url}
+			<button type="button" onClick={onAccessRefused}>refuse</button>
+		</div>
+	),
 }));
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
 	useCloudArtifactAccess: cloudAccessMock,
-	useCloudArtifactChanges: () => undefined,
 }));
 
 const artifacts: SessionArtifact[] = [
@@ -73,7 +78,7 @@ function cloudSession(): WorkspaceSession {
 describe("SessionArtifactsView for a cloud session", () => {
 	beforeEach(() => {
 		openPreviewMock.mockReset();
-		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false });
+		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
 	});
 
 	it("frames an html artifact from its access URL instead of the Browser panel", async () => {
@@ -95,6 +100,39 @@ describe("SessionArtifactsView for a cloud session", () => {
 		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html?v=2026-09-24T00%3A00%3A00Z`);
 	});
 
+	it("keeps an open file's URL while the access prefix is refreshed", async () => {
+		const { rerender } = renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+		cloudAccessMock.mockReturnValue({ data: "https://cp.test/api/cloud/v1/artifact-files/fresh/", isError: false, refetch: vi.fn() });
+		rerender(<SessionArtifactsView session={cloudSession()} />);
+
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${CLOUD_ROOT}report.html`);
+	});
+
+	it("takes a fresh access prefix after the open file's link was refused", async () => {
+		const refetch = vi.fn();
+		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch });
+		const { rerender } = renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "refuse" }));
+		expect(refetch).toHaveBeenCalled();
+		const fresh = "https://cp.test/api/cloud/v1/artifact-files/fresh/";
+		cloudAccessMock.mockReturnValue({ data: fresh, isError: false, refetch });
+		rerender(<SessionArtifactsView session={cloudSession()} />);
+
+		expect(screen.getByTestId("cloud-frame")).toHaveTextContent(`${fresh}report.html`);
+	});
+
+	it("offers a retry when the access prefix cannot be fetched", async () => {
+		const refetch = vi.fn();
+		cloudAccessMock.mockReturnValue({ data: undefined, isError: true, refetch });
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+		expect(refetch).toHaveBeenCalled();
+	});
+
 	it("opens a markdown artifact in the viewer through the cloud fetch", async () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
@@ -105,7 +143,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 	});
 
 	it("says when the files cannot be reached", async () => {
-		cloudAccessMock.mockReturnValue({ data: undefined, isError: true });
+		cloudAccessMock.mockReturnValue({ data: undefined, isError: true, refetch: vi.fn() });
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
 
@@ -123,7 +161,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 
 describe("SessionArtifactsView", () => {
 	beforeEach(() => {
-		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+		cloudAccessMock.mockReset().mockReturnValue({ data: undefined, isError: false, refetch: vi.fn() });
 		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 	});

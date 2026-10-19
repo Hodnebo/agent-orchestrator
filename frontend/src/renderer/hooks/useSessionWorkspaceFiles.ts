@@ -281,6 +281,8 @@ export function sessionArtifactFileQueryOptions(sessionId: string, path: string,
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
 		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage, cloud),
+		// A missing cloud file or a refused link does not change on retry.
+		...(cloud ? { retry: false } : {}),
 	};
 }
 

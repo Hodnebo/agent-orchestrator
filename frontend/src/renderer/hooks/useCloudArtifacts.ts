@@ -1,68 +1,83 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
-import { cloudSessionsQueryKey } from "./useWorkspaceQuery";
 
-/** The control plane signs an access prefix for 30 minutes; refresh well before. */
-const ACCESS_REFRESH_MS = 20 * 60_000;
+/** How long before an access prefix expires it is replaced. */
+const ACCESS_REFRESH_MARGIN_MS = 2 * 60_000;
+/** The soonest an access prefix is refreshed again, whatever its expiry says. */
+const ACCESS_MIN_REFRESH_MS = 30_000;
 
 export const cloudArtifactAccessQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
 	["cloud-artifact-access", baseUrl, orgId, sessionId] as const;
 
 /**
+ * The query key of one cloud session's artifact list. updatedAt is the
+ * session's: every artifact commit changes it, so a cached list is reused
+ * until the session changes.
+ */
+export const cloudArtifactFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string, updatedAt: string) =>
+	["cloud-artifact-files", baseUrl, orgId, sessionId, updatedAt] as const;
+
+type CloudArtifactAccess = { root: string; expiresAt: number };
+
+/** Milliseconds until an access prefix should be replaced. */
+function accessRefreshIn(access: CloudArtifactAccess | undefined): number {
+	if (!access) return 0;
+	return Math.max(ACCESS_MIN_REFRESH_MS, access.expiresAt - Date.now() - ACCESS_REFRESH_MARGIN_MS);
+}
+
+/**
  * The absolute URL, ending in "/", that serves a cloud session's artifact
  * files. A file's URL is this root plus its escaped path; relative links
- * inside an HTML or Markdown file resolve against it.
+ * inside an HTML or Markdown file resolve against it. It is replaced shortly
+ * before it expires, and on window focus once it is about to.
  */
 export function useCloudArtifactAccess(session: WorkspaceSession, enabled = true) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId ?? "";
-	return useQuery({
+	return useQuery<CloudArtifactAccess, Error, string, ReturnType<typeof cloudArtifactAccessQueryKey>>({
 		queryKey: cloudArtifactAccessQueryKey(baseUrl, orgId, session.id),
 		enabled: enabled && ready && orgId !== "",
-		staleTime: ACCESS_REFRESH_MS,
-		refetchInterval: ACCESS_REFRESH_MS,
+		staleTime: (query) => accessRefreshIn(query.state.data),
+		refetchInterval: (query) => accessRefreshIn(query.state.data),
+		refetchOnWindowFocus: true,
 		retry: 1,
-		queryFn: async ({ signal }) => {
+		queryFn: async ({ signal }): Promise<CloudArtifactAccess> => {
 			const access = await client.createSessionArtifactAccess(orgId, session.id, { signal });
-			return `${baseUrl.replace(/\/+$/, "")}${access.filesPrefix}`;
+			return { root: `${baseUrl.replace(/\/+$/, "")}${access.filesPrefix}`, expiresAt: Date.parse(access.expiresAt) };
 		},
+		select: (access) => access.root,
 	});
 }
 
-/**
- * One artifact file's URL under an access root from useCloudArtifactAccess.
+/** One artifact file's URL under an access root from useCloudArtifactAccess.
  * `version` (the file's updatedAt) becomes a query parameter, so the URL
- * changes when the file does and an open view reloads it.
- */
+ * changes when the file does and an open view reloads it. */
 export function cloudArtifactFileUrl(root: string, path: string, version?: string): string {
 	const url = root + path.split("/").map(encodeURIComponent).join("/");
 	return version ? `${url}?v=${encodeURIComponent(version)}` : url;
 }
 
-/** Refreshes the cloud session list when the session's artifacts change. */
-export function useCloudArtifactChanges(session: WorkspaceSession, enabled = true) {
-	const queryClient = useQueryClient();
-	const { baseUrl } = useCloudCp();
-	const orgId = session.cloud?.orgId;
-	const sessionId = session.id;
-	useEffect(() => {
-		if (!enabled || !baseUrl || !orgId) return;
-		const controller = new AbortController();
-		const subscribedAt = Date.now();
-		void subscribeSessionEventsBridged({
-			baseUrl,
-			orgId,
-			sessionId,
-			after: 0,
-			signal: controller.signal,
-			onEvent: (event) => {
-				if (event.type !== "artifact.changed" || Date.parse(event.createdAt) < subscribedAt - 5_000) return;
-				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-			},
-		});
-		return () => controller.abort();
-	}, [baseUrl, enabled, orgId, queryClient, sessionId]);
+/**
+ * The URL an open cloud file is shown from. It is taken from the access root
+ * when the file opens or changes, and kept while the root is refreshed, so a
+ * refresh does not reload the open file. After a read with the kept URL was
+ * refused, repin drops it and waits for a root that gives a different URL.
+ */
+export function usePinnedArtifactUrl(root: string | undefined, path: string | undefined, version: string | undefined) {
+	const [pinned, setPinned] = useState<{ key: string; url?: string; refused?: string }>();
+	const key = path === undefined ? "" : `${path}\n${version ?? ""}`;
+	let current = pinned?.key === key ? pinned : { key };
+	if (current.url === undefined && root !== undefined && path !== undefined) {
+		const url = cloudArtifactFileUrl(root, path, version);
+		if (url !== current.refused) {
+			current = { key, url };
+			setPinned(current);
+		}
+	}
+	return {
+		url: current.url,
+		repin: () => setPinned((previous) => (previous ? { key: previous.key, refused: previous.url } : previous)),
+	};
 }

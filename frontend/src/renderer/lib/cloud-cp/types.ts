@@ -613,7 +613,12 @@ export interface CloudCpSession {
 	requestedOutput?: "artifact";
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
-	/** Committed artifact files, while the deployment keeps artifacts. */
+	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
+	artifactCount?: number;
+	/**
+	 * Committed artifact files: on a session read, and filled in by
+	 * useCloudSessionsQuery for a listed session that has any.
+	 */
 	artifactFiles?: CloudCpSessionArtifact[];
 	createdAt: string;
 	updatedAt: string;

@@ -5,6 +5,7 @@ import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import type { CloudCpProject, CloudCpSession } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -493,8 +494,9 @@ export function toCloudWorkspaceSession(
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
-		// File URLs come from a short-lived access prefix when a file is opened
-		// (useCloudArtifactAccess), not from the list.
+		// The list route sends only a count; useCloudSessionsQuery fills in the
+		// files. File URLs come from a short-lived access prefix when a file is
+		// opened (useCloudArtifactAccess), not from the list.
 		artifactFiles: session.artifactFiles?.map((file) => ({
 			kind: file.kind,
 			name: file.name,
@@ -547,6 +549,7 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
+	const queryClient = useQueryClient();
 	const orgId = org?.id;
 	return useQuery({
 		queryKey: [...cloudSessionsQueryKey, baseUrl, orgId ?? ""],
@@ -559,7 +562,23 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpSession[]> => {
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
-			return response.items;
+			// The list carries only an artifact count. A session's files are read
+			// once per session version (every commit changes updatedAt), so the
+			// poll fetches them only for sessions that changed.
+			return Promise.all(response.items.map(async (session) => {
+				if (!session.artifactCount) return session;
+				const artifacts = await queryClient
+					.fetchQuery({
+						queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId, session.id, session.updatedAt),
+						queryFn: async ({ signal }) => (await client.listSessionArtifacts(orgId, session.id, { signal })).artifacts,
+						staleTime: Infinity,
+						gcTime: 10 * 60_000,
+						// The next poll tries again; a retry here would hold up the whole list.
+						retry: false,
+					})
+					.catch(() => undefined);
+				return artifacts ? { ...session, artifactFiles: artifacts } : session;
+			}));
 		},
 	});
 }

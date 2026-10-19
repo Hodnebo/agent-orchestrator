@@ -1,14 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
-import { cloudArtifactFileUrl, useCloudArtifactAccess, useCloudArtifactChanges } from "../hooks/useCloudArtifacts";
+import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
-import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -24,7 +24,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { PanelMessage } from "./WorkspaceDiffView";
+import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
@@ -372,7 +372,6 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const cloud = Boolean(session.cloud);
 	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
-	useCloudArtifactChanges(session, cloud);
 	const cloudRoot = cloudAccess.data;
 	// A cloud file's URL comes from the session's short-lived access prefix.
 	const artifacts = useMemo(
@@ -397,13 +396,28 @@ export function SessionArtifactsView({
 		if (request) setSelectedPath(request.path);
 	}, [request]);
 
-	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	// An open cloud file keeps the URL it opened with while the access prefix
+	// is refreshed, so the refresh does not reload it.
+	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
+	const selected = listed && cloud ? { ...listed, rawUrl: pinned.url } : listed;
 	// Versions are read back as text, so a binary file such as an image gets no
-	// History. This shares the viewer's cached read of the file.
+	// History. This shares the viewer's cached read of the file, which for a
+	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
-		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact")),
-		enabled: Boolean(selected) && !session.cloud,
+		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
+		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && selected?.kind !== "html")),
 	});
+	const refetchAccess = cloudAccess.refetch;
+	const repin = pinned.repin;
+	const accessRefused = useCallback(() => {
+		void refetchAccess();
+		repin();
+	}, [refetchAccess, repin]);
+	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
+	useEffect(() => {
+		if (readRefused) accessRefused();
+	}, [readRefused, accessRefused]);
 	useEffect(() => {
 		if (!selected) setFullscreen(false);
 	}, [selected]);
@@ -447,9 +461,16 @@ export function SessionArtifactsView({
 				</div>
 				<div className="min-h-0 flex-1">
 					{cloud && !selected.rawUrl ? (
-						<PanelMessage>{cloudAccess.isError ? t("artifacts.accessError") : t("files.loading")}</PanelMessage>
+						cloudAccess.isError ? (
+							<PanelMessage>
+								{t("artifacts.accessError")}
+								<RetryButton onClick={() => void cloudAccess.refetch()} />
+							</PanelMessage>
+						) : (
+							<PanelMessage>{t("files.loading")}</PanelMessage>
+						)
 					) : cloud && selected.kind === "html" ? (
-						<CloudArtifactFrame title={selected.name} url={selected.rawUrl!} />
+						<CloudArtifactFrame onAccessRefused={accessRefused} title={selected.name} url={selected.rawUrl!} />
 					) : (
 						<ArtifactViewerBody
 							artifact={selected}
