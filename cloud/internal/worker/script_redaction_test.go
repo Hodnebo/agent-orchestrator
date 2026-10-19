@@ -22,6 +22,20 @@ type scriptLeakCase struct {
 }
 
 func scriptLeakCases() []scriptLeakCase {
+	return append(earlierLeakCases(), stagingLeakCases()...)
+}
+
+func stagingLeakCases() []scriptLeakCase {
+	var cases []scriptLeakCase
+	for index, step := range stagingRetestSteps()[:len(stagingRetestSecrets)] {
+		if secrets := stagingRetestSecrets[index]; len(secrets) > 0 {
+			cases = append(cases, scriptLeakCase{"staging case " + strconv.Itoa(index+1), step, secrets})
+		}
+	}
+	return cases
+}
+
+func earlierLeakCases() []scriptLeakCase {
 	privateKey := "-----BEGIN RSA PRIVATE KEY-----\n" +
 		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7Leak14BodyA\n" +
 		"VJTUt9Us8cKjMzEfYyjiWA4R4key=Leak14BodyB/M2bS1GB4t7NXp98C3SC6d==\n" +
@@ -110,6 +124,69 @@ func scriptLeakCases() []scriptLeakCase {
 		// Python strings.
 		{"python unicode string", `{'password': u'Leak65py', 'user': u'x'}`, []string{"Leak65py"}},
 		{"python bytes string", `{"api_key": b"Leak66py"}`, []string{"Leak66py"}},
+	}
+}
+
+// stagingRetestSteps are the Setup (and Cleanup) steps of the staging
+// re-test, verbatim: one per case, then all of them in one failing step.
+func stagingRetestSteps() []string {
+	steps := []string{
+		`echo '{"SecretString":"{\"password\":\"FAKEVAL1\"}"}'`,
+		`echo "docker login -p FAKEVAL2 registry.example.com || true"`,
+		`echo "mysql -pFAKEVAL3"`,
+		`echo "sshpass -p FAKEVAL4 ssh -p 22 host"`,
+		`echo "curl -u admin:FAKEVAL5 https://x"`,
+		`echo "https://ghp_FAKEVAL6aaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r"`,
+		`echo "https://acct.blob.core.windows.net/c?sv=1&sig=FAKEVAL7"`,
+		`printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: demo\ndata:\n  foo: RkFLRVZBTDg=\n'`,
+		`echo '["--token","FAKEVAL9"]'`,
+		`printf 'private_key: |\n  FAKEVAL10-line-one\n  FAKEVAL10-line-two\nafter_block: visible\n'`,
+		`echo hf_FAKEVAL11aaaaaaaaaaaaaaaaaaaaaaaa`,
+		`echo "API_KEY=FAKEVAL12;next=1"`,
+		`printf '\033[32mPASSWORD\033[0m=FAKEVAL13\n'`,
+		`export MY_SERVICE_SECRET=FAKEVAL14; printf '%s\n' "$MY_SERVICE_SECRET"`,
+		`set -x; true --password FAKEVAL15`,
+		`echo "docker run -p 8080:80 nginx"`,
+	}
+	var combined []string
+	for _, step := range steps {
+		if !strings.HasPrefix(step, "set -x") {
+			combined = append(combined, step)
+		}
+	}
+	return append(steps, `echo "== summary step =="; `+strings.Join(combined, "; ")+`; set -x; true --password FAKEVAL15; echo "about to fail"; exit 3`)
+}
+
+// stagingRetestSecrets are what each staging re-test step must never publish.
+var stagingRetestSecrets = [][]string{
+	{"FAKEVAL1"}, {"FAKEVAL2"}, {"FAKEVAL3"}, {"FAKEVAL4"}, {"FAKEVAL5"}, {"FAKEVAL6"}, {"FAKEVAL7"}, {"RkFLRVZBTDg"},
+	{"FAKEVAL9"}, {"FAKEVAL10"}, {"FAKEVAL11"}, {"FAKEVAL12"}, {"FAKEVAL13"}, {"FAKEVAL14"}, {"FAKEVAL15"}, nil,
+}
+
+// The staging re-test end to end: its steps as a Setup and a Cleanup publish
+// none of their secrets on any path (each step's live and final command and
+// output, sanitized again by the control plane, the failed run's summary,
+// and Cleanup's steps with the failed step's repeated command line), and
+// still show what is not secret.
+func TestStagingRetestNeverPublishesASecret(t *testing.T) {
+	published := publishedByRuns(t, stagingRetestSteps())
+	for _, secrets := range stagingRetestSecrets {
+		for _, secret := range secrets {
+			if strings.Contains(published, secret) {
+				t.Errorf("%q published", secret)
+			}
+		}
+	}
+	for _, kept := range []string{
+		"sshpass -p [REDACTED] ssh -p 22 host", "docker run -p 8080:80 nginx", "API_KEY=[REDACTED];next=1",
+		`echo "API_KEY=[REDACTED];next=1"`, "after_block: visible", "cleanup step 17: echo", "about to fail",
+	} {
+		if !strings.Contains(published, kept) {
+			t.Errorf("%q is not shown", kept)
+		}
+	}
+	if t.Failed() {
+		t.Logf("published:\n%s", published)
 	}
 }
 
