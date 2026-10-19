@@ -99,8 +99,18 @@ describe("BillingSection", () => {
 		renderSection();
 		await screen.findByText("Starter");
 		expect(within(card("free")).getByText("Claude Code, Codex and Cursor")).toBeInTheDocument();
+		expect(within(card("free")).getByText("Unlimited local agents on your machine")).toBeInTheDocument();
+		expect(within(card("free")).getByText("No cloud agents")).toBeInTheDocument();
+		expect(within(card("free")).queryByRole("list", { name: "Cloud agents" })).not.toBeInTheDocument();
 		expect(within(card("starter")).getByText("Agents keep working when your computer sleeps")).toBeInTheDocument();
-		expect(within(card("starter")).getByText("1 orchestrator at once")).toBeInTheDocument();
+		expect(within(card("starter")).getByText("Up to 2 hosts on the same network")).toBeInTheDocument();
+		// Plan limits only cap cloud agents, so they sit under their own label.
+		const starterCloud = within(card("starter")).getByRole("list", { name: "Cloud agents" });
+		expect(within(starterCloud).getByText("1 orchestrator at once")).toBeInTheDocument();
+		expect(within(starterCloud).getByText("2 sessions at once")).toBeInTheDocument();
+		expect(within(starterCloud).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
+		expect(within(within(card("pro")).getByRole("list", { name: "Cloud agents" })).getByText("16 sessions in total")).toBeInTheDocument();
+		expect(within(within(card("enterprise")).getByRole("list", { name: "Cloud agents" })).getByText("No session-hour caps")).toBeInTheDocument();
 		expect(within(card("pro")).getByText("Everything in Starter")).toBeInTheDocument();
 		expect(within(card("pro")).queryByText("Agents keep working when your computer sleeps")).not.toBeInTheDocument();
 		const enterprise = card("enterprise");
