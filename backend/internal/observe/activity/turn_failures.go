@@ -24,10 +24,15 @@ const DefaultTurnFailureTick = 2 * time.Second
 // reports, matching Claude Code's StopFailure hook.
 const TurnFailureEvent = "stop-failure"
 
-// turnFailureHarnesses are the harnesses whose terminal turn can end on a
-// provider error without firing a hook. Codex runs its Stop hook only after a
-// successful turn; Claude Code reports such a turn through StopFailure.
-var turnFailureHarnesses = []domain.AgentHarness{domain.HarnessCodex}
+// TurnInterruptEvent is the activity event a transcript-proven Esc interrupt
+// reports, matching Codex's Interrupt hook.
+const TurnInterruptEvent = "interrupt"
+
+// turnFailureHarnesses are the harnesses whose terminal turn can end without
+// firing a hook. Codex runs its Stop hook only after a successful turn, so a
+// turn that fails or is interrupted reports nothing; Claude Code reports a
+// failed turn through StopFailure but fires no hook for an Esc interrupt.
+var turnFailureHarnesses = []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode}
 
 // turnFailureSource lists the sessions worth checking: live terminal sessions
 // of one harness that are in a turn and have a native transcript path.
@@ -42,10 +47,11 @@ type TurnFailureConfig struct {
 }
 
 // TurnFailureObserver marks a terminal session idle when its harness's
-// transcript proves the current turn ended on an error. Some harnesses (Codex)
-// fire no hook at all for such a turn, so the hook-driven activity stayed
-// active: the session read "working" and Finish-then-switch waited for a stop
-// that never came. The 30 second stale-activity observer only recovers that
+// transcript proves the current turn ended on an error or was interrupted.
+// Some harnesses fire no hook at all for such a turn (Codex for a failed or
+// interrupted turn, Claude Code for an Esc interrupt), so the hook-driven
+// activity stayed active: the session read "working", queued messages were
+// held, and Finish-then-switch waited for a stop that never came. The 30 second stale-activity observer only recovers that
 // after two minutes, and only when the screen positively shows an idle prompt.
 type TurnFailureObserver struct {
 	sessions turnFailureSource
@@ -107,11 +113,12 @@ func (o *TurnFailureObserver) Start(ctx context.Context) <-chan struct{} {
 }
 
 // Poll performs one pass. It is not safe for concurrent use. The store
-// returns only live terminal sessions in a turn (active, or waiting_input:
+// returns only live terminal sessions in a turn (active, or paused on the user:
 // Codex reports an approval prompt as waiting_input and fires no hook when the
 // approved turn continues, so a turn that then fails would otherwise stay
-// "needs input"). Chat sessions report turn ends through their controller, and
-// an idle session has nothing to recover.
+// "needs input"; Esc at a Claude permission prompt, which reads blocked, ends
+// the turn). Chat sessions report turn ends through their controller, and an
+// idle session has nothing to recover.
 func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 	watched := make(map[domain.SessionID]bool, len(o.watches))
 	for _, harness := range turnFailureHarnesses {
@@ -183,6 +190,10 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 	if watch.reported == key {
 		return
 	}
+	event, what := TurnFailureEvent, "ended on an error"
+	if watch.failure.Interrupted {
+		event, what = TurnInterruptEvent, "was interrupted"
+	}
 	revision := session.Revision
 	err = o.sink.ApplyActivitySignal(ctx, session.ID, ports.ActivitySignal{
 		Valid: true,
@@ -193,7 +204,7 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 		Timestamp:        watch.failure.At,
 		ExpectedRevision: &revision,
 		ExpectedHarness:  session.Harness,
-		Event:            TurnFailureEvent,
+		Event:            event,
 		LaunchID:         session.RuntimeLaunchID,
 	})
 	if err != nil {
@@ -204,6 +215,6 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 		return
 	}
 	watch.reported = key
-	o.logger.Info("agent turn ended on an error; marking the session idle",
+	o.logger.Info("agent turn "+what+"; marking the session idle",
 		"session", session.ID, "harness", session.Harness, "error_message", watch.failure.Message)
 }

@@ -55,6 +55,19 @@ func TestLastTurnFailureReportsAFailedTurn(t *testing.T) {
 	}
 }
 
+// Esc fires no Stop hook (only Codex 0.150+'s Interrupt hook, which AO does
+// not install); the rollout records the aborted turn.
+func TestLastTurnFailureReportsAnInterruptedTurn(t *testing.T) {
+	path := writeRollout(t, lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted, rolloutAborted, rolloutTokenCount))
+	failure, ok, err := New().LastTurnFailure(context.Background(), path)
+	if err != nil || !ok || !failure.Interrupted {
+		t.Fatalf("LastTurnFailure = %#v ok %v err %v, want the interrupt", failure, ok, err)
+	}
+	if want := time.Date(2026, 10, 18, 10, 0, 9, 500_000_000, time.UTC); !failure.At.Equal(want) {
+		t.Fatalf("interrupt At = %v, want the record's own timestamp %v", failure.At, want)
+	}
+}
+
 func TestLastTurnFailureIgnoresTurnsThatDidNotFail(t *testing.T) {
 	cases := map[string]string{
 		// A successful turn is already reported by Codex's Stop hook.
@@ -62,10 +75,15 @@ func TestLastTurnFailureIgnoresTurnsThatDidNotFail(t *testing.T) {
 		"explicit null error":           lines(rolloutMeta, rolloutTaskStarted, rolloutNullError),
 		"failure then a success":        lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutTaskStarted, rolloutSucceeded),
 		"old failure, turn now running": lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted, rolloutUserMessage),
-		"interrupted after a failure":   lines(rolloutMeta, rolloutFailed, rolloutNextStarted, rolloutAborted),
-		"turn still running":            lines(rolloutMeta, rolloutTaskStarted, rolloutUserMessage),
-		"no turns":                      lines(rolloutMeta),
-		"empty":                         "",
+		"interrupted, then a new turn":  lines(rolloutMeta, rolloutNextStarted, rolloutAborted, rolloutTaskStarted),
+		// A turn replaced by a newer one is not a turn the user stopped.
+		"replaced turn": lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted,
+			strings.Replace(rolloutAborted, `"interrupted"`, `"replaced"`, 1)),
+		"interrupt without a readable timestamp": lines(rolloutMeta, rolloutNextStarted,
+			strings.Replace(rolloutAborted, `"timestamp":"2026-10-18T10:00:09.500Z",`, ``, 1)),
+		"turn still running": lines(rolloutMeta, rolloutTaskStarted, rolloutUserMessage),
+		"no turns":           lines(rolloutMeta),
+		"empty":              "",
 		// Codex has not finished writing the record: it is not read yet.
 		"unfinished failure record": lines(rolloutMeta, rolloutTaskStarted) + rolloutFailed,
 		// Without its own time a failure cannot be ordered against the current
