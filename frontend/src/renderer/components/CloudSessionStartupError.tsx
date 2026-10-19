@@ -117,6 +117,14 @@ export function CloudSessionStartupError({
 	const [detailToggled, setShowDetail] = useState<boolean>();
 	const showDetail = detailToggled ?? (projectSetupFailed && !setupRun);
 	const [copied, setCopied] = useState(false);
+	// "Copied" confirms one click; it never carries over to another session or failure.
+	const copiedFor = `${sessionId}\n${problem.phase === "failed" ? problem.message : ""}`;
+	useEffect(() => setCopied(false), [copiedFor]);
+	useEffect(() => {
+		if (!copied) return;
+		const timer = window.setTimeout(() => setCopied(false), 2000);
+		return () => window.clearTimeout(timer);
+	}, [copied]);
 	const copyDetail = () => {
 		if (problem.phase !== "failed") return;
 		const text = [problem.code, problem.message, failureDetail].filter(Boolean).join("\n\n");

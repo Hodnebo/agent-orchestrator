@@ -206,6 +206,28 @@ describe("CloudSessionStartupError", () => {
 		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
 	});
 
+	it("drops the Copied confirmation for a different failure", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.assign(navigator, { clipboard: { writeText } });
+		const failure = { phase: "failed" as const, code: "bootstrap_failed", message: "Your Coder workspace failed to start.", detail: "build log tail" };
+		const { rerender } = mount(failure);
+		await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+		await userEvent.click(screen.getByRole("button", { name: "Copy details" }));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+		rerender({ ...failure, message: "The workspace failed to build." });
+		expect(await screen.findByRole("button", { name: "Copy details" })).toBeTruthy();
+	});
+
+	it("resets the Copied confirmation after a moment", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.assign(navigator, { clipboard: { writeText } });
+		mount({ phase: "failed", code: "bootstrap_failed", message: "Your Coder workspace failed to start.", detail: "build log tail" });
+		await userEvent.click(screen.getByRole("button", { name: "Show details" }));
+		await userEvent.click(screen.getByRole("button", { name: "Copy details" }));
+		expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+		expect(await screen.findByRole("button", { name: "Copy details" }, { timeout: 3000 })).toBeTruthy();
+	});
+
 	it("explains a workspace whose ready check never passed, with the probe output behind Show details", async () => {
 		mount({
 			phase: "failed",
