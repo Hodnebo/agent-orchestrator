@@ -2716,8 +2716,6 @@ describe("XtermTerminal", () => {
 	it("opens a session link on a plain click while an application captures mouse input", () => {
 		const onSessionLinkOpen = vi.fn();
 		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
-		// tmux (mouse on) and fullscreen TUIs keep mouse tracking on, so gating on
-		// a modifier here made plain clicks on session links do nothing.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 		const handler = (state.lastTerminal!.options.linkHandler as {
 			activate: (event: MouseEvent, uri: string) => void;
