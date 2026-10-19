@@ -183,7 +183,11 @@ func (o *TurnFailureObserver) reconcile(ctx context.Context, session domain.Turn
 	// The current state was entered by a hook (a prompt, or an approval
 	// request) at LastActivityAt. A failure recorded before it belongs to an
 	// earlier turn: replaying it would idle a turn that is still running.
-	if session.Activity.LastActivityAt.IsZero() || watch.failure.At.Before(session.Activity.LastActivityAt) {
+	// A prompt submitted while the session still read active (within a poll
+	// of an Esc, before the harness records the prompt) starts a turn without
+	// moving LastActivityAt, so the newest prompt bounds the turn too.
+	if session.Activity.LastActivityAt.IsZero() || watch.failure.At.Before(session.Activity.LastActivityAt) ||
+		watch.failure.At.Before(session.LatestUserPromptAt) {
 		return
 	}
 	key := turnFailureKey{launchID: session.RuntimeLaunchID, at: watch.failure.At.UnixNano()}

@@ -31,6 +31,7 @@ func TestListTurnFailureCandidatesFiltersInSQL(t *testing.T) {
 		rec.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: lastAt}
 		rec.Metadata.RuntimeLaunchID = "launch-1"
 		rec.Metadata.NativeTranscriptPath = "/rollouts/rollout-1.jsonl"
+		rec.Metadata.LatestUserPromptAt = lastAt.Add(time.Second)
 		change(&rec)
 		created, err := s.CreateSession(ctx, rec)
 		if err != nil {
@@ -57,7 +58,8 @@ func TestListTurnFailureCandidatesFiltersInSQL(t *testing.T) {
 		t.Fatalf("get session = %v, %v", ok, err)
 	}
 	if first := got[0]; first.Harness != domain.HarnessCodex || first.Activity.State != current.Activity.State ||
-		!first.Activity.LastActivityAt.Equal(lastAt) || first.Revision != current.Revision ||
+		!first.Activity.LastActivityAt.Equal(lastAt) || !first.LatestUserPromptAt.Equal(lastAt.Add(time.Second)) ||
+		first.Revision != current.Revision ||
 		first.RuntimeLaunchID != "launch-1" || first.NativeTranscriptPath != "/rollouts/rollout-1.jsonl" {
 		t.Fatalf("candidate = %+v, session = %+v", first, current)
 	}

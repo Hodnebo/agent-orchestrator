@@ -147,6 +147,63 @@ func TestTurnFailureObserverIdlesAnEscInterruptedClaudeTurn(t *testing.T) {
 	}
 }
 
+// The user re-prompts within a poll of an Esc. The prompt hook lands while
+// the session still reads active, so the state and its LastActivityAt stay
+// put, and a poll before Claude records the prompt sees the interrupt as the
+// newest record. It belongs to the turn before the prompt and must not idle
+// the new one.
+func TestTurnFailureObserverKeepsATurnPromptedRightAfterAnInterruptActive(t *testing.T) {
+	cases := []struct {
+		name       string
+		harness    domain.AgentHarness
+		transcript string
+		start      func(at time.Time) []string
+		interrupt  func(at time.Time) string
+		prompt     func(at time.Time) string
+	}{
+		{
+			name: "claude", harness: domain.HarnessClaudeCode, transcript: "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl",
+			start:     func(at time.Time) []string { return []string{claudeUserRecord(at, `"fix CI"`)} },
+			interrupt: claudeInterrupt,
+			prompt:    func(at time.Time) string { return claudeUserRecord(at, `"try again"`) },
+		},
+		{
+			name: "codex", harness: domain.HarnessCodex, transcript: "rollout-2026-10-19T04-39-19-01a15274-eee2-7a60-848f-bbc06024ed54.jsonl",
+			start: func(at time.Time) []string {
+				return []string{`{"type":"session_meta","payload":{"source":"cli"}}` + "\n", startedTurn(at)}
+			},
+			interrupt: func(at time.Time) string {
+				return rolloutRecord(at, `{"type":"turn_aborted","turn_id":"t","reason":"interrupted"}`)
+			},
+			prompt: startedTurn,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+			h := newInterruptHarness(t, tc.harness, tc.transcript, promptAt.Add(-time.Minute))
+			h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt, Event: "user-prompt-submit", LatestUserPrompt: "fix CI"})
+			h.write(t, tc.start(promptAt)...)
+			if got := h.poll(t); got.Activity.State != domain.ActivityActive {
+				t.Fatalf("running turn: state = %q, want active", got.Activity.State)
+			}
+
+			escAt := promptAt.Add(5 * time.Second)
+			h.write(t, tc.interrupt(escAt))
+			nextAt := escAt.Add(time.Second)
+			h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: nextAt, Event: "user-prompt-submit", LatestUserPrompt: "try again"})
+			got := h.poll(t)
+			if got.Activity.State != domain.ActivityActive || !got.Activity.LastActivityAt.Equal(promptAt) {
+				t.Fatalf("re-prompted after Esc: activity = %+v, want active since %v", got.Activity, promptAt)
+			}
+			h.write(t, tc.prompt(nextAt))
+			if got := h.poll(t); got.Activity.State != domain.ActivityActive {
+				t.Fatalf("re-prompt recorded: state = %q, want active", got.Activity.State)
+			}
+		})
+	}
+}
+
 // Esc pressed with no turn running (dismissing a menu or autocomplete) writes
 // nothing to the transcript, so a running turn stays active.
 func TestTurnFailureObserverKeepsAClaudeTurnWithoutAnInterruptActive(t *testing.T) {

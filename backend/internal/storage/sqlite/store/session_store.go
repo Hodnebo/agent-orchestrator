@@ -825,6 +825,7 @@ func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.Ag
 			ID:                   r.ID,
 			Harness:              r.Harness,
 			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
 			Revision:             r.Revision,
 			RuntimeLaunchID:      r.RuntimeLaunchID,
 			NativeTranscriptPath: r.NativeTranscriptPath,

@@ -56,4 +56,8 @@ type TurnFailureCandidate struct {
 	Revision             int64
 	RuntimeLaunchID      string
 	NativeTranscriptPath string
+	// LatestUserPromptAt is the newest human prompt submission. A prompt
+	// submitted while the session already read active leaves
+	// Activity.LastActivityAt where the earlier turn started.
+	LatestUserPromptAt time.Time
 }
