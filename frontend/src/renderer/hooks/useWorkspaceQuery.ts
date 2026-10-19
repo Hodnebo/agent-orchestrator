@@ -3,7 +3,7 @@ import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import type { CloudCpProject, CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpSession } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
@@ -671,8 +671,15 @@ export function useCloudSessionQuery(
 	const lookup = useQuery({
 		queryKey: ["cloud-session", baseUrl, orgId ?? "", sessionId],
 		enabled: enabled && ready && orgId !== undefined && sessionId !== "",
-		retry: 1,
-		refetchInterval: poll ? 5000 : false,
+		// A session the control plane does not have (deleted) is not asked for
+		// again.
+		retry: (failures, error) => failures < 1 && !isCloudNotFound(error),
+		// The poll stops once the lookup fails (a deleted session, or the
+		// control plane unreachable: a window focus refetch resumes it once it
+		// answers again) or the session is terminated, whose lifecycle no longer
+		// moves on its own.
+		refetchInterval: (query) =>
+			poll && query.state.status !== "error" && !query.state.data?.isTerminated ? 5000 : false,
 		queryFn: async (): Promise<CloudCpSession | undefined> => {
 			if (orgId === undefined) return undefined;
 			const response = await client.getSession(orgId, sessionId);
@@ -689,6 +696,10 @@ export function useCloudSessionQuery(
 		refetchCloudProjectsForUnknownSessions(queryClient, baseUrl, orgId, [lookedUp]);
 	}, [baseUrl, lookedUp, orgId, projectsLoaded, queryClient]);
 	return lookup;
+}
+
+function isCloudNotFound(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 404;
 }
 
 export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {

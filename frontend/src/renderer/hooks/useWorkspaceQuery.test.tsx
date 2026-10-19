@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
@@ -40,6 +40,7 @@ vi.mock("./useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: cloudState.org, isLoading: false, error: undefined, ready: cloudState.ready }),
 }));
 
+import { CloudCpError } from "../lib/cloud-cp";
 import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
@@ -874,6 +875,77 @@ describe("cloud projects made elsewhere", () => {
 		await waitFor(() => expect(result.current.board.data?.some((workspace) => workspace.id === "cp-1")).toBe(true));
 		await waitFor(() => expect(result.current.lookup.data?.projectId).toBe("cp-new"));
 		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+	});
+
+	describe("polling a session lookup", () => {
+		// The view polls the direct lookup while the list does not have the
+		// session. It stops once the session is gone (404), the lookup fails, or
+		// the session is terminated.
+		async function pollFor(milliseconds: number) {
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(milliseconds);
+			});
+		}
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			getSessionMock.mockReset();
+			listProjectsMock.mockResolvedValue({ items: [], page: { hasMore: false } });
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("keeps polling a live session", async () => {
+			getSessionMock.mockResolvedValue({ session: cloudSession("s-1", "cp-1") });
+			const { Wrapper } = clientWrapper();
+			const { unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			await pollFor(10_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(3);
+			unmount();
+		});
+
+		it("stops for a session the control plane no longer has, without a retry", async () => {
+			getSessionMock.mockRejectedValue(new CloudCpError("session not found", { status: 404, code: "not_found" }));
+			const { Wrapper } = clientWrapper();
+			const { result, unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-gone", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(result.current.isError).toBe(true);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			unmount();
+		});
+
+		it("stops once the lookup fails", async () => {
+			getSessionMock
+				.mockResolvedValueOnce({ session: cloudSession("s-1", "cp-1") })
+				.mockRejectedValue(new CloudCpError("unavailable", { status: 503 }));
+			const { Wrapper } = clientWrapper();
+			const { result, unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			expect(result.current.isError).toBe(false);
+			// The next poll fails, and its one retry too.
+			await pollFor(5_100);
+			expect(result.current.isError).toBe(true);
+			const calls = getSessionMock.mock.calls.length;
+			expect(calls).toBe(3);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(calls);
+			unmount();
+		});
+
+		it("stops for a terminated session", async () => {
+			getSessionMock.mockResolvedValue({ session: { ...cloudSession("s-1", "cp-1"), isTerminated: true } });
+			const { Wrapper } = clientWrapper();
+			const { unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
+			await pollFor(0);
+			await pollFor(30_000);
+			expect(getSessionMock).toHaveBeenCalledTimes(1);
+			unmount();
+		});
 	});
 
 	it("asks once for a project the list never returns, however often its session is seen", async () => {
