@@ -66,6 +66,7 @@ func TestDiagnosticSessionMetaUsesNativeSDKToolRestrictions(t *testing.T) {
 }
 
 func TestDiagnosticPolicyIsAppliedWithoutStandingPrompt(t *testing.T) {
+	t.Setenv(claudeTodoToolsEnv, "1")
 	for _, cfg := range []acpdriver.LaunchConfig{{ReadOnly: true}, {DisableNetwork: true}} {
 		meta := claudeSessionMeta(cfg)
 		if meta["claudeCode"] == nil || meta["systemPrompt"] != nil {

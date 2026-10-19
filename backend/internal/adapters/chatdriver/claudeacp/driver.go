@@ -368,7 +368,8 @@ func validateClaudeACPExecutable(binary, goos string) error {
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	meta := make(map[string]any)
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if claudeTodoToolsEnabled(cfg.Env) {
+	// Restricted diagnostics expose only read tools, so task tools are unavailable.
+	if !cfg.ReadOnly && !cfg.DisableNetwork && claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
 			standing += "\n\n"
 		}
