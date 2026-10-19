@@ -95,6 +95,40 @@ func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
 	}
 }
 
+func TestClaudeHookReportsItsProcess(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct {
+		agent, env string
+		want       int
+	}{
+		{"claude-code", "4242", 4242},
+		{"claude-code", "", 0},
+		{"claude-code", "not-a-pid", 0},
+		{"claude-code", "1", 0},
+		// Only Claude names the process running a hook.
+		{"codex", "4242", 0},
+	} {
+		t.Setenv("CLAUDE_PID", tc.env)
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "stop"); err != nil {
+			t.Fatal(err)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.ProcessID != tc.want {
+			t.Fatalf("%s CLAUDE_PID %q forwarded as %d, want %d", tc.agent, tc.env, request.ProcessID, tc.want)
+		}
+	}
+}
+
 func TestClaudeSubmissionRetryReusesContextNonce(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "qa-1")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
