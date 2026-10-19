@@ -726,16 +726,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		return () => window.clearTimeout(timer);
 	}, [showCompletedLoader]);
 	const cloudResumeRef = useRef("");
-	const requestCloudResume = useCallback(async () => {
+	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await cloudCpClient.resumeSession(session.cloud.orgId, session.id);
-		await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
 		if (!session?.cloud || cloudResumeRef.current === session.id) return;
 		cloudResumeRef.current = session.id;
-		void requestCloudResume().catch(() => {
+		// Opening the session asks the worker to prepare its workspace, which
+		// retries a failed checkout. A failed Setup is not re-run just because
+		// the session is viewed: its scripts can have side effects, so only the
+		// failure card's Retry runs it again.
+		const problem = cloudStartupProblem(session);
+		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
+		void requestCloudResume(!setupFailed).catch(() => {
 			// Keep the paused lifecycle projection visible. A later message, shell
 			// open, or route visit can issue a fresh explicit resume intent.
 		});

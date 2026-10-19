@@ -212,7 +212,7 @@ func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorProjectSetup,
-		Message: message + " Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
+		Message: message + " Fix the project's Setup script (Project settings > Scripts), then select Retry on this session.",
 		Detail:  detail,
 	}
 }

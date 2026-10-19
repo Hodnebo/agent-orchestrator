@@ -1461,7 +1461,7 @@
 	"settings.project.cleanupRetryFailed": "Could not retry cleanup.",
 	"settings.project.cleanupRetryResult": "Cleaned {{cleaned}}; skipped {{skipped}}.",
 	"settings.project.cloudSetupHint": "セッションの初回起動時に一度だけ、セッションのプロジェクトフォルダで、エージェントが作業を始める前に実行されます。",
-	"settings.project.cloudSetupShellHint": "ステップは順番に実行されます。失敗したステップがあるとエージェントは起動しません。ステップを修正してから、セッションを開き直して再試行してください。各ステップは最大 10 分間実行できます。",
+	"settings.project.cloudSetupShellHint": "ステップは順番に実行されます。失敗したステップがあるとエージェントは起動しません。ステップを修正してから、セッションの「再試行」を押してください。各ステップは最大 10 分間実行できます。",
 	"settings.project.cloudCleanupHint": "セッションを削除したとき、ワークスペースが削除される直前に、セッションのプロジェクトフォルダで実行されます。セッションの停止や一時停止では実行されません。",
 	"settings.project.cloudCleanupShellHint": "ステップは順番に実行され、合計で最大 10 分間です。ステップが失敗してもワークスペースは削除されます。",
 	"settings.project.cloudCleanupUnsupported": "クリーンアップは、AO が Coder、Freestyle、Docker のワークスペースを削除する前に実行されます。このプロジェクトのクラウドワークスペースはクリーンアップなしで削除されます。",
