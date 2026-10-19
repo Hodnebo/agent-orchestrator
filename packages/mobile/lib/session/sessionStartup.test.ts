@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionProvisionStep } from "../api";
-import type { ConversationTurn } from "../chat/types";
+import type { ConversationSnapshot, ConversationTurn } from "../chat/types";
 import {
 	formatStepDuration,
 	newlyFinishedSteps,
@@ -13,7 +13,7 @@ import {
 
 const step = (id: SessionProvisionStep["id"], status: SessionProvisionStep["status"], over: Partial<SessionProvisionStep> = {}): SessionProvisionStep => ({ id, status, ...over });
 const turn = (id: string, state: ConversationTurn["state"]) => ({ id, state }) as ConversationTurn;
-const snapshot = (turns: ConversationTurn[], hasMoreBefore = false) => ({ harness: "claude-code", turns, hasMoreBefore });
+const snapshot = (turns: ConversationTurn[], hasMoreBefore = false, controller: ConversationSnapshot["controller"]["state"] = "connecting") => ({ harness: "claude-code", turns, hasMoreBefore, controller: { state: controller } });
 
 const running = [step("fetch", "done"), step("worktree", "running"), step("setup", "pending"), step("agent", "pending")];
 const finished = [step("fetch", "done"), step("worktree", "done"), step("setup", "done"), step("agent", "done")];
@@ -35,6 +35,15 @@ describe("sessionStartupView", () => {
 	it("keeps a ready session's checklist while the opening turn is still live", () => {
 		expect(sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([turn("t1", "running")]))?.openingTurnId).toBe("t1");
 		expect(sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([turn("t1", "completed")]))).toBeUndefined();
+	});
+
+	it("keeps a promptless start's checklist until the agent reports connected", () => {
+		const view = sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([]));
+		expect(view).toMatchObject({ failed: false, openingTurnId: undefined });
+		expect(startupVisible(view, snapshot([]))).toBe(true);
+		expect(sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([], false, "ready"))).toBeUndefined();
+		// A session with history reconnecting after a restart is not a start.
+		expect(sessionStartupView({ provisionState: "ready", provisionSteps: finished }, snapshot([], true))).toBeUndefined();
 	});
 
 	it("never treats a later page's first turn as the opening one", () => {

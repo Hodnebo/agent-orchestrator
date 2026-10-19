@@ -78,8 +78,9 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("<SessionStartupStatus startup={startupView} />");
 		// While the checklist reports setup, the yellow "Starting the agent…" banner stands down.
 		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
-		// The agent coming up emits no conversation event; re-read once provisioning settles.
-		expect(screenSource).toContain('if (before === "provisioning" && provisionState !== "provisioning") void refreshConversation();');
+		// The agent coming up emits no conversation event; keep re-reading until it reports connected.
+		expect(screenSource).toContain('if (before === "provisioning" && provisionState === "ready") setAwaitingAgent(true);');
+		expect(screenSource).toContain("setInterval(() => void refreshConversation(), STARTUP_POLL_MS)");
 		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
 	});
 

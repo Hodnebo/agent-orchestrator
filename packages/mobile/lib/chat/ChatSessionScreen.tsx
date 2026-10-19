@@ -52,7 +52,7 @@ import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
 import { sessionStartupView, startupVisible } from "../session/sessionStartup";
-import { useStartupSession } from "../session/useStartupSession";
+import { STARTUP_POLL_MS, useStartupSession } from "../session/useStartupSession";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
@@ -407,15 +407,29 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const startupShown = startupVisible(startupView, conversation.snapshot);
 	// The agent coming up is not a conversation event, so over the direct link
 	// nothing tells the screen. With an opening brief the turn's own events cover
-	// it; a promptless start stayed on "Connecting to the agent…". Re-read the
-	// conversation once provisioning settles.
+	// it; a promptless start stayed on "Connecting to the agent…". Once
+	// provisioning settles, re-read the conversation until it reports the agent
+	// connected, so one failed read cannot leave the screen waiting.
 	const provisionState = "projectName" in session ? undefined : session.provisionState;
 	const previousProvisionState = useRef(provisionState);
+	const [awaitingAgent, setAwaitingAgent] = useState(false);
 	useEffect(() => {
 		const before = previousProvisionState.current;
 		previousProvisionState.current = provisionState;
-		if (before === "provisioning" && provisionState !== "provisioning") void refreshConversation();
-	}, [provisionState, refreshConversation]);
+		if (before === "provisioning" && provisionState === "ready") setAwaitingAgent(true);
+	}, [provisionState]);
+	const agentConnecting = conversation.snapshot?.controller.state === "connecting";
+	const hasSnapshot = Boolean(conversation.snapshot);
+	useEffect(() => {
+		if (!awaitingAgent) return;
+		if (hasSnapshot && !agentConnecting) {
+			setAwaitingAgent(false);
+			return;
+		}
+		void refreshConversation();
+		const timer = setInterval(() => void refreshConversation(), STARTUP_POLL_MS);
+		return () => clearInterval(timer);
+	}, [agentConnecting, awaitingAgent, hasSnapshot, refreshConversation]);
 	const retryStart = useCallback(() => void resume(), [resume]);
 	const timelineStartup = useMemo<TimelineStartup | undefined>(
 		() => (startupView ? { view: startupView, visible: startupShown, onRetry: retryStart, retrying: resuming } : undefined),

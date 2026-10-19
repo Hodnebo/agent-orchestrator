@@ -52,16 +52,19 @@ export function startupAgentName(harness: string | undefined | null): string {
  * The startup view for a session, or undefined once there is nothing to show.
  * A provisioning or failed session always has one. A ready session keeps it
  * while its opening turn is queued or running, because ready can land before
- * the first turn does, and the checklist must not blink out in that gap.
+ * the first turn does, and the checklist must not blink out in that gap. A
+ * promptless start has no turn to wait on, so it keeps the checklist until the
+ * conversation itself reports the agent connected.
  */
-export function sessionStartupView(session: StartupSession, snapshot: Pick<ConversationSnapshot, "harness" | "turns" | "hasMoreBefore"> | undefined): SessionStartupView | undefined {
+export function sessionStartupView(session: StartupSession, snapshot: Pick<ConversationSnapshot, "harness" | "turns" | "hasMoreBefore" | "controller"> | undefined): SessionStartupView | undefined {
 	const state = session.provisionState === "provisioning" || session.provisionState === "failed" ? session.provisionState : undefined;
 	const steps = session.provisionSteps ?? [];
 	// Mobile pages history in, so the first loaded turn is only the opening one
 	// when nothing older exists.
 	const opening = snapshot && !snapshot.hasMoreBefore ? snapshot.turns[0] : undefined;
 	const openingLive = opening?.state === "queued" || opening?.state === "running";
-	if (!state && !(steps.length && openingLive)) return undefined;
+	const promptlessConnecting = Boolean(snapshot && !snapshot.hasMoreBefore && snapshot.turns.length === 0 && snapshot.controller.state === "connecting");
+	if (!state && !(steps.length && (openingLive || promptlessConnecting))) return undefined;
 	const worktreeUnfinished = steps.length
 		? steps.some((step) => step.id === "worktree" && step.status !== "done")
 		: Boolean(state);
