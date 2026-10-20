@@ -1670,8 +1670,13 @@ describe("SessionView", () => {
 			};
 			const view = render(<SessionView sessionId={id} />);
 			await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", id));
-			if (prepares) await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
-			else expect(checkout).not.toHaveBeenCalled();
+			if (prepares) {
+				await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
+			} else {
+				// The checkout would follow the resume; let that chain settle first.
+				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+				expect(checkout).not.toHaveBeenCalled();
+			}
 			view.unmount();
 		}
 	});
