@@ -1147,3 +1147,52 @@ func TestWorkspaceReviewDispatchMapsStaleSnapshot(t *testing.T) {
 		t.Fatalf("completed=%T failure=%q", control.completed, control.failureCode)
 	}
 }
+
+// A session that started in Chat and cannot run it falls back to the
+// terminal before the Chat controller took any turn: the controller never
+// runs, and the agent terminal opens with a freshly built command.
+func TestFallBackToTUIReplacesAChatStartThatCannotRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	terminalID := "00000000-0000-0000-0000-000000000051"
+	runnerStarted := make(chan struct{})
+	started := make(chan error, 1)
+	built := false
+	supervisor := &Supervisor{
+		Control:   &supervisorControlStub{agentTerminal: terminalID},
+		Workspace: t.TempDir(), Started: started,
+		InitialInterface: InterfaceChat, ChatWorkspaceReady: make(chan struct{}),
+		ChatRunner: blockingChatRunner{started: runnerStarted},
+		AgentCommandFactory: func(_ context.Context, nativeConversationID, _, _ string) (workerexec.Command, error) {
+			built = nativeConversationID == ""
+			return workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "sleep 30"}}, nil
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.FallBackToTUI(ctx); err != nil {
+		t.Fatalf("fall back: %v", err)
+	}
+	if supervisor.iface.Current() != InterfaceTUI || supervisor.agentTerminalID() != terminalID || !built {
+		t.Fatalf("after fallback: interface=%q terminal=%q fresh command built=%v",
+			supervisor.iface.Current(), supervisor.agentTerminalID(), built)
+	}
+	select {
+	case <-runnerStarted:
+		t.Fatal("the Chat controller ran")
+	default:
+	}
+	// A second call (the session is no longer in Chat) changes nothing.
+	if err := supervisor.FallBackToTUI(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transport did not stop")
+	}
+}

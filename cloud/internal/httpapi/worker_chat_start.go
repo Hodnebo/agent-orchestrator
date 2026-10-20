@@ -23,9 +23,9 @@ var chatStartFallbackDetails = map[string]string{
 	worker.ChatStartUnsupported: "The AO worker in this workspace cannot start sessions in Chat, " +
 		"so this session started in the terminal. You can switch it to Chat.",
 	worker.ChatStartAdapterUnavailable: "Chat for Claude needs the Claude ACP adapter " +
-		"(@agentclientprotocol/claude-agent-acp), and this workspace has no npm to install it, " +
-		"so this session started in the terminal. Add Node.js and npm (or the adapter) to the " +
-		"workspace template to start Claude sessions in Chat.",
+		"(@agentclientprotocol/claude-agent-acp), which this workspace does not have and AO could " +
+		"not install, so this session started in the terminal. Add Node.js and npm (or the adapter) " +
+		"to the workspace template to start Claude sessions in Chat.",
 }
 
 // startLaunchInTUIIfChatUnsupported keeps a worker that does not report

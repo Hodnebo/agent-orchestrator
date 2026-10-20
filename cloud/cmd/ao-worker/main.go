@@ -588,7 +588,26 @@ func run(logger *slog.Logger) error {
 		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
 		close(rehydrateDone)
 		if !chatReadyClosed {
-			close(chatWorkspaceReady)
+			// A Claude session starting in Chat first settles whether its ACP
+			// adapter installed; the Chat controller takes no turn until then.
+			go func() {
+				if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
+					ensure: func(ctx context.Context) error {
+						_, err := workerexec.EnsureClaudeACPAdapter(ctx)
+						return err
+					},
+					fallBack:    client.fallBackChatStart,
+					switchToTUI: transportSupervisor.FallBackToTUI,
+				}) {
+					if err := client.publishEvent(runCtx, "agent.ready", map[string]any{
+						"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
+						"version": workerVersion, "capabilities": workerCapabilities,
+					}); err != nil {
+						logger.Warn("publish agent.ready failed", "error", err)
+					}
+				}
+				close(chatWorkspaceReady)
+			}()
 		}
 		transportSupervisor.MarkWorkspaceReady()
 		// Serve durable-restore checkpointing now that the checkout and the git
