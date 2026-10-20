@@ -2936,6 +2936,8 @@
 	"coder.workspacePrefix.settingsHint": "Applies to new sessions. Workspaces are named <prefix>-o-<id> / <prefix>-w-<word>-<id>; empty uses the project name.",
 	"coder.templateOptions.title": "Template options",
 	"coder.templateOptions.titleCount": "Template options ({{total}})",
+	"coder.templateOptions.subtitle": "Your Coder template's own options. AO checks out this project's repositories itself.",
+	"coder.templateOptions.duplicateClone": "Your template will also clone {{repos}}, separate from the copy AO works in. Untick to keep one copy.",
 	"coder.templateOptions.required": "Required",
 	"coder.templateOptions.loadFailed": "Couldn't load this template's options.",
 	"coder.templateOptions.checkFailed": "Couldn't check these options with the template. Change the last value you edited and try again.",

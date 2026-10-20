@@ -2936,6 +2936,8 @@
 	"coder.workspacePrefix.settingsHint": "适用于新会话。工作区命名为 <prefix>-o-<id> / <prefix>-w-<word>-<id>；留空则使用项目名称。",
 	"coder.templateOptions.title": "模板选项",
 	"coder.templateOptions.titleCount": "模板选项 ({{total}})",
+	"coder.templateOptions.subtitle": "你的 Coder 模板自身的选项。AO 会自行检出此项目的仓库。",
+	"coder.templateOptions.duplicateClone": "你的模板还会另外克隆 {{repos}}，与 AO 工作所用的副本分开。取消勾选即可只保留一份副本。",
 	"coder.templateOptions.required": "必填",
 	"coder.templateOptions.loadFailed": "无法加载此模板的选项。",
 	"coder.templateOptions.checkFailed": "无法用模板检查这些选项。请修改你最后编辑的值后重试。",

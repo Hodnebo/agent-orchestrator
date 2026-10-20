@@ -2997,6 +2997,8 @@
 	"coder.workspacePrefix.settingsHint": "Vale para novas sessões. Os espaços de trabalho se chamam <prefix>-o-<id> / <prefix>-w-<word>-<id>; vazio usa o nome do projeto.",
 	"coder.templateOptions.title": "Opções do modelo",
 	"coder.templateOptions.titleCount": "Opções do modelo ({{total}})",
+	"coder.templateOptions.subtitle": "As opções próprias do seu modelo do Coder. O AO faz o checkout dos repositórios deste projeto por conta própria.",
+	"coder.templateOptions.duplicateClone": "Seu modelo também vai clonar {{repos}}, separado da cópia em que o AO trabalha. Desmarque para manter uma só cópia.",
 	"coder.templateOptions.required": "Obrigatório",
 	"coder.templateOptions.loadFailed": "Não foi possível carregar as opções deste modelo.",
 	"coder.templateOptions.checkFailed": "Não foi possível verificar estas opções com o modelo. Altere o último valor editado e tente de novo.",
