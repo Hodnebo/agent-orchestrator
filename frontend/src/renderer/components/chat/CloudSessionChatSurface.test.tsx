@@ -99,6 +99,23 @@ describe("CloudSessionChatSurface", () => {
 		expect(items[1]).toMatchObject({ status: "completed", summary: "Setup: Succeeded", detail: { scriptRun: { status: "succeeded" } } });
 		expect(items[2]).toMatchObject({ summary: "Cleanup: Succeeded", detail: { scriptRun: { phase: "cleanup" } } });
 	});
+	it("places the session's start Setup above the first prompt, and a later Setup where it ran", () => {
+		const at = "2026-10-01T00:00:00Z";
+		const step = (sequence: number, runId: string, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: at,
+			payload: { phase: "setup", runId, total: 1, step: 1, command: "npm ci", repository: "", status },
+		});
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Reply OK", turnId: "t1" }, createdAt: at },
+			step(2, "start", "running"),
+			step(3, "start", "succeeded"),
+			{ sessionId: session.id, sequence: 4, type: "chat.turn_started", payload: { turnId: "t1" }, createdAt: at },
+			{ sessionId: session.id, sequence: 5, type: "chat.turn_completed", payload: { turnId: "t1" }, createdAt: at },
+			step(6, "retry", "succeeded"),
+		];
+		const runs = toSnapshot(session, events).items.filter((item) => item.kind === "activity" && item.detail?.event === "workspace.script.run");
+		expect(runs.map((run) => [run.id, run.sequence])).toEqual([["cloud-script-run-start", 0.5], ["cloud-script-run-retry", 6]]);
+	});
 	it("carries a failed setup step's command, user, directory, log and hint", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "workspace.setup",

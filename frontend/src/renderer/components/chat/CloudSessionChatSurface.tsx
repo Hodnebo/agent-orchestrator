@@ -207,6 +207,14 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const scriptRuns = new Map(groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) }).map((run) => [run.runId, run]));
 	const placedRuns = new Set<string>();
 	const unclaimedSetupRuns = [...scriptRuns.values()].filter((run) => run.phase === "setup");
+	// The session's first prompt is recorded before its Setup runs, so the turn
+	// it opens is anchored ahead of Setup and Setup would read after the reply.
+	// A Setup that ran before any turn started sits just above that prompt.
+	const firstTurnStart = events.find((event) => event.type === "chat.turn_started")?.sequence ?? Infinity;
+	const firstPrompt = events.find((event) => event.type === "chat.user_message")?.sequence;
+	const runSequence = (run: ScriptRun) =>
+		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
+			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
@@ -304,7 +312,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const run = runId ? scriptRuns.get(runId) : undefined;
 			if (run && !placedRuns.has(run.runId)) {
 				placedRuns.add(run.runId);
-				items.push(scriptRunActivity(run, event.createdAt));
+				items.push({ ...scriptRunActivity(run, event.createdAt), sequence: runSequence(run) });
 			}
 			continue;
 		}
