@@ -52,11 +52,11 @@ type ChatProviderSwitch struct {
 	AutoCompactWindow string
 }
 
-// ProviderSwitchError crosses the Chat/TUI dispatch boundary without coupling
-// the session manager to either transport controller.
 // ErrProviderAlreadyActive is the cause of a switch to the agent already running.
 var ErrProviderAlreadyActive = errors.New("target provider is already active")
 
+// ProviderSwitchError crosses the Chat/TUI dispatch boundary without coupling
+// the session manager to either transport controller.
 type ProviderSwitchError struct {
 	Kind   ProviderSwitchRefusalKind
 	Detail string
