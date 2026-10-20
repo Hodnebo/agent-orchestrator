@@ -452,9 +452,11 @@ func ProjectAgentStartsIn(config json.RawMessage) string {
 	return ProjectAgentStartsInRepository
 }
 
-// ProjectWorkingDirectory returns the project's own working directory for a
-// bring-your-own Coder workspace (for example ~/work/{repo}), which overrides
-// the organization connection's. Empty keeps the connection's.
+// ProjectWorkingDirectory returns the project's own working folder in a Coder
+// workspace (for example ~/work/{repo}). With the workspace worker user it
+// overrides the organization connection's working directory; with the
+// dedicated ao-worker user it is where AO checks the main repository out
+// (see CoderCheckoutDirectory). Empty keeps the default.
 func ProjectWorkingDirectory(config json.RawMessage) string {
 	var envelope struct {
 		WorkingDirectory string `json:"workingDirectory"`
@@ -463,6 +465,86 @@ func ProjectWorkingDirectory(config json.RawMessage) string {
 		return ""
 	}
 	return strings.TrimSpace(envelope.WorkingDirectory)
+}
+
+// MaxCoderCheckoutSiblings bounds the additional-repository folders a Coder
+// session's bootstrap prepares beside a working-folder checkout.
+const MaxCoderCheckoutSiblings = 20
+
+// CoderCheckoutDirectory resolves a project's working folder for a session
+// whose worker runs as the dedicated ao-worker user: {repo} becomes the main
+// repository's folder name (RepoDirName), so the session's checkout path is
+// fixed when the session is created. A leading "~/" or "$HOME/" is kept: it is
+// the workspace login user's home, known only inside the workspace.
+func CoderCheckoutDirectory(template, repositoryURL string) (string, error) {
+	template = strings.TrimSpace(template)
+	if err := ValidateCoderWorkingDirectory(template); err != nil {
+		return "", err
+	}
+	if template == "" {
+		return "", errors.New("The working folder is empty.")
+	}
+	if strings.Contains(template, CoderWorkingDirectoryRepo) {
+		if strings.TrimSpace(repositoryURL) == "" {
+			return "", errors.New("The working folder names {repo}, but the project has no repository.")
+		}
+		template = strings.ReplaceAll(template, CoderWorkingDirectoryRepo, RepoDirName(repositoryURL))
+	}
+	if err := ValidateCoderCheckoutDirectory(template); err != nil {
+		return "", err
+	}
+	return template, nil
+}
+
+// ValidateCoderCheckoutDirectory checks a resolved working-folder checkout
+// path: a valid working directory (ValidateCoderWorkingDirectory) with no
+// placeholder left.
+func ValidateCoderCheckoutDirectory(value string) error {
+	if err := ValidateCoderWorkingDirectory(value); err != nil {
+		return err
+	}
+	if strings.ContainsAny(value, "{}") {
+		return errors.New("The working folder must not contain a placeholder.")
+	}
+	return nil
+}
+
+// CoderCheckoutSiblings names the folders the project's additional
+// repositories are cloned into beside a working-folder checkout, in the order
+// the worker clones them (the worker's SessionRepoCheckouts): RepoDirName of
+// each repository, without dot folders, the main checkout's own folder or
+// duplicates.
+func CoderCheckoutSiblings(config json.RawMessage, checkoutDirectory string) []string {
+	main := checkoutDirectory[strings.LastIndex(checkoutDirectory, "/")+1:]
+	seen := map[string]bool{main: true}
+	var names []string
+	for _, repo := range ProjectAdditionalRepos(config) {
+		if strings.TrimSpace(repo.URL) == "" {
+			continue
+		}
+		name := RepoDirName(repo.URL)
+		if !ValidCoderCheckoutSibling(name) || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+		if len(names) == MaxCoderCheckoutSiblings {
+			break
+		}
+	}
+	return names
+}
+
+// ValidCoderCheckoutSibling reports whether name is a folder name a Coder
+// bootstrap may create beside a working-folder checkout: one RepoDirName
+// segment that is not a dot folder.
+func ValidCoderCheckoutSibling(name string) bool {
+	if name == "" || len(name) > 255 || strings.HasPrefix(name, ".") {
+		return false
+	}
+	return strings.IndexFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.')
+	}) < 0
 }
 
 // ValidateProjectRules checks agentRules or orchestratorRules text.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -436,7 +437,7 @@ func TestResolveCoderPlacementCarriesDevEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	placement, err := resolveCoderPlacement(
-		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`","parameters":{"region":"us"}}}`),
+		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`","parameters":{"region":"us"}}}`), "https://github.com/acme/alice",
 		[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}},
 		"",
 	)
@@ -476,13 +477,64 @@ func TestResolveCoderPlacementPrefersTheProjectWorkingDirectory(t *testing.T) {
 			if tc.project != "" {
 				projectConfig = `{"workingDirectory":"` + tc.project + `"}`
 			}
-			placement, err := resolveCoderPlacement(json.RawMessage(projectConfig),
+			placement, err := resolveCoderPlacement(json.RawMessage(projectConfig), "https://github.com/acme/alice",
 				[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if placement.override == nil || placement.override.WorkingDirectory != tc.want {
 				t.Fatalf("override = %+v, want working directory %q", placement.override, tc.want)
+			}
+		})
+	}
+}
+
+// With the dedicated ao-worker user (a bring-your-own connection's default,
+// or the deployment's Coder), the project's working folder becomes the
+// session's checkout folder with {repo} resolved, plus the additional
+// repositories' folders beside it. The workspace user keeps its working
+// directory, and a project without a working folder or a repository keeps the
+// default checkout.
+func TestResolveCoderPlacementStampsTheWorkingFolderCheckoutForAOWorker(t *testing.T) {
+	t.Parallel()
+	byo := func(workerUser string) []domain.ProviderConnection {
+		config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+			BaseURL: "https://coder.acme.example", Owner: "dev", WorkerUser: workerUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: config}}
+	}
+	withExtras := `{"workingDirectory":"~/work/{repo}","repos":[{"url":"https://github.com/acme/billing"},{"url":"https://github.com/acme/.dotfiles"},{"url":"https://github.com/other/billing.git"}]}`
+	for _, tc := range []struct {
+		name         string
+		config       string
+		repository   string
+		connections  []domain.ProviderConnection
+		wantCheckout string
+		wantSiblings []string
+	}{
+		{"byo ao-worker", withExtras, "https://github.com/acme/alice.git", byo(""), "~/work/alice", []string{"billing"}},
+		{"managed coder", `{"workingDirectory":"/srv/{repo}/src"}`, "https://github.com/acme/alice", nil, "/srv/alice/src", nil},
+		{"workspace user", withExtras, "https://github.com/acme/alice", byo(domain.CoderWorkerUserWorkspace), "", nil},
+		{"no working folder", `{}`, "https://github.com/acme/alice", byo(""), "", nil},
+		{"standalone", `{"workingDirectory":"~/work/scratch"}`, "https://scratch.ao.local/abc", byo(""), "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			placement, err := resolveCoderPlacement(json.RawMessage(tc.config), tc.repository, tc.connections, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkout, siblings := "", []string(nil)
+			if placement.options != nil {
+				checkout, siblings = placement.options.CheckoutDirectory, placement.options.CheckoutSiblings
+			}
+			if checkout != tc.wantCheckout || !slices.Equal(siblings, tc.wantSiblings) {
+				t.Fatalf("checkout = %q %q, want %q %q", checkout, siblings, tc.wantCheckout, tc.wantSiblings)
+			}
+			if placement.override != nil && tc.wantCheckout != "" && placement.override.WorkingDirectory != "" {
+				t.Fatalf("ao-worker session got a working directory: %+v", placement.override)
 			}
 		})
 	}

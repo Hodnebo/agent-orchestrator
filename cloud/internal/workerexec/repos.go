@@ -47,15 +47,19 @@ func ParentAgentDirectoryRefusal(workspace string) string {
 // agent more than the project's repositories: the filesystem root, the user's
 // home directory (dotfiles and credentials), or a folder holding AO's own
 // worker state (.ao: the worker token, credential helper and cleanup hook),
-// which is the managed providers' layout. A bring-your-own workspace with a
-// working directory such as ~/work/{repo} gives ~/work, which is accepted.
+// which is the managed providers' layout. A Coder workspace with a working
+// folder such as ~/work/{repo} gives ~/work, which is accepted. A worker that
+// runs as the dedicated ao-worker user has its own HOME, so the workspace
+// login user's home (worker.UserHomeEnv) is refused too.
 func parentAgentDirectoryRefusal(workspace string) string {
 	parent := filepath.Clean(filepath.Dir(workspace))
 	if parent == string(filepath.Separator) || parent == "." {
 		return "it is the filesystem root"
 	}
-	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" && filepath.Clean(home) == parent {
-		return "it is the home directory"
+	for _, key := range []string{"HOME", worker.UserHomeEnv} {
+		if home := strings.TrimSpace(os.Getenv(key)); home != "" && filepath.Clean(home) == parent {
+			return "it is the home directory"
+		}
 	}
 	if _, err := os.Stat(filepath.Join(parent, ".ao")); err == nil {
 		return "it holds AO's worker state (.ao)"

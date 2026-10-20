@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Worker environment a bring-your-own Coder connection sets through the
@@ -182,4 +183,76 @@ func ResolveWorkingDirectory(
 		Workspace: dir, Reused: true, AdoptedNow: true, Stash: stash, BranchCreated: created,
 		AdoptedAt: adoptedCommit(ctx, runner, dir, branch, created),
 	})
+}
+
+// Worker environment for a working-folder checkout, set by the Coder provider
+// when the worker runs as the dedicated ao-worker user (mirrored by the coder
+// provider's constants of the same names).
+const (
+	// CheckoutDirectoryEnv is the absolute folder AO checks the session's main
+	// repository out in (the project's working folder, for example
+	// /home/ubuntu/work/alice), instead of the durable root's repository
+	// folder. AO_WORKSPACE_DIR names the same folder.
+	CheckoutDirectoryEnv = "AO_WORKER_CHECKOUT_DIRECTORY"
+	// UserHomeEnv is the workspace login user's home. The agent never starts
+	// in it, and messages show folders below it with "~".
+	UserHomeEnv = "AO_WORKER_USER_HOME"
+)
+
+// ErrWorkingDirectoryOccupied reports a working-folder checkout that already
+// exists and is not AO's: something else (typically the Coder template, from
+// one of its own options) created it. AO, running as its own user, never
+// takes over or changes it, and never falls back to another folder.
+var ErrWorkingDirectoryOccupied = errors.New("the working folder already exists")
+
+// ErrCheckoutDirectoryUnusable reports a working-folder checkout AO could not
+// prepare, for example a missing folder it is not allowed to create.
+var ErrCheckoutDirectoryUnusable = errors.New("the working folder cannot be used")
+
+// ResolveOwnedCheckoutDirectory checks the folder a dedicated-user worker
+// checks the main repository out in. The provider's bootstrap creates it owned
+// by the worker user, so a folder the worker owns is AO's own checkout (a fresh
+// one, or this session's from an earlier start, whose origin the checkout then
+// verifies) and is used as is. A missing folder is created. Anything else (a
+// folder owned by another user, a symbolic link or a file) is
+// ErrWorkingDirectoryOccupied; home is the workspace login user's home, used
+// to name the folder with "~".
+func ResolveOwnedCheckoutDirectory(dir, home string) error {
+	return resolveOwnedCheckoutDirectory(dir, home, os.Getuid())
+}
+
+func resolveOwnedCheckoutDirectory(dir, home string, uid int) error {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if !filepath.IsAbs(dir) || dir == string(filepath.Separator) {
+		return fmt.Errorf("%w: %q is not an absolute folder", ErrCheckoutDirectoryUnusable, dir)
+	}
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if mkdirErr := os.MkdirAll(dir, 0o755); mkdirErr != nil {
+			return fmt.Errorf("%w: %s does not exist and AO could not create it: %v",
+				ErrCheckoutDirectoryUnusable, DisplayPath(dir, home), mkdirErr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrCheckoutDirectoryUnusable, DisplayPath(dir, home), err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("%w: %s", ErrWorkingDirectoryOccupied, DisplayPath(dir, home))
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != uid {
+		return fmt.Errorf("%w: %s", ErrWorkingDirectoryOccupied, DisplayPath(dir, home))
+	}
+	return nil
+}
+
+// DisplayPath names dir for a person: below home it starts with "~/".
+func DisplayPath(dir, home string) string {
+	home = filepath.Clean(strings.TrimSpace(home))
+	if home != "" && filepath.IsAbs(home) && home != string(filepath.Separator) {
+		if rest, ok := strings.CutPrefix(dir, home+string(filepath.Separator)); ok {
+			return "~/" + rest
+		}
+	}
+	return dir
 }

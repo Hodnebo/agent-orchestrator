@@ -168,6 +168,10 @@ func run(logger *slog.Logger) error {
 	// A configured working directory replaces that search: the session works
 	// exactly there, adopting the template's checkout or cloning into it.
 	workingDirectory := readWorkingDirectory()
+	// A worker that runs as the dedicated ao-worker user checks the repository
+	// out in the project's working folder instead (AO_WORKSPACE_DIR already
+	// names it), once it is sure the folder is AO's own.
+	checkoutDirectory := readCheckoutDirectory()
 	protectSecretFiles := os.Getenv(worker.ProtectSecretFilesEnv) == "1"
 	secretFileGuard := ""
 	if protectSecretFiles {
@@ -195,6 +199,10 @@ func run(logger *slog.Logger) error {
 			reuse.Workspace = dir
 			_ = os.Setenv("AO_WORKSPACE_DIR", dir)
 		}
+	case checkoutDirectory != "" && hasRepository:
+		workspace = checkoutDirectory
+		reuse.Workspace = workspace
+		workingDirectoryErr = resolveCheckoutDirectory(logger, workspace)
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
@@ -224,8 +232,12 @@ func run(logger *slog.Logger) error {
 	// The workspace shell is deliberately available before checkout starts. A
 	// developer can inspect the sandbox immediately while repository preparation
 	// and coding-agent authentication continue in the background.
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		return fmt.Errorf("create workspace directory: %w", err)
+	// A working folder the session cannot use is reported on the session
+	// below; it is never created or changed here.
+	if checkoutDirectory == "" || workingDirectoryErr == nil {
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			return fmt.Errorf("create workspace directory: %w", err)
+		}
 	}
 	for key, value := range map[string]string{
 		"AO_CLOUD_PUBLIC_URL":   publicURL,

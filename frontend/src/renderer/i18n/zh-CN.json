@@ -251,6 +251,7 @@
 	"cloud.startupError.projectSetupFailedTitle": "项目的 Setup 脚本失败",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "代码仓库检出失败",
 	"cloud.startupError.workingDirectoryUnusableTitle": "无法使用工作目录",
+	"cloud.startupError.workingDirectoryOccupiedTitle": "工作文件夹已被占用",
 	"board.empty.body": "描述一个任务后，编排器会进行规划、创建 worker 会话，并在工作推进时在此跟踪。",
 	"board.empty.title": "还没有 worker 会话",
 	"home.folderMissing": "文件夹缺失",

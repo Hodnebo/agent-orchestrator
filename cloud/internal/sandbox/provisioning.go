@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -195,6 +196,18 @@ type CoderSessionProfile struct {
 	// files. Nil on rows written before the field existed, which keeps the
 	// historical behavior (no protection).
 	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
+	// CheckoutDirectory, with the dedicated ao-worker user, is where AO checks
+	// the session's main repository out instead of <durable root>/repository:
+	// the project's working folder with {repo} resolved when the session was
+	// created (domain.CoderCheckoutDirectory), for example ~/work/alice, where
+	// "~" is the workspace login user's home. Empty (every session created
+	// before the field existed, and projects without a working folder) keeps
+	// the durable root checkout. Never set with the workspace worker user,
+	// whose working directory is WorkingDirectory.
+	CheckoutDirectory string `json:"checkoutDirectory,omitempty"`
+	// CheckoutSiblings are the folder names of the project's additional
+	// repositories, prepared beside CheckoutDirectory.
+	CheckoutSiblings []string `json:"checkoutSiblings,omitempty"`
 }
 
 // ProtectsSecretFiles reports whether the session's coding agent must not
@@ -244,6 +257,12 @@ type CoderSessionOptions struct {
 	// template; they override the connection's parameters and are overridden
 	// by Size and StartupScript.
 	Parameters map[string]string
+	// CheckoutDirectory and CheckoutSiblings are the project's working-folder
+	// checkout (see CoderSessionProfile.CheckoutDirectory). They apply with or
+	// without a picked template, and are dropped when the session's worker
+	// runs as the workspace user.
+	CheckoutDirectory string
+	CheckoutSiblings  []string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -438,10 +457,27 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	if !profile.RunsAsWorkspaceUser() {
 		profile.ReuseExistingCheckout = false
 		profile.WorkingDirectory = ""
+	} else {
+		profile.CheckoutDirectory = ""
+		profile.CheckoutSiblings = nil
 	}
 	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
 	if err := domain.ValidateCoderWorkingDirectory(profile.WorkingDirectory); err != nil {
 		return CoderSessionProfile{}, err
+	}
+	profile.CheckoutDirectory = strings.TrimSpace(profile.CheckoutDirectory)
+	if profile.CheckoutDirectory == "" {
+		profile.CheckoutSiblings = nil
+	} else if err := domain.ValidateCoderCheckoutDirectory(profile.CheckoutDirectory); err != nil {
+		return CoderSessionProfile{}, fmt.Errorf("Coder session checkout directory: %w", err)
+	}
+	if len(profile.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return CoderSessionProfile{}, errors.New("Coder session has too many checkout siblings")
+	}
+	for _, name := range profile.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return CoderSessionProfile{}, fmt.Errorf("Coder session checkout sibling %q is invalid", name)
+		}
 	}
 	return profile, nil
 }
@@ -845,6 +881,9 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if override != nil {
 			addCoderDevEnvironment(coderProfile, override)
 		}
+		if err := addCoderCheckoutDirectory(coderProfile, coder, override); err != nil {
+			return Plan{}, err
+		}
 		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{
 			"owner":       strings.TrimSpace(coderCfg.Owner),
@@ -896,6 +935,38 @@ func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeployme
 	if directory := strings.TrimSpace(override.WorkingDirectory); directory != "" {
 		coderProfile["workingDirectory"] = directory
 	}
+}
+
+// addCoderCheckoutDirectory stamps the project's working-folder checkout onto
+// a session whose worker runs as the dedicated ao-worker user (the deployment
+// Coder, or a bring-your-own connection's default), so the path is decided
+// once, when the session is created. The workspace worker user works in its
+// WorkingDirectory instead, and a session without one keeps the durable root
+// checkout and its historical profile shape.
+func addCoderCheckoutDirectory(coderProfile map[string]any, coder *CoderSessionOptions, override *CoderDeploymentOverride) error {
+	if coder == nil || strings.TrimSpace(coder.CheckoutDirectory) == "" {
+		return nil
+	}
+	if override != nil && strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		return nil
+	}
+	directory := strings.TrimSpace(coder.CheckoutDirectory)
+	if err := domain.ValidateCoderCheckoutDirectory(directory); err != nil {
+		return err
+	}
+	if len(coder.CheckoutSiblings) > domain.MaxCoderCheckoutSiblings {
+		return errors.New("too many additional repository folders for the working folder")
+	}
+	for _, name := range coder.CheckoutSiblings {
+		if !domain.ValidCoderCheckoutSibling(name) {
+			return fmt.Errorf("additional repository folder %q is invalid", name)
+		}
+	}
+	coderProfile["checkoutDirectory"] = directory
+	if len(coder.CheckoutSiblings) > 0 {
+		coderProfile["checkoutSiblings"] = slices.Clone(coder.CheckoutSiblings)
+	}
+	return nil
 }
 
 func normalizeProvider(provider string) string {

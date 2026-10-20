@@ -213,6 +213,7 @@
 	"cloud.startupError.projectSetupFailedTitle": "The project's Setup script failed",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "The repository checkout failed",
 	"cloud.startupError.workingDirectoryUnusableTitle": "The working directory can't be used",
+	"cloud.startupError.workingDirectoryOccupiedTitle": "The working folder is already in use",
 	"board.empty.body": "Describe a task and the orchestrator plans it, spawns worker sessions, and tracks them here as work moves forward.",
 	"board.empty.title": "No worker sessions yet",
 	"home.folderMissing": "Folder missing",

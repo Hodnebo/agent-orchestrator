@@ -39,8 +39,8 @@ local project has: open the project's settings and choose **Scripts**.
   opens it in Coder, for as long as the session exists.
 - **Durable root.** AO keeps its own state under the workspace user's home
   (`$HOME/.ao`): the worker, its logs, and the agent's configuration and
-  conversations. Without a working directory (below), the session's checkout
-  is `$HOME/repository`.
+  conversations. Without a working directory or a project working folder
+  (below), the session's checkout is `$HOME/repository`.
 - **Lifecycle.** AO starts, stops and deletes the workspaces it created. A
   startup failure marks the session failed with a message in the app; AO never
   stops or deletes your workspace because of it.
@@ -121,6 +121,24 @@ Without a working directory, **Use the template's existing checkout** (on by
 default with the workspace user) makes AO look for a checkout of the session's
 repository directly under `~/work` and then under `~`, matching on the `origin`
 remote, and falls back to a fresh clone in `$HOME/repository`.
+
+### Working folder with the `ao-worker` user
+
+With **Run the agent as the workspace user** off (the default), a project's
+**Working folder** (Project settings > Repositories, for example
+`~/work/{repo}`) is where AO clones the main repository instead of
+`$HOME/repository`, and the additional repositories go beside it
+(`~/work/<name>`). `~` is the workspace login user's home; `{repo}` is the
+repository name, fixed when the session is created. The bootstrap creates a
+missing parent folder (owned by the login user, group-writable for
+`ao-worker`) and the checkout folders (owned by `ao-worker`), and adds
+traverse permission (`o+x`) to a parent folder `ao-worker` cannot enter. It
+never takes over or changes a folder that already exists: if the template
+already cloned `~/work/<repo>` (for example because the project ticked that in
+its **Template options**), the session stops with "The working folder is already
+in use". Untick it in the Template options, or turn on **Run the agent as the
+workspace user** to work in the template's checkout instead. A restarted or
+restored session keeps using AO's own folder.
 
 ### What goes where
 
@@ -238,6 +256,10 @@ workspace user.
 - **The agent works in `~/repository` instead of your checkout.** Turn on
   **Run the agent as the workspace user** and set the working directory; both
   apply to new sessions only.
+- **"The working folder is already in use".** The project's working folder
+  already exists in the workspace and is not AO's (usually the template cloned
+  it). Untick that in the project's Template options, or turn on **Run the
+  agent as the workspace user** to reuse it, then start a new session.
 - **"Permission denied" on files the template created.** The agent is running
   as `ao-worker`. Turn on **Run the agent as the workspace user**.
 - **The session waits a long time, then fails to start.** The template's

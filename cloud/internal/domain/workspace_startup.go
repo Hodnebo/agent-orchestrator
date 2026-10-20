@@ -10,6 +10,11 @@ const (
 	WorkspaceStartupErrorCheckout         = "repository_checkout_failed"
 	WorkspaceStartupErrorWorkingDirectory = "working_directory_unusable"
 	WorkspaceStartupErrorProjectSetup     = "project_setup_failed"
+	// WorkspaceStartupErrorWorkingDirectoryOccupied means the project's
+	// working folder already holds a folder AO did not create (for example a
+	// checkout the Coder template cloned), so AO, running as its own ao-worker
+	// user, will not check the repository out there.
+	WorkspaceStartupErrorWorkingDirectoryOccupied = "working_directory_occupied"
 )
 
 // WorkspaceStartupErrorCodes lists the codes a worker may report.
@@ -18,6 +23,7 @@ func WorkspaceStartupErrorCodes() []string {
 		WorkspaceStartupErrorCheckout,
 		WorkspaceStartupErrorWorkingDirectory,
 		WorkspaceStartupErrorProjectSetup,
+		WorkspaceStartupErrorWorkingDirectoryOccupied,
 	}
 }
 
