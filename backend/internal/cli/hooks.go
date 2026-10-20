@@ -471,8 +471,14 @@ func firstHookValue(values ...string) string {
 
 func isAOCoordinationMessage(value string) bool {
 	value = strings.TrimSpace(value)
-	_, reportDelivery := domain.CoordinationDeliveryID(value)
-	return reportDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
+	if _, reportDelivery := domain.ReportDeliveryID(value); reportDelivery {
+		// A report envelope may share a prompt with a human instruction. Keep
+		// the delivery ID for acknowledgement, but only classify the whole
+		// prompt as coordination when the envelope is the complete message.
+		return strings.HasSuffix(value, "</ao-report-delivery>")
+	}
+	_, sessionDelivery := domain.CoordinationDeliveryID(value)
+	return sessionDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
 		strings.HasPrefix(value, "AO transferred the previous agent's context in hidden system instructions.")
 }
 

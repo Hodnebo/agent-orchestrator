@@ -857,6 +857,35 @@ artifact: /evidence/vnc-headless-6gb-02
 	}
 }
 
+func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
+	const deliveryID = "report-batch:abc123"
+	report := domain.WrapReportDelivery(deliveryID, "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	instruction := "Please stop the worker and wait for my approval."
+	tests := []struct {
+		name, prompt string
+	}{
+		{
+			name:   "instruction inside paste wrapper",
+			prompt: pasteOpen + report + "\n" + instruction + pasteClose,
+		},
+		{
+			name:   "instruction after paste wrapper",
+			prompt: pasteOpen + report + pasteClose + "\n" + instruction,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != deliveryID || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
 func TestHookConversationFactsRejectsInvalidReportPastes(t *testing.T) {
 	report := domain.WrapReportDelivery("report-batch:abc123", "worker finished")
 	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
