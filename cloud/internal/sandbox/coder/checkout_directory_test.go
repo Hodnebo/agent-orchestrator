@@ -3,6 +3,7 @@ package coder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -23,7 +24,7 @@ import (
 // additional repositories live beside the working folder.
 func TestAOWorkerBootstrapUsesTheWorkingFolderCheckout(t *testing.T) {
 	t.Parallel()
-	for _, durableRoot := range []string{sandbox.CoderHomeDurableRoot, "/home/coder"} {
+	for _, durableRoot := range []string{sandbox.CoderHomeDurableRoot, "/home/ubuntu"} {
 		t.Run(durableRoot, func(t *testing.T) {
 			t.Parallel()
 			fake := newDevEnvCoder(t, nil)
@@ -82,6 +83,38 @@ func TestAOWorkerBootstrapUsesTheWorkingFolderCheckout(t *testing.T) {
 			install, ok := recorder.stage(sandbox.StageWorkerInstall)
 			if !ok || install.Attrs["checkout_directory"] != "/home/ubuntu/work/alice" || install.Attrs["worker_user"] != domain.CoderWorkerUserAOWorker {
 				t.Fatalf("worker install stage = %+v", install)
+			}
+		})
+	}
+}
+
+// A working folder outside the durable root would lose the agent's
+// uncommitted work on a workspace restart, so the session stops with its own
+// startup error before anything is installed.
+func TestAOWorkerBootstrapRefusesAWorkingFolderOutsideTheDurableRoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ durableRoot, checkout, shown string }{
+		{sandbox.CoderHomeDurableRoot, "/workspace/alice", "your home folder (/home/ubuntu)"},
+		{"/home/coder", "~/work/alice", "/home/coder"},
+		{"/home/ubuntu/work", "/home/ubuntu/work", "/home/ubuntu/work"},
+	} {
+		t.Run(tc.durableRoot+" "+tc.checkout, func(t *testing.T) {
+			t.Parallel()
+			fake := newDevEnvCoder(t, nil)
+			server := httptest.NewServer(fake)
+			t.Cleanup(server.Close)
+			client := newTestClient(t, server.URL, nil)
+			client.checkoutDirectory = tc.checkout
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err := client.BootstrapWorker(ctx, testWorkspaceID, multiArchBootstrap(tc.durableRoot))
+			var startupErr *sandbox.StartupError
+			if !errors.As(err, &startupErr) || startupErr.Code != sandbox.StartupErrorWorkingDirectoryNotDurable ||
+				!strings.HasPrefix(startupErr.Message, "The working folder must be inside "+tc.shown+" so the agent's work survives restarts.") {
+				t.Fatalf("bootstrap error = %#v", err)
+			}
+			if archive := fake.lastArchive(); archive != nil {
+				t.Fatalf("the worker was installed: %v", archive)
 			}
 		})
 	}

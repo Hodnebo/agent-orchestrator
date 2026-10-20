@@ -168,6 +168,13 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByText(message)).toBeInTheDocument();
 	});
 
+	it("names a working folder outside the durable root", () => {
+		const message = "The working folder must be inside your home folder (/home/ubuntu) so the agent's work survives restarts. This project's working folder is /workspace/alice. Change it in Project settings > Repositories, then start a new session.";
+		mount({ phase: "failed", code: "working_directory_not_durable", message });
+		expect(screen.getByRole("heading", { name: "The working folder isn't kept across restarts" })).toBeInTheDocument();
+		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
 	it("shows a pending retry, then refetches the session", async () => {
 		let resolve!: (value: unknown) => void;
 		retrySessionStartup.mockReturnValue(new Promise((done) => { resolve = done; }));

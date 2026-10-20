@@ -133,7 +133,13 @@ control plane's `AO_CLOUD_CODER_WORKER_WORKING_FOLDER` on (see
 `~/work/{repo}`) is where AO clones the main repository instead of
 `$HOME/repository`, and the additional repositories go beside it
 (`~/work/<name>`). `~` is the workspace login user's home; `{repo}` is the
-repository name, fixed when the session is created. The bootstrap creates a
+repository name, fixed when the session is created. The folder must be inside
+the connection's durable root (your home by default, so start it with `~/`):
+a folder outside it, such as `/workspace/{repo}` on a Docker template, loses
+the agent's uncommitted work when the workspace restarts. AO refuses such a
+folder when the project is saved, or, when that is only known inside the
+workspace, stops the session with "The working folder must be inside ... so
+the agent's work survives restarts." The bootstrap creates a
 missing parent folder (owned by the login user, group-writable for
 `ao-worker`) and the checkout folders (owned by `ao-worker`), and adds
 traverse permission (`o+x`) to a parent folder `ao-worker` cannot enter. It

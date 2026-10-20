@@ -235,3 +235,41 @@ func (s *Server) prepareGitHubProjectRepos(
 	}
 	return normalized, true
 }
+
+// validatePatchedWorkingFolder refuses a project working folder outside the
+// durable root of the organization's bring-your-own Coder connection when its
+// sessions run as the dedicated ao-worker user: the agent's checkout there
+// would not survive a workspace restart (domain.CoderWorkingFolderOutsideDurableRoot).
+// Without such a connection the durable root is not known here, and the
+// session's startup checks the folder instead. It reports whether the request
+// may continue and writes the error when not.
+func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Request, orgID string, patch json.RawMessage) bool {
+	var keys struct {
+		WorkingDirectory *string `json:"workingDirectory"`
+	}
+	if len(patch) == 0 || json.Unmarshal(patch, &keys) != nil || keys.WorkingDirectory == nil ||
+		strings.TrimSpace(*keys.WorkingDirectory) == "" {
+		return true
+	}
+	config, err := json.Marshal(map[string]string{"workingDirectory": *keys.WorkingDirectory})
+	if err != nil {
+		return true
+	}
+	placement, err := s.orgCoderPlacement(r.Context(), principalFrom(r), orgID, config, "")
+	if err != nil || placement.override == nil ||
+		placement.override.WorkerUser == domain.CoderWorkerUserWorkspace {
+		// No readable bring-your-own connection, or the workspace user (whose
+		// working folder is the template's own checkout): nothing to check.
+		return true
+	}
+	if outside, shown := domain.CoderWorkingFolderOutsideDurableRoot(*keys.WorkingDirectory, placement.override.DurableRoot); outside {
+		example := "~/work/{repo}"
+		if strings.HasPrefix(shown, "/") {
+			example = shown + "/work/{repo}"
+		}
+		writeError(w, r, http.StatusUnprocessableEntity, domain.CoderWorkingFolderNotDurableCode,
+			domain.CoderWorkingFolderNotDurableMessage(shown)+" Choose a folder there, for example "+example+".")
+		return false
+	}
+	return true
+}

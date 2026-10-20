@@ -620,7 +620,9 @@ export interface CloudCpSession {
  * A cloud session's startup failure. Known codes: workspace_not_ready,
  * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
  * worker_never_started, bootstrap_failed, workspace_build_failed,
- * workspace_create_failed; treat any other code generically.
+ * workspace_create_failed, working_directory_not_durable (the project's
+ * working folder is outside the Coder durable root); treat any other code
+ * generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;

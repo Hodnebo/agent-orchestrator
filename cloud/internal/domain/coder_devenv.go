@@ -183,3 +183,37 @@ func UnknownCoderTemplateParameters(parameters map[string]string, declared []str
 	sort.Strings(unknown)
 	return unknown
 }
+
+// CoderWorkingFolderNotDurableCode is the startup error, and settings error,
+// code for a working folder outside the Coder connection's durable root.
+const CoderWorkingFolderNotDurableCode = "working_directory_not_durable"
+
+// CoderWorkingFolderNotDurableMessage says a working folder must be inside
+// durableRoot (as shown to the user).
+func CoderWorkingFolderNotDurableMessage(durableRoot string) string {
+	return "The working folder must be inside " + durableRoot + " so the agent's work survives restarts."
+}
+
+// CoderWorkingFolderOutsideDurableRoot reports whether a project's working
+// folder (as saved, {repo} allowed) is outside a Coder connection's durable
+// root (durableRoot: "$HOME", "~" or empty for the home directory, else an
+// absolute folder), where a session that runs as the dedicated ao-worker user
+// would lose uncommitted work when the workspace restarts. With the home
+// directory as the root, a folder must start with ~/ or $HOME/: an absolute
+// folder (for example /workspace/{repo} on a Docker template) is refused,
+// since a workspace's home is known only inside it. With an absolute root, an
+// absolute folder must be below it, and a ~/ folder is left to the session's
+// startup, which knows the home. It returns the root as shown to the user.
+func CoderWorkingFolderOutsideDurableRoot(folder, durableRoot string) (outside bool, shown string) {
+	folder = strings.TrimSpace(folder)
+	durableRoot = strings.TrimRight(strings.TrimSpace(durableRoot), "/")
+	homeRelative := strings.HasPrefix(folder, "~/") || strings.HasPrefix(folder, "$HOME/")
+	switch durableRoot {
+	case "", "~", "$HOME", "${HOME}":
+		return folder != "" && !homeRelative, "your home folder (~)"
+	}
+	if folder == "" || homeRelative {
+		return false, durableRoot
+	}
+	return !strings.HasPrefix(folder, durableRoot+"/"), durableRoot
+}

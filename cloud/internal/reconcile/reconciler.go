@@ -1391,6 +1391,15 @@ func (r *Reconciler) bootstrapFailed(
 			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
 		return r.terminate(ctx, record, environment, provider, startupErr)
 	}
+	// A project working folder AO cannot use (outside the durable root, or
+	// one the bootstrap could not prepare) fails the same way on every retry,
+	// so park the session with the reason until its working folder changes.
+	if errors.As(err, &startupErr) && (startupErr.Code == sandbox.StartupErrorWorkingDirectoryNotDurable ||
+		startupErr.Code == sandbox.StartupErrorWorkingDirectoryUnusable) {
+		r.log.WarnContext(ctx, "project working folder cannot be used",
+			"session_id", record.SessionID, "provider_id", environment.ID, "code", startupErr.Code, "err", err)
+		return r.terminate(ctx, record, environment, provider, startupErr)
+	}
 	r.recordStartupError(ctx, record, err)
 	if errors.Is(err, sandbox.ErrWorkspaceNotReady) && record.WorkerLastSeenAt == nil {
 		r.log.InfoContext(ctx, "sandbox not ready for worker bootstrap; will retry",

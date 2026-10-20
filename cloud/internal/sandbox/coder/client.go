@@ -1164,10 +1164,25 @@ func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home st
 	directory, err := ExpandCheckoutDirectory(c.checkoutDirectory, home)
 	if err != nil {
 		return &sandbox.StartupError{
-			Code: sandbox.StartupErrorBootstrapFailed,
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
 			Message: fmt.Sprintf("AO couldn't use this project's working folder (%s) in the workspace: %v. "+
 				"Fix it in Project settings > Repositories, then start a new session.", c.checkoutDirectory, err),
 			Err: err,
+		}
+	}
+	// The checkout must survive a workspace restart like AO's own state:
+	// inside the durable root (for example $HOME), never a folder such as
+	// /workspace/<repo> a Docker template does not keep.
+	if root := path.Clean(resolved.DurableRoot); !strings.HasPrefix(directory, strings.TrimSuffix(root, "/")+"/") {
+		shown := root
+		if home = strings.TrimSpace(home); home != "" && root == path.Clean(home) {
+			shown = "your home folder (" + root + ")"
+		}
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryNotDurable,
+			Message: domain.CoderWorkingFolderNotDurableMessage(shown) + " " +
+				fmt.Sprintf("This project's working folder is %s. Change it in Project settings > Repositories, then start a new session.", c.checkoutDirectory),
+			Err: fmt.Errorf("coder: checkout directory %s is outside the durable root %s", directory, root),
 		}
 	}
 	resolved.CheckoutDirectory = directory
