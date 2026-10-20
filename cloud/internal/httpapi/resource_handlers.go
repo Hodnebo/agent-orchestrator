@@ -635,7 +635,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var coderOpts *sandbox.CoderSessionOptions
 	var coderOverride *sandbox.CoderDeploymentOverride
 	if request.Provider == sandbox.ProviderCoder {
-		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config)
+		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config, project.RepositoryURL)
 		if placementErr != nil {
 			s.writeCoderPlacementError(w, r, placementErr)
 			return

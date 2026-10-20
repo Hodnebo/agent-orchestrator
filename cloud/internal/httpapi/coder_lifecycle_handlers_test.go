@@ -121,7 +121,7 @@ func TestResolveCoderPlacementCarriesLifecycleSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	placement, err := resolveCoderPlacement(
-		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`"}}`),
+		json.RawMessage(`{"coder":{"templateId":"`+coderCfgTemplate+`"}}`), "https://github.com/acme/alice",
 		[]domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: defaultAgentConnectionLabel, Config: connectionConfig}},
 		"",
 	)

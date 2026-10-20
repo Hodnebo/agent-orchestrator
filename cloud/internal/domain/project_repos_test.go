@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -352,5 +353,61 @@ func TestStandaloneProjectRejectsRepoPlaceholderInWorkingFolder(t *testing.T) {
 	}
 	if _, err := NormalizeProjectRepoSettings("https://github.com/acme/alice", json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`)); err != nil {
 		t.Fatalf("a repository project refused {repo}: %v", err)
+	}
+}
+
+// An ao-worker session's checkout folder is the project's working folder with
+// {repo} resolved from the main repository; "~/" stays for the workspace to
+// resolve. A {repo} without a repository, or an invalid folder, is refused.
+func TestCoderCheckoutDirectory(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ template, repository, want string }{
+		{"~/work/{repo}", "https://github.com/acme/alice.git", "~/work/alice"},
+		{"$HOME/{repo}/src", "https://github.com/acme/alice", "$HOME/alice/src"},
+		{"/srv/work/{repo}", "git@github.com:acme/Voice_AI.git", "/srv/work/Voice_AI"},
+		{"~/work/fixed", "", "~/work/fixed"},
+	} {
+		got, err := CoderCheckoutDirectory(tc.template, tc.repository)
+		if err != nil || got != tc.want {
+			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, %v; want %q", tc.template, tc.repository, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ template, repository string }{
+		{"", "https://github.com/acme/alice"},
+		{"~/work/{repo}", ""},
+		{"work/{repo}", "https://github.com/acme/alice"},
+		{"~/work/{name}", "https://github.com/acme/alice"},
+		{"~/../{repo}", "https://github.com/acme/alice"},
+	} {
+		if got, err := CoderCheckoutDirectory(tc.template, tc.repository); err == nil {
+			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, want an error", tc.template, tc.repository, got)
+		}
+	}
+}
+
+// The additional repositories' folders beside a working-folder checkout match
+// the worker's: RepoDirName of each, without dot folders, the main checkout's
+// folder or duplicates, in project order.
+func TestCoderCheckoutSiblings(t *testing.T) {
+	t.Parallel()
+	config := json.RawMessage(`{"repos":[` +
+		`{"url":"https://github.com/acme/billing"},` +
+		`{"url":"https://github.com/acme/.github"},` +
+		`{"url":"https://github.com/acme/alice-api.git","branch":"develop"},` +
+		`{"url":"https://github.com/fork/billing"},` +
+		`{"url":"https://github.com/other/alice"}]}`)
+	got := CoderCheckoutSiblings(config, "~/work/alice")
+	if want := []string{"billing", "alice-api"}; !slices.Equal(got, want) {
+		t.Fatalf("siblings = %q, want %q", got, want)
+	}
+	if got := CoderCheckoutSiblings(json.RawMessage(`{}`), "~/work/alice"); got != nil {
+		t.Fatalf("siblings without additional repositories = %q", got)
+	}
+	for name, want := range map[string]bool{
+		"billing": true, "alice-api_v2.0": true, "": false, ".ao": false, "a/b": false, "a b": false, "..": false,
+	} {
+		if got := ValidCoderCheckoutSibling(name); got != want {
+			t.Errorf("ValidCoderCheckoutSibling(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
