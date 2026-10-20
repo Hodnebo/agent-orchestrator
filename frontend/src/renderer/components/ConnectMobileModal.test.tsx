@@ -45,10 +45,12 @@ const { mobileStatus } = vi.hoisted(() => ({
 	},
 }));
 
+const desktopWake = vi.hoisted(() => ({ active: false, lidActive: false }));
+
 // This suite exercises the mobile UI; shared desktop/mobile ownership is
 // covered with the real useAwake hook in AwakeControl.test.tsx.
 vi.mock("../hooks/useAwake", () => ({
-	useAwake: () => ({ state: { sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
+	useAwake: () => ({ state: { ...desktopWake, sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
 	awakeCapability: () => ({ available: true }),
 }));
 
@@ -107,6 +109,8 @@ async function selectConnectionMethod(mode: "LAN" | "Tailscale") {
 beforeEach(() => {
 	// Keep awake's last-known state is remembered across mounts; start clean.
 	window.localStorage.clear();
+	desktopWake.active = false;
+	desktopWake.lidActive = false;
 	mobileStatus.enabled = true;
 	mobileStatus.password = "fake-password-for-testing";
 	mobileStatus.noPublicTunnel = false;
@@ -892,6 +896,22 @@ test("turning on closed-lid mode also enables idle wake in one request", async (
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
 	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked());
 	expect(toggle).toBeChecked();
+});
+
+test("shows sidebar-owned closed-lid wake as active while mobile access is off", async () => {
+	mobileStatus.enabled = false;
+	mobileStatus.keepAwake = {
+		supported: true, enabled: false, active: false, hasBattery: true,
+		lidSupported: true, lidClosed: false, lidActive: false,
+	};
+	desktopWake.active = true;
+	desktopWake.lidActive = true;
+	renderMobileSettings();
+	expect(await screen.findByRole("switch", { name: "Keep awake with lid closed" })).toBeChecked();
+	expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
+	expect(screen.getByText("Closed-lid keep awake is armed.")).toBeInTheDocument();
+	expect(screen.queryByText("Waiting for closed-lid wake to start.")).not.toBeInTheDocument();
+	expect(apiClient.POST).not.toHaveBeenCalled();
 });
 
 test("shows a latched low-battery stop without claiming native activation", async () => {

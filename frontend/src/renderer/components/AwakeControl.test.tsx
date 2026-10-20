@@ -20,7 +20,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 let client: QueryClient;
 let state: AwakeState;
-let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
+let mobile: { enabled: boolean; keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
 let release: (() => void) | undefined;
 let blockStart: boolean;
 function snapshot() { return structuredClone(state); }
@@ -34,7 +34,7 @@ beforeEach(() => {
 	blockStart = false;
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	state = { settings: { lidClosed: true }, sessions: [], rules: [], activeRules: [], active: false, paused: false, capabilities: [{ id: "idle", available: true }] } as unknown as AwakeState;
-	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
+	mobile = { enabled: false, keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
 	test.get.mockReset().mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : structuredClone(mobile) }));
 	test.post.mockReset().mockImplementation(async (path, options) => {
 		if (path === "/api/v1/mobile/keep-awake") {
@@ -46,6 +46,7 @@ beforeEach(() => {
 			if (blockStart) await new Promise<void>((resolve) => { release = resolve; });
 			state.sessions.push(awakeSession({ id: "new", ...options.body }));
 			state.active = true;
+			state.lidActive = options.body.lidClosed;
 		} else if (path === "/api/v1/awake/stop") {
 			state.sessions = state.sessions.map((s) => ({ ...s, endedAt: "now" }));
 			state.paused = true;
@@ -152,13 +153,86 @@ describe("shared Stay Awake controls", () => {
 		expect(test.post).not.toHaveBeenCalled();
 	});
 
-	it("starts idle-only wake even when the saved desktop lid default is true", async () => {
+	it("falls back to idle-only wake when closed-lid capability is unavailable", async () => {
 		await show();
 		fireEvent.click(coffee());
 		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: false }) }));
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
 		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
 	});
+	it("starts desktop closed-lid wake without mobile access, synchronizes both switches, and stops it", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed.*below 10% battery.*critical heat/);
+		fireEvent.click(coffee());
+		await waitFor(() => expect(coffee()).toBeEnabled());
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: true }) });
+		await waitFor(() => expect(coffee()).toHaveAccessibleDescription(/being kept awake, including with the lid closed/));
+		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "true");
+		expect(mobile.enabled).toBe(false);
+		expect(mobile.keepAwake.enabled).toBe(false);
+		expect(test.post).not.toHaveBeenCalledWith("/api/v1/mobile/keep-awake", expect.anything());
+		fireEvent.click(coffee());
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
+		expect(state.lidActive).toBe(false);
+		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
+	});
+	it("keeps the mobile main toggle idle-only even on a lid-capable Mac", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Mobile wake" }));
+		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } }));
+		expect(state.sessions[0].lidClosed).toBe(false);
+	});
+	it.each(["setup failed", "low_battery", "critical_heat"])("reports a refused closed-lid start without silently falling back (%s)", async (reason) => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		test.post.mockResolvedValue({ error: reason });
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(reason));
+		expect(test.post).toHaveBeenCalledTimes(1);
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ lidClosed: true }) });
+		expect(state.active).toBe(false);
+		expect(mobile.keepAwake.enabled).toBe(false);
+	});
+	it.each([true, false])("waits for closed-lid acknowledgement even when idle wake is already active (acknowledged=%s)", async (acknowledged) => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			const result = await post(path, options);
+			if (path === "/api/v1/awake/sessions") {
+				state.lidActive = false;
+				state.reason = "starting";
+				return { data: snapshot() };
+			}
+			return result;
+		});
+		await show();
+		vi.useFakeTimers();
+		try {
+			fireEvent.click(coffee());
+			await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+			expect(state.active).toBe(true);
+			expect(coffee()).toHaveAttribute("aria-busy", "true");
+			expect(coffee()).toHaveAccessibleDescription(/Starting Stay Awake/);
+			expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+			state.lidActive = acknowledged;
+			await act(async () => { await vi.advanceTimersByTimeAsync(acknowledged ? 600 : 3_100); });
+			expect(coffee()).not.toHaveAttribute("aria-busy");
+			expect(coffee()).toBeEnabled();
+			if (acknowledged) {
+				expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
+				expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+			} else {
+				expect(coffee()).toHaveAccessibleDescription(/closed-lid wake is not active/);
+				expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument();
+			}
+		} finally {
+			client.clear();
+			vi.useRealTimers();
+		}
+	});
+
 	it("stops session-scoped, timed, and automatic wake owners", async () => {
 		state.sessions = [awakeSession({ id: "scoped", scope: "session", sessionId: "work" }), awakeSession({ id: "timer", mode: "duration" })];
 		state.rules = [{ id: "automatic", enabled: true }] as AwakeState["rules"];

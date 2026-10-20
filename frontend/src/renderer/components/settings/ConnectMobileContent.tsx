@@ -758,12 +758,11 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 			</PairingLayout>
 
-			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
-			    whether or not the bridge is on: the choice is remembered and takes
-			    effect whenever the mobile connection is. */}
+			{/* macOS only. Reflect desktop-owned wake even while the mobile
+			    bridge is off; mobile-only choices also remain visible here. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn, lidActive: stayAwake.lidActive }}
 					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
@@ -830,7 +829,7 @@ function KeepAwakeRow({
 						<>
 							{t(
 								"mobile.keepAwake.lidHelp",
-								"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+								"Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
 							)}
 							{lidNeedsAttention && (
 								<span className="mt-1 block" role="status">
@@ -841,7 +840,7 @@ function KeepAwakeRow({
 													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
 													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
 												)
-											: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
+											: t("mobile.keepAwake.lidIdle", "Waiting for closed-lid wake to start.")}
 								</span>
 							)}
 						</>

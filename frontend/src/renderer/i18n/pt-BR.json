@@ -846,9 +846,9 @@
 	"mobile.keepAwake.help": "Continua acessível pelo celular enquanto você está fora.",
 	"mobile.keepAwake.laptopNote": "Fechar a tampa ainda coloca o MacBook em repouso, a menos que ele esteja na tomada e conectado a um monitor externo.",
 	"mobile.keepAwake.lidLabel": "Manter ativo com a tampa fechada",
-	"mobile.keepAwake.lidHelp": "Funciona enquanto o acesso móvel está ativado, mesmo se o telefone desconectar. Usa mais bateria; mantenha o Mac em uma superfície ventilada. Para abaixo de 10% de bateria ou em caso de calor crítico.",
+	"mobile.keepAwake.lidHelp": "Mantém este Mac acordado com a tampa fechada. Usa mais bateria; mantenha o Mac em uma superfície ventilada. Para abaixo de 10% de bateria ou em caso de calor crítico.",
 	"mobile.keepAwake.lidActive": "A função com a tampa fechada está preparada.",
-	"mobile.keepAwake.lidIdle": "Inicia quando o acesso móvel está ativado.",
+	"mobile.keepAwake.lidIdle": "Aguardando a ativação da função com a tampa fechada.",
 	"mobile.keepAwake.lidReason.starting": "Preparando a função com a tampa fechada…",
 	"mobile.keepAwake.lidReason.system_managed": "O macOS ou outro utilitário já controla o repouso da tampa. O AO não altera esse controle.",
 	"mobile.keepAwake.lidReason.low_battery": "Parou abaixo de 10% de bateria. Carregue o Mac e desligue e ligue esta opção novamente.",
@@ -3256,5 +3256,9 @@
 	"settings.agentAccounts.stopAndMove": "Parar e mover",
 	"settings.agentAccounts.switching": "Trocando para {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Trocando de conta",
-	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior."
+	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior.",
+	"awake.closedLidOffTooltip": "Clique para manter este Mac acordado, inclusive com a tampa fechada. Usa mais bateria; mantenha o Mac em uma superfície ventilada. Para abaixo de 10% de bateria ou em caso de calor crítico.",
+	"awake.closedLidActiveTooltip": "Este Mac está sendo mantido acordado, inclusive com a tampa fechada. Clique para desativar.",
+	"awake.idleOnlyOffTooltip": "Clique para impedir o repouso por inatividade. Manter acordado com a tampa fechada não está disponível neste Mac.",
+	"awake.lidInactiveTooltip": "Este Mac está acordado, mas a função com a tampa fechada não está ativa. Clique para desativar e tente novamente."
 }

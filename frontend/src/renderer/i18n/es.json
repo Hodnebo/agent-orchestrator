@@ -846,9 +846,9 @@
 	"mobile.keepAwake.help": "Sigue accesible desde tu teléfono mientras no estás.",
 	"mobile.keepAwake.laptopNote": "Cerrar la tapa sigue poniendo el MacBook en reposo, salvo que esté conectado a la corriente y a una pantalla externa.",
 	"mobile.keepAwake.lidLabel": "Mantener activo con la tapa cerrada",
-	"mobile.keepAwake.lidHelp": "Funciona mientras el acceso móvil está activado, incluso si el teléfono se desconecta. Consume más batería; coloca el Mac en una superficie ventilada. Se detiene por debajo del 10 % de batería o con calor crítico.",
+	"mobile.keepAwake.lidHelp": "Mantiene este Mac activo con la tapa cerrada. Consume más batería; coloca el Mac en una superficie ventilada. Se detiene por debajo del 10 % de batería o con calor crítico.",
 	"mobile.keepAwake.lidActive": "La función con la tapa cerrada está preparada.",
-	"mobile.keepAwake.lidIdle": "Se inicia cuando el acceso móvil está activado.",
+	"mobile.keepAwake.lidIdle": "Esperando a que se active la función con la tapa cerrada.",
 	"mobile.keepAwake.lidReason.starting": "Preparando la función con la tapa cerrada…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS u otra utilidad ya controla el reposo al cerrar la tapa. AO no cambia ese control.",
 	"mobile.keepAwake.lidReason.low_battery": "Se detuvo con menos del 10% de batería. Carga el Mac y desactiva y vuelve a activar esta opción.",
@@ -3256,5 +3256,9 @@
 	"settings.agentAccounts.stopAndMove": "Detener y mover",
 	"settings.agentAccounts.switching": "Cambiando a {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Cambiando de cuenta",
-	"settings.agentAccounts.switchFailed": "El cambio falló. El agente sigue en su cuenta anterior."
+	"settings.agentAccounts.switchFailed": "El cambio falló. El agente sigue en su cuenta anterior.",
+	"awake.closedLidOffTooltip": "Haz clic para mantener este Mac activo, incluso con la tapa cerrada. Consume más batería; coloca el Mac en una superficie ventilada. Se detiene por debajo del 10 % de batería o con calor crítico.",
+	"awake.closedLidActiveTooltip": "Este Mac se mantiene activo, incluso con la tapa cerrada. Haz clic para desactivar.",
+	"awake.idleOnlyOffTooltip": "Haz clic para evitar el reposo por inactividad. La función con la tapa cerrada no está disponible en este Mac.",
+	"awake.lidInactiveTooltip": "Este Mac está activo, pero la función con la tapa cerrada no está activa. Haz clic para desactivar y vuelve a intentarlo."
 }

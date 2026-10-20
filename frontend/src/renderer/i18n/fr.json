@@ -846,9 +846,9 @@
 	"mobile.keepAwake.help": "Reste joignable depuis votre téléphone pendant votre absence.",
 	"mobile.keepAwake.laptopNote": "Fermer l'écran met quand même un MacBook en veille, sauf s'il est branché sur secteur avec un écran externe.",
 	"mobile.keepAwake.lidLabel": "Rester éveillé avec le capot fermé",
-	"mobile.keepAwake.lidHelp": "Fonctionne lorsque l’accès mobile est activé, même si votre téléphone se déconnecte. Consomme plus de batterie ; placez le Mac sur une surface ventilée. S’arrête sous 10 % de batterie ou en cas de chaleur critique.",
+	"mobile.keepAwake.lidHelp": "Maintient ce Mac éveillé avec le capot fermé. Consomme plus de batterie ; placez le Mac sur une surface ventilée. S’arrête sous 10 % de batterie ou en cas de chaleur critique.",
 	"mobile.keepAwake.lidActive": "Le maintien éveillé avec le capot fermé est armé.",
-	"mobile.keepAwake.lidIdle": "Démarre lorsque l’accès mobile est activé.",
+	"mobile.keepAwake.lidIdle": "En attente du démarrage du maintien éveillé avec le capot fermé.",
 	"mobile.keepAwake.lidReason.starting": "Préparation du maintien éveillé avec le capot fermé…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS ou un autre utilitaire gère déjà la veille du capot. AO laisse ce contrôle inchangé.",
 	"mobile.keepAwake.lidReason.low_battery": "Arrêt sous 10 % de batterie. Rechargez le Mac, puis désactivez et réactivez cette option.",
@@ -3256,5 +3256,9 @@
 	"settings.agentAccounts.stopAndMove": "Arrêter et déplacer",
 	"settings.agentAccounts.switching": "Passage à {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Changement de compte",
-	"settings.agentAccounts.switchFailed": "Le changement a échoué. L'agent reste sur son compte précédent."
+	"settings.agentAccounts.switchFailed": "Le changement a échoué. L'agent reste sur son compte précédent.",
+	"awake.closedLidOffTooltip": "Cliquez pour maintenir ce Mac éveillé, même avec le capot fermé. Consomme plus de batterie ; placez le Mac sur une surface ventilée. S’arrête sous 10 % de batterie ou en cas de chaleur critique.",
+	"awake.closedLidActiveTooltip": "Ce Mac est maintenu éveillé, même avec le capot fermé. Cliquez pour désactiver.",
+	"awake.idleOnlyOffTooltip": "Cliquez pour empêcher la mise en veille automatique. Le maintien éveillé avec le capot fermé n’est pas disponible sur ce Mac.",
+	"awake.lidInactiveTooltip": "Ce Mac est éveillé, mais le maintien éveillé avec le capot fermé n’est pas actif. Cliquez pour désactiver, puis réessayez."
 }

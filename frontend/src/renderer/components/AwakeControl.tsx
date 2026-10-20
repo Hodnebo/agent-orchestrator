@@ -31,12 +31,18 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	const description = stay.error ?? (stay.starting
 		? t("awake.startingTooltip", "Starting Stay Awake…")
 		: stay.active
-			? t("awake.activeTooltip", "This Mac is being kept awake. Click to turn off.")
+			? stay.lidOn && !stay.lidActive
+				? t("awake.lidInactiveTooltip", "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.")
+				: stay.lidActive
+					? t("awake.closedLidActiveTooltip", "This Mac is being kept awake, including with the lid closed. Click to turn off.")
+					: t("awake.activeTooltip", "This Mac is being kept awake. Click to turn off.")
 			: stay.on
 				? reason
 					? t("awake.inactiveReasonTooltip", "Stay Awake is configured but inactive. {{reason}} Click to turn off.", { reason })
 					: t("awake.inactiveTooltip", "Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.")
-				: t("awake.offTooltip", "Stay Awake is off. Click to keep this Mac awake."));
+				: stay.lidSupported
+					? t("awake.closedLidOffTooltip", "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.")
+					: t("awake.idleOnlyOffTooltip", "Click to prevent idle sleep. Closed-lid wake is unavailable on this Mac."));
 	return (
 		<>
 			<Tooltip>
@@ -52,7 +58,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						aria-busy={stay.starting || undefined}
 						disabled={!stay.supported || stay.busy}
 						data-testid="awake-button"
-						onClick={() => void stay.set(!stay.on)}
+						onClick={() => void (stay.lidSupported ? stay.setWithLid(!stay.on) : stay.set(!stay.on))}
 						className={cn(
 							NAV_ROW_HIGHLIGHT_HOST_CLASS,
 							"size-9 rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",
