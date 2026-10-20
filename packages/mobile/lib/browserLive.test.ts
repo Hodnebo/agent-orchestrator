@@ -76,11 +76,15 @@ describe("browser live transport", () => {
 	});
 
 	it.each([
-		["BROWSER_REMOTE_DISABLED", true],
-		["UNAUTHORIZED", false],
-		["BROWSER_CONTROL_IN_USE", false],
-		["WEBSOCKET_REQUIRED", false],
-	])("identifies handshake rejection %s without guessing from an HTTP status", async (code, disabled) => {
+		[403, "BROWSER_REMOTE_DISABLED", true],
+		[401, "UNAUTHORIZED", false],
+		[403, "FORBIDDEN", false],
+		[409, "BROWSER_CONTROL_IN_USE", false],
+		[426, "WEBSOCKET_REQUIRED", false],
+		[404, undefined, true],
+		[404, "NOT_FOUND", true],
+		[503, "BROWSER_HOST_UNAVAILABLE", false],
+	])("identifies handshake rejection %s/%s", async (status, code, disabled) => {
 		class FakeWebSocket {
 			static instance: FakeWebSocket;
 			binaryType = "";
@@ -90,19 +94,23 @@ describe("browser live transport", () => {
 			close() {}
 		}
 		vi.stubGlobal("WebSocket", FakeWebSocket);
-		vi.mocked(apiRequest).mockRejectedValue(new ApiError(403, "Rejected", code));
+		vi.mocked(apiRequest).mockRejectedValue(new ApiError(status, "Rejected", code));
 		const onDisabled = vi.fn();
+		const onStatus = vi.fn();
 		const config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" };
-		const client = new BrowserLiveClient(config, "worker/a", { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDisabled });
+		const client = new BrowserLiveClient(config, "worker/a", { onStatus, onState: vi.fn(), onFrame: vi.fn(), onDisabled });
 		client.connect();
 		FakeWebSocket.instance.onerror?.();
 		FakeWebSocket.instance.onclose?.();
 		await Promise.resolve();
 		expect(apiRequest).toHaveBeenCalledWith(config, "/api/v1/sessions/worker%2Fa/browser/live", undefined, 5_000);
 		expect(onDisabled).toHaveBeenCalledTimes(disabled ? 1 : 0);
+		if (status === 404) {
+			expect(onStatus).toHaveBeenLastCalledWith("error", "Update the desktop app to view its browser from your phone.");
+		}
 	});
 
-	it("ignores a disabled-sharing probe that finishes after closing the stream", async () => {
+	it.each([403, 404])("ignores a %s sharing probe that finishes after closing the stream", async (status) => {
 		class FakeWebSocket {
 			static instance: FakeWebSocket;
 			binaryType = "";
@@ -118,7 +126,7 @@ describe("browser live transport", () => {
 		client.connect();
 		FakeWebSocket.instance.onerror?.();
 		client.close();
-		reject(new ApiError(403, "Disabled", "BROWSER_REMOTE_DISABLED"));
+		reject(new ApiError(status, "Unavailable", status === 403 ? "BROWSER_REMOTE_DISABLED" : undefined));
 		await Promise.resolve();
 		expect(onDisabled).not.toHaveBeenCalled();
 	});

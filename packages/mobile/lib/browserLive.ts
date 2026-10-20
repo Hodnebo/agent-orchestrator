@@ -25,6 +25,7 @@ type BrowserLiveHandlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
 	onState(state: BrowserLiveState): void;
 	onFrame(frame: BrowserLiveFrame): void;
+	// Also used when an older desktop does not support browser streaming.
 	onDisabled?(): void;
 };
 
@@ -71,7 +72,13 @@ export class BrowserLiveClient {
 		try {
 			await apiRequest(this.config, `/api/v1/sessions/${encodeURIComponent(this.sessionID)}/browser/live`, undefined, 5_000);
 		} catch (error) {
-			if (!this.closed && this.reportedError && this.socket === socket && error instanceof ApiError && error.code === "BROWSER_REMOTE_DISABLED") {
+			if (this.closed || !this.reportedError || this.socket !== socket || !(error instanceof ApiError)) return;
+			// OTA mobile updates can reach desktops that predate this route.
+			// Keep their selected app preview accessible without enabling streaming.
+			if (error.status === 404) {
+				this.handlers.onStatus("error", "Update the desktop app to view its browser from your phone.");
+				this.handlers.onDisabled?.();
+			} else if (error.code === "BROWSER_REMOTE_DISABLED") {
 				this.handlers.onDisabled?.();
 			}
 		}
