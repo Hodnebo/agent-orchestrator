@@ -127,6 +127,17 @@ func TestParseProjectScriptStepsValidatesTimeouts(t *testing.T) {
 		!strings.Contains(err.Error(), "postCreate step 2") {
 		t.Fatalf("err = %v, want it to name the step", err)
 	}
+	// An object-form command is stored as typed, so a timeout marker line it
+	// starts with would become the step's limit when read back.
+	for _, typed := range []string{
+		`{"postCreate":[{"command":"# ao-timeout: 500m\necho hi"}]}`,
+		`{"postCreate":[{"command":"# ao-timeout: 30m\necho hi","timeoutMinutes":10}]}`,
+	} {
+		if _, err := ParseProjectScriptSteps("postCreate", json.RawMessage(typed[len(`{"postCreate":`):len(typed)-1])); err == nil ||
+			!strings.Contains(err.Error(), "postCreate step 1") || !strings.Contains(err.Error(), "timeoutMinutes") {
+			t.Errorf("%s: err = %v, want the typed marker line refused", typed, err)
+		}
+	}
 	// A marker with nothing after it is an empty command.
 	if _, err := ParseProjectScriptSteps("postCreate", json.RawMessage(`["# ao-timeout: 30m\n"]`)); err == nil {
 		t.Fatal("an empty timed command must be refused")

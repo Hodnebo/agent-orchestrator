@@ -108,6 +108,13 @@ func ParseProjectScriptSteps(kind string, raw json.RawMessage) ([]ProjectScriptS
 		return nil, err
 	}
 	for index, step := range steps {
+		// An object-form command is stored as typed, so one that starts with a
+		// timeout marker line would read back with that line's limit, which
+		// may be out of range and then refuse every later settings save.
+		if step.object && scriptTimeoutPattern.MatchString(step.Command) {
+			return nil, fmt.Errorf("%s step %d: set the time limit with timeoutMinutes, not a %q line",
+				kind, index+1, strings.TrimSpace(scriptTimeoutMarker))
+		}
 		if step.TimeoutMinutes != 0 && !ValidScriptStepTimeoutMinutes(step.TimeoutMinutes) {
 			return nil, fmt.Errorf("%s step %d: the time limit must be a whole number of minutes from %d to %d",
 				kind, index+1, MinScriptStepTimeoutMinutes, MaxScriptStepTimeoutMinutes)
