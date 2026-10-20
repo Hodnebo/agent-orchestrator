@@ -238,22 +238,7 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		return err
 	}
 	if turn.Harness == "claude-code" {
-		mode := "default"
-		if turn.Mode == "read-only" {
-			mode = "plan"
-		} else {
-			switch turn.ApprovalMode {
-			case "accept-edits":
-				mode = "acceptEdits"
-			case "auto":
-				mode = "auto"
-			case "bypass-permissions":
-				mode = "bypassPermissions"
-			}
-		}
-		if mode == "auto" && !acpModeOffered(options, modes, mode) && acpModeOffered(options, modes, "default") {
-			mode = "default"
-		}
+		mode := claudeACPOfferedMode(turn, options, modes)
 		if !acpModeOffered(options, modes, mode) {
 			return fmt.Errorf("ACP session does not offer approval mode %q", mode)
 		}
@@ -262,6 +247,53 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		}
 	}
 	return setOption("effort", turn.ReasoningEffort)
+}
+
+// claudeACPApprovalMode is the Claude approval mode a Chat turn runs with. A
+// turn's own approval mode wins; a turn without one (the session's queued first
+// prompt) follows the session mode exactly as the terminal does (claudeArgs):
+// trusted skips permission prompts, standard accepts edits.
+// claudeACPOfferedMode is the turn's approval mode adjusted to what the adapter
+// offers: auto falls back to default, and a mode taken from the session rather
+// than chosen for the turn steps down to the closest offered one instead of
+// failing the turn. A mode chosen for the turn is never silently weakened.
+func claudeACPOfferedMode(turn worker.Turn, options []acp.SessionConfigOption, modes *acp.SessionModeState) string {
+	mode := claudeACPApprovalMode(turn)
+	if mode == "auto" && !acpModeOffered(options, modes, mode) && acpModeOffered(options, modes, "default") {
+		return "default"
+	}
+	if turn.ApprovalMode != "" || turn.Mode == "read-only" {
+		return mode
+	}
+	for _, candidate := range []string{mode, "acceptEdits", "default"} {
+		if acpModeOffered(options, modes, candidate) {
+			return candidate
+		}
+	}
+	return mode
+}
+
+func claudeACPApprovalMode(turn worker.Turn) string {
+	if turn.Mode == "read-only" {
+		return "plan"
+	}
+	switch turn.ApprovalMode {
+	case "default":
+		return "default"
+	case "accept-edits":
+		return "acceptEdits"
+	case "auto":
+		return "auto"
+	case "bypass-permissions":
+		return "bypassPermissions"
+	}
+	switch turn.Mode {
+	case "trusted":
+		return "bypassPermissions"
+	case "standard":
+		return "acceptEdits"
+	}
+	return "default"
 }
 
 // acpModelValue maps a model alias to the choice the session lists for it.

@@ -55,6 +55,14 @@ function allowedApprovalModes(harness: string, ceiling?: "read-only" | "standard
 	return ["default", "accept-edits", "auto", "bypass-permissions"];
 }
 
+// The approval mode a turn starts with when the user hasn't picked one: the
+// session's own mode, as the terminal runs it (trusted skips prompts, standard
+// accepts edits), so a Chat session doesn't ask about every command.
+function defaultApprovalMode(modes: ApprovalMode[], ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode | undefined {
+	const preferred: ApprovalMode | undefined = ceiling === "trusted" ? "bypass-permissions" : ceiling === "standard" ? "accept-edits" : undefined;
+	return preferred && modes.includes(preferred) ? preferred : modes[0];
+}
+
 export function readCloudTurnSettings(key: string): CloudTurnSettings {
 	try {
 		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
@@ -453,7 +461,7 @@ export function CloudSessionChatSurface({
 		const saved = readCloudTurnSettings(settingsKey);
 		const remembered = readCloudTurnSettings(projectKey).approvalMode;
 		const selectedMode = saved.approvalMode ?? remembered;
-		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : approvalModes[0] };
+		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : defaultApprovalMode(approvalModes, cloud?.permissionMode) };
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
 	const settings = selected.key === settingsKey ? selected.settings : readSettings();
@@ -537,7 +545,7 @@ export function CloudSessionChatSurface({
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
-				? selectedSettings.approvalMode : approvalModes[0];
+				? selectedSettings.approvalMode : defaultApprovalMode(approvalModes, cloud.permissionMode);
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {

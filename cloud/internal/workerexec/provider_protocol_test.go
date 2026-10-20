@@ -396,6 +396,30 @@ func TestACPSettingsUseAdvertisedChoices(t *testing.T) {
 	}
 }
 
+func TestClaudeACPModeFollowsSessionMode(t *testing.T) {
+	all := &acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "default"}, {Id: "acceptEdits"}, {Id: "plan"}, {Id: "bypassPermissions"}}}
+	noBypass := &acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "default"}, {Id: "acceptEdits"}, {Id: "plan"}}}
+	for _, tc := range []struct {
+		name  string
+		turn  worker.Turn
+		modes *acp.SessionModeState
+		want  string
+	}{
+		{"trusted first prompt skips prompts", worker.Turn{Mode: "trusted"}, all, "bypassPermissions"},
+		{"standard first prompt accepts edits", worker.Turn{Mode: "standard"}, all, "acceptEdits"},
+		{"read-only plans", worker.Turn{Mode: "read-only", ApprovalMode: "bypass-permissions"}, all, "plan"},
+		{"turn choice wins over session", worker.Turn{Mode: "trusted", ApprovalMode: "default"}, all, "default"},
+		{"no session mode asks", worker.Turn{}, all, "default"},
+		{"trusted steps down when bypass is not offered", worker.Turn{Mode: "trusted"}, noBypass, "acceptEdits"},
+		{"chosen bypass is not weakened", worker.Turn{Mode: "trusted", ApprovalMode: "bypass-permissions"}, noBypass, "bypassPermissions"},
+		{"auto falls back to default", worker.Turn{Mode: "trusted", ApprovalMode: "auto"}, noBypass, "default"},
+	} {
+		if got := claudeACPOfferedMode(tc.turn, nil, tc.modes); got != tc.want {
+			t.Errorf("%s: mode = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestCodexNotificationsProjectStructuredActivities(t *testing.T) {
 	frames := []struct {
 		method string

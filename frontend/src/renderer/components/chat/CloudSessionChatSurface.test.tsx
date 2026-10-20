@@ -483,8 +483,31 @@ describe("CloudSessionChatSurface", () => {
 		);
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("next", [], "after-handoff");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
-			text: "next", mode: "trusted", approvalMode: "default",
+			text: "next", mode: "trusted", approvalMode: "bypass-permissions",
 		}, { idempotencyKey: "after-handoff" });
+	});
+
+	it("starts a trusted Chat without approval prompts and keeps the user's own choice", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("bypass-permissions");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("first", [], "trusted-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "first", mode: "trusted", approvalMode: "bypass-permissions",
+		}, { idempotencyKey: "trusted-1" });
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("second", [], "trusted-2");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "second", mode: "trusted", approvalMode: "default",
+		}, { idempotencyKey: "trusted-2" });
 	});
 
 	it("surfaces send errors and sends cancellation to the active turn", async () => {
