@@ -1,5 +1,6 @@
 import { Plus, X } from "lucide-react";
 import type { TFunction } from "i18next";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp";
 import {
@@ -73,6 +74,21 @@ export function CloudAdditionalReposEditor({
 		return options;
 	};
 	const canAdd = !disabled && value.length < MAX_PROJECT_ADDITIONAL_REPOS && !value.includes("");
+	// The row "Add a repository" just appended: its picker opens straight away,
+	// and dismissing it without a choice takes the blank row back out.
+	const [addedIndex, setAddedIndex] = useState<number | null>(null);
+	const addButtonRef = useRef<HTMLButtonElement>(null);
+	const add = () => {
+		setAddedIndex(value.length);
+		onChange([...value, ""]);
+	};
+	const dropIfBlank = (index: number) => {
+		setAddedIndex(null);
+		if (value[index] !== "") return;
+		onChange(value.filter((_, i) => i !== index));
+		// The picker's trigger goes with the row; keep focus on the add button.
+		setTimeout(() => addButtonRef.current?.focus(), 0);
+	};
 	return (
 		<div className="space-y-2">
 			{value.map((url, index) => (
@@ -89,7 +105,12 @@ export function CloudAdditionalReposEditor({
 						searchPlaceholder={t("createProject.searchRepositories", { defaultValue: "Search repositories" })}
 						value={url}
 						options={optionsFor(index)}
-						onChange={(next) => onChange(value.map((item, i) => (i === index ? next : item)))}
+						defaultOpen={index === addedIndex && url === ""}
+						onDismiss={() => dropIfBlank(index)}
+						onChange={(next) => {
+							setAddedIndex(null);
+							onChange(value.map((item, i) => (i === index ? next : item)));
+						}}
 					/>
 					{url !== "" ? (
 						<span className="hidden shrink-0 font-mono text-[12px] text-muted-foreground sm:inline" title={t("cloudRepos.folderHint", { defaultValue: "Checked out beside the main repository" })}>
@@ -113,7 +134,7 @@ export function CloudAdditionalReposEditor({
 					</Button>
 				</div>
 			))}
-			<Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={!canAdd} onClick={() => onChange([...value, ""])}>
+			<Button ref={addButtonRef} type="button" variant="outline" size="sm" className="gap-1.5" disabled={!canAdd} onClick={add}>
 				<Plus aria-hidden="true" className="size-icon-sm" />
 				{t("cloudRepos.add", { defaultValue: "Add a repository" })}
 			</Button>

@@ -57,7 +57,6 @@ it("adds an additional repository and keeps a stored branch for one that stays",
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 	expect(screen.getByText("../11x")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Add a repository" }));
-	await userEvent.click(screen.getByRole("combobox", { name: "Additional repository 2" }));
 	// Neither the main repository nor one already listed is offered.
 	expect(screen.queryByRole("option", { name: /acme\/alice/ })).toBeNull();
 	expect(screen.queryByRole("option", { name: /acme\/11x/ })).toBeNull();
@@ -67,6 +66,25 @@ it("adds an additional repository and keeps a stored branch for one that stays",
 	expect(mocks.patch.mock.calls[0][2]).toEqual({
 		config: { repos: [{ url: "https://github.com/acme/11x", branch: "develop" }, { url: "https://github.com/acme/voice-calling-ai" }] },
 	});
+});
+
+it("opens the picker for a newly added repository and drops the row when it is dismissed", async () => {
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
+	const add = screen.getByRole("button", { name: "Add a repository" });
+	await userEvent.click(add);
+	// One click is enough: the new row's list is already open.
+	expect(await screen.findByRole("listbox", { name: "Additional repository 2" })).toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "Additional repository 2" })).toHaveAttribute("aria-expanded", "true");
+
+	await userEvent.keyboard("{Escape}");
+	await waitFor(() => expect(screen.queryByRole("combobox", { name: "Additional repository 2" })).toBeNull());
+	expect(screen.queryByRole("listbox")).toBeNull();
+	await waitFor(() => expect(add).toHaveFocus());
+	expect(add).toBeEnabled();
+	// The stored repository is untouched and nothing is left to save.
+	expect(screen.getByText("../11x")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
 
 it("saves where the agent starts on its own", async () => {

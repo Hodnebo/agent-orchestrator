@@ -6,7 +6,7 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
 	SessionInterfaceMode,
@@ -18,6 +18,7 @@ import {
 	interfaceTransitionIsCancellable,
 	interfaceTransitionNeedsRestart,
 } from "../hooks/useSessionInterfaceTransition";
+import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
@@ -345,6 +346,15 @@ export function SessionInterfaceTransitionNotice({
 	recoveryError?: string;
 }) {
 	const { t } = useTranslation();
+	// Centered at the top of the session pane, under the harness update notice
+	// pinned to the app's top-right edge in a narrow window: then it centers in
+	// the part of the pane the notice leaves clear, so its dismiss stays reachable.
+	const [noticeElement, setNoticeElement] = useState<HTMLDivElement | null>(null);
+	const pane = noticeElement?.offsetParent instanceof HTMLElement ? noticeElement.offsetParent : null;
+	const clearance = useHarnessUpdateNoticeClearance(pane);
+	const placement: CSSProperties | undefined = clearance
+		? { left: `calc((100% - ${clearance}px) / 2)`, maxWidth: `calc(100% - 1.5rem - ${clearance}px)` }
+		: undefined;
 	const needsRestart = interfaceTransitionNeedsRestart(transition);
 	if (
 		!transition ||
@@ -358,9 +368,11 @@ export function SessionInterfaceTransitionNotice({
 	if (startFallbackMessageKey) {
 		return (
 			<div
+				ref={setNoticeElement}
 				role="status"
 				aria-live="polite"
 				aria-atomic="true"
+				style={placement}
 				className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-2 rounded-lg border border-border bg-popover px-3 py-2.5 shadow-md"
 			>
 				<SquareTerminal aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
@@ -404,7 +416,9 @@ export function SessionInterfaceTransitionNotice({
 		transition.errorDetail?.startsWith("source controller activity cannot be verified;");
 	return (
 		<div
+			ref={setNoticeElement}
 			role={recovered ? "status" : "alert"}
+			style={placement}
 			aria-live={recovered ? "polite" : "assertive"}
 			aria-atomic="true"
 			className={cn(

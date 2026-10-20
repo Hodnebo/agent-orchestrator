@@ -2942,7 +2942,7 @@
 	"coder.templateOptions.title": "模板选项",
 	"coder.templateOptions.titleCount": "模板选项 ({{total}})",
 	"coder.templateOptions.subtitle": "你的 Coder 模板自身的选项。AO 会自行检出此项目的仓库。",
-	"coder.templateOptions.duplicateClone": "你的模板还会另外克隆 {{repos}}，与 AO 工作所用的副本分开。取消勾选即可只保留一份副本。",
+	"coder.templateOptions.duplicateClone": "你的模板也会克隆 {{repos}}。取消勾选即可只保留一份。",
 	"coder.templateOptions.duplicateCloneWorkingFolder": "你的模板还会把 {{repos}} 克隆到工作文件夹中，因此 AO 无法在那里启动。请取消勾选。",
 	"coder.templateOptions.required": "必填",
 	"coder.templateOptions.loadFailed": "无法加载此模板的选项。",

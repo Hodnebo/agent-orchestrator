@@ -25,6 +25,8 @@ export function SearchablePicker({
 	fixedScroll = false,
 	className,
 	action,
+	defaultOpen = false,
+	onDismiss,
 }: {
 	ariaLabel: string;
 	placeholder: string;
@@ -37,9 +39,13 @@ export function SearchablePicker({
 	className?: string;
 	/** An action pinned below the options (e.g. "Connect more repositories"). */
 	action?: { label: string; onSelect: () => void; disabled?: boolean };
+	/** Opens the list on mount (e.g. a row the user just added). */
+	defaultOpen?: boolean;
+	/** Called when the list closes without a choice (Escape, outside click, trigger). */
+	onDismiss?: () => void;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	const [open, setOpen] = useState(defaultOpen && !disabled);
 	const [search, setSearch] = useState("");
 	const selected = options.find((option) => option.value === value);
 	// A short list is easier to scan than to search; offer search only once the
@@ -76,7 +82,16 @@ export function SearchablePicker({
 	}, []);
 
 	return (
-		<Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setSearch(""); }}>
+		<Popover
+			open={open}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) {
+					setSearch("");
+					onDismiss?.();
+				}
+			}}
+		>
 			<PopoverTrigger asChild>
 				<button
 					type="button"

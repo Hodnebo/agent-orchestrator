@@ -9,8 +9,10 @@ import { Button } from "../ui/button";
 export function SettingsSaveFooter({ dirty, disabled, error }: { dirty: boolean; disabled: boolean; error?: string }) {
 	const { t } = useTranslation();
 	return <div className="sticky -bottom-(--size-modal-padding) z-[1] -mx-(--size-modal-padding) -mb-(--size-modal-padding) border-t border-border bg-card px-(--size-modal-padding) py-4" data-settings-save-footer="">
-		{error ? <p role="alert" className="mb-3 text-sm text-error">{error}</p> : null}
+		{/* The error shares the Save row, clamped to the button's height, so the bar
+		    (and its divider) never moves when validation comes and goes. */}
 		<div className="flex items-center justify-end gap-3">
+			{error ? <p role="alert" className="line-clamp-2 min-w-0 flex-1 text-xs leading-4 text-error" title={error}>{error}</p> : null}
 			<Button disabled={!dirty || disabled} type="submit">{t("settings.project.saveChanges")}</Button>
 		</div>
 	</div>;

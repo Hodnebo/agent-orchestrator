@@ -216,6 +216,9 @@ it("marks an out-of-range time limit at once and keeps the form from saving", as
 	expect(field).toHaveAttribute("aria-invalid", "true");
 	expect(screen.getByRole("alert")).toHaveTextContent("Setup step 1: the time limit must be a whole number of minutes from 1 to 120.");
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+	// The message sits beside Save, clamped to its height, so the footer does not grow.
+	expect(screen.getByRole("alert").parentElement).toContainElement(screen.getByRole("button", { name: "Save changes" }));
+	expect(screen.getByRole("alert")).toHaveClass("line-clamp-2", "leading-4");
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	expect(mocks.patch).not.toHaveBeenCalled();
 	// Clearing it goes back to the default, which saves the plain command.
