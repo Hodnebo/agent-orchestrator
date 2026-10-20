@@ -34,6 +34,32 @@ func TestGuardEnvKeepsExistingGitConfig(t *testing.T) {
 	}
 }
 
+func TestGuardEnvClearsInheritedGitHubTokens(t *testing.T) {
+	keys := []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}
+	for _, key := range keys {
+		t.Setenv(key, "daemon-token")
+	}
+	for _, overlay := range []bool{false, true} {
+		t.Run(strconv.FormatBool(overlay), func(t *testing.T) {
+			env := map[string]string{}
+			if overlay {
+				for _, key := range keys {
+					env[key] = "tester-token"
+				}
+			}
+			GuardEnv(env, t.TempDir())
+			for _, key := range keys {
+				if value, ok := env[key]; !ok || value != "" {
+					t.Errorf("%s must be explicitly empty in the tester environment", key)
+				}
+				if os.Getenv(key) != "daemon-token" {
+					t.Errorf("%s changed in the daemon environment", key)
+				}
+			}
+		})
+	}
+}
+
 // GuardEnv must stop a real git push to every remote form while fetch keeps working.
 func TestGuardEnvBlocksEveryPush(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

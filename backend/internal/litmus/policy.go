@@ -65,13 +65,16 @@ var pushPrefixes = []string{"https://", "http://", "ssh://", "git://", "git@", "
 // remote helper that does not exist, whether `git push` runs directly or inside
 // a script. It covers remotes in pushPrefixes form; a relative path, an explicit
 // pushurl, or a shell that clears the setting gets past it. Fetch and clone are
-// untouched. Settings already in env are kept: the block is appended after them. It also points gh at an empty config
-// dir inside runDir and empties GH_TOKEN, so `gh` in a run has no login to post or comment with (the user's gh login
-// stays the daemon's, not the tester's).
+// untouched. Existing environment settings are kept; the block is appended.
+// It also points gh at an empty config dir inside runDir and empties all standard
+// gh token variables. The daemon's gh login stays out of the tester.
 func GuardEnv(env map[string]string, runDir string) {
 	ghDir := filepath.Join(runDir, "gh-config")
 	_ = os.MkdirAll(ghDir, 0o700) // best effort: gh treats a missing config dir as empty too
-	env["GH_CONFIG_DIR"], env["GH_TOKEN"] = ghDir, ""
+	env["GH_CONFIG_DIR"] = ghDir
+	for _, key := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+		env[key] = ""
+	}
 	base, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
 	base = max(base, 0)
 	for i, prefix := range pushPrefixes {
