@@ -246,13 +246,15 @@ func (s *Supervisor) startTUI(ctx context.Context, input interfacePayload, retri
 	// worker starts a process on the stale bootstrap handle while the renderer
 	// attaches to a newly ticketed handle. The two processes then diverge (and
 	// Codex can report an active thread writer).
-	terminal, err := s.Control.EnsureAgentTerminal(ctx)
-	if err != nil {
+	terminal, err := s.ensureAgentTerminal(ctx)
+	if err != nil && !retried {
 		return err
 	}
-	if strings.TrimSpace(terminal.TerminalID) == "" {
-		return errors.New("control plane returned no agent terminal")
-	}
+	// A start that is retried (the Chat start fallback, after the control
+	// plane already moved the session) is reserved even without a terminal:
+	// startPendingTUI asks for it again, and a lasting failure is reported
+	// with a Retry, rather than the worker staying in a stopped Chat with the
+	// task queued for a terminal that never starts.
 	s.mu.Lock()
 	if retried || (s.holdAgentInput && !s.workspaceReady) {
 		// The checkout or the project's Setup is still running (or failed and
@@ -261,7 +263,9 @@ func (s *Supervisor) startTUI(ctx context.Context, input interfacePayload, retri
 		// not ready: commit the switch, reserve the agent terminal (its input
 		// and viewport are kept, as during a TUI session's own startup) and
 		// start it when MarkWorkspaceReady releases the workspace.
-		s.AgentTerminalID = terminal.TerminalID
+		if terminal.TerminalID != "" {
+			s.AgentTerminalID = terminal.TerminalID
+		}
 		s.agentStarting = true
 		// An earlier switch away (stopInterface) refused input to the closing
 		// terminal; this one is reserved and takes input again.
@@ -280,6 +284,19 @@ func (s *Supervisor) startTUI(ctx context.Context, input interfacePayload, retri
 	}
 	s.mu.Unlock()
 	return s.openTUIAgent(ctx, input, terminal)
+}
+
+// ensureAgentTerminal is Control.EnsureAgentTerminal, refusing a response
+// without a terminal.
+func (s *Supervisor) ensureAgentTerminal(ctx context.Context) (worker.AgentTerminalResponse, error) {
+	terminal, err := s.Control.EnsureAgentTerminal(ctx)
+	if err != nil {
+		return worker.AgentTerminalResponse{}, err
+	}
+	if strings.TrimSpace(terminal.TerminalID) == "" {
+		return worker.AgentTerminalResponse{}, errors.New("control plane returned no agent terminal")
+	}
+	return terminal, nil
 }
 
 // pendingTUIStart is a switch to the terminal committed while the workspace
@@ -330,7 +347,23 @@ func (s *Supervisor) startPendingTUI(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	err := s.openTUIAgent(ctx, pending.input, pending.terminal)
+	terminal := pending.terminal
+	var err error
+	if terminal.TerminalID == "" {
+		// Reserved without its terminal (startTUI): ask for it again.
+		terminal, err = s.ensureAgentTerminal(ctx)
+		if err == nil {
+			s.mu.Lock()
+			if s.pendingTUIStart == pending {
+				pending.terminal = terminal
+				s.AgentTerminalID = terminal.TerminalID
+			}
+			s.mu.Unlock()
+		}
+	}
+	if err == nil {
+		err = s.openTUIAgent(ctx, pending.input, terminal)
+	}
 	s.mu.Lock()
 	if s.pendingTUIStart != pending {
 		s.mu.Unlock()

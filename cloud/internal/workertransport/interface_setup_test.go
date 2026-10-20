@@ -687,3 +687,125 @@ func TestOwnTerminalAgentStartFailureBoundsTheDrainAndClearsOnASwitchAway(t *tes
 	}
 	h.waitForReports(t, 2)
 }
+
+// failingAgentTerminalControl fails its first failures agent terminal
+// requests, as a control plane that is briefly unreachable does.
+type failingAgentTerminalControl struct {
+	*onceTurnControl
+	failures atomic.Int32
+}
+
+func (c *failingAgentTerminalControl) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalResponse, error) {
+	if c.failures.Add(-1) >= 0 {
+		return worker.AgentTerminalResponse{}, errors.New("ensure agent terminal: control plane unavailable")
+	}
+	return c.onceTurnControl.EnsureAgentTerminal(ctx)
+}
+
+// The Chat start fallback stops the Chat controller after the control plane
+// moved the session to the terminal. If the agent terminal cannot be read
+// then, the start is still reserved and asked for again: a brief failure
+// starts the agent shortly, a lasting one is reported with a Retry. Either
+// way the session's queued task reaches the terminal agent exactly once,
+// instead of waiting forever in a stopped Chat with no startup error.
+func TestChatStartFallbackWhoseAgentTerminalCannotBeReadIsRetried(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		failures int32
+	}{
+		{"brief", 1},
+		// The fallback's own request, then every attempt of the start.
+		{"lasting", agentStartAttempts + 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			input := filepath.Join(dir, "input")
+			control := &failingAgentTerminalControl{onceTurnControl: &onceTurnControl{
+				supervisorControlStub: supervisorControlStub{agentTerminal: "00000000-0000-0000-0000-000000000081"},
+				turn:                  &worker.Turn{ID: "turn-task", Prompt: "do the work", Attempt: 1},
+			}}
+			control.failures.Store(test.failures)
+			var failuresMu sync.Mutex
+			var failures []error
+			reported := func() []error {
+				failuresMu.Lock()
+				defer failuresMu.Unlock()
+				return append([]error(nil), failures...)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			started := make(chan error, 1)
+			done := make(chan error, 1)
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), Started: started,
+				InitialInterface: InterfaceChat, ChatWorkspaceReady: make(chan struct{}),
+				ChatRunner: blockingChatRunner{started: make(chan struct{})},
+				AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
+					return workerexec.Command{
+						Path: "/bin/sh", Args: []string{"-c", "stty -echo; cat >> '" + input + "'"},
+					}, nil
+				},
+				AgentReady: func(context.Context) {},
+				AgentStartFailed: func(_ context.Context, err error) {
+					failuresMu.Lock()
+					failures = append(failures, err)
+					failuresMu.Unlock()
+				},
+				agentStartRetryDelay: 10 * time.Millisecond,
+			}
+			supervisor.HoldAgentInputUntilWorkspaceReady()
+			go func() { done <- supervisor.Run(ctx) }()
+			if err := <-started; err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			supervisor.MarkWorkspaceReady()
+			_ = supervisor.FallBackToTUI(context.Background())
+			if test.name == "lasting" {
+				deadline := time.Now().Add(5 * time.Second)
+				for len(reported()) == 0 && time.Now().Before(deadline) {
+					time.Sleep(10 * time.Millisecond)
+				}
+				if reports := reported(); len(reports) != 1 || reports[0] == nil ||
+					!strings.Contains(reports[0].Error(), "agent terminal") {
+					t.Fatalf("reported %v, want the agent terminal failure", reports)
+				}
+				if err := supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+					supervisor.handle(ctx, nil, &worker.TransportRequest{ID: "retry", Kind: "workspace.checkout"})
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if data, _ := os.ReadFile(input); strings.Contains(string(data), "do the work") {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			// Long enough for a duplicate delivery to show.
+			time.Sleep(500 * time.Millisecond)
+			data, _ := os.ReadFile(input)
+			if got := strings.Count(string(data), "do the work"); got != 1 {
+				t.Fatalf("the task reached the terminal agent %d times, want 1 (input %q)", got, data)
+			}
+			control.mu.Lock()
+			claimed, completed := control.claimed, control.completed
+			control.mu.Unlock()
+			if claimed != 1 || completed != 1 {
+				t.Fatalf("claimed %d, completed %d; want 1, 1", claimed, completed)
+			}
+			if test.name == "brief" && len(reported()) != 0 {
+				t.Fatalf("a start that worked on its second attempt reported %v", reported())
+			}
+			if test.name == "lasting" {
+				if reports := reported(); len(reports) != 2 || reports[1] != nil {
+					t.Fatalf("after the retry reported %v, want the failure cleared", reports)
+				}
+			}
+		})
+	}
+}
