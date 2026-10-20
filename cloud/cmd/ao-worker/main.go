@@ -66,6 +66,7 @@ var workerCapabilities = []string{
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
 	worker.CapabilityMultiRepo,
+	worker.CapabilityChatStart,
 }
 
 func main() {
@@ -270,10 +271,14 @@ func run(logger *slog.Logger) error {
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
-	committedInterface := strings.TrimSpace(bootstrap.Launch.Interface)
-	if committedInterface == "" {
-		committedInterface = workertransport.InterfaceTUI
-	}
+	committedInterface := startInterface(ctx, logger, bootstrap.Launch, chatStartChecks{
+		harnessInstalled:    func(harness string) bool { return verifyHarnessAvailable(harness) == nil },
+		claudeChatStartable: workerexec.ClaudeACPAdapterStartable,
+		fallBack:            client.fallBackChatStart,
+	})
+	// Everything below (the agent's launch, the startup prefetch) follows the
+	// interface the session actually starts in.
+	bootstrap.Launch.Interface = committedInterface
 	var chatRunner workertransport.ChatRunner
 	if _, supported := workerexec.SupportedHarness(bootstrap.Launch.Harness); !supported {
 		// Workspace files and shell terminals use the same worker transport as the
