@@ -24,7 +24,7 @@ func TestToolPolicyListsAndRunDir(t *testing.T) {
 			t.Errorf("%s is not allowed", a)
 		}
 	}
-	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)", "Bash(gh auth:*)", "Bash(ao testing post:*)", "Bash(ao testing prune:*)", "Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"} {
+	for _, d := range []string{"Bash(git push:*)", "Bash(gh pr comment:*)", "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr update-branch:*)", "Bash(ao testing start:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)", "Bash(ao stop:*)", "Bash(gh auth:*)", "Bash(ao testing post:*)", "Bash(ao testing discard:*)", "Bash(ao testing prune:*)", "Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"} {
 		if !slices.Contains(denied, d) {
 			t.Errorf("%s is not denied", d)
 		}

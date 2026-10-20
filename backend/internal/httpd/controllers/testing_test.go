@@ -364,6 +364,9 @@ func TestTestingAPIRunsAskBeforePostingAndRerun(t *testing.T) {
 	do("GET", "/runs/run_ao-7", "", http.StatusOK, `"verdictMd":"# Verdict: partial`, `"commentMd":"Litmus tried`, `"checks":[{`, `"run":{`)
 	do("GET", "/runs/run_nope", "", http.StatusNotFound, "TESTING_RUN_NOT_FOUND")
 
+	// A tester cannot discard another run and void its pending user comment.
+	do("POST", "/runs/run_ao-7/discard", `{"sessionId":"ao-8"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "discard")
+	do("GET", "/runs/run_ao-7", "", http.StatusOK, `"state":"awaiting-approval"`, `"commentState":"awaiting-approval"`)
 	do("POST", "/runs/run_ao-7/post", `{}`, http.StatusOK, `"state":"submitted"`, `"commentState":"posted"`, `issuecomment-1`)
 	if len(posted) != 1 {
 		t.Fatalf("posted %q", posted)
@@ -415,11 +418,14 @@ func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	do("POST", "/prune", `{"sessionId":"ao-1","dryRun":true}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/start", `{"sessionId":"ao-1","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/runs/run_ao-1/post", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
+	do("POST", "/runs/run_ao-1/discard", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "discard")
 	do("POST", "/rerun", `{"sessionId":"ao-1","runId":"run_ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "rerun")
 
 	// The user's own session, or no session, is allowed through.
 	do("POST", "/prune", `{"sessionId":"ao-orch","dryRun":true}`, http.StatusOK, `"dryRun":true`)
 	do("POST", "/prune", `{"dryRun":true}`, http.StatusOK, `"dryRun":true`)
 	do("POST", "/start", `{"sessionId":"ao-orch","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-9"`)
+	// The spawn marker protects user-only verbs before the tester has a run.
+	do("POST", "/runs/run_ao-1/discard", `{"sessionId":"ao-9"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "discard")
 	do("POST", "/rerun", `{"sessionId":"ao-orch","runId":"run_ao-1","projectId":"p1"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
 }
