@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
-import { CloudCpError } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpClient } from "../lib/cloud-cp";
 import { isWorkspaceStartupError, type CloudStartupProblem } from "../lib/cloud-lifecycle";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
@@ -19,6 +19,38 @@ import { Button } from "./ui/button";
  * own run long before this; it only covers a retry nothing visibly picked up.
  */
 const RETRY_PICKUP_LIMIT_MS = 5 * 60_000;
+
+/**
+ * How long a workspace retry waits for an idle-paused workspace's worker to
+ * come back, and how often it asks again meanwhile.
+ */
+const WAKE_RETRY_LIMIT_MS = 3 * 60_000;
+const WAKE_RETRY_INTERVAL_MS = 1_000;
+
+/**
+ * Asks the worker to prepare the workspace again. On an idle-paused session
+ * the control plane wakes the workspace for this request, but refuses it as
+ * WORKER_UNAVAILABLE until the worker reconnects a moment later; that is the
+ * retry starting, not a failure, so it asks again until the worker is back.
+ */
+async function requestWorkspaceRetry(
+	client: Pick<CloudCpClient, "requestWorkspaceCheckout">,
+	orgId: string,
+	sessionId: string,
+	signal: AbortSignal,
+): Promise<void> {
+	const deadline = Date.now() + WAKE_RETRY_LIMIT_MS;
+	for (;;) {
+		try {
+			await client.requestWorkspaceCheckout(orgId, sessionId);
+			return;
+		} catch (error) {
+			if (!(error instanceof CloudCpError) || error.code !== "WORKER_UNAVAILABLE" || signal.aborted || Date.now() >= deadline) throw error;
+		}
+		await new Promise((resolve) => window.setTimeout(resolve, WAKE_RETRY_INTERVAL_MS));
+		if (signal.aborted) throw new DOMException("The retry was cancelled.", "AbortError");
+	}
+}
 
 /** True once `waiting` has held for {@link RETRY_PICKUP_LIMIT_MS} since this retry. */
 function useRetryStalled(waiting: boolean, retry: object | undefined): boolean {
@@ -82,11 +114,17 @@ export function CloudSessionStartupError({
 	const rerunning = awaitingRetry
 		&& !(retryRun && (retryRun.status === "failed" || retryRun.status === "unknown" || retryRun.status === "interrupted"))
 		&& !retryStalled;
+	// Ends a retry still waiting for a waking worker when the card goes away.
+	const retryAbort = useRef<AbortController>();
+	useEffect(() => () => retryAbort.current?.abort(), []);
 	const retry = useMutation({
 		mutationFn: async (): Promise<number> => {
 			// Runs that exist now are not the retry's, whatever arrives later.
 			const afterSequence = Math.max(0, ...scriptRuns.map((run) => run.lastSequence));
-			if (workspaceProblem) await client.requestWorkspaceCheckout(orgId, sessionId);
+			retryAbort.current?.abort();
+			const abort = new AbortController();
+			retryAbort.current = abort;
+			if (workspaceProblem) await requestWorkspaceRetry(client, orgId, sessionId, abort.signal);
 			else await client.retrySessionStartup(orgId, sessionId);
 			return afterSequence;
 		},

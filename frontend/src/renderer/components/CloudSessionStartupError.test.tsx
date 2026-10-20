@@ -144,6 +144,40 @@ describe("CloudSessionStartupError", () => {
 		}
 	});
 
+	it("keeps retrying, not failing, while an idle-paused workspace wakes for the Retry", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			// The control plane wakes the paused workspace on the first request
+			// and refuses it until the worker reconnects.
+			const waking = new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" });
+			requestWorkspaceCheckout.mockRejectedValueOnce(waking).mockRejectedValueOnce(waking).mockResolvedValue({ requested: true });
+			mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", at: "2026-10-14T10:00:00Z" });
+			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+			expect(await screen.findByRole("button", { name: "Retrying…" })).toBeDisabled();
+			expect(screen.queryByText(/Couldn't retry/)).not.toBeInTheDocument();
+			await act(async () => { await vi.advanceTimersByTimeAsync(2_500); });
+			expect(requestWorkspaceCheckout).toHaveBeenCalledTimes(3);
+			expect(await screen.findByRole("heading", { name: "Preparing the workspace" })).toBeInTheDocument();
+			expect(screen.queryByText(/Couldn't retry/)).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports a workspace that does not wake for the Retry", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			requestWorkspaceCheckout.mockRejectedValue(new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }));
+			mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", at: "2026-10-14T10:00:00Z" });
+			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+			await act(async () => { await vi.advanceTimersByTimeAsync(3 * 60_000 + 2_000); });
+			expect(await screen.findByText("Couldn't retry: The session worker is not connected.")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("offers no Retry for a deleted session whose Setup failed, and says to restore it", () => {
 		mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", detail: "missing secret" }, undefined, true);
 		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
