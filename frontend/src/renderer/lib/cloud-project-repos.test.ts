@@ -80,6 +80,13 @@ describe("cloud project repositories", () => {
 		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "" })).toBe("npm ci");
 	});
 
+	it("keeps a local step's typed 10 minute limit, which is not a local Cleanup step's default", () => {
+		expect(serializeLocalScriptStep({ command: "make down", folder: "", timeout: "10" })).toBe("# ao-timeout: 10m\nmake down");
+		expect(parseLocalScriptStep("# ao-timeout: 10m\nmake down")).toEqual({ command: "make down", folder: "", timeout: "10" });
+		// A Cloud step's default is 10 minutes, so there it stays implicit.
+		expect(timedScriptCommand(10, "make down")).toBe("make down");
+	});
+
 	it("accepts a time limit of 1 to 120 whole minutes", () => {
 		expect(scriptStepTimeoutMinutes("")).toBeUndefined();
 		expect(scriptStepTimeoutMinutes(" 1 ")).toBe(1);

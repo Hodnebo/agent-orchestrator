@@ -161,7 +161,12 @@ export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
 
 /** The stored step with its own time limit; one with the default (or none) is the command as is. */
 export function timedScriptCommand(minutes: number | undefined, command: string): string {
-	if (minutes === undefined || minutes <= 0 || minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES) return command;
+	return minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES ? command : withTimeoutMarker(minutes, command);
+}
+
+/** command led by its time limit's marker line; without a limit, command as is. */
+function withTimeoutMarker(minutes: number | undefined, command: string): string {
+	if (minutes === undefined || minutes <= 0) return command;
 	return `# ao-timeout: ${minutes}m\n${command}`;
 }
 
@@ -184,15 +189,23 @@ export function scriptStepTimeoutMinutes(text: string | undefined): number | und
 	return minutes >= MIN_SCRIPT_STEP_TIMEOUT_MINUTES && minutes <= MAX_SCRIPT_STEP_TIMEOUT_MINUTES ? minutes : null;
 }
 
-/** A stored step as the editor holds it, without its repository folder (a local step). */
+/**
+ * A stored step as the editor holds it, without its repository folder (a local
+ * step). Every limit it sets shows, 10 minutes too: a local Cleanup step
+ * without one has no limit at all, so 10 is not its default.
+ */
 export function parseLocalScriptStep(stored: string): ScriptStepDraft {
 	const { minutes, command } = parseTimedScriptCommand(stored);
-	return { command, folder: "", ...timeoutText(minutes) };
+	return { command, folder: "", ...(minutes === undefined ? {} : { timeout: String(minutes) }) };
 }
 
-/** The stored form of a local step: its command with its own time limit. */
+/**
+ * The stored form of a local step: its command with the time limit typed for
+ * it, 10 minutes included (a local Cleanup step without one runs without a
+ * limit, so 10 must be kept).
+ */
 export function serializeLocalScriptStep(step: ScriptStepDraft): string {
-	return timedScriptCommand(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
+	return withTimeoutMarker(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
 }
 
 /** A draft's time limit for a stored one: none for the default. */
