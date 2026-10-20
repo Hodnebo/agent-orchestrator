@@ -180,10 +180,7 @@ func tmuxSocket(runID, leg string) string { return "litmus-" + runID + "-" + leg
 // legEnv is the target's whole environment. The isolation block comes last, so a
 // recipe cannot point a target back at the real AO; inherited AO_* never gets through.
 func legEnv(r Recipe, runID string, pr int, leg, legDir, root, nodeDir string, daemonPort, debugPort int) []string {
-	env := baseEnv(nodeDir)
-	for _, k := range slices.Sorted(maps.Keys(r.Env)) {
-		env = append(env, k+"="+r.Env[k])
-	}
+	env := recipeEnv(r, nodeDir)
 	if pr > 0 { // the window label script names the window "Litmus: PR build #N" from this
 		env = append(env, "LITMUS_PR="+strconv.Itoa(pr))
 	}

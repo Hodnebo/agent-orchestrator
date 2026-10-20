@@ -855,7 +855,7 @@ func (s *Service) pushEvidence(ctx context.Context, run Run, stage string, names
 			_ = os.RemoveAll(clone)
 		}
 	}()
-	env := append(baseEnv(""), "GIT_AUTHOR_NAME=Litmus", "GIT_AUTHOR_EMAIL=litmus@users.noreply.github.com", "GIT_COMMITTER_NAME=Litmus", "GIT_COMMITTER_EMAIL=litmus@users.noreply.github.com")
+	env := append(gitEnv(), "GIT_AUTHOR_NAME=Litmus", "GIT_AUTHOR_EMAIL=litmus@users.noreply.github.com", "GIT_COMMITTER_NAME=Litmus", "GIT_COMMITTER_EMAIL=litmus@users.noreply.github.com")
 	g := func(args ...string) ([]byte, error) {
 		dir := clone
 		if args[0] == "clone" {

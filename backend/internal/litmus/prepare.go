@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -143,18 +144,53 @@ func lastLines(b []byte, n int) string {
 	return strings.Join(lines[max(0, len(lines)-n):], "\n")
 }
 
-// baseEnv is the daemon's environment minus anything that could steer a target
-// at the real AO (AO_*) or make Electron behave as plain node, with nodeDir first on PATH.
+// targetEnvKeep contains only process and desktop essentials. Build-specific values
+// belong in the recipe's explicit env, not the daemon's credential-bearing environment.
+var targetEnvKeep = []string{
+	"PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "USER", "USERNAME", "LOGNAME", "SHELL",
+	"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMPDIR", "TMP", "TEMP",
+	"LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES", "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "TZ",
+	"TERM", "COLORTERM", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XAUTHORITY",
+}
+
+// baseEnv is the allowlisted environment for PR-controlled install, build and app
+// processes. The pinned Node directory comes first on PATH, even when PATH is unset.
 func baseEnv(nodeDir string) []string {
 	var env []string
-	for _, kv := range os.Environ() {
-		switch {
-		case strings.HasPrefix(kv, "AO_"), strings.HasPrefix(kv, "ELECTRON_RUN_AS_NODE="):
-			continue
-		case strings.HasPrefix(kv, "PATH=") && nodeDir != "":
-			kv = "PATH=" + nodeDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+	for _, key := range targetEnvKeep {
+		value, ok := os.LookupEnv(key)
+		if key == "PATH" && nodeDir != "" {
+			if value == "" {
+				value = nodeDir
+			} else {
+				value = nodeDir + string(os.PathListSeparator) + value
+			}
+			ok = true
 		}
-		env = append(env, kv)
+		if ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return append(env, "GIT_TERMINAL_PROMPT=0")
+}
+
+// recipeEnv adds only explicitly configured values to the target's environment.
+func recipeEnv(r Recipe, nodeDir string) []string {
+	env := baseEnv(nodeDir)
+	for _, key := range slices.Sorted(maps.Keys(r.Env)) {
+		env = append(env, key+"="+r.Env[key])
+	}
+	return env
+}
+
+// gitEnv is for Litmus's own Git fetch/publish operations, which need the daemon's
+// authentication. Never pass it to PR scripts or the app under test.
+func gitEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "AO_") && !strings.HasPrefix(kv, "ELECTRON_RUN_AS_NODE=") {
+			env = append(env, kv)
+		}
 	}
 	return append(env, "GIT_TERMINAL_PROMPT=0")
 }
@@ -176,7 +212,7 @@ func (s *Service) probeNode(ctx context.Context, major string) (path, version st
 			if _, err := os.Stat(bin); err != nil {
 				continue
 			}
-			if out, err := s.runner.Run(ctx, "", nil, bin, "--version"); err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "v"+major+".") {
+			if out, err := s.runner.Run(ctx, "", baseEnv(""), bin, "--version"); err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "v"+major+".") {
 				return bin, strings.TrimSpace(string(out)), nil
 			}
 		}
@@ -231,9 +267,9 @@ func (s *Service) gitRaw(ctx context.Context, dir string, args ...string) (strin
 	var out []byte
 	var err error
 	if r, ok := s.runner.(stdoutRunner); ok {
-		out, err = r.RunOut(ctx, "", baseEnv(""), "git", full...)
+		out, err = r.RunOut(ctx, "", gitEnv(), "git", full...)
 	} else {
-		out, err = s.runner.Run(ctx, "", baseEnv(""), "git", full...)
+		out, err = s.runner.Run(ctx, "", gitEnv(), "git", full...)
 	}
 	return string(out), err
 }
@@ -242,7 +278,7 @@ func (s *Service) gitRaw(ctx context.Context, dir string, args ...string) (strin
 // stopped. A runner that cannot stop the command (the tests' fake) returns it whole and it is cut here.
 func (s *Service) gitCapped(ctx context.Context, dir string, limit int, args ...string) (string, bool, error) {
 	if r, ok := s.runner.(cappedRunner); ok {
-		out, cut, err := r.RunCapped(ctx, "", baseEnv(""), limit, "git", append([]string{"-C", dir}, args...)...)
+		out, cut, err := r.RunCapped(ctx, "", gitEnv(), limit, "git", append([]string{"-C", dir}, args...)...)
 		return string(out), cut, err
 	}
 	out, err := s.gitRaw(ctx, dir, args...)
@@ -291,10 +327,11 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 		m.Durations[step] = time.Since(since).Round(time.Millisecond).Seconds()
 	}
 	m.SHA, m.NodePath, m.NodeVersion, m.UsedAt = full, nodeBin, nodeVersion, s.clock()
-	env := baseEnv("")
+	nodeDir := ""
 	if nodeBin != "" {
-		env = baseEnv(filepath.Dir(nodeBin))
+		nodeDir = filepath.Dir(nodeBin)
 	}
+	env := recipeEnv(r, nodeDir)
 
 	if r.Install.Cmd != "" {
 		hash, err := lockHash(dir, r.Install.CacheKey, r.Toolchain.Node)
@@ -374,7 +411,7 @@ func (s *Service) cloneLeg(ctx context.Context, repo, dir, full string) (m Manif
 	if head, err := s.git(ctx, dir, "rev-parse", "HEAD"); gitErr != nil || err != nil || head != full || !borrowsFrom(dir, mirror) {
 		_ = os.RemoveAll(dir) // absent, an interrupted clone, or a copy borrowing from a checkout of the user's
 		m = Manifest{Durations: map[string]float64{}}
-		if _, err := s.runner.Run(ctx, "", baseEnv(""), "git", "clone", "--shared", "--no-checkout", mirror, dir); err != nil {
+		if _, err := s.runner.Run(ctx, "", gitEnv(), "git", "clone", "--shared", "--no-checkout", mirror, dir); err != nil {
 			return m, err
 		}
 		if _, err := s.git(ctx, dir, "checkout", "--detach", full); err != nil {
