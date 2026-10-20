@@ -248,6 +248,7 @@
 	"cloud.startupError.projectSetupFailedTitle": "프로젝트 설정 스크립트가 실패했습니다",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "저장소 체크아웃에 실패했습니다",
 	"cloud.startupError.workingDirectoryUnusableTitle": "작업 디렉터리를 사용할 수 없습니다",
+	"cloud.startupError.workingDirectoryOccupiedTitle": "작업 폴더가 이미 사용 중입니다",
 	"board.empty.body": "작업을 설명하면 오케스트레이터가 계획을 세우고 워커 세션을 생성하며, 진행 상황을 여기서 추적합니다.",
 	"board.empty.title": "아직 워커 세션이 없습니다",
 	"home.folderMissing": "폴더가 없습니다",

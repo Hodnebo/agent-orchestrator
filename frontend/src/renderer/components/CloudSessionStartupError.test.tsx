@@ -161,6 +161,13 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.queryByTestId("cloud-session-startup-detail")).not.toBeInTheDocument();
 	});
 
+	it("names a working folder the template already created", () => {
+		const message = "~/work/alice already exists (created by your Coder template). Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.";
+		mount({ phase: "failed", code: "working_directory_occupied", message });
+		expect(screen.getByRole("heading", { name: "The working folder is already in use" })).toBeInTheDocument();
+		expect(screen.getByText(message)).toBeInTheDocument();
+	});
+
 	it("shows a pending retry, then refetches the session", async () => {
 		let resolve!: (value: unknown) => void;
 		retrySessionStartup.mockReturnValue(new Promise((done) => { resolve = done; }));
