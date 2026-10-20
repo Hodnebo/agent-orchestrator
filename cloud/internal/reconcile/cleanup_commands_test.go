@@ -215,3 +215,55 @@ func TestDeletionCarriesTheCleanupScope(t *testing.T) {
 		}
 	}
 }
+
+// A Cleanup whose steps set long time limits holds the deletion longer before
+// the reconciler gives up on it, by how far its budget exceeds the default,
+// and never past the two-hour cap.
+func TestDeletionDeadlineGrowsWithTheCleanupsTimeLimits(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	record := domain.Sandbox{OrgID: "org-1", SessionID: "session-1"}
+	for name, test := range map[string]struct {
+		current   []string
+		installed string
+		want      time.Duration
+	}{
+		"no cleanup":       {nil, "", DefaultDeletionDeadline},
+		"one default step": {[]string{"make down"}, "", DefaultDeletionDeadline + 10*time.Second},
+		"a long step":      {[]string{"# ao-timeout: 60m\nmake down"}, "", DefaultDeletionDeadline + 50*time.Minute + 10*time.Second},
+		"installed longer": {[]string{"make down"}, `{"installedCleanup":["# ao-timeout: 90m\nmake down"]}`, DefaultDeletionDeadline + 80*time.Minute + 10*time.Second},
+		"capped":           {[]string{"# ao-timeout: 120m\na", "# ao-timeout: 120m\nb"}, "", DefaultDeletionDeadline + 110*time.Minute},
+	} {
+		record.BootstrapContext = []byte(test.installed)
+		reconciler := New(&cleanupLookupStore{commands: test.current}, lifecycleResolver{}, Options{Logger: logger})
+		if got := reconciler.deletionDeadline(context.Background(), record); got != test.want {
+			t.Errorf("%s: deadline = %s, want %s", name, got, test.want)
+		}
+	}
+
+	// Within its extended deadline a deletion keeps running Cleanup.
+	requested := time.Now().Add(-30 * time.Minute)
+	record = domain.Sandbox{
+		OrgID: "org-1", SessionID: "session-1", Provider: "coder",
+		ProviderEnvironmentID: "workspace-1", DeletionRequestedAt: &requested,
+	}
+	provider := &deadlineDeleteProvider{lifecycleProvider: lifecycleProvider{
+		environment: sandbox.Environment{ID: "workspace-1", State: sandbox.StateRunning},
+	}}
+	reconciler := New(&cleanupLookupStore{commands: []string{"# ao-timeout: 60m\nmake down"}}, lifecycleResolver{provider: provider}, Options{Logger: logger})
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.deletes) != 1 || provider.deletes[0] {
+		t.Fatalf("deletes = %v, want one with Cleanup inside the extended deadline", provider.deletes)
+	}
+	// Past it, the last Delete skips Cleanup.
+	long := time.Now().Add(-3 * time.Hour)
+	record.DeletionRequestedAt = &long
+	provider.deletes = nil
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.deletes) != 1 || !provider.deletes[0] {
+		t.Fatalf("deletes = %v, want one that skips Cleanup", provider.deletes)
+	}
+}

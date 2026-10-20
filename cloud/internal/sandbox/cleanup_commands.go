@@ -1,6 +1,43 @@
 package sandbox
 
-import "context"
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+)
+
+// A Cleanup run's budget: the sum of its steps' time limits
+// (domain.ScriptStepTimeout) and CleanupStepGrace for each, never below
+// MinCleanupBudget (what every run had before per-step limits) nor above
+// MaxCleanupBudget, so a deletion is delayed by a bounded time at most.
+const (
+	MinCleanupBudget = 10 * time.Minute
+	MaxCleanupBudget = 2 * time.Hour
+	// CleanupStepGrace covers timeout(1)'s kill grace (-k 5) and a step's
+	// own start and end around its time limit.
+	CleanupStepGrace = 10 * time.Second
+)
+
+// CleanupBudget is the budget of a Cleanup run that may run any of the given
+// lists of commands (each command led by its time limit's marker when it sets
+// one): the largest list's, bounded as above. With no commands it is
+// MinCleanupBudget.
+func CleanupBudget(lists ...[]string) time.Duration {
+	budget := MinCleanupBudget
+	for _, commands := range lists {
+		var total time.Duration
+		for _, command := range commands {
+			plain, timeout := domain.SplitScriptStepTimeout(command)
+			if strings.TrimSpace(plain) != "" {
+				total += timeout + CleanupStepGrace
+			}
+		}
+		budget = max(budget, total)
+	}
+	return min(budget, MaxCleanupBudget)
+}
 
 type cleanupCommandsKey struct{}
 

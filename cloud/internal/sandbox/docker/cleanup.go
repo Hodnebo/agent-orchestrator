@@ -58,7 +58,7 @@ func (c *Client) cleanupFinished(ctx context.Context, view containerView) bool {
 	}
 	wait := c.cleanupWait
 	if wait <= 0 {
-		wait = cleanuphook.Budget
+		wait = plan.Budget
 	}
 	// Detached from the reconcile pass's cancellation, but keeping its stage
 	// observer and session event recorder.

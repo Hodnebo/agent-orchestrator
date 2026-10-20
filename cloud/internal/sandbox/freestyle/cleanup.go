@@ -25,7 +25,7 @@ const (
 	// inlineCleanupBudget is the Cleanup budget when the exec must run
 	// inline: with cleanuphook.Margin and the owner's processes' stop it
 	// stays within inlineExecLimit. Coder's (and a backgrounded Freestyle
-	// exec's) is cleanuphook.Budget.
+	// exec's) is the plan's budget.
 	inlineCleanupBudget = inlineExecLimit - cleanuphook.Margin - 10*time.Second
 	// backgroundHeader backgrounds a Freestyle API request: one still
 	// running after that many seconds answers 202 with a request id to poll
@@ -68,8 +68,9 @@ var cleanupRuns cleanuphook.Tracker
 // reported as skipped with the reason.
 //
 // Freestyle answers an exec-await inline for at most five minutes, so the
-// hook runs as a backgrounded exec, with the same budget as Coder's
-// (cleanuphook.Budget). On a VM whose agent cannot run one, the hook runs
+// hook runs as a backgrounded exec, with the same budget as Coder's (the
+// plan's: the sum of its steps' time limits, up to two hours), polled until it
+// ends. On a VM whose agent cannot run one, the hook runs
 // inline with a budget of inlineCleanupBudget (4.5 minutes) instead.
 func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if sandbox.CleanupSkipped(ctx) {
@@ -112,7 +113,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	}
 	wait := c.cleanupWait
 	if wait <= 0 {
-		wait = cleanuphook.Budget
+		wait = plan.Budget
 	}
 	resumeWait := c.cleanupResumeWait
 	if resumeWait <= 0 {

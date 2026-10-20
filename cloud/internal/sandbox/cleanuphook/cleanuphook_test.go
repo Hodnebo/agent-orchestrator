@@ -159,6 +159,26 @@ func TestNewPlanFollowsTheProjectsCurrentCleanup(t *testing.T) {
 	}
 }
 
+// A run's budget covers the time limits of the steps it may run: the current
+// Cleanup's, and the worker's installed ones the hook falls back to.
+func TestNewPlanBudgetCoversTheStepsTimeLimits(t *testing.T) {
+	t.Parallel()
+	plan, _ := NewPlan(context.Background())
+	if plan.Budget != Budget {
+		t.Fatalf("unknown commands budget = %s, want %s", plan.Budget, Budget)
+	}
+	current := []string{"# ao-timeout: 45m\nmake down", "echo done"}
+	plan, _ = NewPlan(sandbox.WithCleanupCommands(context.Background(), current))
+	if plan.Budget != 55*time.Minute+20*time.Second {
+		t.Fatalf("current budget = %s", plan.Budget)
+	}
+	installed := []string{"# ao-timeout: 90m\nmake down"}
+	plan, _ = NewPlan(sandbox.WithInstalledCleanupCommands(sandbox.WithCleanupCommands(context.Background(), current), installed))
+	if plan.Budget != 90*time.Minute+10*time.Second {
+		t.Fatalf("installed budget = %s, want the installed commands' larger one", plan.Budget)
+	}
+}
+
 // Tracker runs a key's Cleanup once, Await holds a Delete only while the run
 // is going, and a run that never reports stops holding it after its limit.
 func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
@@ -289,7 +309,7 @@ func TestReportNotRunSkipsEveryStep(t *testing.T) {
 	t.Parallel()
 	r := &recorder{}
 	ctx := r.context()
-	steps := worker.CleanupRun{RunID: "run-1", Commands: []string{"make down", domain.RepoScriptCommand("api", "npm run clean")}}
+	steps := worker.CleanupRun{RunID: "run-1", Commands: []string{"make down", domain.TimedScriptCommand(45, domain.RepoScriptCommand("api", "npm run clean"))}}
 	ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), map[string]string{}, steps, "The sandbox did not resume.", errors.New("resume failed"))
 	if len(r.events) != 2 {
 		t.Fatalf("events = %+v", r.events)
@@ -300,8 +320,9 @@ func TestReportNotRunSkipsEveryStep(t *testing.T) {
 			t.Fatalf("event %d = %+v", index, event)
 		}
 	}
-	if r.events[1].Repository != "api" || r.events[1].Command != "npm run clean" {
-		t.Fatalf("repository step = %+v", r.events[1])
+	if r.events[1].Repository != "api" || r.events[1].Command != "npm run clean" || r.events[1].TimeoutMinutes != 45 ||
+		r.events[0].TimeoutMinutes != 10 {
+		t.Fatalf("repository step = %+v (first %+v)", r.events[1], r.events[0])
 	}
 	if stage := r.stages[0]; stage.Err == nil || stage.Attrs["result"] != Skipped {
 		t.Fatalf("stage = %+v", stage)

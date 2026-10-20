@@ -133,7 +133,7 @@ type Client struct {
 	protectSecretFiles bool
 	durableRoot        string
 	// cleanupWait bounds how long one Delete waits for the project's Cleanup
-	// commands; zero uses cleanupBudget.
+	// commands; zero uses the plan's budget (cleanuphook.Plan.Budget).
 	cleanupWait time.Duration
 	// cleanupInline bounds how long one Delete waits for a Cleanup run before
 	// returning to the reconciler; zero uses cleanupInlineWait.

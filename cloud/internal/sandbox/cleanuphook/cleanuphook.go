@@ -43,10 +43,12 @@ const (
 	// (SkipReason), when the worker never installed a hook (the worker never
 	// started), or the hook may not run.
 	Skipped = "skipped"
-	// Budget bounds the whole Cleanup run, so the sandbox is still deleted
-	// well within the reconciler's deletion deadline. Each command also has
-	// its own 10-minute limit inside the hook.
-	Budget = 10 * time.Minute
+	// Budget is the least a whole Cleanup run is given; a run gets the sum
+	// of its steps' time limits (Plan.Budget, sandbox.CleanupBudget), at
+	// most sandbox.MaxCleanupBudget, and the reconciler's deletion deadline
+	// grows with it. Each command also has its own time limit inside the
+	// hook.
+	Budget = sandbox.MinCleanupBudget
 	// Margin is extra time AO waits beyond Budget for the command to start
 	// and the result to arrive.
 	Margin = 20 * time.Second
@@ -377,6 +379,11 @@ type Plan struct {
 	// Steps names the run and, with an override, its marker nonce and
 	// commands.
 	Steps worker.CleanupRun
+	// Budget bounds the whole run: the sum of the time limits of the steps
+	// it may run (the current Cleanup's, and the worker's installed ones the
+	// hook falls back to), at least Budget and at most
+	// sandbox.MaxCleanupBudget (sandbox.CleanupBudget).
+	Budget time.Duration
 }
 
 // NewPlan plans a Cleanup run from the project's current Cleanup when the
@@ -390,15 +397,19 @@ func NewPlan(ctx context.Context, logArgs ...any) (Plan, bool) {
 	}
 	// The current Cleanup's commands script marks its steps with a nonce
 	// made for this run, so its step events are read only from those markers.
-	plan := Plan{Steps: worker.CleanupRun{RunID: uuid.NewString()}}
+	plan := Plan{Steps: worker.CleanupRun{RunID: uuid.NewString()}, Budget: Budget}
 	// What the hook runs if the current Cleanup is not installed: the
 	// commands the worker was last given, else (a sandbox from before they
 	// were stored) the current ones, the best guess left.
-	if installed, ok := sandbox.InstalledCleanupCommands(ctx); ok {
+	installed, installedKnown := sandbox.InstalledCleanupCommands(ctx)
+	if installedKnown {
 		plan.Steps.KnownCommands = installed
 	} else if known {
 		plan.Steps.KnownCommands = current
 	}
+	// Either list may be what runs: the current one, or the installed one
+	// when the current one cannot be put in place.
+	plan.Budget = sandbox.CleanupBudget(current, installed)
 	if known {
 		nonce := worker.NewScriptMarkerNonce()
 		if payload, fits := CommandsPayload(current, nonce); fits {
@@ -532,10 +543,12 @@ func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason str
 	}
 	total := len(commands)
 	for index, stored := range commands {
-		repository, command, _ := domain.ParseRepoScriptCommand(stored)
+		plain, timeout := domain.SplitScriptStepTimeout(stored)
+		repository, command, _ := domain.ParseRepoScriptCommand(plain)
 		sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, worker.SanitizeScriptStepEvent(worker.ScriptStepEvent{
 			Phase: worker.ScriptPhaseCleanup, RunID: steps.RunID, Step: index + 1, Total: total,
 			Command: command, Repository: repository, Status: worker.ScriptStepSkipped, Hint: reason,
+			TimeoutMinutes: int(timeout / time.Minute),
 		}))
 	}
 }
@@ -604,8 +617,9 @@ const (
 	// DefaultMaxOrgRuns bounds one organization's.
 	DefaultMaxOrgRuns = 2
 	// DefaultQueueWait is how long a run waits for a slot. With a run's own
-	// limit (up to Budget, Margin and a resume) and StaleAfter it keeps a
-	// deletion within the reconciler's deletion deadline (15 minutes).
+	// limit (its Plan.Budget, Margin and a resume) and StaleAfter it keeps a
+	// deletion within the reconciler's deletion deadline (15 minutes, plus
+	// how far the run's budget exceeds Budget).
 	DefaultQueueWait = 2 * time.Minute
 )
 

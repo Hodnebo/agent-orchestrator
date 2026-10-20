@@ -183,7 +183,8 @@ func TestDeleteRunsCleanupInTheContainerBeforeRemovingIt(t *testing.T) {
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
 		`elif ! [ -O "$ao_hook" ]; then ao_skip hook_owner`,
 		`if [ -L "$ao_hook" ]; then ao_skip hook_link; fi`,
-		"timeout -k 5 600 ",
+		// The run's budget: its step's limit and the step grace.
+		"timeout -k 5 610 ",
 		// The worker's agent is stopped before the hook runs.
 		`ao_stop "$ao_who" TERM`,
 	} {
