@@ -235,6 +235,8 @@
 	"cloud.startupError.retrying": "Retrying…",
 	"cloud.startupError.workspaceRerunningTitle": "Preparing the workspace",
 	"cloud.startupError.workspaceRerunning": "Preparing the workspace again. This can take a few minutes if the project's Setup is long.",
+	"cloud.startupError.agentRestartingTitle": "Starting the agent",
+	"cloud.startupError.agentRestarting": "Starting the agent again…",
 	"cloud.startupError.retryFailed": "Couldn't retry: {{message}}",
 	"cloud.startupError.retryUnavailable": "This session can't be retried right now.",
 	"cloud.startupError.stillRetrying": "AO is still retrying.",

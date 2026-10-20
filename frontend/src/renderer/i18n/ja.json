@@ -273,6 +273,8 @@
 	"cloud.startupError.retrying": "再試行中…",
 	"cloud.startupError.workspaceRerunningTitle": "ワークスペースを準備しています",
 	"cloud.startupError.workspaceRerunning": "ワークスペースを再度準備しています。プロジェクトのセットアップが長い場合は数分かかることがあります。",
+	"cloud.startupError.agentRestartingTitle": "エージェントを起動しています",
+	"cloud.startupError.agentRestarting": "エージェントを再度起動しています…",
 	"cloud.startupError.retryFailed": "再試行できませんでした: {{message}}",
 	"cloud.startupError.retryUnavailable": "このセッションは現在再試行できません。",
 	"cloud.startupError.stillRetrying": "AO は再試行を続けています。",

@@ -142,8 +142,10 @@ export function CloudSessionStartupError({
 	// check, and the details carry its last output.
 	const setupNotReady = problem.phase === "failed" && problem.code === "workspace_setup_not_ready";
 	const projectSetupFailed = problem.phase === "failed" && problem.code === "project_setup_failed";
+	// A retried agent start runs no Setup, so it says what it does instead.
+	const agentStartFailed = problem.phase === "failed" && problem.code === "agent_start_failed";
 	const title = rerunning
-		? t("cloud.startupError.workspaceRerunningTitle")
+		? t(agentStartFailed ? "cloud.startupError.agentRestartingTitle" : "cloud.startupError.workspaceRerunningTitle")
 		: setupNotReady
 		? t("cloud.startupError.workspaceSetupNotReadyTitle")
 		: projectSetupFailed
@@ -196,7 +198,7 @@ export function CloudSessionStartupError({
 						{title}
 					</h2>
 					<p className="text-sm leading-relaxed text-muted-foreground">
-						{rerunning ? t("cloud.startupError.workspaceRerunning") : problem.message ?? t("cloud.startupError.unavailableDescription")}
+						{rerunning ? t(agentStartFailed ? "cloud.startupError.agentRestarting" : "cloud.startupError.workspaceRerunning") : problem.message ?? t("cloud.startupError.unavailableDescription")}
 					</p>
 					{failed && ended ? (
 						<p className="text-xs text-muted-foreground">{t("cloud.startupError.restoreToRetry")}</p>

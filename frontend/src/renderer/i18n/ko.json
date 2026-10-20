@@ -273,6 +273,8 @@
 	"cloud.startupError.retrying": "다시 시도하는 중…",
 	"cloud.startupError.workspaceRerunningTitle": "작업 공간 준비 중",
 	"cloud.startupError.workspaceRerunning": "작업 공간을 다시 준비하고 있습니다. 프로젝트의 설정이 길면 몇 분 걸릴 수 있습니다.",
+	"cloud.startupError.agentRestartingTitle": "에이전트 시작 중",
+	"cloud.startupError.agentRestarting": "에이전트를 다시 시작하고 있습니다…",
 	"cloud.startupError.retryFailed": "다시 시도할 수 없습니다: {{message}}",
 	"cloud.startupError.retryUnavailable": "지금은 이 세션을 다시 시도할 수 없습니다.",
 	"cloud.startupError.stillRetrying": "AO가 계속 다시 시도하고 있습니다.",

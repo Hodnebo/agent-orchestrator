@@ -99,6 +99,16 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("still missing");
 	});
 
+	it("says the agent is starting again after Retry on a terminal agent that could not start", async () => {
+		requestWorkspaceCheckout.mockResolvedValue({ requested: true });
+		mount({ phase: "failed", code: "agent_start_failed", message: "The coding agent did not start.", at: "2026-10-14T10:00:00Z" });
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(await screen.findByText("Starting the agent again…")).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "Starting the agent" })).toBeInTheDocument();
+		expect(screen.queryByText(/Setup is long/)).not.toBeInTheDocument();
+		expect(requestWorkspaceCheckout).toHaveBeenCalledWith("org-1", "sess-1");
+	});
+
 	it("leaves the retrying state when the retried Setup fails again, even if the failure is re-sent unchanged", async () => {
 		const step = (sequence: number, payload: Record<string, unknown>) => ({
 			sessionId: "sess-1", sequence, type: "workspace.script.step", createdAt: "2026-10-14T10:00:00Z",

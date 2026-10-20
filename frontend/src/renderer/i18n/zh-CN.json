@@ -273,6 +273,8 @@
 	"cloud.startupError.retrying": "正在重试…",
 	"cloud.startupError.workspaceRerunningTitle": "正在准备工作区",
 	"cloud.startupError.workspaceRerunning": "正在重新准备工作区。如果项目的设置步骤较长，可能需要几分钟。",
+	"cloud.startupError.agentRestartingTitle": "正在启动智能体",
+	"cloud.startupError.agentRestarting": "正在重新启动智能体…",
 	"cloud.startupError.retryFailed": "无法重试：{{message}}",
 	"cloud.startupError.retryUnavailable": "此会话现在无法重试。",
 	"cloud.startupError.stillRetrying": "AO 仍在重试。",

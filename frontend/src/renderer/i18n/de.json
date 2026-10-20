@@ -273,6 +273,8 @@
 	"cloud.startupError.retrying": "Wird erneut versucht…",
 	"cloud.startupError.workspaceRerunningTitle": "Workspace wird vorbereitet",
 	"cloud.startupError.workspaceRerunning": "Der Workspace wird erneut vorbereitet. Das kann einige Minuten dauern, wenn das Setup des Projekts lange läuft.",
+	"cloud.startupError.agentRestartingTitle": "Agent wird gestartet",
+	"cloud.startupError.agentRestarting": "Der Agent wird erneut gestartet…",
 	"cloud.startupError.retryFailed": "Erneuter Versuch fehlgeschlagen: {{message}}",
 	"cloud.startupError.retryUnavailable": "Diese Sitzung kann gerade nicht erneut gestartet werden.",
 	"cloud.startupError.stillRetrying": "AO versucht es weiterhin.",
