@@ -1119,8 +1119,8 @@ func Run() error {
 	// port Start actually bound. Routed through bs, not lan directly, so the
 	// proxy never gets pinned to a dead port after an ephemeral fallback.
 	// Best-effort: never blocks boot.
-	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
-		log.Warn("restore mobile bridge on boot failed", "err", err)
+	if err := restoreMobileOnBoot(ctx, mobilebridge.Path(cfg.DataDir), bs, awakeSvc); err != nil {
+		log.Warn("restore mobile bridge or wake state on boot failed", "err", err)
 	}
 	go runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
 
