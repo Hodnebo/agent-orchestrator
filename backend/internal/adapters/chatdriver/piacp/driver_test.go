@@ -277,7 +277,7 @@ func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
 	dir := filepath.Join(dataDir, "pi-acp", "session-1")
 	script := filepath.Join(dir, "models-preload.mjs")
 	// The user's own Bun options are kept; the preload is added to them.
-	if got := launch.Env["BUN_OPTIONS"]; got != "--smol --preload "+script {
+	if got := launch.Env["BUN_OPTIONS"]; got != "--smol --preload="+script {
 		t.Fatalf("BUN_OPTIONS = %q", got)
 	}
 	if got := launch.Env["AO_PI_MODELS_JSON"]; got != filepath.Join(dir, "models.json") {

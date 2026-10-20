@@ -470,3 +470,37 @@ func TestProviderSwitchSavesTheModelATargetRunsWhenThePickDidNotTake(t *testing.
 		t.Fatalf("saved model = %q, %v; want the opus the target runs", conversation.Settings.Model, err)
 	}
 }
+
+func TestFailedSwitchRestoresAnUnansweredTargetThatStartsFresh(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	// A -> B, and B never answers, so its provider never saved the conversation.
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("SwitchProvider to B: %v", err)
+	}
+	record, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("GetSession: found=%v err=%v", found, err)
+	}
+	// B -> C fails to start, so B comes back: fresh, with an id of its own.
+	restored := newFakeConversation()
+	restored.providerConversationID = "thread-b-fresh"
+	driver.mu.Lock()
+	driver.startErr = errors.New("target failed to start")
+	driver.resumed[record.Metadata.ProviderConversationID] = restored
+	driver.mu.Unlock()
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex}); err == nil {
+		t.Fatal("SwitchProvider to C succeeded, want its start failure")
+	}
+	if _, err := h.svc.Controller(testSession); err != nil {
+		t.Fatalf("no agent after the failed switch: %v", err)
+	}
+	conversation, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("ConversationForSession: %v", err)
+	}
+	branch, err := h.st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
+	if err != nil || branch.ProviderConversationID != "thread-b-fresh" {
+		t.Fatalf("active branch provider = %q, %v; want B's fresh conversation", branch.ProviderConversationID, err)
+	}
+}

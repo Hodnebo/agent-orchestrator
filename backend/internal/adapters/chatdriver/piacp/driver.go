@@ -253,7 +253,8 @@ func preloadCurrentModels(cfg acpdriver.LaunchConfig, env map[string]string) err
 	if err := os.WriteFile(script, modelsPreload, 0o600); err != nil {
 		return err
 	}
-	env["BUN_OPTIONS"] = strings.TrimSpace(env["BUN_OPTIONS"] + " --preload " + script)
+	// "--preload=<path>": with a space, bun reads the path as the script to run.
+	env["BUN_OPTIONS"] = strings.TrimSpace(cmp.Or(env["BUN_OPTIONS"], os.Getenv("BUN_OPTIONS")) + " --preload=" + script)
 	env["AO_PI_MODELS_JSON"] = filepath.Join(dir, "models.json")
 	return nil
 }

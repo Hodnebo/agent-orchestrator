@@ -1034,8 +1034,17 @@ func (s *Service) restoreClosedSourceController(
 	if err != nil {
 		return fmt.Errorf("resume source after failed native edit: %w", err)
 	}
-	// A fresh start in place of the missing session has its own id.
-	providerConversationID = cmp.Or(provider.ProviderConversationID(), providerConversationID)
+	// A fresh start in place of the missing session has its own id, and the
+	// branch must name it before it can be activated.
+	if fresh := provider.ProviderConversationID(); fresh != "" && fresh != providerConversationID {
+		if rebinder, ok := s.store.(branchProviderRebinder); ok {
+			if err := rebinder.RebindUnansweredBranchProvider(recoveryCtx, conversation.ID, branch.ID, providerConversationID, fresh); err != nil {
+				_ = provider.Close()
+				return fmt.Errorf("rebind source after failed native edit: %w", err)
+			}
+		}
+		providerConversationID = fresh
+	}
 	generation := s.newID()
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(
