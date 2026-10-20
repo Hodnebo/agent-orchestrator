@@ -28,11 +28,16 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 			: stay.reason === "battery_unknown"
 				? t("awake.stopReason.battery_unknown", "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.")
 				: "";
+	const lidReason = stay.lidReason
+		? t(`mobile.keepAwake.lidReason.${stay.lidReason}`, "Closed-lid keep awake is unavailable. Turn the option off and on to retry.")
+		: "";
 	const description = stay.error ?? (stay.starting
 		? t("awake.startingTooltip", "Starting Stay Awake…")
 		: stay.active
 			? stay.lidOn && !stay.lidActive
-				? t("awake.lidInactiveTooltip", "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.")
+				? lidReason
+					? t("awake.lidInactiveReasonTooltip", "This Mac is awake, but closed-lid wake is not active. {{reason}} Click to turn off.", { reason: lidReason })
+					: t("awake.lidInactiveTooltip", "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.")
 				: stay.lidActive
 					? t("awake.closedLidActiveTooltip", "This Mac is being kept awake, including with the lid closed. Click to turn off.")
 					: t("awake.activeTooltip", "This Mac is being kept awake. Click to turn off.")
@@ -41,7 +46,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 					? t("awake.inactiveReasonTooltip", "Stay Awake is configured but inactive. {{reason}} Click to turn off.", { reason })
 					: t("awake.inactiveTooltip", "Stay Awake is configured, but this Mac is not being kept awake. Click to turn off.")
 				: stay.lidSupported
-					? t("awake.closedLidOffTooltip", "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.")
+					? t("awake.closedLidOffTooltip", "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.", { percent: stay.stopBatteryPercent })
 					: t("awake.idleOnlyOffTooltip", "Click to prevent idle sleep. Closed-lid wake is unavailable on this Mac."));
 	return (
 		<>

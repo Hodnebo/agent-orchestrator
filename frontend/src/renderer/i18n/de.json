@@ -838,7 +838,7 @@
 	"mobile.keepAwake.help": "Bleibt von deinem Telefon aus erreichbar, während du weg bist.",
 	"mobile.keepAwake.laptopNote": "Beim Zuklappen geht ein MacBook trotzdem in den Ruhezustand, außer es ist am Strom und mit einem externen Display verbunden.",
 	"mobile.keepAwake.lidLabel": "Bei geschlossenem Deckel wach bleiben",
-	"mobile.keepAwake.lidHelp": "Hält diesen Mac bei geschlossenem Deckel wach. Verbraucht mehr Akku; stelle den Mac auf eine gut belüftete Fläche. Stoppt unter 10 % Akkuladung oder bei kritischer Hitze.",
+	"mobile.keepAwake.lidHelp": "Hält diesen Mac bei geschlossenem Deckel wach. Verbraucht mehr Akku; stelle den Mac auf eine gut belüftete Fläche. Stoppt unter {{percent}} % Akkuladung oder bei kritischer Hitze.",
 	"mobile.keepAwake.lidActive": "Wach bleiben bei geschlossenem Deckel ist bereit.",
 	"mobile.keepAwake.lidIdle": "Warten auf den Start von Wach bleiben bei geschlossenem Deckel.",
 	"mobile.keepAwake.lidReason.starting": "Wach bleiben bei geschlossenem Deckel wird vorbereitet…",
@@ -3211,8 +3211,9 @@
 	"settings.agentAccounts.switching": "Wechsel zu {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Konto wird gewechselt",
 	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto.",
-	"awake.closedLidOffTooltip": "Klicken, um diesen Mac auch bei geschlossenem Deckel wach zu halten. Verbraucht mehr Akku; stelle den Mac auf eine gut belüftete Fläche. Stoppt unter 10 % Akkuladung oder bei kritischer Hitze.",
+	"awake.closedLidOffTooltip": "Klicken, um diesen Mac auch bei geschlossenem Deckel wach zu halten. Verbraucht mehr Akku; stelle den Mac auf eine gut belüftete Fläche. Stoppt unter {{percent}} % Akkuladung oder bei kritischer Hitze.",
 	"awake.closedLidActiveTooltip": "Dieser Mac wird auch bei geschlossenem Deckel wach gehalten. Zum Ausschalten klicken.",
 	"awake.idleOnlyOffTooltip": "Klicken, um den automatischen Ruhezustand zu verhindern. Wach bleiben bei geschlossenem Deckel ist auf diesem Mac nicht verfügbar.",
-	"awake.lidInactiveTooltip": "Dieser Mac ist wach, aber Wach bleiben bei geschlossenem Deckel ist nicht aktiv. Zum Ausschalten klicken und erneut versuchen."
+	"awake.lidInactiveTooltip": "Dieser Mac ist wach, aber Wach bleiben bei geschlossenem Deckel ist nicht aktiv. Zum Ausschalten klicken und erneut versuchen.",
+	"awake.lidInactiveReasonTooltip": "Dieser Mac ist wach, aber Wach bleiben bei geschlossenem Deckel ist nicht aktiv. {{reason}} Zum Ausschalten klicken."
 }

@@ -835,7 +835,7 @@
 	"mobile.keepAwake.help": "Stay reachable from your phone while you're away.",
 	"mobile.keepAwake.laptopNote": "Closing the lid still puts a MacBook to sleep unless it's plugged in with an external display.",
 	"mobile.keepAwake.lidLabel": "Keep awake with lid closed",
-	"mobile.keepAwake.lidHelp": "Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+	"mobile.keepAwake.lidHelp": "Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.",
 	"mobile.keepAwake.lidActive": "Closed-lid keep awake is armed.",
 	"mobile.keepAwake.lidIdle": "Waiting for closed-lid wake to start.",
 	"mobile.keepAwake.lidReason.starting": "Starting closed-lid keep awake…",
@@ -3192,8 +3192,9 @@
 	"settings.agentAccounts.switching": "Switching to {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Switching account",
 	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account.",
-	"awake.closedLidOffTooltip": "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+	"awake.closedLidOffTooltip": "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.",
 	"awake.closedLidActiveTooltip": "This Mac is being kept awake, including with the lid closed. Click to turn off.",
 	"awake.idleOnlyOffTooltip": "Click to prevent idle sleep. Closed-lid wake is unavailable on this Mac.",
-	"awake.lidInactiveTooltip": "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry."
+	"awake.lidInactiveTooltip": "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.",
+	"awake.lidInactiveReasonTooltip": "This Mac is awake, but closed-lid wake is not active. {{reason}} Click to turn off."
 }

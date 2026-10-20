@@ -762,7 +762,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    bridge is off; mobile-only choices also remain visible here. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn, lidActive: stayAwake.lidActive }}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn, lidActive: stayAwake.lidActive, lidReason: stayAwake.lidReason ?? status.keepAwake.lidReason }}
+					stopBatteryPercent={stayAwake.stopBatteryPercent}
 					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
@@ -785,11 +786,13 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	stopBatteryPercent = 10,
 	onCheckedChange,
 	onLidChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	stopBatteryPercent?: number;
 	onCheckedChange?: (next: boolean) => void;
 	onLidChange?: (next: boolean) => void;
 }) {
@@ -829,7 +832,8 @@ function KeepAwakeRow({
 						<>
 							{t(
 								"mobile.keepAwake.lidHelp",
-								"Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+								"Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.",
+								{ percent: stopBatteryPercent },
 							)}
 							{lidNeedsAttention && (
 								<span className="mt-1 block" role="status">

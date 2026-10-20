@@ -44,6 +44,10 @@ export function useStayAwake(enabled = true) {
 	const on = intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled || active);
 	const lidOn = intent ? intent.on && (intent.desktopLidClosed || (intent.lidClosed ?? false)) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed);
 	const lidActive = !!awake.state?.lidActive || !!mobile.data?.keepAwake?.lidActive;
+	// The desktop status reports its lid failure as the overall reason.
+	const lidReason = lidOn && !lidActive
+		? (desktopLid ? awake.state?.reason : mobile.data?.keepAwake?.lidReason) || undefined
+		: undefined;
 	// Status also includes recovery/lid errors unrelated to an inactive request.
 	const pauseReason = awake.state?.paused ? awake.state.reason : undefined;
 	const reason = pauseReason === "low_battery" || pauseReason === "critical_heat" || pauseReason === "battery_unknown"
@@ -63,8 +67,9 @@ export function useStayAwake(enabled = true) {
 				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed } });
 				// A successful POST writes a lease; the native helper acknowledges it
 				// on its next two-second scan. Keep the shared intent pending until
-				// that acknowledgement instead of flashing an inactive warning.
-				const deadline = Date.now() + 5_000;
+				// that acknowledgement instead of flashing an inactive warning. A first
+				// closed-lid start also registers the helper before its first scan.
+				const deadline = Date.now() + (lidClosed ? 10_000 : 5_000);
 				while ((!latest.active || (lidClosed && !latest.lidActive)) && !latest.paused && (!latest.reason || latest.reason === "starting" || latest.reason === "helper_unavailable") && Date.now() < deadline) {
 					await new Promise((resolve) => setTimeout(resolve, 500));
 					let timeout: number | undefined;
@@ -104,11 +109,20 @@ export function useStayAwake(enabled = true) {
 				const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(false, false)]);
 				for (const result of results) if (result.status === "rejected") throw result.reason;
 			} else if (change.lidClosed === false) {
-				if (desktopLid) {
-					// Retire legacy desktop lid owners and replace them with idle-only wake.
+				if (rules.some((r) => r.lidClosed)) {
+					// Automatic lid rules would rearm; pause them and replace with idle-only wake.
 					const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(true, false)]);
 					for (const result of results) if (result.status === "rejected") throw result.reason;
 					await start();
+				} else if (desktopLid) {
+					// End only lid sessions, starting idle wake first so the Mac never
+					// sleeps in between. Timed and session-scoped owners keep running.
+					if (!sessions.some((s) => !s.lidClosed)) await start();
+					const endLid = async () => {
+						for (const s of sessions) if (s.lidClosed) await awake.actAsync({ kind: "end", id: s.id });
+					};
+					const results = await Promise.allSettled([endLid(), updateMobile(true, false)]);
+					for (const result of results) if (result.status === "rejected") throw result.reason;
 				} else await updateMobile(true, false);
 			} else {
 				await ensureDesktop(change.desktopLidClosed);
@@ -132,7 +146,11 @@ export function useStayAwake(enabled = true) {
 		lidSupported: awakeCapability(awake.state, "lid")?.available ?? false,
 		lidActive,
 		setWithLid: (on: boolean) => change({ on, desktopLidClosed: true }),
-		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
+		lidReason,
+		stopBatteryPercent: awake.state?.settings?.stopBatteryPercent || 10,
+		// Mobile lid leases apply only while mobile access is on; otherwise the
+		// desktop owns closed-lid wake, as it does for the sidebar toggle.
+		setLid: (lidClosed: boolean) => change({ on: true, lidClosed, desktopLidClosed: lidClosed && !mobile.data?.enabled }),
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
 		supported: awakeCapability(awake.state, "idle")?.available ?? false,

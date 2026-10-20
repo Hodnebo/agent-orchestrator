@@ -838,7 +838,7 @@
 	"mobile.keepAwake.help": "离开时仍可从手机访问。",
 	"mobile.keepAwake.laptopNote": "除非 MacBook 接通电源并连接外接显示器，否则合上盖子仍会让它进入睡眠。",
 	"mobile.keepAwake.lidLabel": "合上盖子后保持唤醒",
-	"mobile.keepAwake.lidHelp": "让此 Mac 在合盖后仍保持唤醒。耗电量会增加，请将 Mac 放在通风良好的表面上。电量低于 10% 或温度达到危险水平时停止。",
+	"mobile.keepAwake.lidHelp": "让此 Mac 在合盖后仍保持唤醒。耗电量会增加，请将 Mac 放在通风良好的表面上。电量低于 {{percent}}% 或温度达到危险水平时停止。",
 	"mobile.keepAwake.lidActive": "合盖保持唤醒已准备就绪。",
 	"mobile.keepAwake.lidIdle": "正在等待合盖保持唤醒启动。",
 	"mobile.keepAwake.lidReason.starting": "正在准备合盖保持唤醒…",
@@ -3193,8 +3193,9 @@
 	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
 	"settings.agentAccounts.switchingAccount": "正在切换账号",
 	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。",
-	"awake.closedLidOffTooltip": "点击可让此 Mac 在合盖后仍保持唤醒。耗电量会增加，请将 Mac 放在通风良好的表面上。电量低于 10% 或温度达到危险水平时停止。",
+	"awake.closedLidOffTooltip": "点击可让此 Mac 在合盖后仍保持唤醒。耗电量会增加，请将 Mac 放在通风良好的表面上。电量低于 {{percent}}% 或温度达到危险水平时停止。",
 	"awake.closedLidActiveTooltip": "此 Mac 正保持唤醒，包括合盖时。点击关闭。",
 	"awake.idleOnlyOffTooltip": "点击可防止闲置睡眠。此 Mac 无法在合盖后保持唤醒。",
-	"awake.lidInactiveTooltip": "此 Mac 处于唤醒状态，但合盖保持唤醒尚未生效。点击关闭后重试。"
+	"awake.lidInactiveTooltip": "此 Mac 处于唤醒状态，但合盖保持唤醒尚未生效。点击关闭后重试。",
+	"awake.lidInactiveReasonTooltip": "此 Mac 处于唤醒状态，但合盖保持唤醒尚未生效。{{reason}} 点击关闭。"
 }
