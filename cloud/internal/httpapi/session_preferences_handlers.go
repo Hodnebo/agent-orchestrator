@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
@@ -51,6 +53,46 @@ func (s *Server) updateSessionPreferences(w http.ResponseWriter, r *http.Request
 		AutoInjectReview:   request.AutoInjectReview,
 		TerminateOnPRMerge: request.TerminateOnPRMerge,
 	})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": toSessionResponse(session, nil)})
+}
+
+type sessionRenameStore interface {
+	RenameSession(context.Context, domain.Principal, string, string, string) (domain.Session, error)
+}
+
+type updateSessionRequest struct {
+	DisplayName string `json:"displayName"`
+}
+
+// updateSession renames a session, as the local daemon's PATCH /sessions/{id}
+// does: 1 to 100 characters, by anyone who may edit the session.
+func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	sessionID := chi.URLParam(r, "sessionId")
+	if requireUUID(orgID, "orgId") != nil || requireUUID(sessionID, "sessionId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId and sessionId must be UUIDs.")
+		return
+	}
+	store, ok := s.store.(sessionRenameStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Renaming cloud sessions is unavailable.")
+		return
+	}
+	var request updateSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The session update request is invalid.")
+		return
+	}
+	name := strings.TrimSpace(request.DisplayName)
+	if name == "" || utf8.RuneCountInString(name) > 100 {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "A session name needs 1 to 100 characters.")
+		return
+	}
+	session, err := store.RenameSession(r.Context(), principalFrom(r), orgID, sessionID, name)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
