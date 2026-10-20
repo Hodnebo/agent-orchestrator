@@ -9,6 +9,7 @@ import {
 	rememberRenderHeight,
 	rememberedRenderHeight,
 	renderFrameLive,
+	renderSkeletonLines,
 	subscribeRenderViewport,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
@@ -186,5 +187,13 @@ describe("render viewport signal", () => {
 		unsubscribe();
 		notifyRenderViewport();
 		expect(calls).toBe(1);
+	});
+});
+
+describe("renderSkeletonLines", () => {
+	it("adds caption lines only when the frame has room for them", () => {
+		expect(renderSkeletonLines(80)).toEqual([]);
+		expect(renderSkeletonLines(159)).toEqual([]);
+		expect(renderSkeletonLines(160)).toEqual([0.7, 0.45]);
 	});
 });

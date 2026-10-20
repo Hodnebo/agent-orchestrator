@@ -28,10 +28,13 @@ import {
 	type RenderRef,
 	type RenderTheme,
 } from "./renderFrameModel";
+import { RenderSkeleton } from "./RenderSkeleton";
 
 // A link opens only from a touch the viewer just received, so a page cannot
 // open one on its own by posting to the bridge.
 const LINK_TAP_WINDOW_MS = 1000;
+// A page whose process the OS keeps killing stops reloading after this many.
+const MAX_PROCESS_RESTARTS = 2;
 
 function useRenderTheme(): RenderTheme {
 	const t = useTheme();
@@ -45,10 +48,13 @@ function useRenderTheme(): RenderTheme {
  * opaque origin. Theme rides in the fragment for first paint and is posted
  * after, so the page never reloads.
  */
-function RenderDocument({ path, displayMode, onHeight, onFailed }: {
+function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed }: {
 	path: string;
 	displayMode: RenderDisplayMode;
 	onHeight?: (height: number) => void;
+	onReady: () => void;
+	/** The page's process died; the WebView is blank until it is mounted again. */
+	onGone: () => void;
 	onFailed: () => void;
 }) {
 	const styles = useThemedStyles(makeStyles);
@@ -86,9 +92,12 @@ function RenderDocument({ path, displayMode, onHeight, onFailed }: {
 			onLoadEnd={() => {
 				loaded.current = true;
 				web.current?.injectJavaScript(renderThemeScript(themeRef.current));
+				onReady();
 			}}
 			onHttpError={onFailed}
 			onError={onFailed}
+			onContentProcessDidTerminate={onGone}
+			onRenderProcessGone={onGone}
 			setSupportMultipleWindows={false}
 			javaScriptCanOpenWindowsAutomatically={false}
 			allowsLinkPreview={false}
@@ -105,14 +114,39 @@ function RenderDocument({ path, displayMode, onHeight, onFailed }: {
 	</View>;
 }
 
+/**
+ * One mounted page's lifecycle: loading until its document finishes, then
+ * ready. A page whose process dies is mounted afresh, up to a limit.
+ */
+function useRenderPage() {
+	const [mount, setMount] = useState(0);
+	const [loading, setLoading] = useState(true);
+	const restarts = useRef(0);
+	const ready = useCallback(() => setLoading(false), []);
+	const unload = useCallback(() => setLoading(true), []);
+	const reset = useCallback(() => {
+		restarts.current = 0;
+		setLoading(true);
+		setMount((value) => value + 1);
+	}, []);
+	const gone = useCallback((giveUp: () => void) => {
+		restarts.current += 1;
+		if (restarts.current > MAX_PROCESS_RESTARTS) return giveUp();
+		setLoading(true);
+		setMount((value) => value + 1);
+	}, []);
+	return useMemo(() => ({ mount, loading, ready, unload, reset, gone }), [mount, loading, ready, unload, reset, gone]);
+}
+
 /** The page over the whole screen, scrollable and pinch-zoomable. */
 function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible: boolean; onClose: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const [failed, setFailed] = useState(false);
+	const page = useRenderPage();
 	const close = () => { haptics.tap(); onClose(); };
-	return <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose} onShow={() => setFailed(false)}>
+	return <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose} onShow={() => { setFailed(false); page.reset(); }}>
 		<View style={[styles.viewer, { paddingTop: insets.top }]}>
 			<View style={styles.viewerHeader}>
 				<Text numberOfLines={1} accessibilityRole="header" style={styles.viewerTitle}>{render.title}</Text>
@@ -122,7 +156,10 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 			</View>
 			{failed
 				? <View style={styles.viewerError}><Text style={styles.fallbackTitle}>Couldn't load this page.</Text></View>
-				: visible ? <View style={styles.viewerBody}><RenderDocument path={render.path} displayMode="fullscreen" onFailed={() => setFailed(true)} /></View> : null}
+				: visible ? <View style={styles.viewerBody}>
+					<RenderDocument key={page.mount} path={render.path} displayMode="fullscreen" onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} />
+					{page.loading ? <RenderSkeleton height={Number.POSITIVE_INFINITY} label={render.title} style={styles.viewerSkeleton} /> : null}
+				</View> : null}
 		</View>
 	</Modal>;
 }
@@ -143,7 +180,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const [contentHeight, setContentHeight] = useState(() => rememberedRenderHeight(render.path));
 	const [live, setLive] = useState(false);
 	const [failed, setFailed] = useState(false);
-	const [attempt, setAttempt] = useState(0);
+	const page = useRenderPage();
 	const [expanded, setExpanded] = useState(false);
 	const measure = useCallback(() => {
 		frame.current?.measureInWindow((_x, y, _width, height) => {
@@ -152,6 +189,9 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		});
 	}, [viewportHeight]);
 	useEffect(() => subscribeRenderViewport(measure), [measure]);
+	// A page that leaves range reloads when it returns, so it is loading again.
+	const { unload } = page;
+	useEffect(() => { if (!live) unload(); }, [live, unload]);
 	const onHeight = useCallback((height: number) => {
 		rememberRenderHeight(render.path, height);
 		setContentHeight(height);
@@ -162,7 +202,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 			disabled={!config}
 			accessibilityRole={config ? "button" : undefined}
 			accessibilityLabel={config ? `Retry loading ${render.title}` : undefined}
-			onPress={() => { haptics.tap(); setFailed(false); setAttempt((value) => value + 1); }}
+			onPress={() => { haptics.tap(); setFailed(false); page.reset(); }}
 			style={styles.fallback}
 		>
 			<Feather name={config ? "refresh-cw" : "file-text"} size={12} color={t.textTertiary} />
@@ -173,9 +213,9 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 
 	const height = clampRenderHeight(contentHeight ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
-		{width && live
-			? <RenderDocument key={attempt} path={render.path} displayMode="inline" onHeight={onHeight} onFailed={() => setFailed(true)} />
-			: <View style={styles.placeholder}><Feather name="file-text" size={12} color={t.textFaint} /><Text numberOfLines={1} style={styles.placeholderTitle}>{render.title}</Text></View>}
+		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
+		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
+		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} /> : null}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
 		<Pressable
 			accessibilityRole="button"
@@ -198,8 +238,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	frame: { marginVertical: space.xs, overflow: "hidden", backgroundColor: t.bgBase },
 	document: { flex: 1 },
 	web: { flex: 1, backgroundColor: t.bgBase },
-	placeholder: { flexDirection: "row", alignItems: "center", gap: space.xs, padding: space.sm },
-	placeholderTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textFaint, fontSize: type.caption1.fontSize },
 	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
 	viewer: { flex: 1, backgroundColor: t.bgBase },
 	viewerHeader: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.xs },
@@ -207,6 +245,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	viewerClose: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated },
 	// The thread's own inset, so the page sits where it did inline.
 	viewerBody: { flex: 1, paddingHorizontal: space.xl },
+	viewerSkeleton: { position: "absolute", top: 0, left: space.xl, right: space.xl, height: 360 },
 	viewerError: { flex: 1, alignItems: "center", justifyContent: "center" },
 	fallback: { alignSelf: "flex-start", marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
 	fallbackTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },

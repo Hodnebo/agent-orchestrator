@@ -82,6 +82,15 @@ export function renderFrameLive(top: number, height: number, viewportHeight: num
 	return top + height > -margin && top < viewportHeight + margin;
 }
 
+/**
+ * The caption lines a loading skeleton draws under its content block, as
+ * fractions of the frame width. A short frame is all content block: lines
+ * squeezed into it would read as the page itself.
+ */
+export function renderSkeletonLines(height: number): number[] {
+	return height >= 160 ? [0.7, 0.45] : [];
+}
+
 const MAX_REMEMBERED_HEIGHTS = 200;
 const rememberedHeights = new Map<string, number>();
 
