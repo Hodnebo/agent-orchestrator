@@ -302,7 +302,10 @@ export function SessionFileExplorer({
 
 	const maximizeButton = onToggleMaximized ? (
 		<Tooltip>
-			<TooltipTrigger asChild>
+			{/* Closing the overlay hands focus back to this button, and a tooltip
+			    that opens on that focus stays up until the pointer comes back.
+			    Only keyboard focus (focus-visible) opens it; hover still does. */}
+			<TooltipTrigger asChild onFocus={(event) => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>
 				{/* Sized and toned like the pinned top-bar buttons beside it. */}
 				<Button
 					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
@@ -346,86 +349,106 @@ export function SessionFileExplorer({
 		/>
 	);
 
+	// Maximized, the overlay's titlebar band carries the header too: the
+	// pickers at its start, the filter centred, the view controls and minimize
+	// at its end, so the review needs no row of its own.
+	const headerInTitlebar = isMaximized && Boolean(filesTopbarHost) && !filesActionsHost;
+	const headerInFrame = showHeader && !headerInTitlebar;
+
+	// What to review, then which branch: the changes picker truncates last,
+	// the branch picker first. -ml-1.5 cancels the first trigger's own 6px
+	// inline padding so its label starts on the 12px gutter.
+	const pickers = showChangesTrigger || branchMenu ? (
+		<div className="-ml-1.5 flex min-w-0 shrink items-center gap-1">
+			{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
+			{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
+		</div>
+	) : null;
+
+	const viewControls = (
+		<>
+			{source.kind === "snapshot" ? <Tooltip><TooltipTrigger asChild><Button aria-label={t("files.snapshotRefresh")} onClick={review.refreshSource} size="icon-sm" type="button" variant="ghost"><RefreshCw aria-hidden="true" className="size-icon-base"/></Button></TooltipTrigger><TooltipContent side="bottom">{t("files.snapshotRefresh")}</TooltipContent></Tooltip> : null}
+			{viewMenu}
+			{hasViewTabs ? (
+				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={t("files.reviewChanges")}
+								aria-selected={showChanges}
+								className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								onClick={() => handleViewChange(true)}
+								role="tab"
+								type="button"
+							>
+								<GitCompareArrows aria-hidden="true" className="size-icon-base" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
+					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={allFilesTabLabel}
+								aria-selected={!showChanges}
+								className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
+								onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
+								role="tab"
+								type="button"
+							>
+								<Folders aria-hidden="true" className="size-icon-base" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
+					</Tooltip>
+				</div>
+			) : null}
+			{showTreeToggle ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
+							aria-pressed={treeOpen}
+							className="shrink-0"
+							onClick={() => setTreeOpen((open) => !open)}
+							size="icon-sm"
+							type="button"
+							variant="ghost"
+						>
+							<FolderTree className="size-icon-base" aria-hidden="true" />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
+				</Tooltip>
+			) : null}
+		</>
+	);
+
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background text-foreground" aria-label={t("files.sessionFiles")}>
 			{/* The inspector top bar or the maximized overlay's titlebar hosts the
-			    filter, and maximize sits at the top bar's trailing edge; without
-			    hosts they stay in this header. */}
+			    filter, and maximize sits at the top bar's trailing edge; the
+			    overlay's titlebar also takes the pickers and view controls. Without
+			    hosts they all stay in this header. */}
 			{filesTopbarHost ? createPortal(filterField, filesTopbarHost) : null}
-			{filesActionsHost && maximizeButton ? createPortal(maximizeButton, filesActionsHost)
+			{headerInTitlebar && filesTopbarHost ? (
+				<>
+					{createPortal(<div className="files-popout-titlebar__start">{showHeader ? pickers : null}</div>, filesTopbarHost)}
+					{createPortal(<div className="files-popout-titlebar__end flex shrink-0 items-center gap-1 pr-2">{showHeader ? viewControls : null}{maximizeButton}</div>, filesTopbarHost)}
+				</>
+			) : filesActionsHost && maximizeButton ? createPortal(maximizeButton, filesActionsHost)
 				: filesTopbarHost && maximizeButton ? createPortal(<div className="ml-auto flex shrink-0 items-center pr-2">{maximizeButton}</div>, filesTopbarHost)
 				: null}
-			{showHeader ? (
+			{headerInFrame ? (
 				/* The header is a size container so the pickers can drop their icons
 				   and stats as it narrows. Its trailing controls sit 4px from the right
 				   edge with 4px gaps, like the pinned top-bar buttons above them. */
 				<header className="@container/files-header flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2">
-					{/* What to review, then which branch: the changes picker truncates
-					    last, the branch picker first. -ml-1.5 cancels the first trigger's
-					    own 6px inline padding so its label starts on the 12px gutter. */}
-					{showChangesTrigger || branchMenu ? (
-						<div className="-ml-1.5 flex min-w-0 shrink items-center gap-1">
-							{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
-							{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
-						</div>
-					) : null}
+					{pickers}
 					{filesTopbarHost ? null : <span aria-hidden="true" className="flex-1" />}
 					{filesTopbarHost ? null : filterField}
 					<span aria-hidden="true" className="flex-1" />
-     {source.kind === "snapshot" ? <Tooltip><TooltipTrigger asChild><Button aria-label={t("files.snapshotRefresh")} onClick={review.refreshSource} size="icon-sm" type="button" variant="ghost"><RefreshCw aria-hidden="true" className="size-icon-base"/></Button></TooltipTrigger><TooltipContent side="bottom">{t("files.snapshotRefresh")}</TooltipContent></Tooltip> : null}
-     {viewMenu}
-					{hasViewTabs ? (
-						<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<button
-										aria-label={t("files.reviewChanges")}
-										aria-selected={showChanges}
-										className={cn(viewTabClass, "w-control-md justify-center px-0", showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-										onClick={() => handleViewChange(true)}
-										role="tab"
-										type="button"
-									>
-										<GitCompareArrows aria-hidden="true" className="size-icon-base" />
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("files.reviewChanges")}</TooltipContent>
-							</Tooltip>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<button
-										aria-label={allFilesTabLabel}
-										aria-selected={!showChanges}
-										className={cn(viewTabClass, "w-control-md justify-center px-0", !showChanges ? "bg-interactive-active text-foreground" : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground")}
-										onClick={() => (!showChanges && splitView ? setTreeOpen((open) => !open) : handleViewChange(false))}
-										role="tab"
-										type="button"
-									>
-										<Folders aria-hidden="true" className="size-icon-base" />
-									</button>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{allFilesTabLabel}</TooltipContent>
-							</Tooltip>
-						</div>
-					) : null}
-					{showTreeToggle ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									aria-label={treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}
-									aria-pressed={treeOpen}
-									className="shrink-0"
-									onClick={() => setTreeOpen((open) => !open)}
-									size="icon-sm"
-									type="button"
-									variant="ghost"
-								>
-									<FolderTree className="size-icon-base" aria-hidden="true" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{treeOpen ? t("files.hideFileTree") : t("files.showFileTree")}</TooltipContent>
-						</Tooltip>
-					) : null}
+					{viewControls}
 					{filesActionsHost || filesTopbarHost ? null : maximizeButton}
 				</header>
 			) : null}
@@ -445,7 +468,7 @@ export function SessionFileExplorer({
 					</PanelMessage>
 				) : filesData ? (
 					isMaximized ? (
-						<ResizablePanelGroup className={cn("min-h-0 flex-1", showHeader && "border-t border-border")}>
+						<ResizablePanelGroup className={cn("min-h-0 flex-1", headerInFrame && "border-t border-border")}>
 							<ResizablePanel defaultSize="74%" minSize="40%">
 								{reviewPane}
 							</ResizablePanel>
@@ -471,7 +494,7 @@ export function SessionFileExplorer({
 			) : splitView ? (
 				// Preview on the left, tree on the right (collapsible from the header),
 				// like an editor's changed-files rail.
-				<ResizablePanelGroup className={cn("min-h-0 flex-1", showHeader && "border-t border-border")}>
+				<ResizablePanelGroup className={cn("min-h-0 flex-1", headerInFrame && "border-t border-border")}>
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
 							<FileContentPane onOpenInCenter={onOpenFile && selectedPath ? openPreviewInCenter : undefined} annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />

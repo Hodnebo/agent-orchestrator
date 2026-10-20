@@ -44,6 +44,9 @@ describe("ReviewBranchMenu", () => {
 		const { props } = renderMenu();
 		const trigger = screen.getByRole("button", { name: "Branch to review: main" });
 		expect(trigger).toHaveAttribute("title", "main");
+		// Text only, like the Changes trigger: the chevron is its one icon.
+		expect(trigger.querySelectorAll("svg")).toHaveLength(1);
+		expect(trigger.querySelector("svg")).toHaveClass("lucide-chevron-down");
 		await openMenu();
 		expect(props.onOpenChange).toHaveBeenCalledWith(true);
 		const rows = screen.getAllByRole("menuitemradio");

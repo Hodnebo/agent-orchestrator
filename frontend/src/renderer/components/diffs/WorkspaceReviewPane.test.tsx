@@ -182,6 +182,19 @@ describe("WorkspaceReviewPane", () => {
 		await waitFor(() => expect(scrollToMock).toHaveBeenCalledTimes(2));
 	});
 
+	it("shows an empty review as an icon, its message and the way to the file tree", async () => {
+		const onBrowseAll = vi.fn();
+		const data = workspace([]);
+		renderWithQuery(<WorkspaceReviewPane annotation={annotation()} target={reviewTarget(data, { kind: "unstaged" })} filter="" onBrowseAll={onBrowseAll} sessionId="sess-1" split={false} />);
+		const empty = await screen.findByTestId("empty-message");
+		expect(empty).toHaveClass("flex-1", "justify-center", "items-center");
+		expect(empty.querySelector("svg")).not.toBeNull();
+		expect(empty).toHaveTextContent("No unstaged changes.");
+		const browse = screen.getByRole("button", { name: "Browse all files" });
+		await userEvent.click(browse);
+		expect(onBrowseAll).toHaveBeenCalledOnce();
+	});
+
 	it("reuses the matching prefetch query without another diff request", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);

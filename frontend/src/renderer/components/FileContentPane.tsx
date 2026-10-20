@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
 import { EditProvider } from "@pierre/diffs/react";
 import {
@@ -31,6 +31,7 @@ import {
 	cancelFileAnnotations,
 	FileAnnotationComposer,
 	FileAnnotationSendBar,
+	EmptyMessage,
 	PanelMessage,
 	ReviewDiffBody,
 	RetryButton,
@@ -268,7 +269,7 @@ export function FileContentPane({
 	const refetch = query.refetch;
 
 	if (!path) {
-		return <PanelMessage>{t("files.explorer.selectFile")}</PanelMessage>;
+		return <EmptyMessage icon={FileText} title={t("files.explorer.selectFile")} />;
 	}
 	if (outsideWorkspace) {
 		return <PanelMessage>{t("files.error.outsideWorkspace")}</PanelMessage>;

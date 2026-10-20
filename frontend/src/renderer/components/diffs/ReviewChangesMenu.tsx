@@ -245,7 +245,9 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 							</DropdownMenuRadioItem>
 						))}
 					</DropdownMenuRadioGroup>
-					{commitsAvailable ? (
+					{/* A branch with no commits has nothing to list, so Commits › goes;
+					    while they load it stays, showing the loading row. */}
+					{commitsAvailable && !noCommits ? (
 						<>
 							<DropdownMenuSeparator />
 							{/* Commits open to the side, so the scopes stay a short list and a

@@ -265,12 +265,17 @@ describe("ReviewChangesMenu", () => {
 		expect(screen.queryByRole("menuitemcheckbox", { name: /^All commits/ })).not.toBeInTheDocument();
 	});
 
-	it("shows only the empty reason in the Commits submenu of a branch with no commits", async () => {
-		renderMenu({}, { rows: [], allStats: { additions: 0, deletions: 0 } });
+	it("drops Commits from the menu when the branch has none, and keeps it while they load", async () => {
+		const none = renderMenu({}, { rows: [], allStats: { additions: 0, deletions: 0 } });
 		await openMenu();
-		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
-		expect(await screen.findByRole("menuitem", { name: "No commits found." })).toHaveAttribute("aria-disabled", "true");
-		expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(3);
+		expect(screen.queryByRole("menuitem", { name: /^Commits/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menu").querySelector('[role="separator"]')).toBeNull();
+		none.view.unmount();
+
+		renderMenu({}, { state: "loading", rows: [] });
+		await openMenu();
+		expect(screen.getByRole("menuitem", { name: /^Commits/ })).toBeInTheDocument();
 	});
 
 	it("labels a default branch's range as its latest commits", async () => {

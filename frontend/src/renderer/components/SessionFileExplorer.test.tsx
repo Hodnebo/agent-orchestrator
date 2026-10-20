@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -265,10 +265,10 @@ describe("SessionFileExplorer", () => {
 		expect(header?.nextElementSibling).toHaveClass("border-t");
 	});
 
-	it("renders the maximized filter into the overlay titlebar it is given", () => {
+	it("puts the whole maximized header into the overlay titlebar it is given", async () => {
 		const titlebar = document.createElement("div");
 		document.body.append(titlebar);
-		renderWithQuery(
+		const { container } = renderWithQuery(
 			<FilesTopbarHostContext.Provider value={titlebar}>
 				<SessionFileExplorer isMaximized onToggleMaximized={vi.fn()} sessionId="sess-explorer-titlebar" />
 			</FilesTopbarHostContext.Provider>,
@@ -276,9 +276,17 @@ describe("SessionFileExplorer", () => {
 
 		const filter = screen.getByRole("textbox", { name: "Filter files" });
 		expect(titlebar).toContainElement(filter);
-		// With no actions slot, minimize follows the filter into the titlebar; the ⋯ menu stays in the header.
-		expect(titlebar).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
-		expect(screen.getByRole("button", { name: "Split diff view" }).closest("header")).not.toBeNull();
+		// One row: the pickers before the filter, the view controls and minimize after it.
+		const changes = await screen.findByRole("button", { name: /^Changes to review/ });
+		const start = titlebar.querySelector(".files-popout-titlebar__start");
+		const end = titlebar.querySelector(".files-popout-titlebar__end");
+		expect(start).toContainElement(changes);
+		expect(end).toContainElement(screen.getByRole("button", { name: "Split diff view" }));
+		expect(end).toContainElement(screen.getByRole("tab", { name: "Changes" }));
+		expect(end?.lastElementChild).toContainElement(screen.getByRole("button", { name: "Minimize files" }));
+		expect(container.querySelector("header")).toBeNull();
+		// The titlebar's own border divides it from the review, so the split adds none.
+		expect(container.querySelector('[data-slot="resizable-panel-group"]')).not.toHaveClass("border-t");
 		titlebar.remove();
 	});
 
@@ -513,6 +521,21 @@ describe("SessionFileExplorer", () => {
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
 		await userEvent.click(screen.getByRole("button", { name: "Report an expanded file" }));
 		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
+	});
+
+	it("opens the maximize tooltip on hover or keyboard focus, not when focus is handed back", async () => {
+		renderWithQuery(<SessionFileExplorer onToggleMaximized={vi.fn()} sessionId="sess-explorer-tooltip" />);
+		const maximize = await screen.findByRole("button", { name: "Maximize files" });
+		// Closing the maximized overlay restores focus to this button in code.
+		const focusVisible = vi.spyOn(maximize, "matches").mockImplementation((selector) => selector !== ":focus-visible");
+		act(() => maximize.focus());
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		act(() => maximize.blur());
+		focusVisible.mockImplementation((selector) => selector === ":focus-visible");
+		act(() => maximize.focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Maximize files");
+		focusVisible.mockRestore();
 	});
 
 	it("lets the caller toggle between rail and maximized layouts", async () => {

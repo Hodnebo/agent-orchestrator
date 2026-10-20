@@ -77,7 +77,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 		triggerLabel = t("files.branches.checkedOut");
 		monoLabel = false;
 	}
-	const TriggerIcon = trigger.kind === "pull_request" ? GitPullRequest : GitBranch;
 
 	const rowLabel = (row: ReviewBranchRow) => (row.detached ? t("files.branches.detached") : row.name || (row.prNumber ? `#${row.prNumber}` : ""));
 	const rowCaption = (row: ReviewBranchRow) => {
@@ -114,7 +113,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 					className={cn(REVIEW_MENU_TRIGGER, "min-w-16 max-w-44 shrink-[10] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", className)}
 					title={triggerLabel}
 				>
-					<TriggerIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive @max-[20rem]/files-header:hidden" />
 					<span className={cn("min-w-0 truncate", monoLabel && "font-mono")}>{triggerLabel}</span>
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>

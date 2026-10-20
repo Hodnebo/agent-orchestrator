@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
-import { ChevronRight, FileCode2, MessageSquarePlus, MoreVertical, Pencil } from "lucide-react";
+import { ChevronRight, FileCode2, GitCompareArrows, MessageSquarePlus, MoreVertical, Pencil, SearchX } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
 	fetchWorkspaceFileRevision,
@@ -19,7 +19,7 @@ import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_INITIAL_BATCHES, WORKSPAC
 import { statusLabel, statusTone } from "../../lib/workspace-file-status";
 import { useUiStore } from "../../stores/ui-store";
 import { type FileOpenOptions } from "../FileContentPane";
-import { PanelMessage, RetryButton, FileAnnotationComposer, FileAnnotationSendBar, LineFeedbackButtonControl, cancelFileAnnotations, fileAnnotationKey, type FileAnnotationModel } from "../WorkspaceDiffView";
+import { EmptyMessage, PanelMessage, RetryButton, FileAnnotationComposer, FileAnnotationSendBar, LineFeedbackButtonControl, cancelFileAnnotations, fileAnnotationKey, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { VscodeGoToFileIcon } from "../icons/VscodeGoToFileIcon";
 import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import { Button } from "../ui/button";
@@ -584,8 +584,14 @@ export function WorkspaceReviewPane({
 			{firstError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{firstError.message}</PanelMessage> : null}
 			{groupError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{groupError.message}</PanelMessage> : null}
 			{loading && items.length === 0 ? <PanelMessage compact>{t("files.loadingDiff")}</PanelMessage> : null}
-			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 && onBrowseAll ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? emptyMessage : t("files.noFilterMatches")}</PanelMessage> : null}
-			<div className="min-h-0 flex-1 overflow-hidden">
+			{files.length === 0 ? (
+				<EmptyMessage
+					action={allFiles.length === 0 && onBrowseAll ? <Button onClick={onBrowseAll} type="button">{t("files.browseAll")}</Button> : undefined}
+					icon={allFiles.length === 0 ? GitCompareArrows : SearchX}
+					title={allFiles.length === 0 ? emptyMessage : t("files.noFilterMatches")}
+				/>
+			) : null}
+			<div className={cn("min-h-0 overflow-hidden", files.length > 0 && "flex-1")}>
 				{items.length > 0 ? (
 					<CodeView<"feedback">
 						ref={codeViewRef}
