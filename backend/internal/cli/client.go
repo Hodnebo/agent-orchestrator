@@ -21,6 +21,11 @@ import (
 // status probe timeout.
 const commandTimeout = 2 * time.Minute
 
+// spawnCommandTimeout bounds `ao spawn`. The daemon runs the project's Setup
+// inside the spawn and bounds it by the Setup steps' own time limits, so the
+// CLI must not give up first: hanging up cancels the spawn and its Setup.
+const spawnCommandTimeout = 9 * time.Hour
+
 // maxDrainedBodyBytes bounds how much of an unused response body the CLI
 // discards for keep-alive reuse without an unbounded read.
 const maxDrainedBodyBytes = 4 << 10
@@ -106,6 +111,11 @@ func (c *commandContext) getJSON(ctx context.Context, path string, out any) erro
 // connection-refused dump.
 func (c *commandContext) postJSON(ctx context.Context, path string, body, out any) error {
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
+}
+
+// postSpawnJSON is postJSON for a session spawn, under spawnCommandTimeout.
+func (c *commandContext) postSpawnJSON(ctx context.Context, body, out any) error {
+	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions", body, out, nil, spawnCommandTimeout)
 }
 
 // patchJSON sends body as JSON to PATCH /api/v1/<path> on the running daemon

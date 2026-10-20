@@ -813,9 +813,13 @@ func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
 	project := st.projects["mer"]
 	project.Config.PostCreate = []string{"# ao-timeout: 90m\nmake", "npm ci"}
 	st.projects["mer"] = project
-	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute)
+	var extended time.Duration
+	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
 	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
 	if want := 101 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
 		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 10m)", probe.budget, want)
+	}
+	if extended != 101*time.Minute+time.Second {
+		t.Fatalf("request deadline extended to %s, want just past the spawn's own", extended)
 	}
 }

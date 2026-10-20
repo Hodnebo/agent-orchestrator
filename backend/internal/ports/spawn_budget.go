@@ -7,16 +7,31 @@ import (
 
 type spawnRequestBudgetKey struct{}
 
-// WithSpawnRequestBudget marks ctx as a REST spawn that runs under a wide outer
-// ceiling instead of the REST layer's flat deadline: the spawn bounds itself at
-// budget plus its project's Setup step time limits, so a Setup step longer than
-// one request is not cut short.
-func WithSpawnRequestBudget(ctx context.Context, budget time.Duration) context.Context {
-	return context.WithValue(ctx, spawnRequestBudgetKey{}, budget)
+type spawnRequestBudget struct {
+	base   time.Duration
+	extend func(time.Duration)
 }
 
-// SpawnRequestBudget is the budget WithSpawnRequestBudget recorded, if any.
-func SpawnRequestBudget(ctx context.Context) (time.Duration, bool) {
-	budget, ok := ctx.Value(spawnRequestBudgetKey{}).(time.Duration)
-	return budget, ok && budget > 0
+// WithSpawnRequestBudget marks ctx as a REST request that may run the
+// project's Setup (a spawn, an orchestrator start, a restore). The request is
+// held to base until the operation knows its project; extend then moves the
+// request's deadline to that many from now, so a Setup step longer than one
+// request is not cut short while a slow request body still is.
+func WithSpawnRequestBudget(ctx context.Context, base time.Duration, extend func(time.Duration)) context.Context {
+	return context.WithValue(ctx, spawnRequestBudgetKey{}, spawnRequestBudget{base: base, extend: extend})
+}
+
+// ExtendSpawnRequestBudget moves a WithSpawnRequestBudget request's deadline
+// to base plus setup from now and returns ctx bounded by it. Outside such a
+// request it returns ctx unchanged.
+func ExtendSpawnRequestBudget(ctx context.Context, setup time.Duration) (context.Context, context.CancelFunc) {
+	budget, ok := ctx.Value(spawnRequestBudgetKey{}).(spawnRequestBudget)
+	if !ok || budget.base <= 0 || budget.extend == nil {
+		return ctx, func() {}
+	}
+	total := budget.base + setup
+	// The request's own stop comes just after the operation's deadline, so
+	// the operation sees context.DeadlineExceeded and reports it.
+	budget.extend(total + time.Second)
+	return context.WithTimeout(ctx, total)
 }

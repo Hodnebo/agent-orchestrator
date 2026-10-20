@@ -973,11 +973,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
-	if budget, ok := ports.SpawnRequestBudget(ctx); ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, postCreateBudget(budget, project.Config.PostCreate))
-		defer cancel()
-	}
+	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancelBudget()
 	standalone := cfg.ProjectID == ""
 	projectKind := project.Kind.WithDefault()
 	if standalone {
@@ -2983,6 +2980,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
+	// A restore whose worktree was reclaimed runs the project's Setup again.
+	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancelBudget()
 	// Mirror Kill's incomplete-handle guard: a session whose spawn failed before
 	// the workspace landed has neither WorkspacePath nor Branch, and there is
 	// nothing meaningful to restore from. Surface this as a typed 409 instead of
