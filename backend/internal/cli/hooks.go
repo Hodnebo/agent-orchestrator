@@ -440,6 +440,7 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 }
 
 var claudePastedContentPrefix = regexp.MustCompile(`^<pasted_content id="([A-Za-z0-9_-]+)">`)
+var claudePastedContentClosingSuffix = regexp.MustCompile(`</pasted_content id="([A-Za-z0-9_-]+)">$`)
 
 // normalizeClaudePastedPrompt removes only Claude's leading paste wrapper.
 // A report envelope can continue after the pasted segment, so keep that suffix.
@@ -460,6 +461,32 @@ func normalizeClaudePastedPrompt(prompt string) string {
 	return before + after
 }
 
+func reportDeliveryHasOnlyPastedClosers(value string) bool {
+	const reportClose = "</ao-report-delivery>"
+	closeAt := strings.Index(value, reportClose)
+	if closeAt < 0 {
+		return false
+	}
+	prefix := value[:closeAt]
+	suffix := strings.TrimSpace(value[closeAt+len(reportClose):])
+	closedIDs := make(map[string]int)
+	for suffix != "" {
+		match := claudePastedContentClosingSuffix.FindStringSubmatch(suffix)
+		if match == nil {
+			return false
+		}
+		id := match[1]
+		opening := `<pasted_content id="` + id + `">`
+		closing := `</pasted_content id="` + id + `">`
+		if strings.Count(prefix, opening) <= strings.Count(prefix, closing)+closedIDs[id] {
+			return false
+		}
+		closedIDs[id]++
+		suffix = strings.TrimSpace(strings.TrimSuffix(suffix, match[0]))
+	}
+	return true
+}
+
 func firstHookValue(values ...string) string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
@@ -474,8 +501,8 @@ func isAOCoordinationMessage(value string) bool {
 	if _, reportDelivery := domain.ReportDeliveryID(value); reportDelivery {
 		// A report envelope may share a prompt with a human instruction. Keep
 		// the delivery ID for acknowledgement, but only classify the whole
-		// prompt as coordination when the envelope is the complete message.
-		return strings.HasSuffix(value, "</ao-report-delivery>")
+		// prompt as coordination when only Claude paste closers follow it.
+		return reportDeliveryHasOnlyPastedClosers(value)
 	}
 	_, sessionDelivery := domain.CoordinationDeliveryID(value)
 	return sessionDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||

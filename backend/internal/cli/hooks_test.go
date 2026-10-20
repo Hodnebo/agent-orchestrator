@@ -873,6 +873,16 @@ func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
 			name:   "instruction after paste wrapper",
 			prompt: pasteOpen + report + pasteClose + "\n" + instruction,
 		},
+		{
+			name: "instruction after multiple paste blocks",
+			prompt: pasteOpen +
+				"<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n" + instruction,
+		},
+		{
+			name:   "unmatched paste closer",
+			prompt: report + "\n</pasted_content id=\"eead\">",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
