@@ -108,6 +108,13 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
+// Every agent's permission modes are known, as once the daemon has answered, unless a test says not.
+const permissionModesState = vi.hoisted(() => ({ known: true }));
+vi.mock("../../hooks/useChatPermissionModes", () => ({
+	useChatPermissionModes: (_hostId: string | undefined, harness: string | undefined) =>
+		harness && permissionModesState.known ? new Map([[harness, ["default", "accept-edits", "bypass-permissions"]]]) : undefined,
+}));
+
 vi.mock("../../hooks/useConversation", () => ({
 	ProviderSwitchFailed: switchFailure.ProviderSwitchFailed,
 	clearConversationProviderCatalogs: clearCatalogsMock,
@@ -245,6 +252,7 @@ beforeEach(() => {
 	configState.options = [];
 	configState.loaded = false;
 	configState.error = undefined;
+	permissionModesState.known = true;
 	getMock.mockReset().mockImplementation(async () => ({
 		data: {},
 		error: undefined,
@@ -323,6 +331,24 @@ describe("SessionChatSurface pending switch effort", () => {
 			useUiStore.setState({ developerMode: false });
 		});
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+	});
+
+	it("sends nothing with a switch until the agent's permission modes are known", async () => {
+		permissionModesState.known = false;
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
+		conversationCommandState.send = vi.fn().mockResolvedValue({});
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		await act(async () => {
+			sideMocks.agentSwitch?.onPendingChange({ harness: "pi" });
+		});
+		let failure: unknown;
+		await act(async () => {
+			await sideMocks.workspaceSend?.("Only edit after approval", undefined, "permission-race").catch((error) => { failure = error; });
+		});
+		// The bar may still show the chat's mode, which Pi does not run in.
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "pi" });
 	});
 
 	it("reports a refused switch as a switch failure, so the draft stays editable", async () => {

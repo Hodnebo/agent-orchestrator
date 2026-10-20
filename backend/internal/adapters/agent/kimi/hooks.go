@@ -74,10 +74,10 @@ func PrepareACPInstructions(ctx context.Context, workspacePath, systemPrompt str
 	// Kimi Code reads <project>/.kimi-code/AGENTS.md; the older Kimi CLI read
 	// .kimi/AGENTS.md. Both are written, so either finds AO's instructions.
 	for _, dir := range []string{kimiCodeInstructionsDirName, kimiInstructionsDirName} {
-		path := filepath.Join(workspacePath, dir, kimiInstructionsFileName)
-		if gitTracked(ctx, path) {
-			continue // The project's own instructions: AO's block would land in its commits.
+		if projectOwnsInstructions(ctx, workspacePath, dir) {
+			continue // The chat driver sends them with the first prompt instead.
 		}
+		path := filepath.Join(workspacePath, dir, kimiInstructionsFileName)
 		if err := writeKimiInstructions(ctx, path, systemPrompt); err != nil {
 			return err
 		}
@@ -469,6 +469,23 @@ func joinKimiInstructionParts(prefix, block, suffix string) string {
 		b.WriteString(suffix)
 	}
 	return b.String()
+}
+
+// CodeInstructionsOwnedByProject reports whether AO must leave Kimi Code's
+// project instructions file alone, so its standing instructions need another
+// way in.
+func CodeInstructionsOwnedByProject(ctx context.Context, workspacePath string) bool {
+	return projectOwnsInstructions(ctx, workspacePath, kimiCodeInstructionsDirName)
+}
+
+// projectOwnsInstructions: a committed file would carry AO's block into the
+// project's commits, and a linked folder would take the write outside the
+// workspace.
+func projectOwnsInstructions(ctx context.Context, workspacePath, dir string) bool {
+	if info, err := os.Lstat(filepath.Join(workspacePath, dir)); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	return gitTracked(ctx, filepath.Join(workspacePath, dir, kimiInstructionsFileName))
 }
 
 // gitTracked reports whether git tracks path. Any failure (no git, no

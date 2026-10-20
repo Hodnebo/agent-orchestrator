@@ -344,12 +344,14 @@ export function TurnSettingsBar({
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
 			onPickModel: primaryModelOption && onChangeConfigOption ? (id) => applyOption(primaryModelOption.id, { value: id }) : undefined,
-			// The effort is set after the model, because the agent offers levels per model.
+			// The effort and Fast are set after the model, because the agent offers them per model.
+			// Fast is set either way, so a saved setup without it turns a paid Fast off.
 			onPickSetup: primaryModelOption && onChangeConfigOption
 				? (setup) => {
 					ultracode?.onChange(false);
 					void Promise.resolve(onChangeConfigOption(primaryModelOption.id, { value: setup.model }))
 						.then(() => setup.effort && acpEffortOption ? onChangeConfigOption(acpEffortOption.id, { value: setup.effort }) : undefined)
+						.then(() => fastOption && setConfigToggle(fastOption, Boolean(setup.fast), (id, value) => void onChangeConfigOption(id, value)))
 						.catch(() => {});
 				}
 				: undefined,

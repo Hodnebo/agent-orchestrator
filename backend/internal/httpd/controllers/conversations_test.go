@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -255,6 +256,15 @@ func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.S
 	f.switchRequest = request
 	f.switchCtxErr = ctx.Err()
 	return f.switchErr
+}
+
+// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
+func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		return domain.ConversationTurn{}, false, err
+	}
+	turn, err := f.Send(ctx, id, message)
+	return turn, true, err
 }
 
 func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -161,7 +162,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 				fmt.Fprintf(&b, "(and %d more)\n", len(in.ChangedFiles)-handoffChangedFileLimit)
 				break
 			}
-			fmt.Fprintf(&b, "- %s\n", quoteHandoffText(name, handoffChangedFileCap, handoffLineClipMarker))
+			fmt.Fprintf(&b, "- %s\n", quoteHandoffLine(name, handoffChangedFileCap))
 		}
 	}
 
@@ -193,7 +194,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 			if file.RequestsOnly {
 				note = " The requests are above; this file also has the answers."
 			}
-			fmt.Fprintf(&b, "- %s: `%s`. %s%s\n", handoffHarnessLabel(file.Harness), quoteHandoffText(file.Path, handoffHistoryPathCap, handoffLineClipMarker), file.Read, note)
+			fmt.Fprintf(&b, "- %s: `%s`. %s%s\n", handoffHarnessLabel(file.Harness), quoteHandoffLine(file.Path, handoffHistoryPathCap), file.Read, note)
 		}
 	}
 
@@ -247,7 +248,7 @@ func handoffHarnessLabel(harness AgentHarness) string {
 
 func writeHandoffNoteField(b *strings.Builder, label, value string) {
 	if value = strings.TrimSpace(value); value != "" {
-		fmt.Fprintf(b, "%s: %s\n", label, quoteHandoffText(value, handoffChangedFileCap, handoffLineClipMarker))
+		fmt.Fprintf(b, "%s: %s\n", label, quoteHandoffLine(value, handoffChangedFileCap))
 	}
 }
 
@@ -268,11 +269,26 @@ func budgetHandoffTurn(turn HandoffTurn, budget, userCap int, oneLine bool) (use
 	return user, quoteHandoffText(agentText, budget-utf8.RuneCountInString(user), marker)
 }
 
-// quoteHandoffText clips quoted text to limit and defangs the note's own tag,
-// so nothing inside a quoted turn can close the handoff block early.
+// handoffTagPattern is the note's own tag in any case; a heading at the start
+// of a quoted line would read as one of the note's sections.
+var (
+	handoffTagPattern     = regexp.MustCompile(`(?i)ao-handoff-request`)
+	handoffHeadingPattern = regexp.MustCompile(`(?m)^([ \t]*)#`)
+)
+
+// quoteHandoffText clips quoted text to limit and defangs the note's own tag
+// and section headings, so nothing inside a quoted turn can close the handoff
+// block early or add a section to it.
 func quoteHandoffText(value string, limit int, marker string) string {
-	value = strings.ReplaceAll(SanitizeControlChars(value), "ao-handoff-request", "ao_handoff_request")
+	value = handoffTagPattern.ReplaceAllString(SanitizeControlChars(value), "ao_handoff_request")
+	value = handoffHeadingPattern.ReplaceAllString(value, `$1\#`)
 	return clipHandoffText(value, limit, marker)
+}
+
+// quoteHandoffLine is quoteHandoffText for a value given one line of its own,
+// such as a file name or a title, which may hold a newline.
+func quoteHandoffLine(value string, limit int) string {
+	return quoteHandoffText(strings.Join(strings.Fields(value), " "), limit, handoffLineClipMarker)
 }
 
 // clipHandoffText keeps the start and the end of over-long text: a request opens

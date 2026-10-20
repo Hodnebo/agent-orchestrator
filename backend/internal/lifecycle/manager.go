@@ -685,12 +685,6 @@ retryProjection:
 		m.mu.Unlock()
 		return nil
 	}
-	// Every ownership fence has accepted the signal. A revision retry reduces
-	// the same signal again, so the turn is recorded once.
-	if !terminalTurnRecorded && mode == domain.SessionModeTUI {
-		terminalTurnRecorded = true
-		m.recordTerminalTurn(ctx, rec, s, now)
-	}
 	// Conversation text is meaningful only inside one provider identity, owner
 	// generation, and main turn. Reduce it as one durable state machine so a Stop
 	// whose UserPromptSubmit was lost can never borrow the prior turn's prompt.
@@ -704,6 +698,13 @@ retryProjection:
 		!rec.Metadata.NativeIdentityObservedAt.IsZero() && !s.Timestamp.After(rec.Metadata.NativeIdentityObservedAt) {
 		m.mu.Unlock()
 		return nil
+	}
+	// Every ownership fence, the native thread's included, has accepted the
+	// signal. A revision retry reduces the same signal again, so the turn is
+	// recorded once.
+	if !terminalTurnRecorded && mode == domain.SessionModeTUI {
+		terminalTurnRecorded = true
+		m.recordTerminalTurn(ctx, rec, s, now)
 	}
 	resetConversationCheckpoint :=
 		nativeIdentityChanged ||

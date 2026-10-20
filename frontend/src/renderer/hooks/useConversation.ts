@@ -94,8 +94,13 @@ export class ProviderSwitchFailed extends Error {
 	}
 }
 
-/** A remote daemon's gateway answers 502–504 while the daemon may still finish the switch. */
-const switchOutcomeUnknown = (status: number) => status === 502 || status === 503 || status === 504;
+/**
+ * A remote daemon's gateway answers 502–504 while the daemon may still finish the switch.
+ * The daemon's own refusal (a PROVIDER_SWITCH_ code, 503 for "not installed") is definite.
+ */
+const switchOutcomeUnknown = (status: number, error: unknown) =>
+	(status === 502 || status === 503 || status === 504) &&
+	!String((error as { code?: unknown } | undefined)?.code ?? "").startsWith("PROVIDER_SWITCH_");
 
 interface ConversationSendMutationInput {
 	targetSessionId: string;
@@ -490,7 +495,7 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 				params: { path: { sessionId } },
 				body: { ...request, idempotencyKey: crypto.randomUUID() },
 			});
-			if (error) throw switchOutcomeUnknown(response.status) ? error : new ProviderSwitchFailed(error);
+			if (error) throw switchOutcomeUnknown(response.status, error) ? error : new ProviderSwitchFailed(error);
 			return data;
 		},
 		onSuccess: () => refreshAfterProviderSwitch(queryClient, sessionId, hostId),
@@ -613,7 +618,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					throw failure;
 				});
 				const switched = !error || response.headers.get("X-AO-Provider-Switched") === "1";
-				const refused = Boolean(error) && !switched && !switchOutcomeUnknown(response.status);
+				const refused = Boolean(error) && !switched && !switchOutcomeUnknown(response.status, error);
 				if (!refused) refresh();
 				if (error) throw refused ? new ProviderSwitchFailed(error) : error;
 				const accepted: components["schemas"]["SendConversationMessageResponse"] = data.message ?? { duplicate: true };

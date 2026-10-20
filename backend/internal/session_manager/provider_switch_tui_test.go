@@ -58,6 +58,14 @@ func (s *launchOptionsFakeStore) SetSessionLaunchOptions(_ context.Context, _ do
 	return nil
 }
 
+func (s *launchOptionsFakeStore) UpdateSessionWithLaunchOptions(ctx context.Context, rec domain.SessionRecord, options domain.AgentLaunchOptions) error {
+	if err := s.UpdateSession(ctx, rec); err != nil {
+		return err
+	}
+	s.options = options
+	return nil
+}
+
 func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -81,6 +89,10 @@ func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testi
 	if got := st.sessions["mer-1"].Metadata.Prompt; got != "ORIGINAL TASK" {
 		t.Fatalf("session prompt = %q, want the task kept", got)
 	}
+	// Delivered once; a later restore must not start over from the switch.
+	if store.options.HandoffNote != "" {
+		t.Fatalf("saved note = %q after the target started, want it cleared", store.options.HandoffNote)
+	}
 }
 
 func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing.T) {
@@ -88,19 +100,26 @@ func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing
 		name     string
 		override *string
 		ended    int
+
+		savedNote string
 	}{
-		{"ordinary relaunch", nil, 1},
-		{"provider switch", ptr("HANDOFF NOTE"), 0},
+		{"ordinary relaunch", nil, 1, ""},
+		// A restore that hands over a cut-short switch's saved note is not a switch:
+		// nothing rolls it back.
+		{"restore with a saved note", nil, 1, "SAVED NOTE"},
+		{"provider switch", ptr("HANDOFF NOTE"), 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 			rec := mkLive("mer-1")
 			rec.Metadata.Prompt = "TASK"
+			rec.Metadata.AgentSessionID = ""
 			st.sessions[rec.ID] = rec
+			store := &launchOptionsFakeStore{fakeStore: st, options: domain.AgentLaunchOptions{HandoffNote: tc.savedNote}}
 			lcm := &fakeLCM{store: st}
 			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: afterStartAgent{recordingAgent: &recordingAgent{}}},
-				Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{err: errors.New("delivery failed")},
+				Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{err: errors.New("delivery failed")},
 				Lifecycle: lcm, LookPath: func(string) (string, error) { return "/bin/true", nil }})
 			_, err := m.relaunchSessionWithPolicyAndGeneration(context.Background(), "relaunch", rec, st.projects["mer"],
 				ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath}, nil, true, false, "", domain.SessionInterfaceTransitionHistoryStrict, tc.override)

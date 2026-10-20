@@ -257,14 +257,19 @@ func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
 
 func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
 	dataDir := t.TempDir()
-	cfg := buildConfig(fakePiPlugin{}, func(context.Context) (string, error) { return "/user/bin/pi-acp", nil }, nil)
+	entry := filepath.Join(t.TempDir(), "index.mjs")
+	if err := os.WriteFile(entry, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry, _ = filepath.EvalSymlinks(entry)
+	cfg := buildConfig(fakePiPlugin{}, func(context.Context) (string, error) { return entry, nil }, nil)
 	launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{
 		SessionID: "session-1", DataDir: dataDir, Env: map[string]string{"BUN_OPTIONS": "--smol"},
 	})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
-	dir := filepath.Join(dataDir, "pi-acp", "session-1")
+	dir := filepath.Join(dataDir, "prompts", "session-1", "pi-acp-models")
 	script := filepath.Join(dir, "models-preload.mjs")
 	// The user's own Bun options are kept; the preload is added to them.
 	if got := launch.Env["BUN_OPTIONS"]; got != "--smol --preload="+script {
@@ -272,6 +277,10 @@ func TestLaunchPreloadsTheCurrentModelsIntoPiACP(t *testing.T) {
 	}
 	if got := launch.Env["AO_PI_MODELS_JSON"]; got != filepath.Join(dir, "models.json") {
 		t.Fatalf("AO_PI_MODELS_JSON = %q", got)
+	}
+	// The preload acts only in pi-acp itself and gives Pi's commands the user's options back.
+	if launch.Env["AO_PI_ACP_ENTRY"] != entry || launch.Env["AO_PI_BUN_OPTIONS"] != "--smol" {
+		t.Fatalf("AO_PI_ACP_ENTRY = %q, AO_PI_BUN_OPTIONS = %q", launch.Env["AO_PI_ACP_ENTRY"], launch.Env["AO_PI_BUN_OPTIONS"])
 	}
 	if written, err := os.ReadFile(script); err != nil || string(written) != string(modelsPreload) {
 		t.Fatalf("preload script = %d bytes, %v; want the embedded one", len(written), err)

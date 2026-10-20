@@ -7,6 +7,22 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, join } from "node:path";
 
 const out = process.env.AO_PI_MODELS_JSON;
+const entry = process.env.AO_PI_ACP_ENTRY;
+// Only pi-acp and its daemon take the preload. The commands Pi runs for the
+// agent get the user's own BUN_OPTIONS back, and a bun inheriting it anyway
+// (an older daemon's child) skips it.
+const own = process.argv[1] && entry && (() => {
+	try {
+		return realpathSync(process.argv[1]) === entry;
+	} catch {
+		return false;
+	}
+})();
+if (own && process.argv.includes("--daemon")) {
+	if (process.env.AO_PI_BUN_OPTIONS) process.env.BUN_OPTIONS = process.env.AO_PI_BUN_OPTIONS;
+	else delete process.env.BUN_OPTIONS;
+	for (const name of ["AO_PI_BUN_OPTIONS", "AO_PI_ACP_ENTRY", "AO_PI_MODELS_JSON"]) delete process.env[name];
+}
 const warn = (error) => console.error("ao: pi-acp models preload:", error instanceof Error ? error.message : error);
 
 // Only the fields the old runtime's models.json schema knows: a file it
@@ -51,13 +67,13 @@ function mergedModelsPath(modelsJsonPath) {
 		listed.set(provider, new Set(declared.models.map((model) => model.id)));
 	}
 	mkdirSync(dirname(out), { recursive: true });
-	writeFileSync(out, JSON.stringify(config));
+	// It holds the user's provider keys.
+	writeFileSync(out, JSON.stringify(config), { mode: 0o600 });
 	return out;
 }
 
-if (out && process.argv[1]) {
+if (out && own) {
 	try {
-		const entry = realpathSync(process.argv[1]);
 		const { ModelRegistry, getAgentDir } = await import(Bun.resolveSync("@earendil-works/pi-coding-agent", dirname(entry)));
 		if (ModelRegistry && typeof ModelRegistry.create === "function" && typeof getAgentDir === "function") {
 			const create = ModelRegistry.create;

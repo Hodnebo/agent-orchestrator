@@ -383,8 +383,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
 		conv.launchMode = cfg.Permissions
-		// The thread may still be on the fast tier from before the restart.
-		conv.fastTier = true
+		// Neither the tier nor the collaboration mode the thread was left on is
+		// known; the next turn states both.
+		conv.tierUnknown, conv.planUnknown = true, true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}
@@ -417,8 +418,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	resumeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	var resp struct {
-		Model           string `json:"model"`
-		ReasoningEffort string `json:"reasoningEffort"`
+		Model           string  `json:"model"`
+		ReasoningEffort string  `json:"reasoningEffort"`
+		ServiceTier     *string `json:"serviceTier"`
 	}
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
 	if err != nil {
@@ -428,9 +430,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 
-	// The thread may have been left on the fast tier, which sticks to it. Its
-	// first turn here says so either way.
-	conv.fastTier = true
+	// A tier sticks to the thread. One AO left it on is undone by the first turn
+	// here; one the user configured is theirs, as on a new thread.
+	conv.fastTier = resp.ServiceTier != nil && conv.configuredServiceTier(ctx) == ""
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }

@@ -63,7 +63,9 @@ type conversation struct {
 	// Guarded by sendMu: whether the last turn put the thread on the fast tier
 	// or in plan mode, and each model's fast tier id as last listed.
 	fastTier, planMode bool
-	fastTiers          map[string]string
+	// A reconnected thread may be on any tier and in either collaboration mode.
+	tierUnknown, planUnknown bool
+	fastTiers                map[string]string
 
 	mu      sync.Mutex
 	pending map[string]*parkedRequest
@@ -308,6 +310,22 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
+// configuredServiceTier is the service_tier the user's Codex config sets, or
+// "" for none or when it cannot be read.
+func (c *conversation) configuredServiceTier(ctx context.Context) string {
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var resp struct {
+		Config struct {
+			ServiceTier string `json:"service_tier"`
+		} `json:"config"`
+	}
+	if err := c.conn.request(readCtx, "config/read", map[string]any{}, &resp); err != nil {
+		return ""
+	}
+	return resp.Config.ServiceTier
+}
+
 // codexFastServiceTier is the fast tier's id before a model list is read.
 const codexFastServiceTier = "priority"
 
@@ -336,14 +354,14 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	// has to be said: an explicit null returns the thread to its default.
 	if msg.Settings.Fast {
 		params["serviceTier"] = cmp.Or(c.fastTiers[msg.Settings.Model], c.fastTiers[c.threadModel], codexFastServiceTier)
-	} else if c.fastTier {
+	} else if c.fastTier || c.tierUnknown && c.configuredServiceTier(ctx) == "" {
 		params["serviceTier"] = nil
 	}
 
 	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
 	// default mode. The mode names its model; with none known nothing is sent.
 	planMode := c.planMode
-	if model := cmp.Or(msg.Settings.Model, c.threadModel); msg.Settings.Plan != c.planMode && model != "" {
+	if model := cmp.Or(msg.Settings.Model, c.threadModel); (msg.Settings.Plan != c.planMode || c.planUnknown) && model != "" {
 		mode := "default"
 		if msg.Settings.Plan {
 			mode = "plan"
@@ -355,6 +373,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		params["collaborationMode"] = map[string]any{"mode": mode, "settings": settings}
 		planMode = msg.Settings.Plan
 	}
+	planKnown := params["collaborationMode"] != nil
 
 	var resp struct {
 		Turn struct {
@@ -366,6 +385,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	}
 	c.fastTier = msg.Settings.Fast
 	c.planMode = planMode
+	c.tierUnknown, c.planUnknown = false, c.planUnknown && !planKnown
 
 	c.mu.Lock()
 	c.activeTurn = resp.Turn.ID

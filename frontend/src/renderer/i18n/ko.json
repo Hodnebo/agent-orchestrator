@@ -118,6 +118,7 @@
 	"agentSwitch.loadingSettings": "설정 불러오는 중",
 	"agentSwitch.autoCompact": "자동 압축",
 	"agentSwitch.autoCompactAuto": "자동",
+	"agentSwitch.checkingPermissionModes": "{{agent}}이(가) 실행되는 권한 모드를 확인하는 중입니다. 잠시 후 다시 보내세요.",
 	"agentSwitch.autoCompactHint": "Claude Code가 대화를 스스로 압축하는 시점입니다.",
 	"agentSwitch.addFavourite": "즐겨찾기에 추가",
 	"agentSwitch.removeFavourite": "즐겨찾기에서 삭제",

@@ -17,9 +17,10 @@ const (
 )
 
 // Copilot writes its event log in ~100ms batches, so the answer is normally not
-// on disk yet when the stop hook starts. Variables so tests do not wait.
+// on disk yet when the stop hook starts. The idle report waits for it, so a few
+// batches at most. Variables so tests do not wait.
 var (
-	copilotTranscriptWait = 1500 * time.Millisecond
+	copilotTranscriptWait = 400 * time.Millisecond
 	copilotTranscriptPoll = 40 * time.Millisecond
 )
 
@@ -50,9 +51,17 @@ func FinalAssistantMessage(payload []byte) string {
 		return ""
 	}
 	deadline := time.Now().Add(copilotTranscriptWait)
+	text, size := "", int64(-1)
 	for {
-		text, settled := readCopilotFinalMessage(path, input.Timestamp)
-		if settled || !time.Now().Before(deadline) {
+		// The log is read again only once it has grown.
+		if info, err := os.Stat(path); err == nil && info.Size() != size {
+			size = info.Size()
+			var settled bool
+			if text, settled = readCopilotFinalMessage(path, input.Timestamp); settled {
+				return text
+			}
+		}
+		if !time.Now().Before(deadline) {
 			return text
 		}
 		time.Sleep(copilotTranscriptPoll)

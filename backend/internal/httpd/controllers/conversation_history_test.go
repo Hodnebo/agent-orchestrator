@@ -119,6 +119,10 @@ func (f *fakeChatService) SwitchProvider(context.Context, domain.SessionID, doma
 	return nil
 }
 
+func (f *fakeChatService) SwitchProviderAndSend(context.Context, domain.SessionID, domain.ProviderSwitchRequest, ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	return domain.ConversationTurn{}, true, nil
+}
+
 func (f *fakeChatService) SessionHistory(context.Context, domain.SessionID, int, int) ([]domain.HandoffTurn, int, error) {
 	return nil, 0, nil
 }

@@ -1136,14 +1136,20 @@ func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
 	}
 }
 
-func TestGetAgentHooksTrustsTheWorkspaceForCopilot(t *testing.T) {
+func TestOnlyASwitchTargetTrustsTheWorkspaceForCopilot(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("COPILOT_HOME", home)
 	workspace := t.TempDir()
+	config := filepath.Join(home, "config.json")
+	// A new task leaves folder trust to the user.
 	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "s-1"}); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a spawn wrote the user's Copilot config: %v", err)
+	}
+	New().PrepareSwitchTarget(context.Background(), workspace)
+	data, err := os.ReadFile(config)
 	resolved, _ := filepath.EvalSymlinks(workspace)
 	if err != nil || !strings.Contains(string(data), resolved) {
 		t.Fatalf("config.json = %q (%v), want %s trusted", data, err, resolved)

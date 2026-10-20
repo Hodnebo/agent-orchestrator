@@ -118,6 +118,7 @@
 	"agentSwitch.loadingSettings": "Cargando ajustes",
 	"agentSwitch.autoCompact": "Compactación automática",
 	"agentSwitch.autoCompactAuto": "Auto",
+	"agentSwitch.checkingPermissionModes": "Comprobando en qué modos de permisos se ejecuta {{agent}}. Vuelve a enviar en un momento.",
 	"agentSwitch.autoCompactHint": "Cuándo Claude Code compacta la conversación por sí solo.",
 	"agentSwitch.addFavourite": "Añadir a favoritos",
 	"agentSwitch.removeFavourite": "Quitar de favoritos",

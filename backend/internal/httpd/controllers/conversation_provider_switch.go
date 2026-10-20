@@ -45,45 +45,53 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	// the client goes away (a restarted app); its retry of the message is a duplicate.
 	ctx, cancel := withoutClientCancel(r.Context())
 	defer cancel()
-	err := c.Svc.SwitchProvider(ctx, sessionID, domain.ProviderSwitchRequest{
+	request := domain.ProviderSwitchRequest{
 		TargetHarness: domain.AgentHarness(req.TargetHarness), IdempotencyKey: req.IdempotencyKey,
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
 		PermissionMode: domain.PermissionMode(req.PermissionMode),
-	})
-	// A message retried after its switch went through just goes to that agent.
-	if req.Message != nil && errors.Is(err, domain.ErrProviderAlreadyActive) {
-		err = nil
 	}
-	var refusal *domain.ProviderSwitchError
-	if errors.As(err, &refusal) {
-		status, category := http.StatusConflict, "conflict"
-		switch refusal.Kind {
-		case domain.ProviderSwitchRefusalUnsupported:
-			status, category = http.StatusBadRequest, "validation"
-		case domain.ProviderSwitchRefusalUnavailable:
-			status, category = http.StatusServiceUnavailable, "unavailable"
+	if req.Message == nil {
+		if err := c.Svc.SwitchProvider(ctx, sessionID, request); err != nil {
+			writeProviderSwitchError(w, r, err)
+			return
 		}
-		envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), providerSwitchRefusalDetails(refusal))
-	} else if err != nil {
-		writeConversationError(w, r, err)
-	} else if req.Message == nil {
 		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok"})
-	} else {
-		// A send that fails now is not a switch failure: the header tells the
-		// client the switch went through.
-		turn, sendErr := c.Svc.Send(ctx, sessionID, message)
-		if sendErr != nil {
+		return
+	}
+	turn, switched, err := c.Svc.SwitchProviderAndSend(ctx, sessionID, request, message)
+	if err != nil {
+		if switched {
+			// A send that fails now is not a switch failure: the header tells the
+			// client the switch went through.
 			w.Header().Set(providerSwitchedHeader, "1")
 			// The renderer calls the daemon cross-origin, so it reads the header only if exposed.
 			w.Header().Set("Access-Control-Expose-Headers", providerSwitchedHeader)
-			writeConversationError(w, r, sendErr)
+			writeConversationError(w, r, err)
 			return
 		}
-		response := sendConversationMessageResponse(turn)
-		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok", Message: &response})
+		writeProviderSwitchError(w, r, err)
+		return
 	}
+	response := sendConversationMessageResponse(turn)
+	envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok", Message: &response})
+}
+
+func writeProviderSwitchError(w http.ResponseWriter, r *http.Request, err error) {
+	var refusal *domain.ProviderSwitchError
+	if !errors.As(err, &refusal) {
+		writeConversationError(w, r, err)
+		return
+	}
+	status, category := http.StatusConflict, "conflict"
+	switch refusal.Kind {
+	case domain.ProviderSwitchRefusalUnsupported:
+		status, category = http.StatusBadRequest, "validation"
+	case domain.ProviderSwitchRefusalUnavailable:
+		status, category = http.StatusServiceUnavailable, "unavailable"
+	}
+	envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), providerSwitchRefusalDetails(refusal))
 }
 
 // providerSwitchRefusalDetails names, as a new task's refusal does, what an agent

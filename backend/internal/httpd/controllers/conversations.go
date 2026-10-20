@@ -60,6 +60,7 @@ type ConversationService interface {
 	SetTitle(ctx context.Context, session domain.SessionID, title string) (string, error)
 	ReloadMCPServers(ctx context.Context, session domain.SessionID) ([]domain.ConversationMCPServer, error)
 	SwitchProvider(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest) error
+	SwitchProviderAndSend(ctx context.Context, session domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (domain.ConversationTurn, bool, error)
 	SessionHistory(ctx context.Context, session domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error)
 }
 

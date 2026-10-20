@@ -2256,6 +2256,7 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 type launchOptionsStore interface {
 	SessionLaunchOptions(ctx context.Context, id domain.SessionID) (domain.AgentLaunchOptions, error)
 	SetSessionLaunchOptions(ctx context.Context, id domain.SessionID, options domain.AgentLaunchOptions) error
+	UpdateSessionWithLaunchOptions(ctx context.Context, rec domain.SessionRecord, options domain.AgentLaunchOptions) error
 }
 
 // sessionLaunchOptions reads the saved launch choices; none on a failed read.
@@ -3479,9 +3480,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		agentConfig.Effort = effort
 	}
 	agentConfig.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	// Only a provider switch passes its own prompt; it rolls back a failed start itself.
+	switching := promptOverride != nil
 	// A switch target that has not started yet: its note goes in place of the task.
-	if note := agentConfig.Launch.HandoffNote; note != "" && promptOverride == nil && rec.Metadata.AgentSessionID == "" {
-		promptOverride = &note
+	savedNote := false
+	if note := agentConfig.Launch.HandoffNote; note != "" && !switching && rec.Metadata.AgentSessionID == "" {
+		promptOverride, savedNote = &note, true
 	}
 	agentConfig.Launch.HandoffNote = ""
 	if rec.Metadata.Permissions != "" {
@@ -3713,9 +3717,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			// A provider switch (the only caller with a prompt override) brings
-			// the source back itself, so its session must not be ended here.
-			if promptOverride == nil {
+			// A provider switch brings the source back itself, so its session
+			// must not be ended here.
+			if !switching {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
 				cancel()
@@ -3723,6 +3727,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			m.cleanupSystemPromptDir(rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err)
 		}
+	}
+	if savedNote {
+		m.clearHandoffNote(ctx, rec.ID)
 	}
 	updated, err := m.getRecord(ctx, rec.ID)
 	if err != nil {

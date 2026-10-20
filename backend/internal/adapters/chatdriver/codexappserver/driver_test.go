@@ -138,6 +138,7 @@ func newTestDriver(t *testing.T) (*Driver, *scriptedServer) {
 			"turn/start":     `{"turn":{"id":"turn-1","status":"inProgress","items":[]}}`,
 			"turn/interrupt": `{}`,
 			"thread/resume":  `{"thread":{"id":"thread-1"}}`,
+			"config/read":    `{"config":{}}`,
 		},
 		responseSequences: map[string][]string{},
 		failures:          map[string]string{},
@@ -1817,6 +1818,7 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 
 func TestCodexResumedThreadLeavesTheFastTierItMayHaveBeenLeftOn(t *testing.T) {
 	d, srv := newTestDriver(t)
+	srv.respondTo("thread/resume", `{"thread":{"id":"thread-1"},"serviceTier":"priority"}`)
 	resumed, err := d.Resume(context.Background(), ports.ChatResumeConfig{
 		SessionID: "fast-resume", WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1",
 	})
@@ -1835,5 +1837,29 @@ func TestCodexResumedThreadLeavesTheFastTierItMayHaveBeenLeftOn(t *testing.T) {
 	// The tier sticks to the thread, so leaving it has to be said.
 	if tier, ok := params["serviceTier"]; !ok || string(tier) != "null" {
 		t.Fatalf("serviceTier = %s (sent %v), want an explicit null", tier, ok)
+	}
+}
+
+func TestCodexResumedThreadKeepsTheUsersConfiguredServiceTier(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo("thread/resume", `{"thread":{"id":"thread-1"},"serviceTier":"priority"}`)
+	srv.respondTo("config/read", `{"config":{"service_tier":"fast"}}`)
+	resumed, err := d.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "fast-config", WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close() }()
+	if _, err := resumed.SendTurn(context.Background(), ports.ChatUserMessage{Text: "as configured"}); err != nil {
+		t.Fatal(err)
+	}
+	request := srv.awaitFrame(func(f frame) bool { return f.Method == "turn/start" })
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if tier, ok := params["serviceTier"]; ok {
+		t.Fatalf("serviceTier = %s, want it left to the user's config", tier)
 	}
 }

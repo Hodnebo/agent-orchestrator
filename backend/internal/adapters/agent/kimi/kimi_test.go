@@ -1039,3 +1039,19 @@ func TestPrepareACPInstructionsWritesWhereKimiCodeReads(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareACPInstructionsDoesNotWriteThroughALinkedFolder(t *testing.T) {
+	workspace, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(workspace, ".kimi-code")); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareACPInstructions(context.Background(), workspace, "AO standing instructions"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Fatalf("wrote %d files outside the workspace through the link", len(entries))
+	}
+	if !CodeInstructionsOwnedByProject(context.Background(), workspace) {
+		t.Fatal("a linked .kimi-code was not left to the project, so the chat would drop AO's instructions")
+	}
+}

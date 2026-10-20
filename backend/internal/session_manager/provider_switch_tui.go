@@ -91,13 +91,13 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	defer cancelSwitch()
 	// The rows written from here are whole. A rename, pin or preview change made
 	// while the source stopped is the user's, so it is kept.
-	keepUserEdits := func(rec *domain.SessionRecord) {
+	keepUserEdits := func(ctx context.Context, rec *domain.SessionRecord) {
 		if current, found, err := m.store.GetSession(ctx, id); err == nil && found {
 			rec.DisplayName, rec.IsPinned, rec.PinnedAt = current.DisplayName, current.IsPinned, current.PinnedAt
 			rec.Metadata.PreviewURL, rec.Metadata.PreviewRevision = current.Metadata.PreviewURL, current.Metadata.PreviewRevision
 		}
 	}
-	keepUserEdits(&rec)
+	keepUserEdits(ctx, &rec)
 
 	source := rec
 	source.Metadata.RuntimeHandleID, source.Metadata.RuntimeLaunchID, source.Metadata.AgentSessionIDLaunchID = "", "", ""
@@ -123,7 +123,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		}
 		// So does one made while the target was starting.
 		source := source
-		keepUserEdits(&source)
+		keepUserEdits(ctx, &source)
 		restoreErr := m.store.UpdateSession(ctx, source)
 		if restoreErr == nil {
 			_, restoreErr = m.relaunchSessionWithPolicy(ctx, "restore source provider", source, project, ws, nil, false, false, domain.SessionInterfaceTransitionHistoryStrict)
@@ -149,20 +149,23 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	md.ConversationCheckpointState, md.ConversationCheckpointGeneration = domain.ConversationCheckpointEmpty, ""
 	md.ConversationCheckpointNativeID, md.ConversationCheckpointTurnID, md.ConversationCheckpointUnsettled = "", "", false
 	targetRecord.UpdatedAt = m.clock()
+	// The note stays saved with the target's choices until it has started, so a
+	// relaunch before then (the daemon stopped) hands over again instead of
+	// replaying the task. Both move with ownership in one write.
+	targetLaunch.HandoffNote = request.HandoffNote
+	publish := func() error { return m.store.UpdateSession(ctx, targetRecord) }
 	if launchStore != nil {
-		// The note stays saved with them, so a relaunch before the target has a
-		// native session (it crashed first, or records none, as deepseek-harness)
-		// hands over again instead of replaying the task. It is saved before
-		// ownership moves, so no stop in between can lose it.
-		targetLaunch.HandoffNote = request.HandoffNote
-		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
-			return restoreSource(err, "could not save the target's launch options")
-		}
+		publish = func() error { return launchStore.UpdateSessionWithLaunchOptions(ctx, targetRecord, targetLaunch) }
 	}
-	if err := m.store.UpdateSession(ctx, targetRecord); err != nil {
+	if err := publish(); err != nil {
 		return restoreSource(err, "could not publish target provider ownership")
 	}
 
+	if preparer, ok := targetAgent.(interface {
+		PrepareSwitchTarget(context.Context, string)
+	}); ok {
+		preparer.PrepareSwitchTarget(ctx, ws.Path)
+	}
 	started, err := m.relaunchSessionWithPolicyAndGeneration(ctx, "switch TUI provider", targetRecord, project, ws, nil,
 		true, false, "", domain.SessionInterfaceTransitionHistoryStrict, &request.HandoffNote)
 	if err != nil {
@@ -175,7 +178,25 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return restoreSource(err, "target provider did not stay running")
 	}
 	m.adoptTUISwitchSettings(ctx, id, request)
+	m.clearHandoffNote(ctx, id)
 	return nil
+}
+
+// clearHandoffNote drops a switch target's saved note once the target is
+// running: a later restore must not start it over from the switch.
+func (m *Manager) clearHandoffNote(ctx context.Context, id domain.SessionID) {
+	launchStore, ok := m.store.(launchOptionsStore)
+	if !ok {
+		return
+	}
+	options, err := launchStore.SessionLaunchOptions(ctx, id)
+	if err != nil || options.HandoffNote == "" {
+		return
+	}
+	options.HandoffNote = ""
+	if err := launchStore.SetSessionLaunchOptions(ctx, id, options); err != nil {
+		m.logger.Warn("clear terminal switch handoff note", "session", id, "error", err)
+	}
 }
 
 // adoptTUISwitchSettings gives the chat, if the store keeps one, the target's

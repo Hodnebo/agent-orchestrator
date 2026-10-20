@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -502,5 +503,85 @@ func TestFailedSwitchRestoresAnUnansweredTargetThatStartsFresh(t *testing.T) {
 	branch, err := h.st.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
 	if err != nil || branch.ProviderConversationID != "thread-b-fresh" {
 		t.Fatalf("active branch provider = %q, %v; want B's fresh conversation", branch.ProviderConversationID, err)
+	}
+}
+
+func TestSwitchWithAMessageKeepsOtherSwitchesOutUntilItIsSent(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	release := make(chan struct{})
+	targetStarting := make(chan struct{})
+	var once sync.Once
+	driver.mu.Lock()
+	claude := driver.fresh
+	driver.beforeStart = func(ports.ChatStartConfig) {
+		once.Do(func() {
+			close(targetStarting)
+			<-release
+		})
+	}
+	driver.mu.Unlock()
+
+	first := make(chan error, 1)
+	go func() {
+		_, _, err := h.svc.SwitchProviderAndSend(ctx, testSession,
+			domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "first"},
+			ports.ChatUserMessage{Text: "Only Claude should receive this", ClientMessageID: "first-message"})
+		first <- err
+	}()
+	<-targetStarting
+	second := make(chan error, 1)
+	go func() {
+		second <- h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode, IdempotencyKey: "second"})
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("a second switch ran while the first was under way: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	// It runs after the message reached Claude, which is now working on it.
+	var refusal *domain.ProviderSwitchError
+	if err := <-second; !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("second switch = %v, want it refused while Claude works on the message", err)
+	}
+	if got := claude.sentTexts(); len(got) != 1 {
+		t.Fatalf("Claude received %q, want the message sent with its switch", got)
+	}
+}
+
+func TestRetryOfADeliveredMessageDoesNotSwitchBack(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	message := ports.ChatUserMessage{Text: "First message already delivered", ClientMessageID: "replayed-message"}
+	if _, _, err := h.svc.SwitchProviderAndSend(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "first"}, message); err != nil {
+		t.Fatal(err)
+	}
+	driver.mu.Lock()
+	claude := driver.fresh
+	driver.mu.Unlock()
+	claude.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if snapshot, err := h.svc.Snapshot(ctx, testSession); err == nil && len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateCompleted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first turn did not finish")
+		}
+	}
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode, IdempotencyKey: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	// The renderer sends a fresh switch key with each attempt, and the same delivery id.
+	turn, switched, err := h.svc.SwitchProviderAndSend(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "retry"}, message)
+	if err != nil || !switched || turn.ID != "" {
+		t.Fatalf("retry = %+v, switched %v, %v; want a duplicate", turn, switched, err)
+	}
+	if rec, _, _ := h.st.GetSession(ctx, testSession); rec.Harness != domain.HarnessOpenCode {
+		t.Fatalf("harness after the retry = %q, want the later switch's opencode", rec.Harness)
 	}
 }

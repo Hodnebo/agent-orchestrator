@@ -45,6 +45,64 @@ type providerSwitchActivityDetail struct {
 // canonical AO conversation and publishes a new provider branch only after the
 // target has started successfully.
 func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+	unlock, err := s.lockProviderSwitch(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.switchProvider(ctx, id, request)
+}
+
+// SwitchProviderAndSend switches, then sends msg to the agent it switched to:
+// no other switch runs between the two. A message already delivered is not
+// switched for again, so its retry cannot take the chat back from a later
+// switch. switched says the chat is on the target, so a failure is the send's.
+func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, msg ports.ChatUserMessage) (turn domain.ConversationTurn, switched bool, err error) {
+	unlock, err := s.lockProviderSwitch(ctx, id)
+	if err != nil {
+		return turn, false, err
+	}
+	defer unlock()
+	delivered, err := s.messageDelivered(ctx, id, msg.ClientMessageID)
+	if err != nil {
+		return turn, false, err
+	}
+	if !delivered {
+		// A retry after the switch went through finds the target already active.
+		if err := s.switchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+			return turn, false, err
+		}
+	}
+	turn, err = s.Send(ctx, id, msg)
+	return turn, true, err
+}
+
+// lockProviderSwitch admits one provider switch per session at a time.
+func (s *Service) lockProviderSwitch(ctx context.Context, id domain.SessionID) (func(), error) {
+	value, _ := s.providerSwitches.LoadOrStore(id, make(chan struct{}, 1))
+	slot, _ := value.(chan struct{})
+	select {
+	case slot <- struct{}{}:
+		return func() { <-slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Service) messageDelivered(ctx context.Context, id domain.SessionID, clientMessageID string) (bool, error) {
+	if clientMessageID == "" {
+		return false, nil
+	}
+	// A session without a conversation has nothing delivered; the switch says why.
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return false, nil //nolint:nilerr // The switch reports the session's state itself.
+	}
+	_, found, err := s.store.ConversationMessageByClientID(ctx, conversation.ID, clientMessageID)
+	return found, err
+}
+
+func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
 	if request.TargetHarness == "" {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is required"}
 	}

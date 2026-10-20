@@ -104,7 +104,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			if err := prepareStandingInstructions(ctx, cfg); err != nil {
 				return acpdriver.Launch{}, err
 			}
-			if err := preloadCurrentModels(cfg, env); err != nil && log != nil {
+			if err := preloadCurrentModels(cfg, binary, env); err != nil && log != nil {
 				log.Warn("Pi chat keeps pi-acp's own model list", "session", cfg.SessionID, "error", err)
 			}
 			return acpdriver.Launch{Command: binary, Env: env}, nil
@@ -281,8 +281,13 @@ var modelsPreload []byte
 // preloadCurrentModels has pi-acp, and the daemon it starts, load
 // modelsPreload: pi-acp pins a Pi release whose built-in models providers have
 // since retired (a ChatGPT account refuses all of them).
-func preloadCurrentModels(cfg acpdriver.LaunchConfig, env map[string]string) error {
-	dir := filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID))
+//
+// The merged list carries the user's provider keys, so it lives with the
+// session's prompts, which are removed when the session ends.
+func preloadCurrentModels(cfg acpdriver.LaunchConfig, binary string, env map[string]string) error {
+	dir := filepath.Join(cfg.DataDir, "prompts", string(cfg.SessionID), "pi-acp-models")
+	// Earlier builds left the merged list, keys and all, beside the socket.
+	_ = os.Remove(filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID), "models.json"))
 	script := filepath.Join(dir, "models-preload.mjs")
 	// BUN_OPTIONS splits on whitespace and takes no quotes.
 	if strings.ContainsAny(script, " \t\n") {
@@ -294,8 +299,16 @@ func preloadCurrentModels(cfg acpdriver.LaunchConfig, env map[string]string) err
 	if err := os.WriteFile(script, modelsPreload, 0o600); err != nil {
 		return err
 	}
+	entry, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		return err
+	}
 	// "--preload=<path>": with a space, bun reads the path as the script to run.
-	env["BUN_OPTIONS"] = strings.TrimSpace(cmp.Or(env["BUN_OPTIONS"], os.Getenv("BUN_OPTIONS")) + " --preload=" + script)
+	// The preload hands the user's own options back to the commands Pi runs.
+	own := cmp.Or(env["BUN_OPTIONS"], os.Getenv("BUN_OPTIONS"))
+	env["BUN_OPTIONS"] = strings.TrimSpace(own + " --preload=" + script)
+	env["AO_PI_BUN_OPTIONS"] = own
+	env["AO_PI_ACP_ENTRY"] = entry
 	env["AO_PI_MODELS_JSON"] = filepath.Join(dir, "models.json")
 	return nil
 }

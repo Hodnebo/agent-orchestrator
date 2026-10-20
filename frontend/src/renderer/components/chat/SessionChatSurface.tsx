@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { agentLabel } from "../../lib/agent-options";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -636,6 +637,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					// A new message replaces an earlier switch's failure.
 					clearSwitchError();
 					if (!pendingSwitch) return commands.send(message);
+					// The bar shows the mode the agent will start in only once its modes are known
+					// (Pi runs only with permissions bypassed); nothing goes before then.
+					if (!pendingPermissionModes) {
+						const reason = { message: t("agentSwitch.checkingPermissionModes", { agent: agentLabel(pendingSwitch.harness) }) };
+						setSendSwitchError(reason);
+						throw Object.assign(new Error(reason.message), { code: AGENT_SWITCH_FAILED });
+					}
 					const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
 					const effort = switchEffort(pendingSwitch);
 					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow, permissionMode: pendingSwitch.approvalMode };

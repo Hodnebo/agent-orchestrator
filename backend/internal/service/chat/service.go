@@ -115,6 +115,7 @@ type Service struct {
 	probeMu            sync.Mutex
 	probed             map[domain.AgentHarness]ports.ChatCapabilities
 	prewarming         sync.Map // domain.AgentHarness -> struct{}
+	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
 	terminalSwitcher   TerminalProviderSwitcher
 }
 
@@ -740,14 +741,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
 		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
 	}
-	// Claude Code reads its compaction window when it starts. The map is
-	// copied because the caller's may be the one saved for later restarts.
-	if cfg.Harness == domain.HarnessClaudeCode {
+	// Claude Code reads its compaction window when it starts. Auto leaves any
+	// window the project's environment sets. The map is copied because the
+	// caller's may be the one saved for later restarts.
+	if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; cfg.Harness == domain.HarnessClaudeCode && tokens > 0 {
 		cfg.Env = cloneStartConfig(cfg).Env
-		delete(cfg.Env, claudeAutoCompactWindowEnv)
-		if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; tokens > 0 {
-			cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
-		}
+		cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
 	}
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
