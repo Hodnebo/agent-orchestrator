@@ -454,6 +454,24 @@ func TestTestingPruneSendsFlagsAndPrintsLines(t *testing.T) {
 	}
 }
 
+func TestTestingRerunAttributesCaller(t *testing.T) {
+	for _, caller := range []string{"", " w1 "} {
+		t.Run(caller, func(t *testing.T) {
+			got := testingDaemon(t, http.StatusOK, `{}`)
+			t.Setenv("AO_SESSION_ID", caller)
+			t.Setenv("AO_PROJECT_ID", "")
+			_, err := runTesting(t, "rerun", "run_ao-25")
+			if err != nil || got.method != http.MethodPost || got.path != "/api/v1/testing/rerun" || got.body["runId"] != "run_ao-25" {
+				t.Fatalf("request %s %s %v err=%v", got.method, got.path, got.body, err)
+			}
+			id, present := got.body["sessionId"]
+			if want := strings.TrimSpace(caller); present != (want != "") || (present && id != want) {
+				t.Fatalf("caller %q became sessionId=%v present=%t", caller, id, present)
+			}
+		})
+	}
+}
+
 func TestTestingPanelVerbs(t *testing.T) {
 	t.Setenv("AO_PROJECT_ID", "")
 	type M = map[string]any

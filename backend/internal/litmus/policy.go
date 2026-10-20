@@ -44,7 +44,7 @@ var (
 		"Bash(gh pr unlock:*)", "Bash(gh pr update-branch:*)", "Bash(gh issue:*)", "Bash(gh api:*)", "Bash(gh release:*)",
 		"Bash(gh repo:*)", "Bash(gh workflow:*)", "Bash(gh run:*)", "Bash(gh gist:*)", "Bash(gh label:*)", "Bash(gh secret:*)",
 		"Bash(gh variable:*)", "Bash(gh ssh-key:*)", "Bash(gh gpg-key:*)", "Bash(gh cache:*)", "Bash(gh agent-task:*)", "Bash(gh auth:*)",
-		"Bash(ao testing start:*)", "Bash(ao testing post:*)", "Bash(ao testing discard:*)", "Bash(ao testing prune:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
+		"Bash(ao testing start:*)", "Bash(ao testing rerun:*)", "Bash(ao testing post:*)", "Bash(ao testing discard:*)", "Bash(ao testing prune:*)", "Bash(ao spawn:*)", "Bash(ao session:*)", "Bash(ao send:*)", "Bash(ao pr:*)",
 		"Bash(ao review:*)", "Bash(ao project:*)", "Bash(ao orchestrator:*)", "Bash(ao automation:*)", "Bash(ao cue:*)",
 		"Bash(ao stop:*)", "Bash(ao start:*)", "Bash(ao import:*)", "Bash(ao remote-host:*)", "Bash(ao browser:*)",
 		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)",

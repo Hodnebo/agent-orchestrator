@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -411,7 +412,11 @@ func TestTestingAPIProjectSettingsReviewPreservesOmittedValue(t *testing.T) {
 
 // The daemon, not the prompt, keeps a tester out of start, rerun, post and prune.
 func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
-	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) { return "ao-9", nil })
+	var spawned atomic.Int32
+	svc := litmus.New(litmus.NewStore(t.TempDir()), nil).WithGH(recordedGH{t: t}).WithSpawner(func(context.Context, litmus.SpawnRequest) (string, error) {
+		spawned.Add(1)
+		return "ao-9", nil
+	})
 	do := testingServer(t, httpd.APIDeps{Testing: svc})
 	do("POST", "/intake", `{"sessionId":"ao-1","prUrl":"https://github.com/aoagents/agent-orchestrator/pull/6394"}`, http.StatusOK)
 
@@ -420,6 +425,9 @@ func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	do("POST", "/runs/run_ao-1/post", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN")
 	do("POST", "/runs/run_ao-1/discard", `{"sessionId":"ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "discard")
 	do("POST", "/rerun", `{"sessionId":"ao-1","runId":"run_ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "rerun")
+	if spawned.Load() != 0 {
+		t.Fatalf("tester spawned %d sessions through user-only verbs", spawned.Load())
+	}
 
 	// The user's own session, or no session, is allowed through.
 	do("POST", "/prune", `{"sessionId":"ao-orch","dryRun":true}`, http.StatusOK, `"dryRun":true`)
@@ -427,5 +435,12 @@ func TestTestingAPIRefusesTheTesterOnUserVerbs(t *testing.T) {
 	do("POST", "/start", `{"sessionId":"ao-orch","projectId":"p1","prUrl":"aoagents/agent-orchestrator#6394"}`, http.StatusOK, `"sessionId":"ao-9"`)
 	// The spawn marker protects user-only verbs before the tester has a run.
 	do("POST", "/runs/run_ao-1/discard", `{"sessionId":"ao-9"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "discard")
+	do("POST", "/rerun", `{"sessionId":" ao-9 ","runId":"run_ao-1"}`, http.StatusForbidden, "TESTING_TESTER_FORBIDDEN", "rerun")
+	if spawned.Load() != 1 {
+		t.Fatalf("pre-intake tester spawned another session: %d", spawned.Load())
+	}
 	do("POST", "/rerun", `{"sessionId":"ao-orch","runId":"run_ao-1","projectId":"p1"}`, http.StatusOK, `"sessionId":"ao-9"`, `"runId":"run_ao-9"`)
+	if spawned.Load() != 2 {
+		t.Fatalf("user rerun did not spawn exactly one session: %d", spawned.Load())
+	}
 }
