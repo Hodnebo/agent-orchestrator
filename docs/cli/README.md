@@ -333,6 +333,9 @@ Use `ao project update my-project --canonical-repo-url <url>` for a focused
 change that preserves omitted fields. `--default-branch` is supported by the
 same command. `--dry-run --json` returns a typed `changes` list, and `--yes`
 skips the confirmation prompt. An empty flag value clears that field.
+Interactive updates validate and display the proposed changes before asking for
+the project id. The preview and prompt go to stderr, so `--json` writes only the
+final result to stdout.
 The `PATCH /api/v1/projects/{id}/config` API uses the same empty string to clear
 `canonicalRepoURL` or `defaultBranch`. An omitted field or explicit `null` leaves
 that field unchanged.

@@ -192,7 +192,7 @@ type projectUpdateRequest struct {
 }
 
 type projectUpdateResult struct {
-	Project projectDetails        `json:"project"`
+	Project json.RawMessage       `json:"project"`
 	Changes []projectConfigChange `json:"changes"`
 	DryRun  bool                  `json:"dryRun"`
 }
@@ -247,12 +247,26 @@ func newProjectUpdateCommand(ctx *commandContext) *cobra.Command {
 				req.DefaultBranch = &value
 			}
 			if !opts.dryRun && !opts.yes {
+				preview := req
+				preview.DryRun = true
+				var proposed projectUpdateResult
+				if err := ctx.patchJSON(cmd.Context(), "projects/"+url.PathEscape(id)+"/config", preview, &proposed); err != nil {
+					return err
+				}
+				for _, change := range proposed.Changes {
+					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s: %q -> %q\n", change.Path, change.From, change.To); err != nil {
+						return err
+					}
+				}
+				if len(proposed.Changes) == 0 {
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "no changes")
+				}
 				confirmed, err := confirmProjectUpdate(cmd, id)
 				if err != nil {
 					return err
 				}
 				if !confirmed {
-					_, err := fmt.Fprintln(cmd.OutOrStdout(), "aborted")
+					_, err := fmt.Fprintln(cmd.ErrOrStderr(), "aborted")
 					return err
 				}
 			}
@@ -677,7 +691,7 @@ func confirmProjectRemoval(cmd *cobra.Command, id string) (bool, error) {
 }
 
 func confirmProjectUpdate(cmd *cobra.Command, id string) (bool, error) {
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Update project %q? Type the project id to confirm: ", id); err != nil {
+	if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "Update project %q? Type the project id to confirm: ", id); err != nil {
 		return false, err
 	}
 	reader := bufio.NewReader(cmd.InOrStdin())

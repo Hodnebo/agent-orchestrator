@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,101 @@ func TestProjectUpdate_DryRunSendsPartialPatch(t *testing.T) {
 	}
 	if !strings.Contains(out, "canonicalRepoURL") {
 		t.Fatalf("output missing change: %s", out)
+	}
+}
+
+func TestProjectUpdate_InteractivePreviewsBeforeWriting(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []projectUpdateRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var req projectUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests = append(requests, req)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"project":{"id":"demo","folderMissing":true,"workspaceRepos":[{"gitStatus":"dirty"}],"config":{"preRemove":["clean"],"agentConfig":{"effort":"high"}}},"changes":[{"path":"config.defaultBranch","from":"main","to":"develop"}],"dryRun":`+strconv.FormatBool(req.DryRun)+`}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{In: strings.NewReader("demo\n"), ProcessAlive: func(int) bool { return true }}, "project", "update", "demo", "--default-branch", "develop", "--json")
+	if err != nil {
+		t.Fatalf("update: %v\nstderr=%s", err, errOut)
+	}
+	if len(requests) != 2 || !requests[0].DryRun || requests[1].DryRun {
+		t.Fatalf("requests = %#v, want preview then write", requests)
+	}
+	if !strings.Contains(errOut, `config.defaultBranch: "main" -> "develop"`) || !strings.Contains(errOut, `Type the project id`) {
+		t.Fatalf("stderr missing preview or prompt: %s", errOut)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out)
+	}
+	var project map[string]json.RawMessage
+	if err := json.Unmarshal(got["project"], &project); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"folderMissing", "workspaceRepos", "config"} {
+		if _, ok := project[field]; !ok {
+			t.Fatalf("project field %q lost: %s", field, out)
+		}
+	}
+	if !strings.Contains(out, `"preRemove"`) || !strings.Contains(out, `"effort"`) || !strings.Contains(out, `"gitStatus"`) {
+		t.Fatalf("nested project fields lost: %s", out)
+	}
+}
+
+func TestProjectUpdate_InvalidPreviewDoesNotPromptOrWrite(t *testing.T) {
+	cfg := setConfigEnv(t)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"code":"INVALID_PROJECT_CONFIG","message":"invalid branch"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, Deps{In: strings.NewReader("demo\n"), ProcessAlive: func(int) bool { return true }}, "project", "update", "demo", "--default-branch", "bad")
+	if err == nil || requests != 1 || strings.Contains(errOut, "Type the project id") || out != "" {
+		t.Fatalf("err=%v requests=%d stdout=%q stderr=%q", err, requests, out, errOut)
+	}
+}
+
+func TestProjectUpdate_DeclinedConfirmationDoesNotWrite(t *testing.T) {
+	cfg := setConfigEnv(t)
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		requests++
+		var req projectUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if !req.DryRun {
+			t.Error("unexpected write after declined confirmation")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"project":{"id":"demo"},"changes":[{"path":"config.defaultBranch","from":"main","to":"develop"}],"dryRun":true}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, Deps{In: strings.NewReader("wrong\n"), ProcessAlive: func(int) bool { return true }}, "project", "update", "demo", "--default-branch", "develop", "--json")
+	if err != nil || requests != 1 || out != "" || !strings.Contains(errOut, "aborted") {
+		t.Fatalf("err=%v requests=%d stdout=%q stderr=%q", err, requests, out, errOut)
 	}
 }
 
