@@ -120,8 +120,10 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 		if timeout > 0 {
 			stepCtx, cancel = context.WithTimeout(ctx, timeout)
 		}
-		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
-		timedOut := timeout > 0 && errors.Is(stepCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		err := runCleanupStep(stepCtx, workspacePath, command, env, out)
+		// A step that exits cleanly right at its deadline succeeded; only a
+		// failing step can have timed out.
+		timedOut := err != nil && timeout > 0 && errors.Is(stepCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
 		if timedOut {
 			err = &stepTimeoutError{timeout: timeout, cause: err}
@@ -137,6 +139,9 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 	}
 	return nil
 }
+
+// runCleanupStep runs one Cleanup step; tests swap it to pin deadline races.
+var runCleanupStep = runWorkspaceStep
 
 // runWorkspaceStep shares shell, environment and pipe-drain handling for setup
 // and cleanup. WaitDelay bounds orphaned output pipes after shell exit or
