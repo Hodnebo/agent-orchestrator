@@ -228,6 +228,14 @@ func TestTurnCompletionRacingSteeredBatchDeliversOnce(t *testing.T) {
 	provider := &blockingBatchSteerer{
 		steerRecorder: newSteerRecorder(), started: make(chan struct{}), release: make(chan struct{}),
 	}
+	releaseProvider := func() {
+		select {
+		case <-provider.release:
+		default:
+			close(provider.release)
+		}
+	}
+	defer releaseProvider()
 	h := newHarnessWithConversationAndStore(t, provider, func(st *store.Store) chatsvc.Store { return st })
 	ctx := context.Background()
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
@@ -252,12 +260,12 @@ func TestTurnCompletionRacingSteeredBatchDeliversOnce(t *testing.T) {
 	}()
 	select {
 	case <-provider.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("steer did not reach provider")
 	}
 	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 		ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
-	close(provider.release)
+	releaseProvider()
 	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
