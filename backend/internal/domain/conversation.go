@@ -531,8 +531,10 @@ type ConversationTurn struct {
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt is a snapshot-only fact derived from every durable retry
 	// relation, including attempts outside the active provider branch.
-	HasRetryAttempt bool      `json:"hasRetryAttempt,omitempty"`
-	State           TurnState `json:"state"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt is a snapshot-only fact independent of timeline pagination.
+	HasHumanPrompt bool      `json:"hasHumanPrompt,omitempty"`
+	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
 	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`

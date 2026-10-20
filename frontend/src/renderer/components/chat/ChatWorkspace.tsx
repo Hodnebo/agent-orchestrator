@@ -757,8 +757,7 @@ function ChatWorkspaceContent({
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
-		snapshot.items.some((entry) => entry.kind === "message" && entry.turnId === latestSettledTurn.id &&
-			entry.role === "user" && entry.origin === "human")
+		latestSettledTurn.hasHumanPrompt
 		? latestSettledTurn : undefined;
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
@@ -2930,7 +2929,7 @@ export function Timeline({
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
 	const retryableTurns = useMemo(
 		() =>
-			new Set(
+			new Map(
 				snapshot.turns
 					.filter(
 						(turn) =>
@@ -2938,7 +2937,7 @@ export function Timeline({
 							Boolean(turn.providerTurnId) &&
 							!consumedRetrySources.has(turn.id),
 					)
-					.map((turn) => turn.id),
+					.map((turn) => [turn.id, turn]),
 			),
 		[snapshot.turns, consumedRetrySources],
 	);
@@ -3908,12 +3907,13 @@ export function Timeline({
 						style={virtualized ? { height: virtualHeight } : undefined}>
 					{renderedGroups.map(({ group, row, index }) => {
 						const retrySelected = !retryControl?.turnId || retryControl.turnId === group.turnId;
+						const retryableTurn = group.turnId ? retryableTurns.get(group.turnId) : undefined;
 						const retry =
 							group.turnId &&
 							retryControl &&
-							retryableTurns.has(group.turnId) &&
+							retryableTurn &&
 							group.turnId !== composerRecoveryTurnId &&
-							groupHasHumanPrompt(group)
+							(groupHasHumanPrompt(group) || Boolean(retryableTurn.usageLimit && retryableTurn.hasHumanPrompt))
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(

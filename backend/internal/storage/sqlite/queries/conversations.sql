@@ -1653,6 +1653,13 @@ FROM conversation_turns
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id IS NOT NULL;
 
+-- Prompt eligibility must survive the original message falling outside a page.
+-- name: SelectConversationHumanPromptTurnIDs :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+FROM conversation_messages
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human';
+
 -- name: SelectConversationQueuedEditDelivery :one
 SELECT request_hash FROM conversation_queued_edit_deliveries
 WHERE conversation_id = ? AND client_message_id = ?;

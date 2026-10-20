@@ -1596,6 +1596,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			providerTurnId: turn.providerTurnId,
 			retryOfTurnId: turn.retryOfTurnId,
 			hasRetryAttempt: turn.hasRetryAttempt,
+			hasHumanPrompt: turn.hasHumanPrompt,
 			errorMessage: turn.errorMessage,
 			usageLimit: turn.usageLimit ? {
 				resetsAt: turn.usageLimit.resetsAt ?? undefined,

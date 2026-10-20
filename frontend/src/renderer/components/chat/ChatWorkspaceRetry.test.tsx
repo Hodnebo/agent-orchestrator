@@ -13,7 +13,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
-import type { ConversationSnapshot } from "../../types/conversation";
+import type { ConversationItem, ConversationSnapshot } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -45,6 +45,7 @@ function limitedSnapshot(autoResume = false): ConversationSnapshot {
 	snapshot.turns = snapshot.turns.filter((turn) => turn.id === "turn-1").map((turn) => ({
 		...turn,
 		errorMessage: "You've hit your session limit",
+		hasHumanPrompt: true,
 		usageLimit: { resetsAt: new Date(Date.now() + 60_000).toISOString(), autoResume },
 	}));
 	snapshot.items = snapshot.items.filter((item) => item.turnId === "turn-1");
@@ -66,6 +67,56 @@ describe("ChatWorkspace retry", () => {
 		render(<ChatWorkspace snapshot={limitedSnapshot(true)} retryControl={{ retry: vi.fn(), setAutoResume }} />);
 		await userEvent.click(screen.getByRole("button", { name: "Cancel auto-resume" }));
 		expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
+	});
+
+	it.each([
+		{ autoResume: false, action: "Resume" },
+		{ autoResume: true, action: "Cancel auto-resume" },
+	])("keeps $action available when pagination omits the prompt", async ({ autoResume, action }) => {
+		const snapshot = limitedSnapshot(autoResume);
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.items = snapshot.items.filter((item) => item.kind !== "message" || item.role !== "user");
+		snapshot.hasMoreBefore = true;
+		snapshot.oldestSequence = 2;
+		const retry = vi.fn();
+		const setAutoResume = vi.fn();
+		const loadOlder = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry, setAutoResume }} hasOlder onLoadOlder={loadOlder} />);
+
+		expect(screen.getByRole("button", { name: action, exact: true })).toBeEnabled();
+		await userEvent.click(screen.getByRole("button", { name: action, exact: true }));
+		if (autoResume) expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
+		else expect(retry).toHaveBeenCalledWith("turn-1");
+		expect(loadOlder).not.toHaveBeenCalled();
+	});
+
+	it("does not offer usage-limit recovery without a durable human prompt", () => {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0]!.hasHumanPrompt = false;
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user"
+			? { ...item, origin: "automation" } : item);
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
+
+		expect(screen.queryByRole("button", { name: "Resume", exact: true })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).toBeNull();
+	});
+
+	it("keeps an earlier limited turn resumable when pagination omits its prompt", async () => {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.items = snapshot.items.filter((item) => item.kind !== "message" || item.role !== "user");
+		snapshot.hasMoreBefore = true;
+		snapshot.oldestSequence = 2;
+		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+		const retry = vi.fn();
+		const loadOlder = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} hasOlder onLoadOlder={loadOlder} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Resume", exact: true }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+		expect(loadOlder).not.toHaveBeenCalled();
 	});
 
 	it.each([

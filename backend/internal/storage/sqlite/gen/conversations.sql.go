@@ -2804,6 +2804,37 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 	return i, err
 }
 
+const selectConversationHumanPromptTurnIDs = `-- name: SelectConversationHumanPromptTurnIDs :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human'
+`
+
+// Prompt eligibility must survive the original message falling outside a page.
+func (q *Queries) SelectConversationHumanPromptTurnIDs(ctx context.Context, conversationID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationHumanPromptTurnIDs, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var turn_id string
+		if err := rows.Scan(&turn_id); err != nil {
+			return nil, err
+		}
+		items = append(items, turn_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
 SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ?

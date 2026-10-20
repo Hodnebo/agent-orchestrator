@@ -820,7 +820,7 @@ describe("useConversation snapshot mapping", () => {
 		]);
 	});
 
-	it("maps retry lineage and consumed-source facts from the daemon", async () => {
+	it("maps retry lineage and durable prompt facts from the daemon", async () => {
 		getMock.mockResolvedValue({
 			data: {
 				...WIRE,
@@ -829,6 +829,7 @@ describe("useConversation snapshot mapping", () => {
 						...WIRE.turns[0],
 						retryOfTurnId: "turn-source",
 						hasRetryAttempt: true,
+						hasHumanPrompt: true,
 					},
 				],
 			},
@@ -841,6 +842,7 @@ describe("useConversation snapshot mapping", () => {
 		expect(result.current.snapshot!.turns[0]).toMatchObject({
 			retryOfTurnId: "turn-source",
 			hasRetryAttempt: true,
+			hasHumanPrompt: true,
 		});
 	});
 

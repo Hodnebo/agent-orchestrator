@@ -3494,6 +3494,10 @@ func (s *Store) LoadConversationSnapshotPage(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
 
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -3511,6 +3515,7 @@ func (s *Store) LoadConversationSnapshotPage(
 		}
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
+		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -3629,6 +3634,10 @@ func (s *Store) LoadConversationSnapshot(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
+	humanPromptTurns, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
 	// Messages and activities exclude anything attached to a rolled-back turn: the
 	// agent has forgotten those, and a timeline that still showed them would be
 	// describing a conversation the agent is not in.
@@ -3653,6 +3662,7 @@ func (s *Store) LoadConversationSnapshot(
 	for _, row := range turnRows {
 		turn := turnToDomain(row)
 		turn.HasRetryAttempt = retriedSources[turn.ID]
+		turn.HasHumanPrompt = humanPromptTurns[turn.ID]
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
@@ -3675,6 +3685,18 @@ func (s *Store) conversationRetriedSources(ctx context.Context, conversationID s
 		sources[sourceTurnID] = true
 	}
 	return sources, nil
+}
+
+func (s *Store) conversationHumanPromptTurns(ctx context.Context, conversationID string) (map[string]bool, error) {
+	rows, err := s.qr.SelectConversationHumanPromptTurnIDs(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("select conversation human prompts: %w", err)
+	}
+	turns := make(map[string]bool, len(rows))
+	for _, turnID := range rows {
+		turns[turnID] = true
+	}
+	return turns, nil
 }
 
 type conversationHistoryPresentation struct {

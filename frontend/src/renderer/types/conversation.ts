@@ -121,6 +121,8 @@ export interface ConversationTurn {
 	retryOfTurnId?: string;
 	/** A retry attempt exists, even if that child is outside the active branch. */
 	hasRetryAttempt?: boolean;
+	/** Durable human-prompt fact, independent of the loaded history page. */
+	hasHumanPrompt?: boolean;
 	errorMessage?: string;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;

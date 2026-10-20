@@ -71,6 +71,23 @@ for (const { harness, providerLabel } of [
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
 		});
 
+		test("keeps Cancel and Resume available without loading the paginated prompt", async ({ page }) => {
+			await page.setViewportSize({ width: 390, height: 844 });
+			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&paginated=1&armed=1&delay=-1000`);
+			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
+			const prompt = page.getByText("Continue improving the session experience.", { exact: true });
+			await expect(prompt).toHaveCount(0);
+			await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
+			const cancel = page.getByRole("button", { name: "Cancel auto-resume" });
+			await expect(cancel).toBeEnabled();
+			await cancel.click();
+			const resume = page.getByRole("button", { name: "Resume", exact: true });
+			await expect(resume).toBeEnabled();
+			await expect(prompt).toHaveCount(0);
+			await resume.click();
+			await expect(resume).toHaveCount(0);
+		});
+
 		test("keeps controls usable on a narrow screen and never guesses a reset", async ({ page }) => {
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&unknown=1`);

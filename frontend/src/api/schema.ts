@@ -5364,6 +5364,7 @@ export interface components {
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
+            hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
             plan?: components["schemas"]["ConversationPlanResponse"];
