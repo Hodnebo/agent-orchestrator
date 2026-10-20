@@ -146,6 +146,9 @@ func (s *Service) SweepExpired(ctx context.Context, kill func(ctx context.Contex
 		}
 	}
 	for _, run := range runs {
+		if run.SessionID == "" && strings.HasPrefix(run.ID, "validate_") {
+			continue // standalone validation has no tester session to expire or kill
+		}
 		if run.State == RunAwaitingApproval && s.clock().Sub(run.CreatedAt) > AwaitingTTL {
 			why := "discarded: nobody approved or discarded this comment within 7 days"
 			if _, err := s.discard(ctx, run.ID, why); err != nil {

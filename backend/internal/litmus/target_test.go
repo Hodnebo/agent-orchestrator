@@ -444,3 +444,58 @@ func TestElectronProcPicksTheBrowserNotAHelper(t *testing.T) {
 		t.Fatalf("no match = %+v", got)
 	}
 }
+
+func TestRecipeValidationFailureDoesNotFreezeRetention(t *testing.T) {
+	svc, _ := prepSvc(t, map[string]string{"v24": "v24.21.0"})
+	// Standalone validation has no tester or spawn marker.
+	svc.store = NewStore(t.TempDir())
+	r, err := ParseRecipe(defaultRecipe)
+	is(t, "")(nil, err)
+	r.Run.Dir = "no-such-directory" // fail before any app process can start
+	data, err := yaml.Marshal(r)
+	is(t, "")(nil, err)
+	path := filepath.Join(t.TempDir(), "recipe.yaml")
+	is(t, "")(nil, os.WriteFile(path, data, 0o600))
+	sha := strings.Repeat("a", 40)
+	ref, err := RecipeRef(path, sha)
+	is(t, "")(nil, err)
+	if _, err := svc.RecipeValidate(ctx, ref); err == nil {
+		t.Fatal("validation unexpectedly launched from a missing directory")
+	}
+	runs, unreadable := svc.loadForPrune()
+	if len(unreadable) != 0 || len(runs) != 1 {
+		t.Fatalf("validation left unreadable run directories: runs=%d unreadable=%q", len(runs), unreadable)
+	}
+	run := runs[0]
+	if !strings.HasPrefix(run.ID, "validate_") || run.SessionID != "" || run.State != RunPrepared || run.HeadSHA != sha || run.Error == "" || len(run.Legs) != 1 {
+		t.Fatalf("validation did not retain its prepared checkout and failure: %+v", run)
+	}
+	if run.Comment != CommentOff || run.Evidence != EvidenceOff || run.CreatedAt.IsZero() {
+		t.Fatal("validation record is missing its nonpublishing lifecycle metadata")
+	}
+	if !pathExists(filepath.Join(svc.store.legDir(run.ID, "head"), "logs", "dev.log")) {
+		t.Fatal("failed validation logs were lost")
+	}
+	stale := filepath.Join(svc.store.reposDir(run.Repo), strings.Repeat("b", 40))
+	writeFile(t, filepath.Join(stale, "node_modules", "unused"), "generated")
+	is(t, "")(nil, writeManifest(stale, Manifest{UsedAt: svc.clock().Add(-24 * time.Hour)}))
+	report, err := svc.Prune(ctx, 0, 0)
+	if err != nil || pathExists(stale) || len(report.Checkouts) != 1 || len(report.Runs) != 0 {
+		t.Fatalf("validation froze unrelated retention: %+v err=%v", report, err)
+	}
+	if !pathExists(run.Legs[0].Worktree) || !pathExists(filepath.Join(svc.store.root, run.ID)) {
+		t.Fatal("prune deleted validation state before cleanup was proven")
+	}
+	if strings.Contains(strings.Join(report.Lines, "\n"), "no readable run.json") {
+		t.Fatalf("validation was still classified as unreadable: %q", report.Lines)
+	}
+	// The tester sweep must not expire or kill a nonexistent validation session.
+	svc.clock = func() time.Time { return run.Deadline.Add(time.Hour) }
+	svc.SweepExpired(ctx, func(context.Context, string) error {
+		t.Fatal("standalone validation reached the tester-session killer")
+		return nil
+	}, quiet)
+	if saved, err := svc.store.Get(run.ID); err != nil || saved.State != RunPrepared || saved.Error != run.Error {
+		t.Fatalf("tester expiry changed standalone validation: state=%s err=%v", saved.State, err)
+	}
+}

@@ -724,15 +724,34 @@ func (s *Service) RecipeValidate(ctx context.Context, ref string) (Recipe, error
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RecipeValidateBudget)
 	defer cancel()
-	id, w := fmt.Sprintf("validate_%d", time.Now().Unix()), newLaps()
-	leg, err := s.prepareLeg(ctx, cmp.Or(r.Repo, DefaultRepo), r, "head", sha)
+	id, w := fmt.Sprintf("validate_%d", time.Now().UnixNano()), newLaps()
+	repo := cmp.Or(r.Repo, DefaultRepo)
+	leg, err := s.prepareLeg(ctx, repo, r, "head", sha)
 	w.lap("prepare")
 	if err == nil {
-		_, err = s.startLeg(ctx, id, 0, r, leg, w, nil)
-	}
-	if err == nil {
-		err = cleanLeg(ctx, s.sys, s.store.legDir(id, "head"), true)
-		w.lap("cleanup")
+		// A readable record pins this validation's checkout while it runs, without
+		// making prune treat all commits as unknown. Validation has no tester session.
+		run := Run{ID: id, Repo: repo, HeadSHA: filepath.Base(leg.Worktree), State: RunPrepared,
+			CreatedAt: s.clock(), Deadline: s.clock().Add(RecipeValidateBudget), Legs: []Leg{leg}, Comment: CommentOff, Evidence: EvidenceOff}
+		s.mu.Lock()
+		err = s.store.Save(run) // save before startLeg creates logs or starts a process
+		s.mu.Unlock()
+		if err == nil {
+			leg, err = s.startLeg(ctx, id, 0, r, leg, w, nil)
+			if err == nil {
+				err = cleanLeg(ctx, s.sys, s.store.legDir(id, "head"), true)
+				w.lap("cleanup")
+			}
+			_, saveErr := s.update(id, func(cur *Run) {
+				cur.Legs = []Leg{leg}
+				if err == nil {
+					cur.State, cur.Legs[0].State = RunCleaned, "cleaned"
+				} else {
+					cur.Error = err.Error() // keep failed or uncertain cleanup pinned
+				}
+			})
+			err = errors.Join(err, saveErr)
+		}
 	}
 	if err != nil {
 		return Recipe{}, fmt.Errorf("%w (timings: %s)", err, strings.Join(w.out, ", "))
