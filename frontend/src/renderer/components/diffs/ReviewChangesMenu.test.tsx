@@ -61,6 +61,9 @@ describe("ReviewChangesMenu", () => {
 		const trigger = screen.getByRole("button", { name: "Changes to review: Uncommitted" });
 		expect(trigger).toHaveAttribute("title", "Uncommitted");
 		expect(trigger).toHaveTextContent("Uncommitted+3−1");
+		// Text only, like the menu's rows: the chevron is its one icon.
+		expect(trigger.querySelectorAll("svg")).toHaveLength(1);
+		expect(trigger.querySelector("svg")).toHaveClass("lucide-chevron-down");
 	});
 
 	it("lists the working scopes with stats and a check slot, and closes on a pick", async () => {
@@ -68,6 +71,10 @@ describe("ReviewChangesMenu", () => {
 		await openMenu();
 		const scopes = await screen.findAllByRole("menuitemradio");
 		expect(scopes.map((item) => item.textContent)).toEqual(["Uncommitted+3−1", "Staged+1−0", "Unstaged+2−1"]);
+		// Plain labels: only the selected row's check is drawn.
+		expect(scopes[0].querySelectorAll("svg")).toHaveLength(1);
+		expect(scopes[1].querySelector("svg")).toBeNull();
+		expect(screen.getByRole("menuitem", { name: /^Commits/ }).querySelectorAll("svg")).toHaveLength(1);
 		expect(scopes[0]).toHaveAttribute("aria-checked", "true");
 		expect(scopes[1]).toHaveAttribute("aria-checked", "false");
 
@@ -83,11 +90,13 @@ describe("ReviewChangesMenu", () => {
 		expect(props.onSelectScope).toHaveBeenCalledWith("uncommitted");
 	});
 
-	it("shows commits immediately with All commits checked when commits are picked", async () => {
+	it("puts commits in a submenu with All commits checked when commits are picked", async () => {
 		renderMenu({ value: { kind: "commits", shas: [] }, stats: { additions: 12, deletions: 4 } });
 		expect(screen.getByRole("button", { name: "Changes to review: All commits" })).toBeInTheDocument();
 		await openMenu();
 		expect(screen.getAllByRole("menuitemradio").every((item) => item.getAttribute("aria-checked") === "false")).toBe(true);
+		expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
 		const all = await screen.findByRole("menuitemcheckbox", { name: /^All commits/ });
 		expect(all).toHaveAttribute("aria-checked", "true");
 		expect(all).toHaveTextContent("All commits+12−4");
@@ -143,21 +152,39 @@ describe("ReviewChangesMenu", () => {
 		expect(screen.getByRole("button", { name: "Changes to review: 2 commits" })).toBeInTheDocument();
 	});
 
-	it("shows commits 50 at a time and marks the end of a truncated history", async () => {
+	it("shows commits 50 at a time in a 7-row scroll box that ends in Show more", async () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(120), truncated: true });
 		await openMenu();
 		const commitCount = () => screen.getAllByRole("menuitemcheckbox").length - 1;
 		expect(commitCount()).toBe(50);
 		expect(screen.queryByText("Older commits aren't listed")).not.toBeInTheDocument();
+		const list = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ }).parentElement;
+		expect(list).toHaveClass("max-h-[12.625rem]", "overflow-y-auto");
+		// Scrolling the list reaches Show more, after its last row.
+		const more = screen.getByRole("menuitem", { name: "Show 50 more" });
+		expect(list).toContainElement(more);
+		expect(list?.lastElementChild).toBe(more);
 
-		await userEvent.click(screen.getByRole("menuitem", { name: "Show 50 more" }));
+		await userEvent.click(more);
 		expect(commitCount()).toBe(100);
 		expect(screen.getByRole("menu")).toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("menuitem", { name: "Show 20 more" }));
 		expect(commitCount()).toBe(120);
 		expect(screen.queryByRole("menuitem", { name: /^Show/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: "Older commits aren't listed" })).toHaveAttribute("aria-disabled", "true");
+		const older = screen.getByRole("menuitem", { name: "Older commits aren't listed" });
+		expect(older).toHaveAttribute("aria-disabled", "true");
+		expect(list).toContainElement(older);
+	});
+
+	it("lines All commits' box up with the commits' boxes, scrollbar or not", async () => {
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(3) });
+		await openMenu();
+		const list = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ }).parentElement;
+		// The list keeps its scrollbar gutter even when it doesn't scroll; All
+		// commits, outside it, is inset by the same gutter and padding.
+		expect(list).toHaveClass("[scrollbar-gutter:stable]", "pr-0.5");
+		expect(screen.getByRole("menuitemcheckbox", { name: /^All commits/ })).toHaveClass("mr-1.5");
 	});
 
 	it("expands the list to a ticked commit beyond the first page", async () => {
@@ -224,6 +251,16 @@ describe("ReviewChangesMenu", () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: [], rangeMode: "since_base", baseRef: "main" });
 		await openMenu();
 		expect(screen.getByRole("menuitem", { name: "No commits that aren't on main" })).toBeInTheDocument();
+		// There is nothing for All commits to select.
+		expect(screen.queryByRole("menuitemcheckbox", { name: /^All commits/ })).not.toBeInTheDocument();
+	});
+
+	it("shows only the empty reason in the Commits submenu of a branch with no commits", async () => {
+		renderMenu({}, { rows: [], allStats: { additions: 0, deletions: 0 } });
+		await openMenu();
+		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
+		expect(await screen.findByRole("menuitem", { name: "No commits found." })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
 	});
 
 	it("labels a default branch's range as its latest commits", async () => {

@@ -3198,7 +3198,6 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.snapshotRefresh": "Reload selected revision",
-	"files.branches.showMore": "Show more branches",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}"
 }

@@ -223,9 +223,12 @@ export function FileTree({
 	onSelectPath,
 	onPrefetchPath,
 	flushTop = false,
+	expandChanged = false,
 }: {
 	/** Start the first row at the top edge (the Files split view's divider). */
 	flushTop?: boolean;
+	/** Changed-only: open every folder, including ones that appear later. */
+	expandChanged?: boolean;
  source?: FilesSource;
 	filterText: string;
 	sessionId: string;
@@ -240,6 +243,7 @@ export function FileTree({
 		return (
 			<ChangedFileTree
 				data={changedOnlyData}
+				expandAll={expandChanged}
 				filterText={filterText}
 				flushTop={flushTop}
 				onSelectPath={onSelectPath}
@@ -361,6 +365,15 @@ function WorkspaceFileTree({
 			) : null}
 		</div>
 	);
+}
+
+/** Every folder above the files, as the tree names them ("a/b/"). */
+function directoryPaths(paths: readonly string[]): string[] {
+	const directories = new Set<string>();
+	for (const path of paths) {
+		for (let index = path.indexOf("/"); index !== -1; index = path.indexOf("/", index + 1)) directories.add(path.slice(0, index + 1));
+	}
+	return [...directories];
 }
 
 function flattenChangedFiles(nodes: TreeNode[], files: TreeNode[] = []): TreeNode[] {
@@ -532,6 +545,7 @@ function PierreTreeSurface({
 function ChangedFileTree({
 	onPrefetchPath,
 	data,
+	expandAll,
 	filterText,
 	flushTop,
 	onSelectPath,
@@ -540,6 +554,7 @@ function ChangedFileTree({
 }: {
 	onPrefetchPath?: (node: TreeNode) => void;
 	data: TreeNode[];
+	expandAll: boolean;
  source?: FilesSource;
 	filterText: string;
 	flushTop: boolean;
@@ -580,7 +595,7 @@ function ChangedFileTree({
 		flattenEmptyDirectories: false,
 		icons: TREE_ICONS,
 		unsafeCSS: TREE_UNSAFE_CSS,
-		initialExpansion: "closed",
+		initialExpansion: expandAll ? "open" : "closed",
 		initialSelectedPaths: selectedPath && filesByPath.has(selectedPath) ? [selectedPath] : [],
 		itemHeight: ROW_HEIGHT,
 		overscan: 8,
@@ -599,14 +614,21 @@ function ChangedFileTree({
 	modelRef.current = model;
 	const hostRef = useTreeExpandAnimation(model);
 
+	// Folders seen before keep the open state the user left them in; with
+	// expandAll a folder that first appears now opens like the rest.
+	const knownDirectories = useRef<Set<string> | null>(null);
 	useLayoutEffect(() => {
-		const expandedPaths = model
-			.getVisibleRows(0, model.getVisibleCount())
-			.filter((row) => row.kind === "directory" && row.isExpanded)
-			.map((row) => row.path);
+		const rows = model.getVisibleRows(0, model.getVisibleCount());
+		const expandedPaths = rows.filter((row) => row.kind === "directory" && row.isExpanded).map((row) => row.path);
+		if (expandAll) {
+			const known = knownDirectories.current ?? new Set(rows.filter((row) => row.kind === "directory").map((row) => row.path));
+			const directories = directoryPaths(paths);
+			for (const directory of directories) if (!known.has(directory)) expandedPaths.push(directory);
+			knownDirectories.current = new Set(directories);
+		}
 		model.resetPaths({ preparedInput, initialExpandedPaths: expandedPaths });
 		model.setGitStatus(gitStatus);
-	}, [gitStatus, model, preparedInput]);
+	}, [expandAll, gitStatus, model, paths, preparedInput]);
 
 	useLayoutEffect(() => {
 		if (!selectedPath || !filesByPath.has(selectedPath)) return;

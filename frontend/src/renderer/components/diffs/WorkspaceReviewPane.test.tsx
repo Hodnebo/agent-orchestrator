@@ -16,7 +16,7 @@ import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { WorkspaceReviewPane } from "./WorkspaceReviewPane";
 
-const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
+const { getMock, postMock, scrollToMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), scrollToMock: vi.fn() }));
 
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
@@ -55,14 +55,17 @@ vi.mock("@pierre/diffs", () => ({
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
-	CodeView: ({ className, items, options, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+	CodeView: ({ className, items, options, ref, renderAnnotation, renderCustomHeader, renderGutterUtility }: {
+		ref?: { current: unknown };
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
 		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
-	}) => (
+	}) => {
+		if (ref) ref.current = { scrollTo: scrollToMock };
+		return (
 		<div className={className} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS} data-testid="code-view">
 			{items.map((item) => (
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
@@ -73,7 +76,8 @@ vi.mock("@pierre/diffs/react", () => ({
 			))}
 			{items[0] ? renderGutterUtility?.(() => ({ lineNumber: 7, side: "additions" }), items[0]) : null}
 		</div>
-	),
+		);
+	},
 }));
 
 function annotation(): FileAnnotationModel {
@@ -151,6 +155,31 @@ describe("WorkspaceReviewPane", () => {
 				groups: [{ repository: "", patch: "diff --git a/src/App.tsx b/src/App.tsx\n", truncated: false, includedPaths: ["src/App.tsx"], deferred: [] }],
 			},
 		});
+	});
+
+	it("scrolls to a file the changed-files rail picks, once its diff is in the list", async () => {
+		scrollToMock.mockReset();
+		const data = workspace([{ path: "src/App.tsx", status: "modified", additions: 1, deletions: 1, size: 20, binary: false, fileFingerprint: "file-1" }]);
+		const target = reviewTarget(data);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (scrollRequest?: { path: string; key: number }) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<WorkspaceReviewPane annotation={annotation()} target={target} filter="" onBrowseAll={vi.fn()} scrollRequest={scrollRequest} sessionId="sess-1" split={false} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(pane());
+		expect(await screen.findByTestId("code-view")).toBeInTheDocument();
+		expect(scrollToMock).not.toHaveBeenCalled();
+
+		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
+		await waitFor(() => expect(scrollToMock).toHaveBeenCalledWith({ type: "item", id: `${target.key}:src/App.tsx`, align: "start" }));
+		// A request is acted on once; a new key asks again.
+		view.rerender(pane({ path: "src/App.tsx", key: 1 }));
+		expect(scrollToMock).toHaveBeenCalledTimes(1);
+		view.rerender(pane({ path: "src/App.tsx", key: 2 }));
+		await waitFor(() => expect(scrollToMock).toHaveBeenCalledTimes(2));
 	});
 
 	it("reuses the matching prefetch query without another diff request", async () => {

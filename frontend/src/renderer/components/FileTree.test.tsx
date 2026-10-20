@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FileTree } from "./FileTree";
-import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildWorkspaceFileTree, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
@@ -210,6 +210,19 @@ describe("FileTree", () => {
 		const tree = await screen.findByTestId("changed-file-tree");
 		await waitFor(() => expect(tree.shadowRoot?.querySelector('[data-item-path="notes.txt"]')).not.toBeNull());
 		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("opens every folder of the changed tree when asked, including ones that appear later", async () => {
+		const nested = (paths: string[]): TreeNode[] => buildWorkspaceFileTree(paths.map((path) => ({ path, status: "modified", binary: false })));
+		const tree = (paths: string[]) => (
+			<FileTree changedOnly changedOnlyData={nested(paths)} expandChanged onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />
+		);
+		const view = renderWithQuery(tree(["src/app/main.ts"]));
+		const host = await screen.findByTestId("changed-file-tree");
+		await waitFor(() => expect(host.shadowRoot?.querySelector('[data-item-path="src/app/main.ts"]')).not.toBeNull());
+
+		view.rerender(<QueryClientProvider client={new QueryClient()}>{tree(["src/app/main.ts", "lib/util/text.ts"])}</QueryClientProvider>);
+		await waitFor(() => expect(host.shadowRoot?.querySelector('[data-item-path="lib/util/text.ts"]')).not.toBeNull());
 	});
 
 	it("selects a changed file from Pierre's path-first tree", async () => {

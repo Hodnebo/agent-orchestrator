@@ -49,6 +49,8 @@ export type FilesReviewSelection = {
 	changesMenu: ReviewChangesMenuProps;
 	/** Null where other branches cannot be read (scratch sessions, an older daemon, a degraded manifest) and until that is known. */
 	branchMenu: ReviewBranchMenuProps | null;
+	/** The session has a pull request the branch menu offers; undefined while the branch list is loading. */
+	hasPullRequest: boolean | undefined;
 	target: ReviewTarget;
 	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
 	retryTarget: () => void;
@@ -273,9 +275,15 @@ export function useFilesReviewSelection({
 		},
 	};
 
+	// The list carries the session's PRs, as their own rows or on the local branch they own.
+	const hasPullRequest = branchRows ? branchMenu !== null && branchRows.some((row) => row.prNumber != null)
+		: branchesQuery.isFetching ? undefined
+		: false;
+
 	return {
 		changesMenu,
 		branchMenu,
+		hasPullRequest,
 		target,
 		refreshSource: () => {invalidateWorkspaceViews(queryClient,sessionId,hostId);void branchesQuery.refetch();void historyQuery.refetch();},
 		retryTarget: () => {

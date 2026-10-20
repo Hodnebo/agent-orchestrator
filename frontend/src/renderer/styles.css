@@ -3471,6 +3471,14 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 }
 
+/* A button the Files view adds here (maximize) joins the pinned pair, so it
+   sits the same 4px from them as they sit from each other. */
+.session-inspector__files-actions:not(:empty) + .session-inspector-actions-spacer {
+	width: calc(
+		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-1)
+	);
+}
+
 @container workspace-topbar (max-width: 759px) {
 	.workspace-topbar-actions [data-priority="secondary"] [data-compact-label] {
 		inline-size: 0;

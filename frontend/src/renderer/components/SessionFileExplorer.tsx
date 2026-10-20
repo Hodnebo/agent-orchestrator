@@ -27,7 +27,7 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useFilesReviewSelection } from "../hooks/useFilesReviewSelection";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { buildChangedOnlyTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildChangedOnlyTree, buildWorkspaceFileTree, sessionWorkspaceTreeQueryOptions, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -210,23 +210,41 @@ export function SessionFileExplorer({
 
 	// Both live and historical sources support complete repository browsing.
 	const hasViewTabs = hasChanges || onOtherBranch;
-	const showTreeToggle = splitView && !hasViewTabs;
-	// With the filter and actions in a top bar, the header holds only the pickers
-	// and view tabs, so it is dropped when there are none. The pickers wait for
-	// the manifest, so until it arrives the row is kept and nothing jumps.
 	const setLayout = (next: boolean) => {
 		if (controlledSplit === undefined) setInternalSplit(next);
 		onSplitChange?.(next);
 	};
 	// Unified/split applies wherever a diff shows: the Changes review and the
-	// preview beside the tree.
-	const showLayout = showChanges || splitView || Boolean(onOpenFile);
-	const showCollapse = showChanges && Boolean(filesData);
+	// preview beside the tree. A review with no files has nothing to lay out or
+	// collapse, so both go until it has some; while it loads they stay put.
+	const reviewHasFiles = review.target.state === "pending" || (review.target.files?.length ?? 0) > 0;
+	// Beside the tree only the maximized preview can show a diff, and only of a
+	// changed file (any file of another branch's snapshot may differ). Docked,
+	// the tree opens plain files in the centre, whose diffs keep the layout last
+	// picked in the Changes view.
+	const previewHasDiff = splitView && selectedPath !== null
+		&& (source.kind === "snapshot" || Boolean(filesData?.files.some((file) => file.path === selectedPath && file.status !== "unmodified")));
+	const showLayout = showChanges ? reviewHasFiles : previewHasDiff;
+	const showCollapse = showChanges && Boolean(filesData) && reviewHasFiles;
 	// With the filter and maximize in a top bar, the header holds only the
-	// pickers, the ⋯ menu and the view tabs, so it is dropped when there are
-	// none. The pickers wait for the manifest, so until it arrives the row is
-	// kept and nothing jumps.
-	const showHeader = !filesTopbarHost || !filesData || showChangesTrigger || Boolean(branchMenu) || showLayout || showCollapse || hasViewTabs || showTreeToggle;
+	// pickers and the view controls. A session with nothing to review (no
+	// changes, no pull request, no other branch picked) drops the whole row and
+	// shows just the tree. Until the manifest and the branch list say so, the
+	// row is kept and a review never jumps.
+	const showHeader = !filesTopbarHost || !filesData || hasViewTabs || review.hasPullRequest !== false;
+	const showTreeToggle = showHeader && splitView && !hasViewTabs;
+	// Without the header nothing can reopen a hidden tree, so it always shows.
+	const treeShown = treeOpen || !showHeader;
+	// Maximized, the Changes review gets a rail of just its changed files, like
+	// the All files tree beside the preview; picking one scrolls to its diff.
+	const reviewFiles = review.target.files;
+	const reviewTreeData = useMemo(() => buildWorkspaceFileTree(reviewFiles ?? []), [reviewFiles]);
+	const [reviewTreePath, setReviewTreePath] = useState<string | null>(null);
+	const [reviewScrollRequest, setReviewScrollRequest] = useState<{ path: string; key: number }>();
+	const selectReviewTreePath = (node: TreeNode) => {
+		setReviewTreePath(node.path);
+		setReviewScrollRequest((current) => ({ path: node.path, key: (current?.key ?? 0) + 1 }));
+	};
 	// In the preview + tree split the (already active) All-files tab doubles as
 	// the tree toggle, so the header doesn't carry two file-tree buttons.
 	const allFilesTabLabel = !showChanges && splitView ? (treeOpen ? t("files.hideFileTree") : t("files.showFileTree")) : t("files.allFiles");
@@ -305,6 +323,29 @@ export function SessionFileExplorer({
 		</Tooltip>
 	) : null;
 
+	const reviewPane = (
+		<WorkspaceReviewPane
+			annotation={annotation}
+			target={review.target}
+			onRetry={review.retryTarget}
+			hostId={hostId}
+			filter={filter}
+			onBrowseAll={() => handleViewChange(false)}
+			canOpenInCenter={Boolean(onOpenFile)}
+			onOpenFile={(path,options)=>{
+    if(isMaximized && !options?.center) openInMaximizedPreview(path,options);
+    else {if(isMaximized) onToggleMaximized?.(false);onOpenFile?.(path,options);}
+   }}
+			onIncludeCommitsBetween={review.includeCommitsBetween}
+			onShowAllCommits={review.showAllCommits}
+			sessionId={sessionId}
+			split={split}
+			collapseRequest={collapseRequest}
+			onAllCollapsedChange={setReviewAllCollapsed}
+			scrollRequest={reviewScrollRequest}
+		/>
+	);
+
 	return (
 		<section className="relative flex h-full min-h-0 flex-col bg-background text-foreground" aria-label={t("files.sessionFiles")}>
 			{/* The inspector top bar or the maximized overlay's titlebar hosts the
@@ -320,10 +361,10 @@ export function SessionFileExplorer({
 				   edge with 4px gaps, like the pinned top-bar buttons above them. */
 				<header className="@container/files-header flex shrink-0 items-center gap-1 pb-3 pl-3 pr-1 pt-2">
 					{/* What to review, then which branch: the changes picker truncates
-					    last, the branch picker first. -ml-2 cancels the first trigger's
-					    own 8px inline padding so its label starts on the 12px gutter. */}
+					    last, the branch picker first. -ml-1.5 cancels the first trigger's
+					    own 6px inline padding so its label starts on the 12px gutter. */}
 					{showChangesTrigger || branchMenu ? (
-						<div className="-ml-2 flex min-w-0 shrink items-center gap-1">
+						<div className="-ml-1.5 flex min-w-0 shrink items-center gap-1">
 							{showChangesTrigger ? <ReviewChangesMenu {...review.changesMenu} /> : null}
 							{branchMenu ? <ReviewBranchMenu {...branchMenu} /> : null}
 						</div>
@@ -403,36 +444,40 @@ export function SessionFileExplorer({
 						{filesQuery.error.message || t("files.error.loadWorkspace")}
 					</PanelMessage>
 				) : filesData ? (
-					<WorkspaceReviewPane
-						annotation={annotation}
-						target={review.target}
-						onRetry={review.retryTarget}
-						hostId={hostId}
-						filter={filter}
-						onBrowseAll={() => handleViewChange(false)}
-						canOpenInCenter={Boolean(onOpenFile)}
-						onOpenFile={(path,options)=>{
-       if(isMaximized && !options?.center) openInMaximizedPreview(path,options);
-       else {if(isMaximized) onToggleMaximized?.(false);onOpenFile?.(path,options);}
-      }}
-						onIncludeCommitsBetween={review.includeCommitsBetween}
-						onShowAllCommits={review.showAllCommits}
-						sessionId={sessionId}
-						split={split}
-						collapseRequest={collapseRequest}
-						onAllCollapsedChange={setReviewAllCollapsed}
-					/>
+					isMaximized ? (
+						<ResizablePanelGroup className={cn("min-h-0 flex-1", showHeader && "border-t border-border")}>
+							<ResizablePanel defaultSize="74%" minSize="40%">
+								{reviewPane}
+							</ResizablePanel>
+							<ResizableHandle />
+							<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">
+								{reviewFiles ? (
+									<FileTree
+										changedOnly
+										changedOnlyData={reviewTreeData}
+										expandChanged
+										filterText={filter}
+										onSelectPath={selectReviewTreePath}
+										selectedPath={reviewTreePath}
+										sessionId={sessionId}
+									/>
+								) : review.target.state === "pending" ? (
+									<PanelMessage compact>{t("files.loading")}</PanelMessage>
+								) : null}
+							</ResizablePanel>
+						</ResizablePanelGroup>
+					) : reviewPane
 				) : null
 			) : splitView ? (
 				// Preview on the left, tree on the right (collapsible from the header),
 				// like an editor's changed-files rail.
-				<ResizablePanelGroup className="min-h-0 flex-1 border-t border-border">
+				<ResizablePanelGroup className={cn("min-h-0 flex-1", showHeader && "border-t border-border")}>
 					<ResizablePanel defaultSize="74%" minSize="40%">
 						<ContentScrollArea>
 							<FileContentPane onOpenInCenter={onOpenFile && selectedPath ? openPreviewInCenter : undefined} annotation={annotation} commitSha={previewRequest?.commitSha} hostId={hostId} initialEditing={previewRequest?.editing ?? false} initialMode={previewRequest?.mode} initialRequestKey={previewRequest?.key ?? 0} path={selectedPath} previousPath={selectedPreviousPath} scope={previewRequest?.scope} sessionId={sessionId} source={previewRequest?.source ?? source} split={split} toolbar="compact" />
 						</ContentScrollArea>
 					</ResizablePanel>
-					{treeOpen ? (
+					{treeShown ? (
 						<>
 							<ResizableHandle />
 							<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">

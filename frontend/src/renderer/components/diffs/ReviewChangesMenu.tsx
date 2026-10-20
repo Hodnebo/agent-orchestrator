@@ -1,8 +1,7 @@
 import { markFileMenuPainted, markFileViewerPerformance } from "../../lib/file-viewer-performance";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-// Aliased: @pierre/diffs also exports a FileDiff the review pane imports.
-import { FileDiff as FileDiffIcon, FilePen, GitCommitHorizontal, History, ListChecks, type LucideIcon } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { SettingsMenuTrigger } from "../settings/SettingsMenuTrigger";
 import {
@@ -13,9 +12,13 @@ import {
 	DropdownMenuRadioGroup,
 	DropdownMenuRadioItem,
 	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { REVIEW_MENU_LIST, REVIEW_MENU_LIST_ALIGN, REVIEW_MENU_MORE, REVIEW_MENU_PAGE, REVIEW_MENU_ROW, REVIEW_MENU_TRIGGER } from "./review-menu-styles";
 
 /** Working-tree scopes. `combined` is the "Changes" row an older daemon offers instead of `uncommitted`. */
 export type ReviewChangesScope = "uncommitted" | "staged" | "unstaged" | "combined";
@@ -71,14 +74,11 @@ export type ReviewChangesMenuProps = {
 	className?: string;
 };
 
-const COMMIT_PAGE = 50;
+const COMMIT_PAGE = REVIEW_MENU_PAGE;
+/** A commit row's fixed height, so the list's box holds exactly a page. */
+const COMMIT_ROW = "h-7 shrink-0";
 
-const scopeIcons: Record<ReviewChangesScope, LucideIcon> = {
-	uncommitted: FileDiffIcon,
-	staged: ListChecks,
-	unstaged: FilePen,
-	combined: FileDiffIcon,
-};
+const COMMITS_PANEL = "w-[min(20rem,calc(100vw-2rem))]";
 
 // Checkbox rows toggle in place: Radix closes the menu on select unless the
 // event is cancelled.
@@ -110,27 +110,23 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	const ticked = new Set(tickedShas);
 	const allTicked = value.kind === "commits" && tickedShas.length === 0;
 
-	let TriggerIcon: LucideIcon;
+	// Text only, like the menu's own rows.
 	let triggerLabel: string;
 	let triggerValue: string;
 	let monoLabel = false;
 	if (value.kind !== "commits") {
-		TriggerIcon = scopeIcons[value.kind];
 		triggerLabel = scopeLabel(value.kind);
 		triggerValue = triggerLabel;
 	} else if (tickedShas.length === 0) {
-		TriggerIcon = History;
 		triggerLabel = allLabel;
 		triggerValue = allLabel;
 	} else if (tickedShas.length === 1) {
 		const sha = tickedShas[0];
 		const subject = commits.rows.find((row) => row.sha === sha)?.subject;
-		TriggerIcon = GitCommitHorizontal;
 		triggerLabel = sha.slice(0, 7);
 		triggerValue = subject ? `${triggerLabel} ${subject}` : triggerLabel;
 		monoLabel = true;
 	} else {
-		TriggerIcon = GitCommitHorizontal;
 		triggerLabel = t("files.changes.commitCount", { count: tickedShas.length });
 		triggerValue = triggerLabel;
 	}
@@ -145,18 +141,23 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	const shownRows = commits.rows.slice(0, shownCount);
 	const hiddenCount = commits.rows.length - shownRows.length;
 
+	// With no commits to list, All commits would select an empty review, so only the reason shows.
+	const noCommits = commits.state === "ready" && commits.rows.length === 0;
 	const commitBlock = (
 		<>
-			<DropdownMenuCheckboxItem checked={allTicked} onCheckedChange={commits.onToggleAll} onSelect={keepMenuOpen}>
-				<span className="min-w-0 flex-1 truncate">{allLabel}</span>
-				{commits.allStats ? <ChangeStats muted={!allTicked} stats={commits.allStats} /> : null}
-			</DropdownMenuCheckboxItem>
+			{noCommits ? null : (
+				<DropdownMenuCheckboxItem checked={allTicked} className={cn(REVIEW_MENU_ROW, COMMIT_ROW, REVIEW_MENU_LIST_ALIGN)} onCheckedChange={commits.onToggleAll} onSelect={keepMenuOpen}>
+					<span className="min-w-0 flex-1 truncate">{allLabel}</span>
+					{commits.allStats ? <ChangeStats muted={!allTicked} stats={commits.allStats} /> : null}
+				</DropdownMenuCheckboxItem>
+			)}
 			{commits.state === "loading" ? (
-				<DropdownMenuItem disabled>{t("files.changes.loadingCommits")}</DropdownMenuItem>
+				<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.changes.loadingCommits")}</DropdownMenuItem>
 			) : commits.state === "error" ? (
 				<>
-					<DropdownMenuItem disabled>{t("files.changes.commitsError")}</DropdownMenuItem>
+					<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.changes.commitsError")}</DropdownMenuItem>
 					<DropdownMenuItem
+						className={REVIEW_MENU_ROW}
 						onSelect={(event) => {
 							event.preventDefault();
 							commits.onRetry();
@@ -165,10 +166,11 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 						{t("files.retry")}
 					</DropdownMenuItem>
 				</>
-			) : commits.rows.length === 0 ? (
-				<DropdownMenuItem disabled>{emptyLabel}</DropdownMenuItem>
+			) : noCommits ? (
+				<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{emptyLabel}</DropdownMenuItem>
 			) : (
-				<div className="board-scrollbar flex max-h-72 flex-col gap-px overflow-y-auto pr-0.5">
+				// The box shows seven 28px rows and their 1px gaps; Show more ends the scroll.
+				<div className={cn(REVIEW_MENU_LIST, "max-h-[12.625rem]")}>
 					{shownRows.map((row) => (
 						<CommitRow
 							checked={ticked.has(row.sha)}
@@ -181,7 +183,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 					))}
 					{hiddenCount > 0 ? (
 						<DropdownMenuItem
-							className="text-caption"
+							className={cn(REVIEW_MENU_MORE, COMMIT_ROW)}
 							onSelect={(event) => {
 								event.preventDefault();
 								setVisibleCount(shownCount + COMMIT_PAGE);
@@ -190,7 +192,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 							{t("files.changes.showMore", { count: Math.min(COMMIT_PAGE, hiddenCount) })}
 						</DropdownMenuItem>
 					) : commits.truncated ? (
-						<DropdownMenuItem className="text-caption" disabled>{t("files.changes.olderNotListed")}</DropdownMenuItem>
+						<DropdownMenuItem className={cn(REVIEW_MENU_MORE, COMMIT_ROW)} disabled>{t("files.changes.olderNotListed")}</DropdownMenuItem>
 					) : null}
 				</div>
 			)}
@@ -219,36 +221,45 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 			<DropdownMenuTrigger asChild>
 				<SettingsMenuTrigger
 					aria-label={t("files.changes.trigger", { value: triggerValue })}
-					className={cn("h-control-md min-w-0 max-w-56 shrink-[0.1] text-xs", className)}
+					className={cn(REVIEW_MENU_TRIGGER, "min-w-0 max-w-56 shrink-[0.1]", className)}
 					title={triggerValue}
 				>
-					<TriggerIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive @max-[20rem]/files-header:hidden" />
 					<span className={cn("min-w-0 truncate", monoLabel && "font-mono")}>{triggerLabel}</span>
 					{stats ? <ChangeStats className="@max-[24rem]/files-header:hidden" stats={stats} /> : null}
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>
 			{mode === "view" ? (
-				<DropdownMenuContent align="start" className="w-[min(26rem,calc(100vw-2rem))]" {...modalityHandlers}>
+				<DropdownMenuContent align="start" className={COMMITS_PANEL} {...modalityHandlers}>
 					{commitBlock}
 				</DropdownMenuContent>
 			) : (
-				<DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)]" {...modalityHandlers}>
+				<DropdownMenuContent align="start" className="w-56 max-w-[calc(100vw-2rem)]" {...modalityHandlers}>
 					<DropdownMenuRadioGroup value={value.kind === "commits" ? "" : value.kind}>
-						{scopes.map(({ scope, stats: scopeStats }) => {
-							const Icon = scopeIcons[scope];
-							return (
-								<DropdownMenuRadioItem key={scope} onSelect={() => onSelectScope(scope)} value={scope}>
-									<Icon aria-hidden="true" />
-									<span className="min-w-0 flex-1 truncate">{scopeLabel(scope)}</span>
-									{scopeStats ? <ChangeStats stats={scopeStats} /> : null}
-								</DropdownMenuRadioItem>
-							);
-						})}
+						{/* Plain labels, like the trigger; the check marks what is picked. */}
+						{scopes.map(({ scope, stats: scopeStats }) => (
+							<DropdownMenuRadioItem className={REVIEW_MENU_ROW} key={scope} onSelect={() => onSelectScope(scope)} value={scope}>
+								<span className="min-w-0 flex-1 truncate">{scopeLabel(scope)}</span>
+								{scopeStats ? <ChangeStats stats={scopeStats} /> : null}
+							</DropdownMenuRadioItem>
+						))}
 					</DropdownMenuRadioGroup>
 					{commitsAvailable ? (
 						<>
 							<DropdownMenuSeparator />
-<div role="group" aria-label={t("files.commits")}>{commitBlock}</div>
+							{/* Commits open to the side, so the scopes stay a short list and a
+							    long history scrolls in its own panel. */}
+							<DropdownMenuSub>
+								<DropdownMenuSubTrigger className={cn(REVIEW_MENU_ROW, value.kind === "commits" && "text-foreground")}>
+									<span className="min-w-0 flex-1 truncate">{t("files.commits")}</span>
+									{/* The same reserved check slot as the scope rows. */}
+									<span className="flex size-4 shrink-0 items-center justify-center">
+										{value.kind === "commits" ? <Check aria-hidden="true" className="text-logo-accent!" /> : null}
+									</span>
+								</DropdownMenuSubTrigger>
+								<DropdownMenuSubContent aria-label={t("files.commits")} className={COMMITS_PANEL} {...modalityHandlers}>
+									{commitBlock}
+								</DropdownMenuSubContent>
+							</DropdownMenuSub>
 						</>
 					) : null}
 				</DropdownMenuContent>
@@ -289,7 +300,7 @@ function CommitRow({
 		>
 			<DropdownMenuCheckboxItem
 				checked={checked}
-				className="gap-2"
+				className={cn(REVIEW_MENU_ROW, COMMIT_ROW)}
 				onBlur={() => setFocusOpen(false)}
 				onCheckedChange={onToggle}
 				onFocus={() => setFocusOpen(keyboardFocus())}

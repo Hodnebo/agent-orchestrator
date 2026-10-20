@@ -337,7 +337,7 @@ export const SessionInspector = memo(function SessionInspector({
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
-							{view === "files" && filesView ? <div className="flex items-center gap-1" ref={setFilesActionsHost} /> : null}
+							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
 							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>

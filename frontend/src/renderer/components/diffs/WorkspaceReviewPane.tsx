@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
-import { CodeView } from "@pierre/diffs/react";
+import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
 import { ChevronRight, FileCode2, MessageSquarePlus, MoreVertical, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -181,6 +181,7 @@ export function WorkspaceReviewPane({
 	split,
 	collapseRequest,
 	onAllCollapsedChange,
+	scrollRequest,
 }: {
 	annotation: FileAnnotationModel;
 	/** What to review: the Files header's branch and changes. */
@@ -207,6 +208,8 @@ export function WorkspaceReviewPane({
 	collapseRequest?: { expand: boolean; key: number };
 	/** Tells the toolbar whether every file is collapsed, so it offers the other action. */
 	onAllCollapsedChange?: (allCollapsed: boolean) => void;
+	/** From the changed-files rail: bring this file's diff into view; a new key asks again. */
+	scrollRequest?: { path: string; key: number };
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -215,6 +218,8 @@ export function WorkspaceReviewPane({
 	const [loadedDeferredPaths, setLoadedDeferredPaths] = useState<Set<string>>(() => new Set());
 	const [activeBatchCount, setActiveBatchCount] = useState(WORKSPACE_REVIEW_INITIAL_BATCHES);
 	const reviewRef = useRef<HTMLDivElement>(null);
+	const codeViewRef = useRef<CodeViewHandle<"feedback", undefined> | null>(null);
+	const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null);
 	const gutterHover = usePersistentGutterUtility(reviewRef);
 	// Set when a file row's overflow menu hands off to another surface (an editor,
 	// a preview, the feedback composer) so closing the menu doesn't pull focus
@@ -253,6 +258,7 @@ export function WorkspaceReviewPane({
 		setCollapsedPaths(new Set(allFiles.filter((file) => isDeferredByDefault(file) || isViewedRecord(file, savedViewed)).map((file) => file.path)));
 		setLoadedDeferredPaths(new Set());
 		setActiveBatchCount(WORKSPACE_REVIEW_INITIAL_BATCHES);
+		setPendingScrollPath(null);
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- reset on review-target identity, not on allFiles' reference (which changes on every poll) or the filtered files (which changes per keystroke).
 	}, [workspaceVersion, reviewSelectionKey, filesKnown, viewedSessionKey]);
 
@@ -495,6 +501,43 @@ export function WorkspaceReviewPane({
 		if (collapseRequest.expand) collapseActions.current.expandAll();
 		else collapseActions.current.collapseAll();
 	}, [collapseRequest]);
+	// The rail can pick a file whose diff isn't in the list yet: a deferred file
+	// loads, a queued batch starts, and the scroll waits until the diff is there.
+	// The picked file opens, since it was asked for.
+	const handledScrollKey = useRef(scrollRequest?.key);
+	useEffect(() => {
+		if (!scrollRequest || scrollRequest.key === handledScrollKey.current) return;
+		handledScrollKey.current = scrollRequest.key;
+		const { path } = scrollRequest;
+		const file = files.find((entry) => entry.path === path);
+		if (!file) return;
+		if (isDeferredByDefault(file)) setLoadedDeferredPaths((current) => (current.has(path) ? current : new Set(current).add(path)));
+		setCollapsedPaths((current) => {
+			if (!current.has(path)) return current;
+			const next = new Set(current);
+			next.delete(path);
+			return next;
+		});
+		setPendingScrollPath(path);
+	}, [files, scrollRequest]);
+	useEffect(() => {
+		if (!pendingScrollPath) return;
+		const id = `${reviewSelectionKey}:${pendingScrollPath}`;
+		if (items.some((item) => item.id === id)) {
+			codeViewRef.current?.scrollTo({ type: "item", id, align: "start" });
+			setPendingScrollPath(null);
+			return;
+		}
+		const batchIndex = batches.findIndex((paths) => paths.includes(pendingScrollPath));
+		if (batchIndex >= activeBatchCount) {
+			setActiveBatchCount(batchIndex + 1);
+			return;
+		}
+		// Still loading; once its batch settles without a diff (a binary or
+		// unavailable file) there is nothing in the list to scroll to.
+		if (batchIndex >= 0 && pendingDiffPaths.has(pendingScrollPath)) return;
+		setPendingScrollPath(null);
+	}, [activeBatchCount, batches, items, pendingDiffPaths, pendingScrollPath, reviewSelectionKey]);
 	const retryAll = () => patchQueries.forEach((query) => void query.refetch());
 	const firstError = patchQueries.find((query) => query.error)?.error;
 	const groupError = patchQueries.flatMap((query) => query.data?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
@@ -545,6 +588,7 @@ export function WorkspaceReviewPane({
 			<div className="min-h-0 flex-1 overflow-hidden">
 				{items.length > 0 ? (
 					<CodeView<"feedback">
+						ref={codeViewRef}
 						className="ao-pierre-surface board-scrollbar h-full min-h-0 select-text overflow-y-auto overscroll-contain"
 						disableWorkerPool={typeof Worker === "undefined"}
 						items={items}

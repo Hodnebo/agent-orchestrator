@@ -13,6 +13,7 @@ import {
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { REVIEW_MENU_LIST, REVIEW_MENU_MORE, REVIEW_MENU_PAGE, REVIEW_MENU_ROW, REVIEW_MENU_TRIGGER, REVIEW_MENU_VISIBLE_ROWS } from "./review-menu-styles";
 
 export type ReviewBranchRow = {
 	id: string;
@@ -48,14 +49,15 @@ export type ReviewBranchMenuProps = {
 	className?: string;
 };
 
-/** Above this many rows the menu gets a search field. */
-const SEARCH_THRESHOLD = 8;
+const BRANCH_PAGE = REVIEW_MENU_PAGE;
+/** A list that fits its box needs no search; one that scrolls gets it. */
+const SEARCH_THRESHOLD = REVIEW_MENU_VISIBLE_ROWS;
 
 export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, onRetry, onOpenChange, className }: ReviewBranchMenuProps) {
 	const { t } = useTranslation();
 	const [menuOpen,setMenuOpen]=useState(false);
- const [search, setSearch] = useState("");
- const [visibleCount,setVisibleCount]=useState(50);
+	const [search, setSearch] = useState("");
+	const [visibleCount, setVisibleCount] = useState(BRANCH_PAGE);
  useLayoutEffect(()=>{if(menuOpen) markFileMenuPainted();},[menuOpen]);
 	const listRef = useRef<HTMLDivElement>(null);
 
@@ -92,32 +94,36 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 		? rows.filter((row) => `${rowLabel(row)} ${row.prNumber ? `#${row.prNumber}` : ""}`.toLocaleLowerCase().includes(query))
 		: rows;
 	const selectedId = rows.find((row) => row.selected)?.id ?? "";
+	// A picked branch further down than the first page stays in reach without paging to it.
+	const selectedIndex = visibleRows.findIndex((row) => row.selected);
+	const shownCount = Math.max(visibleCount, Math.ceil((selectedIndex + 1) / BRANCH_PAGE) * BRANCH_PAGE);
 
 	return (
 		<DropdownMenu
 			onOpenChange={(open) => {
     setMenuOpen(open);
-				if (!open) {setSearch("");setVisibleCount(50);} else markFileViewerPerformance("file-menu-open-requested");
+				if (!open) {setSearch("");setVisibleCount(BRANCH_PAGE);} else markFileViewerPerformance("file-menu-open-requested");
 				onOpenChange?.(open);
 			}}
 		>
 			<DropdownMenuTrigger asChild>
 				<SettingsMenuTrigger
 					aria-label={t("files.branches.trigger", { branch: triggerLabel })}
-					className={cn("h-control-md min-w-16 max-w-44 shrink-[10] text-xs", className)}
+					className={cn(REVIEW_MENU_TRIGGER, "min-w-16 max-w-44 shrink-[10] text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", className)}
 					title={triggerLabel}
 				>
 					<TriggerIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive @max-[20rem]/files-header:hidden" />
 					<span className={cn("min-w-0 truncate", monoLabel && "font-mono")}>{triggerLabel}</span>
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+			<DropdownMenuContent align="start" className="w-72 max-w-[calc(100vw-2rem)]">
 				{state === "loading" ? (
-					<DropdownMenuItem disabled>{t("files.branches.loading")}</DropdownMenuItem>
+					<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.branches.loading")}</DropdownMenuItem>
 				) : state === "error" ? (
 					<>
-						<DropdownMenuItem disabled>{t("files.branches.error")}</DropdownMenuItem>
+						<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.branches.error")}</DropdownMenuItem>
 						<DropdownMenuItem
+							className={REVIEW_MENU_ROW}
 							onSelect={(event) => {
 								event.preventDefault();
 								onRetry();
@@ -144,24 +150,26 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 							>
 								<input
 									aria-label={t("files.branches.search")}
-									className="menu-search-input"
-									onChange={(event) => {setSearch(event.target.value);setVisibleCount(50);}}
+									className="menu-search-input h-control-md! px-2! text-xs!"
+									onChange={(event) => {setSearch(event.target.value);setVisibleCount(BRANCH_PAGE);}}
 									placeholder={t("files.branches.search")}
 									type="search"
 									value={search}
 								/>
 							</div>
 						) : null}
+						{/* The box shows seven 36px rows and their 1px gaps; Show more ends the scroll, as in the commits list. */}
 						<DropdownMenuRadioGroup
-							className="board-scrollbar flex max-h-80 flex-col gap-px overflow-y-auto pr-0.5"
+							className={cn(REVIEW_MENU_LIST, "max-h-[16.125rem]")}
 							ref={listRef}
 							value={selectedId}
 						>
-							{visibleRows.slice(0,visibleCount).map((row) => {
+							{visibleRows.slice(0, shownCount).map((row) => {
 								const Icon = row.kind === "pull_request" ? GitPullRequest : GitBranch;
 								const caption = rowCaption(row);
 								return (
 									<DropdownMenuRadioItem
+										className={cn(REVIEW_MENU_ROW, "h-9 shrink-0")}
 										key={row.id}
 										onSelect={() => {
 											if (!row.selected) onSelect(row.id);
@@ -169,20 +177,30 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 										value={row.id}
 									>
 										<Icon aria-hidden="true" />
-										<span className="flex min-w-0 flex-1 flex-col">
+										<span className="flex min-w-0 flex-1 flex-col leading-tight">
 											<span className={cn("truncate text-xs", !row.detached && "font-mono")}>{rowLabel(row)}</span>
 											{caption ? <span className="truncate text-caption text-passive">{caption}</span> : null}
 										</span>
 									</DropdownMenuRadioItem>
 								);
 							})}
+							{visibleRows.length > shownCount ? (
+								<DropdownMenuItem
+									className={cn(REVIEW_MENU_MORE, "shrink-0")}
+									onSelect={(event) => {
+										event.preventDefault();
+										setVisibleCount(shownCount + BRANCH_PAGE);
+									}}
+								>
+									{t("files.changes.showMore", { count: Math.min(BRANCH_PAGE, visibleRows.length - shownCount) })}
+								</DropdownMenuItem>
+							) : null}
 						</DropdownMenuRadioGroup>
-      {visibleRows.length>visibleCount ? <DropdownMenuItem onSelect={event=>{event.preventDefault();setVisibleCount(count=>count+50);}}>{t("files.branches.showMore")}</DropdownMenuItem> : null}
 						{query && visibleRows.length === 0 ? (
-							<DropdownMenuItem disabled>{t("files.branches.noMatches")}</DropdownMenuItem>
+							<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.branches.noMatches")}</DropdownMenuItem>
 						) : null}
 						{truncated ? (
-							<DropdownMenuItem className="text-caption" disabled>
+							<DropdownMenuItem className={cn(REVIEW_MENU_ROW, "text-caption")} disabled>
 								{t("files.branches.capped", { count: rows.length })}
 							</DropdownMenuItem>
 						) : null}

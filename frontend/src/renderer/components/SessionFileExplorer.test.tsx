@@ -80,9 +80,10 @@ vi.mock("./FileContentPane", () => ({
 }));
 
 vi.mock("./diffs/WorkspaceReviewPane", () => ({
-	WorkspaceReviewPane: ({ canOpenInCenter = true, collapseRequest, filter, onAllCollapsedChange, onBrowseAll, onOpenFile, target }: { canOpenInCenter?: boolean; collapseRequest?: { expand: boolean; key: number }; filter: string; onAllCollapsedChange?: (allCollapsed: boolean) => void; onBrowseAll?: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void; target: ReviewTarget }) => (
+	WorkspaceReviewPane: ({ canOpenInCenter = true, collapseRequest, filter, onAllCollapsedChange, onBrowseAll, onOpenFile, scrollRequest, target }: { canOpenInCenter?: boolean; collapseRequest?: { expand: boolean; key: number }; filter: string; onAllCollapsedChange?: (allCollapsed: boolean) => void; onBrowseAll?: () => void; onOpenFile?: (path: string, options?: { editing?: boolean; mode?: "diff" | "file" | "rendered" }) => void; scrollRequest?: { path: string; key: number }; target: ReviewTarget }) => (
 		<div data-testid="review-pane">
 			<span data-testid="review-filter">{filter}</span>
+			<span data-testid="review-scroll">{scrollRequest ? `${scrollRequest.path}:${scrollRequest.key}` : ""}</span>
 			<span data-testid="review-target">{target.key}</span>
 			<span data-testid="review-collapse">{collapseRequest ? `${collapseRequest.expand ? "expand" : "collapse"}:${collapseRequest.key}` : ""}</span>
 			<button onClick={() => onAllCollapsedChange?.(true)} type="button">Report all collapsed</button>
@@ -234,6 +235,22 @@ describe("SessionFileExplorer", () => {
 		widthSpy.mockRestore();
 	});
 
+	it("offers the diff layout in All files only while the maximized preview shows a changed file", async () => {
+		useUiStore.getState().setFilesChangedOnly("sess-layout-docked", false);
+		const docked = renderWithQuery(<SessionFileExplorer onOpenFile={vi.fn()} sessionId="sess-layout-docked" />);
+		expect(await screen.findByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+		// Docked, the tree opens plain files in the centre: nothing here to lay out.
+		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		docked.unmount();
+
+		useUiStore.getState().setFilesChangedOnly("sess-layout-max", false);
+		renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-layout-max" />);
+		expect(await screen.findByTestId("content-pane")).toHaveTextContent("none");
+		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		expect(screen.getByRole("button", { name: "Split diff view" })).toBeInTheDocument();
+	});
+
 	it("keeps the header in place when switching between the Changes and Files views", async () => {
 		renderWithQuery(<SessionFileExplorer isMaximized onToggleMaximized={vi.fn()} sessionId="sess-explorer-steady" />);
 
@@ -314,15 +331,76 @@ describe("SessionFileExplorer", () => {
 				workspaceVersion: "clean-1",
 			},
 		});
-		renderWithQuery(<SessionFileExplorer sessionId="sess-clean" />);
+		const titlebar = document.createElement("div");
+		document.body.append(titlebar);
+		const { container } = renderWithQuery(
+			<FilesTopbarHostContext.Provider value={titlebar}>
+				<SessionFileExplorer onOpenFile={vi.fn()} sessionId="sess-clean" />
+			</FilesTopbarHostContext.Provider>,
+		);
 
 		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("false");
 		expect(screen.queryByTestId("review-pane")).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Changes" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
-		// Nothing to review on the checked-out branch: only the branch picker stays.
+		// Nothing to review: the whole header row goes, pickers and layout toggle
+		// included, so the tree starts right under the top bar.
 		expect(screen.queryByRole("button", { name: /^Changes to review/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Branch to review/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		expect(container.querySelector("header")).toBeNull();
+		titlebar.remove();
+	});
+
+	it("shows only the tree beside the preview when a maximized session has nothing to review", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-clean-max",
+				files: [],
+				sections: { committed: [], staged: [], unstaged: [], untracked: [] },
+				commits: [],
+				summary: { additions: 0, deletions: 0, files: 0 },
+				truncated: false,
+				workspaceVersion: "clean-max-1",
+			},
+		});
+		const titlebar = document.createElement("div");
+		document.body.append(titlebar);
+		const { container } = renderWithQuery(
+			<FilesTopbarHostContext.Provider value={titlebar}>
+				<SessionFileExplorer isMaximized onToggleMaximized={vi.fn()} sessionId="sess-clean-max" />
+			</FilesTopbarHostContext.Provider>,
+		);
+
+		expect(await screen.findByTestId("content-pane")).toBeInTheDocument();
+		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
+		expect(container.querySelector("header")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Hide file tree" })).not.toBeInTheDocument();
+		// No header above it, so the split draws no second divider under the titlebar.
+		expect(container.querySelector('[data-slot="resizable-panel-group"]')).not.toHaveClass("border-t");
+		titlebar.remove();
+	});
+
+	it("puts a rail of the changed files beside the maximized review, and a pick scrolls to it", async () => {
+		renderWithQuery(<SessionFileExplorer isMaximized onToggleMaximized={vi.fn()} sessionId="sess-review-rail" />);
+
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		// Only the review's files, every folder open; no button to hide it.
+		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("true");
+		expect(screen.getByTestId("tree-files")).toHaveTextContent("src/App.tsx");
+		expect(screen.queryByRole("button", { name: /file tree$/ })).not.toBeInTheDocument();
+		expect(screen.getByTestId("review-scroll")).toHaveTextContent("");
+
+		await userEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		expect(screen.getByTestId("review-scroll")).toHaveTextContent("src/App.tsx:1");
+		await userEvent.click(screen.getByRole("button", { name: "select src/App.tsx" }));
+		expect(screen.getByTestId("review-scroll")).toHaveTextContent("src/App.tsx:2");
+	});
+
+	it("keeps the docked review without a changed-files rail", async () => {
+		renderWithQuery(<SessionFileExplorer sessionId="sess-review-docked" />);
+		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
+		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
 	});
 
 	it("keeps the continuous right-side diff visible when opening the full file in center", async () => {
@@ -521,6 +599,63 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(screen.getByTestId("review-target")).toHaveTextContent("uncommitted");
 	});
 
+	it("hides the layout and collapse buttons while the picked changes are empty", async () => {
+		const nothingStaged = { ...manifest, sections: { ...manifest.sections, staged: [], unstaged: [changed] } };
+		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string } } }) => {
+			if (path.endsWith("/workspace/manifest")) return { data: { ...nothingStaged, sessionId: init.params.path.sessionId } };
+			if (path.endsWith("/workspace/branches")) return { data: { ...branchList, sessionId: init.params.path.sessionId } };
+			if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, sessionId: init.params.path.sessionId } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		renderWithQuery(<SessionFileExplorer sessionId="sess-empty-scope" />);
+
+		expect(await screen.findByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Split diff view" })).toBeInTheDocument();
+
+		await userEvent.click(changesTrigger());
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Staged/ }));
+		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
+		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
+		// The view tabs stay: All files still has something to show.
+		expect(screen.getByRole("tab", { name: "Files" })).toBeInTheDocument();
+
+		await userEvent.click(changesTrigger());
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Unstaged/ }));
+		expect(await screen.findByRole("button", { name: "Split diff view" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
+	});
+
+	it("keeps the pickers for a session with no changes that has a pull request", async () => {
+		const clean = { ...manifest, files: [], sections: { uncommitted: [], committed: [], staged: [], unstaged: [], untracked: [] }, summary: { additions: 0, deletions: 0, files: 0 } };
+		const titlebar = document.createElement("div");
+		document.body.append(titlebar);
+		const render = (sessionId: string, branches: WorkspaceBranches) => {
+			getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string } } }) => {
+				if (path.endsWith("/workspace/manifest")) return { data: { ...clean, sessionId: init.params.path.sessionId } };
+				if (path.endsWith("/workspace/branches")) return { data: { ...branches, sessionId: init.params.path.sessionId } };
+				if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, commits: [], sessionId: init.params.path.sessionId } };
+				throw new Error(`Unexpected GET ${path}`);
+			});
+			return renderWithQuery(
+				<FilesTopbarHostContext.Provider value={titlebar}>
+					<SessionFileExplorer onOpenFile={vi.fn()} projectKind="single_repo" sessionId={sessionId} />
+				</FilesTopbarHostContext.Provider>,
+			);
+		};
+
+		const withPr = render("sess-clean-pr", branchList);
+		expect(await screen.findByRole("button", { name: "Branch to review: feature/login" })).toBeInTheDocument();
+		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
+		withPr.unmount();
+
+		// The same session without its PR has nothing to review: the row goes.
+		const noPr = render("sess-clean-no-pr", { ...branchList, branches: branchList.branches.filter((row) => row.prNumber == null) });
+		await waitFor(() => expect(noPr.container.querySelector("header")).toBeNull());
+		expect(screen.getByTestId("tree-changed-only")).toHaveTextContent("false");
+		titlebar.remove();
+	});
+
 	it("lists local branches with the checked-out one first and updated times", async () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-branch-list" />);
 
@@ -574,6 +709,7 @@ describe("SessionFileExplorer review pickers", () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-ticks" />);
 
 		await userEvent.click(await screen.findByRole("button", { name: "Changes to review: Uncommitted" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: /^Commits/ }));
 		await userEvent.click(await screen.findByRole("menuitemcheckbox", { name: /^Commit a/ }));
 		await userEvent.click(screen.getByRole("menuitemcheckbox", { name: /^Commit c/ }));
 		expect(screen.getAllByRole("menu").length).toBeGreaterThan(0);
@@ -588,6 +724,12 @@ describe("SessionFileExplorer review pickers", () => {
 	});
 
 	it("docked and maximized explorers share the selection", async () => {
+		// jsdom draws every element as an empty box at 0,0, so the maximized
+		// review's resize handle would claim every click; move it out of the way.
+		const rect = HTMLElement.prototype.getBoundingClientRect;
+		const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			return this.dataset.slot === "resizable-handle" ? new DOMRect(-1000, -1000, 1, 1) : rect.call(this);
+		});
 		renderWithQuery(<>
 			<SessionFileExplorer sessionId="sess-shared" />
 			<SessionFileExplorer isMaximized sessionId="sess-shared" />
@@ -600,6 +742,7 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(changesTrigger(docked)).toHaveAccessibleName("Changes to review: Staged");
 		expect(changesTrigger(maximized)).toHaveAccessibleName("Changes to review: Staged");
 		expect(within(maximized).getByTestId("review-target")).toHaveTextContent("staged");
+		rectSpy.mockRestore();
 	});
 
 	it("left trigger stays in the All files view and switches to Changes", async () => {
