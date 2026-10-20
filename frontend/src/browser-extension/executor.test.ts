@@ -446,6 +446,9 @@ describe("Executor", () => {
 		fake.frames[2]!.url = "https://www.paypal.com/embedded";
 		await expect(run("snapshot", { interactive: true })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
 		await expect(run("fill", { ref: "e1", text: "4111" })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
+		const dispatched = fake.debuggerCalls.length;
+		await expect(run("press", { key: "Enter" })).rejects.toMatchObject({ code: "BROWSER_SITE_BLOCKED" });
+		expect(fake.debuggerCalls).toHaveLength(dispatched);
 		expect(contentOps).toEqual(["2:snapshot"]);
 	});
 

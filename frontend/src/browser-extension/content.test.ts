@@ -96,16 +96,19 @@ describe("content operations", () => {
 			// Attached but display:none, or visibility:hidden: not satisfied.
 			await expect(wait("selector", "#panel")).resolves.toEqual({ satisfied: false });
 			await expect(wait("selector", "#ghost")).resolves.toEqual({ satisfied: false });
-			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: true });
+			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: false });
+			await expect(wait("selector-gone", "#ghost")).resolves.toEqual({ satisfied: false });
 
 			const shown = wait("selector", "#panel", 2_000);
 			setTimeout(() => (panel.style.display = "block"), 20);
 			await expect(shown).resolves.toEqual({ satisfied: true });
 			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: false });
 
-			const hidden = wait("selector-gone", "#panel", 2_000);
-			setTimeout(() => (panel.style.display = "none"), 20);
-			await expect(hidden).resolves.toEqual({ satisfied: true });
+			panel.style.display = "none";
+			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: false });
+			const removed = wait("selector-gone", "#panel", 2_000);
+			setTimeout(() => panel.remove(), 20);
+			await expect(removed).resolves.toEqual({ satisfied: true });
 			ghost.style.visibility = "visible";
 			await expect(wait("selector", "#ghost")).resolves.toEqual({ satisfied: true });
 		} finally {

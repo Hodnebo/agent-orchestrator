@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { app, BrowserWindow, WebContentsView } from "electron";
+import type { ChromeApi } from "../browser-extension/chrome-api";
+import { TrustedInput } from "../browser-extension/trusted-input";
 import type { AgentBrowserRuntime } from "./agent-browser-runtime";
 import { createBrowserViewHost } from "./browser-view-host";
 import type { BrowserTabsState } from "./browser-view-host";
@@ -16,6 +18,53 @@ function requiredEnvironmentVariable(name: string): string {
 const fixturePath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_FIXTURE");
 const userDataPath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_USER_DATA");
 app.setPath("userData", userDataPath);
+
+// Exercise the extension's actual input loop against Chromium, rather than a
+// fake that cannot observe click default actions such as form submission.
+async function testCancelledTrustedClick(): Promise<void> {
+	const window = new BrowserWindow({ show: false, width: 500, height: 400 });
+	try {
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{width:100vw;height:100vh}</style>
+			<form><button>Submit</button></form><script>
+			window.events = [];
+			for (const type of ["mousedown","mouseup","click","submit"]) {
+				document.addEventListener(type, event => {
+					if (event.target.closest("form")) window.events.push(type);
+					if (type === "submit") event.preventDefault();
+				});
+			}
+		</script>`)}`);
+		const debuggerApi = window.webContents.debugger;
+		const controller = new AbortController();
+		let cancelOnPress = false;
+		const chrome = {
+			debugger: {
+				attach: async () => debuggerApi.attach("1.3"),
+				detach: async () => debuggerApi.detach(),
+				onEvent: { addListener() {}, removeListener() {} },
+				onDetach: { addListener() {}, removeListener() {} },
+				sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
+					const result = await debuggerApi.sendCommand(method, params);
+					if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && cancelOnPress) controller.abort();
+					return result;
+				},
+			},
+		} as unknown as ChromeApi;
+		const input = new TrustedInput(chrome);
+		// Sanity check: normal trusted input activates the full-viewport button.
+		await input.click(1, { x: 50, y: 50 });
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.webContents.executeJavaScript("window.events = []");
+		cancelOnPress = true;
+		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown"]);
+		process.stdout.write("cancelled trusted click does not activate its target in Chromium\n");
+	} finally {
+		window.destroy();
+	}
+}
 
 async function run(): Promise<void> {
 	await app.whenReady();
@@ -404,6 +453,7 @@ async function run(): Promise<void> {
 		assert.equal((await host.execute("integration-session", "tabs") as BrowserTabsState).tabs.length, 1);
 		process.stdout.write("browser popup handle, cross-origin messaging, shared browser profile and self-close integration passed\n");
 
+		await testCancelledTrustedClick();
 		process.stdout.write("browser action postcondition integration passed\n");
 	} finally {
 		// Tear down native views synchronously before exiting. Electron can leave a

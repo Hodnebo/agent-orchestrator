@@ -305,6 +305,7 @@ export class Executor {
 
 	/** Trusted input only when the tab and every frame on the way allow it. */
 	private async useTrustedInput(ctx: Context, page: ActiveTab): Promise<boolean> {
+		await this.assertFrameAllowed(ctx, page, this.frameFor(ctx, page));
 		if (!ctx.approval.trusted || !trustedInputAllowed(ctx.policy, page.tab.url)) return false;
 		const urls = await this.frameChainUrls(page, this.frameFor(ctx, page));
 		return urls.every((url) => inheritsParentOrigin(url) || trustedInputAllowed(ctx.policy, url));

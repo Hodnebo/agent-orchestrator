@@ -288,7 +288,12 @@ class HeldInput {
 
 	async release(send: Send): Promise<void> {
 		if (this.mouse) {
-			await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...this.mouse, buttons: 0, clickCount: 1 }).catch(() => undefined);
+			// Releasing on the pressed target completes a click (and can submit a
+			// form). Move outside the viewport first, then release there. If the
+			// move fails, the release still uses the outside coordinates.
+			const outside = { x: -1, y: -1, button: this.mouse.button };
+			await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...outside, buttons: 1 }).catch(() => undefined);
+			await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...outside, buttons: 0, clickCount: 1 }).catch(() => undefined);
 			this.mouse = undefined;
 		}
 		for (const [code, params] of [...this.keys].reverse()) {

@@ -71,9 +71,9 @@ describe("TrustedInput cancellation", () => {
 		controller.abort();
 		release();
 		await expect(click).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
-		expect(fake.inputTypes()).toEqual(["mouseMoved", "mousePressed", "mouseReleased"]);
+		expect(fake.inputTypes()).toEqual(["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]);
 		const released = fake.calls.find((call) => call.params.type === "mouseReleased");
-		expect(released?.params).toMatchObject({ x: 10, y: 20, button: "left", buttons: 0 });
+		expect(released?.params).toMatchObject({ x: -1, y: -1, button: "left", buttons: 0 });
 	});
 
 	it("never attaches when cancelled while waiting for the tab", async () => {

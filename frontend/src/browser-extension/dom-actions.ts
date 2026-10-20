@@ -224,9 +224,9 @@ export function conditionHolds(document: Document, kind: WaitKind, value: string
 				throw new BridgeError("INVALID_ARGUMENT", `Invalid selector: ${value}`);
 			}
 			// Same rule as the panel's runtime: a selector wait means usable on
-			// screen, and "gone" means removed or hidden.
+			// screen, and "gone" means detached from the document.
 			const visible = found !== null && isVisible(found);
-			return kind === "selector" ? visible : !visible;
+			return kind === "selector" ? visible : !found;
 		}
 		default:
 			return false;
