@@ -415,3 +415,84 @@ func TestCompletedHandoffDeliversEveryHeldPrompt(t *testing.T) {
 		}
 	}
 }
+
+// A new Chat session switched to the terminal with "drain" before its first
+// turn started runs its task once: the terminal gets the prompt on its command
+// line, and the commit settles the prompt's never-claimed turn so the
+// terminal's turn forwarder does not type it again. A later message stays
+// queued for the forwarder. Once Chat claimed a turn, the launch carries no
+// prompt and every queued turn stays.
+func TestDrainToTerminalSettlesTheUnclaimedPromptTurn(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	rlsStore := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	switchToTerminal := func(sessionID string) {
+		t.Helper()
+		transition, err := store.StartSessionInterfaceTransition(ctx, principal, fixture.orgID, sessionID,
+			domain.SessionInterfaceChat, domain.SessionInterfaceTUI, domain.SessionInterfaceTransitionDrain, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner := "drain-test-" + uuid.NewString()
+		if _, err := admin.Exec(ctx, `UPDATE ao_interface_transitions SET phase = 'source_stopped', claimed_by = $2, claimed_at = now()
+			WHERE id = $1`, transition.ID, owner); err != nil {
+			t.Fatal(err)
+		}
+		if committed, err := rlsStore.CommitCoordinatedSessionInterface(ctx, owner, fixture.orgID, transition.ID, domain.SessionInterfaceTUI); err != nil || !committed {
+			t.Fatalf("commit = %v, %v", committed, err)
+		}
+	}
+	turnStates := func(sessionID string) []string {
+		t.Helper()
+		rows, err := admin.Query(ctx, `SELECT state FROM ao_turns WHERE session_id = $1 ORDER BY user_message_sequence`, sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		states, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return states
+	}
+	create := func() domain.Session {
+		t.Helper()
+		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "do the work",
+			Provider: "docker", Interface: domain.SessionInterfaceChat,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.SendMessage(ctx, principal, fixture.orgID, session.ID, uuid.NewString(), "and then this", domain.ChatTurnSettings{}); err != nil {
+			t.Fatal(err)
+		}
+		return session
+	}
+
+	fresh := create()
+	switchToTerminal(fresh.ID)
+	if states := turnStates(fresh.ID); len(states) != 2 || states[0] != "completed" || states[1] != "queued" {
+		t.Fatalf("turn states after the drain = %v, want [completed queued]", states)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.Interface != domain.SessionInterfaceTUI || launch.Prompt != "do the work" {
+		t.Fatalf("launch interface = %q prompt = %q, want the TUI with the prompt", launch.Interface, launch.Prompt)
+	}
+
+	ran := create()
+	if _, err := admin.Exec(ctx, `UPDATE ao_turns SET state = 'completed', attempt_count = 1, completed_at = now()
+		WHERE session_id = $1 AND user_message_sequence = (SELECT min(user_message_sequence) FROM ao_turns WHERE session_id = $1)`, ran.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SendMessage(ctx, principal, fixture.orgID, ran.ID, uuid.NewString(), "one more", domain.ChatTurnSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	switchToTerminal(ran.ID)
+	if states := turnStates(ran.ID); len(states) != 3 || states[0] != "completed" || states[1] != "queued" || states[2] != "queued" {
+		t.Fatalf("turn states after Chat ran = %v, want [completed queued queued]", states)
+	}
+}

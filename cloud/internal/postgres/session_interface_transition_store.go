@@ -49,7 +49,8 @@ const commitCoordinatedSessionInterfaceSQL = `UPDATE ao_sessions AS session
 			  AND transition.claimed_by = $4
 			  AND transition.phase = 'source_stopped'
 			  AND transition.org_id = session.org_id
-			  AND transition.session_id = session.id`
+			  AND transition.session_id = session.id
+			RETURNING session.id`
 
 // StartSessionInterfaceTransition durably claims a session for an interface
 // handoff. It returns the committed transition and whether a new row was
@@ -800,13 +801,23 @@ func (s *Store) CommitCoordinatedSessionInterface(
 ) (bool, error) {
 	var committed bool
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, commitCoordinatedSessionInterfaceSQL,
-			interfaceValue, transitionID, orgID, owner)
+		var sessionID string
+		err := tx.QueryRow(ctx, commitCoordinatedSessionInterfaceSQL,
+			interfaceValue, transitionID, orgID, owner).Scan(&sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTransitionStale
+		}
 		if err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrTransitionStale
+		// A drain stops a Chat controller that never claimed the session's
+		// first turn without settling it. The terminal starts with the prompt
+		// on its command line, so the prompt's turn is settled in the same
+		// transaction as the commit, as a start that falls back to the TUI does.
+		if interfaceValue == domain.SessionInterfaceTUI {
+			if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
+				return err
+			}
 		}
 		committed = true
 		return nil
