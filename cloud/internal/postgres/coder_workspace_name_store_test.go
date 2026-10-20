@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // A Coder session's workspace name is chosen when the session is created,
@@ -32,11 +35,11 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	storedName := func(sessionID string) string {
 		t.Helper()
 		var raw json.RawMessage
-		if err := admin.QueryRow(ctx,
-			`SELECT resource_profile FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, fixture.orgID, sessionID,
-		).Scan(&raw); err != nil {
-			t.Fatal(err)
-		}
+		withOrgTx(t, admin, fixture.orgID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx,
+				`SELECT resource_profile FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, fixture.orgID, sessionID,
+			).Scan(&raw)
+		})
 		decoded, err := sandbox.DecodeCoderSessionProfile(raw)
 		if err != nil {
 			t.Fatalf("decode stored profile %s: %v", raw, err)
@@ -93,11 +96,9 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	if _, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, storedName(child.ID)); !errors.Is(err, ErrSandboxLeaseLost) {
 		t.Fatalf("retry without the lease = %v, want ErrSandboxLeaseLost", err)
 	}
-	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes
+	execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sandboxes
 		SET reconcile_lease_owner = 'reconciler-a', reconcile_lease_until = now() + interval '1 minute'
-		WHERE org_id = $1 AND session_id = $2`, fixture.orgID, child.ID); err != nil {
-		t.Fatal(err)
-	}
+		WHERE org_id = $1 AND session_id = $2`, fixture.orgID, child.ID)
 	taken := storedName(child.ID)
 	if _, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, "some-other-name"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("retry for a name that is not stored = %v, want ErrConflict", err)
@@ -115,12 +116,9 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	}
 
 	// A legacy row (written before names were stored) reads back no name.
-	if _, err := admin.Exec(ctx,
+	execOneRowAsOrg(t, admin, fixture.orgID,
 		`UPDATE ao_sandboxes SET resource_profile = resource_profile #- '{coder,workspaceName}' #- '{coder,workspaceNameIssuedAt}'
-		WHERE org_id = $1 AND session_id = $2`, fixture.orgID, worker.ID,
-	); err != nil {
-		t.Fatal(err)
-	}
+		WHERE org_id = $1 AND session_id = $2`, fixture.orgID, worker.ID)
 	legacy, err := store.GetSession(ctx, principal, fixture.orgID, worker.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -154,11 +152,11 @@ func TestCreateSessionStoresNoCoderWorkspaceNameWithoutReadableNames(t *testing.
 		t.Fatal(err)
 	}
 	var raw json.RawMessage
-	if err := admin.QueryRow(ctx,
-		`SELECT resource_profile FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, fixture.orgID, session.ID,
-	).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
+	withOrgTx(t, admin, fixture.orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT resource_profile FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, fixture.orgID, session.ID,
+		).Scan(&raw)
+	})
 	decoded, err := sandbox.DecodeCoderSessionProfile(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +164,41 @@ func TestCreateSessionStoresNoCoderWorkspaceNameWithoutReadableNames(t *testing.
 	if decoded.WorkspaceName != "" || decoded.WorkspaceNameRetry != "" || decoded.WorkspaceNameIssuedAt != nil {
 		t.Fatalf("stored profile %s names its workspace", raw)
 	}
+}
+
+// withOrgTx runs fn in an admin transaction scoped to orgID (ao.org_id), so
+// forced row-level security shows it the organization's rows even when the
+// test role does not bypass it; it commits when fn succeeds.
+func withOrgTx(t *testing.T, admin *pgxpool.Pool, orgID string, fn func(pgx.Tx) error) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fn(tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// execOneRowAsOrg runs a statement as orgID (withOrgTx) and fails the test
+// unless it changed exactly one row.
+func execOneRowAsOrg(t *testing.T, admin *pgxpool.Pool, orgID, query string, args ...any) {
+	t.Helper()
+	withOrgTx(t, admin, orgID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(context.Background(), query, args...)
+		if err == nil && tag.RowsAffected() != 1 {
+			err = fmt.Errorf("%d rows changed, want 1", tag.RowsAffected())
+		}
+		return err
+	})
 }
 
 // idChars is the first n letters and digits of a session id, as workspace

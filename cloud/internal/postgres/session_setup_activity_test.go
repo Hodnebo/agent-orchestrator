@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestRunningSetupReadsAsActive(t *testing.T) {
@@ -63,10 +64,8 @@ func TestRunningSetupReadsAsActive(t *testing.T) {
 	t.Run("a step whose worker is gone is not running", func(t *testing.T) {
 		store, admin, fixture := openNotificationTestStore(t)
 		appendEvent(t, store, fixture, "workspace.script.step", stepPayload("setup", "running", 1))
-		if _, err := admin.Exec(context.Background(), `UPDATE ao_worker_connections SET disconnected_at = now()
-			WHERE org_id = $1 AND session_id = $2`, fixture.orgID, fixture.sessionID); err != nil {
-			t.Fatal(err)
-		}
+		execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_worker_connections SET disconnected_at = now()
+			WHERE org_id = $1 AND session_id = $2`, fixture.orgID, fixture.sessionID)
 		session, err := store.GetSession(context.Background(),
 			domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID)
 		if err != nil {
@@ -96,10 +95,10 @@ func TestRunningSetupReadsAsActive(t *testing.T) {
 		appendEvent(t, store, fixture, "workspace.script.step", stepPayload("setup", "running", 1))
 		assertWorking(t, store, fixture)
 		var stored string
-		if err := admin.QueryRow(context.Background(), `SELECT activity_state FROM ao_sessions
-			WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID).Scan(&stored); err != nil {
-			t.Fatal(err)
-		}
+		withOrgTx(t, admin, fixture.orgID, func(tx pgx.Tx) error {
+			return tx.QueryRow(context.Background(), `SELECT activity_state FROM ao_sessions
+				WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID).Scan(&stored)
+		})
 		if stored != string(contract.ActivityIdle) {
 			t.Fatalf("stored activity = %q, want idle", stored)
 		}
