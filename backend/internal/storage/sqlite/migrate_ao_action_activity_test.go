@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-func TestMigration0197AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 196)
+func TestMigrationAllowsAOActionAndKeepsActivitySchema(t *testing.T) {
+	const actionMigration = 20261020090353460
+	db := openMigratedDatabaseCopy(t, 215)
 
 	var beforeTable string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&beforeTable); err != nil {
@@ -22,7 +23,7 @@ func TestMigration0197AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 		t.Fatalf("indexes=%q triggers=%q, want both preserved", beforeIndexes, beforeTriggers)
 	}
 
-	upTo(t, db, 197)
+	upTo(t, db, actionMigration)
 
 	var afterTable string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&afterTable); err != nil {
@@ -38,7 +39,7 @@ func TestMigration0197AllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 		t.Fatalf("triggers changed:\n%s\n%s", beforeTriggers, got)
 	}
 
-	downTo(t, db, 196)
+	downTo(t, db, 215)
 	var restored string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_activities'`).Scan(&restored); err != nil || restored != beforeTable {
 		t.Fatalf("down migration schema = %q err=%v, want original", restored, err)
