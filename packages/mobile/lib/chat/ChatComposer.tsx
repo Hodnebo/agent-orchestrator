@@ -56,11 +56,11 @@ export const COMPOSER_FIELD_HEIGHT = 44;
  * six lines of a reply's worth of prompt, so the composer can never swallow the
  * conversation it is writing into.
  */
-const COMPOSER_MAX_HEIGHT = 150;
-const COMPOSER_FIELD_MAX_HEIGHT = 138;
-const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
+export const COMPOSER_MAX_HEIGHT = 150;
+export const COMPOSER_FIELD_MAX_HEIGHT = 138;
+export const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
 /** The pill's corner, and so also the radius of the glass drawn behind it. */
-const COMPOSER_RADIUS = 28;
+export const COMPOSER_RADIUS = 28;
 const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
@@ -100,6 +100,7 @@ export function ChatComposer({
 	onSettings,
 	onConfigOption,
 	restingInset,
+	dockRiseOverride,
 	quotaActive,
 	request,
 	requestDismissed,
@@ -150,6 +151,12 @@ export function ChatComposer({
 	 * itself; see `dockRise` below.
 	 */
 	restingInset: number;
+	/**
+	 * Pins the dock's rise (0 resting, 1 against the keyboard) when the keyboard's
+	 * own progress missed a transition and is stuck at the old end. Leave it
+	 * unset to ride the progress. See `chatDockRiseOverride`.
+	 */
+	dockRiseOverride?: number;
 	/** The account-quota banner is up, so the context meter stands down. */
 	quotaActive?: boolean;
 	/** A pending request, which takes the composer's place until it is answered. */
@@ -236,7 +243,7 @@ export function ChatComposer({
 		wasReviewPromptCollapsed.current = Boolean(reviewPRCollapsed);
 	}, [reviewCardDragY, reviewPRCollapsed, reviewPromptAvailable]);
 	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
 	}));
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);

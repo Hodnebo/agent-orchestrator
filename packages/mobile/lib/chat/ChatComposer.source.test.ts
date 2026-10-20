@@ -98,7 +98,7 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value");
+		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
