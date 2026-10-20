@@ -120,7 +120,7 @@ func TestProjectScriptStepJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(`["make up",{"command":"npm ci","repository":" https://github.com/acme/web "}]`), &steps); err != nil {
 		t.Fatal(err)
 	}
-	want := []ProjectScriptStep{{Command: "make up"}, {Command: "npm ci", Repository: "https://github.com/acme/web"}}
+	want := []ProjectScriptStep{{Command: "make up"}, {Command: "npm ci", Repository: "https://github.com/acme/web", object: true}}
 	if !reflect.DeepEqual(steps, want) {
 		t.Fatalf("steps = %+v", steps)
 	}

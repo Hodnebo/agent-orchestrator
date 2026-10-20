@@ -188,3 +188,63 @@ it("offers no repository choice to a single-repository project", async () => {
 	await screen.findByLabelText("Step 1");
 	expect(screen.queryByRole("button", { name: "Repository for step 1" })).toBeNull();
 });
+
+it("reads, edits and saves each step's own time limit in the stored form", async () => {
+	mocks.get.mockResolvedValue({ project: project({ ...stored, postCreate: ["npm ci", "# ao-timeout: 45m\nmake seed"] }) });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 2")).toHaveValue("make seed");
+	const first = screen.getByLabelText("Time limit for step 1, in minutes");
+	const second = screen.getByLabelText("Time limit for step 2, in minutes");
+	// Empty is the default, shown as its placeholder.
+	expect(first).toHaveValue("");
+	expect(first).toHaveAttribute("placeholder", "10");
+	expect(second).toHaveValue("45");
+	// Only digits are kept; the arrow keys step by one minute.
+	await userEvent.type(first, "9x0");
+	expect(first).toHaveValue("90");
+	fireEvent.keyDown(second, { key: "ArrowUp" });
+	expect(second).toHaveValue("46");
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual(["# ao-timeout: 90m\nnpm ci", "# ao-timeout: 46m\nmake seed"]);
+});
+
+it("marks an out-of-range time limit at once and keeps the form from saving", async () => {
+	renderScripts();
+	const field = await screen.findByLabelText("Time limit for step 1, in minutes");
+	fireEvent.change(field, { target: { value: "121" } });
+	expect(field).toHaveAttribute("aria-invalid", "true");
+	expect(screen.getByRole("alert")).toHaveTextContent("Setup step 1: the time limit must be a whole number of minutes from 1 to 120.");
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	expect(mocks.patch).not.toHaveBeenCalled();
+	// Clearing it goes back to the default, which saves the plain command.
+	fireEvent.change(field, { target: { value: "" } });
+	expect(field).not.toHaveAttribute("aria-invalid");
+	expect(screen.queryByRole("alert")).toBeNull();
+	fireEvent.change(field, { target: { value: "10" } });
+	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
+	fireEvent.change(screen.getByLabelText("Time limit for step 1, in minutes"), { target: { value: "0" } });
+	expect(screen.getByRole("alert")).toHaveTextContent("Cleanup step 1");
+	fireEvent.change(screen.getByLabelText("Time limit for step 1, in minutes"), { target: { value: "120" } });
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: {
+		postCreate: ["npm ci"],
+		preRemove: ["# ao-timeout: 120m\ndocker compose -p \"ao-$AO_SESSION_ID\" down"],
+	} });
+});
+
+it("keeps a repository step's time limit outside its folder wrapper", async () => {
+	mocks.get.mockResolvedValue({ project: project({
+		...stored, repos: [{ url: "https://github.com/acme/web" }],
+		postCreate: ["# ao-timeout: 30m\n(\ncd -- '../web' || exit 1\nnpm ci\n)"],
+	}) });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 1")).toHaveValue("npm ci");
+	expect(screen.getByLabelText("Time limit for step 1, in minutes")).toHaveValue("30");
+	fireEvent.change(screen.getByLabelText("Step 1"), { target: { value: "npm ci --prefer-offline" } });
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual(["# ao-timeout: 30m\n(\ncd -- '../web' || exit 1\nnpm ci --prefer-offline\n)"]);
+});

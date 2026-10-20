@@ -19,8 +19,10 @@ import (
 //
 //	@@ao-step-<nonce> log <path>
 //	@@ao-step-<nonce> <n> <total> start <epochMs> <repository or /> <command>
-//	@@ao-step-<nonce> <n> <total> end <exitCode> <durationMs>
+//	@@ao-step-<nonce> <n> <total> end <exitCode> <durationMs> [<timeoutSeconds>]
 //
+// A script from before per-step time limits leaves the timeout out; its steps
+// had ProjectScriptStepTimeout.
 // The nonce is random per script, so a command that prints something that
 // looks like a marker is read as output.
 
@@ -59,9 +61,10 @@ type CleanupRun struct {
 	// named by their nonce (CleanupRunID).
 	RunID string
 	// Nonce is the marker nonce of the commands script the control plane
-	// installed for this run, and Commands that script's commands; both are
-	// empty when the hook ran the commands the worker installed, whose nonce
-	// is then read from the output.
+	// installed for this run, and Commands that script's commands (each led by
+	// its time limit's marker when it sets one); both are empty when the hook
+	// ran the commands the worker installed, whose nonce is then read from the
+	// output.
 	Nonce    string
 	Commands []string
 	// KnownCommands are what the hook otherwise runs, as best known: the
@@ -122,6 +125,19 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 	// they assign to secret-named variables: a step that sets one prints it
 	// with nothing naming it.
 	redactor := run.redactor()
+	// The run's own commands and time limits, when the control plane wrote its
+	// script; the end markers carry each step's limit too.
+	var ownCommands []string
+	var ownTimeouts []time.Duration
+	if own {
+		ownCommands, ownTimeouts = splitScriptSteps(run.Commands)
+	}
+	stepTimeout := func(step int) time.Duration {
+		if own && len(ownTimeouts) >= step {
+			return ownTimeouts[step-1]
+		}
+		return 0
+	}
 	steps := map[int]*cleanupStep{}
 	var current *cleanupStep
 	var preamble, trailer strings.Builder
@@ -137,10 +153,18 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			trailer.WriteString(text + "\n")
 		}
 	}
-	finish := func(step *cleanupStep, exitCode int, duration time.Duration) {
+	finish := func(step *cleanupStep, exitCode int, duration, timeout time.Duration) {
+		if timeout <= 0 {
+			timeout = stepTimeout(step.event.Step)
+		}
+		if timeout > 0 {
+			step.event.TimeoutMinutes = timeoutMinutes(timeout)
+		} else {
+			timeout = ProjectScriptStepTimeout
+		}
 		status := SetupSucceeded
 		switch {
-		case (exitCode == 124 || exitCode == 137) && duration >= ProjectScriptStepTimeout-time.Second:
+		case (exitCode == 124 || exitCode == 137) && duration >= timeout-time.Second:
 			status, exitCode = SetupTimedOut, -1
 		case exitCode != 0:
 			status = SetupFailed
@@ -191,7 +215,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			if current != nil && !current.finished {
 				// A start without the previous step's end: that step stopped
 				// the script without reporting.
-				finish(current, -1, 0)
+				finish(current, -1, 0, 0)
 			}
 			parts := strings.SplitN(rest, " ", 3)
 			current = &cleanupStep{event: ScriptStepEvent{Step: step}}
@@ -207,7 +231,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			steps[step] = current
 		case "end":
 			parts := strings.Fields(rest)
-			exitCode, duration := -1, time.Duration(0)
+			exitCode, duration, timeout := -1, time.Duration(0), time.Duration(0)
 			if len(parts) > 0 {
 				if code, err := strconv.Atoi(parts[0]); err == nil {
 					exitCode = code
@@ -218,6 +242,11 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 					duration = time.Duration(milliseconds) * time.Millisecond
 				}
 			}
+			if len(parts) > 2 {
+				if seconds, err := strconv.Atoi(parts[2]); err == nil && seconds > 0 {
+					timeout = time.Duration(seconds) * time.Second
+				}
+			}
 			if current == nil || current.event.Step != step || current.finished {
 				// Its start is no longer in the output: what came before
 				// this marker is the end of its output.
@@ -226,7 +255,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				preamble.Reset()
 				steps[step] = current
 			}
-			finish(current, exitCode, duration)
+			finish(current, exitCode, duration, timeout)
 			current = nil
 		default:
 			write(line)
@@ -242,6 +271,9 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		duration := run.Duration
 		if current.startedMs > 0 {
 			duration = max(0, ended.Sub(time.UnixMilli(current.startedMs)))
+		}
+		if timeout := stepTimeout(current.event.Step); timeout > 0 {
+			current.event.TimeoutMinutes = timeoutMinutes(timeout)
 		}
 		switch code := run.ExitCode; code {
 		case 124, 137:
@@ -287,8 +319,13 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			// shows): never ran.
 			event.Status = ScriptStepSkipped
 		}
-		if event.Command == "" && own && len(run.Commands) == total {
-			event.Command, event.Repository = scriptStepCommand(run.Commands[number-1], redactor)
+		if event.Command == "" && own && len(ownCommands) == total {
+			event.Command, event.Repository = scriptStepCommand(ownCommands[number-1], redactor)
+		}
+		if event.TimeoutMinutes == 0 {
+			if timeout := stepTimeout(number); timeout > 0 && len(ownCommands) == total {
+				event.TimeoutMinutes = timeoutMinutes(timeout)
+			}
 		}
 		event.Phase, event.RunID, event.Total = ScriptPhaseCleanup, CleanupRunID(nonce), total
 		if event.Status != ScriptStepSkipped && (sawLog || logPath != "") {

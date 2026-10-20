@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // A project's Setup (postCreate) and Cleanup (preRemove) scripts, the same
@@ -22,9 +24,10 @@ import (
 // before the coding agent starts; Cleanup commands run before the session's
 // workspace is permanently deleted.
 const (
-	// ProjectScriptStepTimeout bounds each Setup or Cleanup command, as the
-	// local daemon does.
-	ProjectScriptStepTimeout = 10 * time.Minute
+	// ProjectScriptStepTimeout bounds each Setup or Cleanup command that does
+	// not set its own time limit (domain.ScriptStepTimeout), as the local
+	// daemon does.
+	ProjectScriptStepTimeout = time.Duration(domain.DefaultScriptStepTimeoutMinutes) * time.Minute
 	// ProjectScriptOutputLimit bounds the command output kept for the worker
 	// log and the session event, as the local daemon does.
 	ProjectScriptOutputLimit = 8 << 10
@@ -89,6 +92,9 @@ type SetupEvent struct {
 	Groups     []string `json:"groups,omitempty"`
 	LogPath    string   `json:"logPath,omitempty"`
 	Hint       string   `json:"hint,omitempty"`
+	// TimeoutMinutes is the failed step's time limit (0 for one from a worker
+	// that predates per-step limits, which had the default).
+	TimeoutMinutes int `json:"timeoutMinutes,omitempty"`
 }
 
 // Summary names the failed step and why, in the local daemon's words
@@ -96,9 +102,41 @@ type SetupEvent struct {
 func (e SetupEvent) Summary() string {
 	cause := fmt.Sprintf("exit status %d", e.ExitCode)
 	if e.Status == SetupTimedOut {
-		cause = "timed out after " + ProjectScriptStepTimeout.String()
+		cause = "timed out after " + scriptMinutes(domain.ScriptStepTimeout(e.TimeoutMinutes))
 	}
 	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+}
+
+// scriptMinutes says a step's time limit in minutes ("1 minute", "30
+// minutes").
+func scriptMinutes(timeout time.Duration) string {
+	minutes := int(timeout / time.Minute)
+	if minutes == 1 {
+		return "1 minute"
+	}
+	return strconv.Itoa(minutes) + " minutes"
+}
+
+// timeoutMinutes is a step's time limit as whole minutes, for its events.
+func timeoutMinutes(timeout time.Duration) int {
+	return int((timeout + time.Minute - 1) / time.Minute)
+}
+
+// splitScriptSteps reads a run's step commands, each optionally led by its
+// time limit's marker (domain.TimedScriptCommand): the commands without the
+// marker and their time limits, blank commands dropped.
+func splitScriptSteps(steps []string) ([]string, []time.Duration) {
+	commands := make([]string, 0, len(steps))
+	timeouts := make([]time.Duration, 0, len(steps))
+	for _, step := range steps {
+		command, timeout := domain.SplitScriptStepTimeout(step)
+		if strings.TrimSpace(command) == "" {
+			continue
+		}
+		commands = append(commands, command)
+		timeouts = append(timeouts, timeout)
+	}
+	return commands, timeouts
 }
 
 // Context is a failed step's command, who and where it ran, and its log, one
@@ -204,7 +242,7 @@ type SetupRunner struct {
 	// (or under a worker from before Setup existed) never runs one added to
 	// the project later inside its already-prepared workspace.
 	FirstStart bool
-	// StepTimeout overrides ProjectScriptStepTimeout for tests.
+	// StepTimeout overrides every step's time limit for tests.
 	StepTimeout time.Duration
 	// Publish, when set, receives the run's ScriptStepEventType events: each
 	// step's start, live updates of its output while it runs, its final
@@ -223,16 +261,18 @@ type SetupRunner struct {
 }
 
 // Run runs commands in order in dir with `sh -c`, stopping at the first one
-// that fails. ran is false when there is nothing to run or Setup already
-// succeeded for this session. Only a success is recorded, so a failed Setup
-// runs again when the session is reopened.
+// that fails. Each runs for at most its time limit: the one its timeout marker
+// line sets (domain.TimedScriptCommand, LaunchContext.ProjectScripts), else
+// ProjectScriptStepTimeout. ran is false when there is nothing to run or Setup
+// already succeeded for this session. Only a success is recorded, so a failed
+// Setup runs again when the session is reopened.
 func (r SetupRunner) Run(
 	ctx context.Context,
-	commands []string,
+	timedCommands []string,
 	dir string,
 	environment SessionScriptEnvironment,
 ) (event SetupEvent, ran bool) {
-	commands = nonEmptyCommands(commands)
+	commands, timeouts := splitScriptSteps(timedCommands)
 	marker := filepath.Join(r.DataDir, setupDoneFile)
 	if _, err := os.Stat(marker); err == nil {
 		return SetupEvent{}, false
@@ -246,10 +286,6 @@ func (r SetupRunner) Run(
 		return SetupEvent{}, false
 	}
 	r.writeMarker(attempted)
-	timeout := r.StepTimeout
-	if timeout <= 0 {
-		timeout = ProjectScriptStepTimeout
-	}
 	// Each run keeps only its own steps' logs.
 	logs := filepath.Join(r.DataDir, setupLogsDir)
 	_ = os.RemoveAll(logs)
@@ -266,8 +302,13 @@ func (r SetupRunner) Run(
 		if logs != "" {
 			logPath = filepath.Join(logs, "step-"+strconv.Itoa(index+1)+".log")
 		}
-		live := steps.start(index+1, command, logPath)
+		timeout := timeouts[index]
+		if r.StepTimeout > 0 {
+			timeout = r.StepTimeout
+		}
+		live := steps.start(index+1, command, logPath, timeout)
 		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath, live)
+		step.TimeoutMinutes = timeoutMinutes(timeout)
 		// Only a failure carries output in the summary event: it is what the
 		// startup screen shows to fix the step. Each step's own events carry
 		// its redacted output (setupStepEvents).
@@ -294,7 +335,7 @@ func (r SetupRunner) Run(
 			}
 			step.Hint = ScriptFailureHint(step.Output, step.ExitCode, step.User)
 			steps.finish(step)
-			steps.skip(commands[index+1:])
+			steps.skip(commands[index+1:], timeouts[index+1:])
 			return step, true
 		}
 		steps.finish(step)
@@ -432,56 +473,59 @@ func (b *tailBuffer) String() string {
 }
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
-// command with `sh -c` in order, each bounded by ProjectScriptStepTimeout when
-// timeout(1) is available, stopping at the first failure with that command's
-// status. With no commands it does nothing. Around each command it prints a
-// start and an end marker line carrying nonce (NewScriptMarkerNonce), which
-// the control plane parses into the run's step events
-// (CleanupStepEvents); the commands, their order, environment and exit
-// status are the same as without them.
-func CleanupCommandsScript(commands []string, nonce string) string {
-	seconds := strconv.Itoa(int(ProjectScriptStepTimeout / time.Second))
-	commands = nonEmptyCommands(commands)
+// command with `sh -c` in order, each bounded by its time limit (the one its
+// timeout marker line sets, else ProjectScriptStepTimeout) when timeout(1) is
+// available, stopping at the first failure with that command's status. With
+// no commands it does nothing. Around each command it prints a start and an
+// end marker line carrying nonce (NewScriptMarkerNonce), which the control
+// plane parses into the run's step events (CleanupStepEvents); the commands, their order, environment and exit
+// status are the same as without them. Each end marker also carries the
+// step's time limit in seconds, so its timeout is told apart from a failure.
+func CleanupCommandsScript(steps []string, nonce string) string {
+	commands, timeouts := splitScriptSteps(steps)
 	// The step lines it prints name each command, redacted: also of the
 	// values its commands assign to secret-named variables.
 	redactor := newScriptRedactor(nil, assignedSecretValues(commands))
 	total := strconv.Itoa(len(commands))
 	marker := scriptMarkerPrefix + nonce + " "
-	var steps strings.Builder
-	steps.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
-	steps.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5 " + seconds + "\"; fi\n")
+	var script strings.Builder
+	script.WriteString("#!/bin/sh\n# Written by AO: the project's Cleanup commands.\n")
+	script.WriteString("ao_timeout=\nif command -v timeout >/dev/null 2>&1; then ao_timeout=\"timeout -k 5\"; fi\n")
 	if len(commands) > 0 {
 		// Milliseconds since the epoch: from nanoseconds when date has %N (16
 		// digits or more), else from seconds, else 0; never anything that
 		// would stop the script.
-		steps.WriteString("ao_ms() { ao_t=$(date +%s%N 2>/dev/null) || ao_t=\n" +
+		script.WriteString("ao_ms() { ao_t=$(date +%s%N 2>/dev/null) || ao_t=\n" +
 			"  case \"$ao_t\" in *[!0-9]*) ao_t= ;; ????????????????*) ao_t=${ao_t%??????} ;; *) ao_t= ;; esac\n" +
 			"  [ -n \"$ao_t\" ] || ao_t=$(date +%s 2>/dev/null)000\n" +
 			"  case \"$ao_t\" in ''|*[!0-9]*) ao_t=0 ;; esac\n" +
 			"  echo \"$ao_t\"\n}\n")
-		steps.WriteString("printf '%s\\n' " + shellQuote(marker+"log") + "\" $(dirname \"$0\")/" + cleanupStateDir + "/output\"\n")
+		script.WriteString("printf '%s\\n' " + shellQuote(marker+"log") + "\" $(dirname \"$0\")/" + cleanupStateDir + "/output\"\n")
 	}
 	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
+		seconds := strconv.Itoa(int(timeouts[index] / time.Second))
 		summary, repository := scriptCommandSummary(command, redactor)
 		if repository == "" {
 			repository = scriptMarkerMainRepository
 		}
-		steps.WriteString("ao_started=$(ao_ms)\n")
-		steps.WriteString("printf '%s %s %s\\n' " + shellQuote(marker+step+" "+total+" start") + " \"$ao_started\" " +
+		script.WriteString("ao_started=$(ao_ms)\n")
+		script.WriteString("printf '%s %s %s\\n' " + shellQuote(marker+step+" "+total+" start") + " \"$ao_started\" " +
 			shellQuote(repository+" "+summary) + "\n")
-		steps.WriteString("$ao_timeout sh -c " + shellQuote(command) + " </dev/null\n")
-		end := "echo \"" + marker + step + " " + total + " end $ao_code $(($(ao_ms) - $ao_started))\"\n"
+		// Unquoted, so an empty $ao_timeout (no timeout(1)) leaves the
+		// command and its limit out.
+		script.WriteString("${ao_timeout:+$ao_timeout " + seconds + "} sh -c " + shellQuote(command) + " </dev/null\n")
+		end := "echo \"" + marker + step + " " + total + " end $ao_code $(($(ao_ms) - $ao_started)) " + seconds + "\"\n"
 		// Say which step, what it ran, and as whom and where, so a failure in
 		// the logs needs no trip into the sandbox.
-		steps.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then\n" +
+		script.WriteString("ao_code=$?\nif [ \"$ao_code\" -ne 0 ]; then\n" +
 			"  echo \"cleanup step " + step + " failed: exit status $ao_code\" >&2\n" +
 			"  echo " + shellQuote("cleanup step "+step+": "+summary) + " >&2\n" +
 			"  echo \"ran as $(id -un 2>/dev/null) (groups: $(id -Gn 2>/dev/null)) in $(pwd)\" >&2\n" +
 			"  " + end +
 			"  exit \"$ao_code\"\nfi\n" + end)
 	}
-	return steps.String()
+	return script.String()
 }
 
 // WriteCleanupHook installs the hook the control plane runs before it deletes

@@ -28,7 +28,10 @@ type cleanupStepError struct {
 func (e *cleanupStepError) Error() string {
 	reason := "command could not run"
 	var exit *exec.ExitError
+	var timedOut *stepTimeoutError
 	switch {
+	case errors.As(e.cause, &timedOut):
+		reason = "timed out after " + stepMinutes(timedOut.timeout)
 	case errors.Is(e.cause, context.Canceled):
 		reason = "cancelled"
 	case errors.Is(e.cause, exec.ErrWaitDelay):
@@ -40,6 +43,15 @@ func (e *cleanupStepError) Error() string {
 }
 
 func (e *cleanupStepError) Unwrap() []error { return []error{ErrCleanupScript, e.cause} }
+
+// stepTimeoutError is a Cleanup step stopped at its own time limit.
+type stepTimeoutError struct {
+	timeout time.Duration
+	cause   error
+}
+
+func (e *stepTimeoutError) Error() string { return "timed out after " + stepMinutes(e.timeout) }
+func (e *stepTimeoutError) Unwrap() error { return e.cause }
 
 // runPreRemove is called only for permanent AO-owned workspace retirement,
 // after the session's processes have stopped and before worktree removal.
@@ -92,7 +104,10 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return errors.New("cleanup path is outside managed workspaces")
 	}
-	for index, command := range project.Config.PreRemove {
+	for index, step := range project.Config.PreRemove {
+		// A step runs without a limit unless it sets its own; its marker
+		// line never reaches the shell (cmd on Windows has no # comments).
+		command, timeout := scriptStepTimeout(step, 0)
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
@@ -101,7 +116,16 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 			"AO_SOURCE_TREE_PATH": project.Path,
 			"AO_WORKTREE_PATH":    workspacePath,
 		})
-		err := runWorkspaceStep(ctx, workspacePath, command, env, out)
+		stepCtx, cancel := ctx, context.CancelFunc(func() {})
+		if timeout > 0 {
+			stepCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
+		timedOut := timeout > 0 && errors.Is(stepCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		cancel()
+		if timedOut {
+			err = &stepTimeoutError{timeout: timeout, cause: err}
+		}
 		if err != nil {
 			m.logger.Warn("workspace cleanup step failed", "projectID", projectID, "step", index+1,
 				"error", err, "output", agentlaunch.RedactValues(strings.TrimSpace(string(out.tail)), env))

@@ -857,13 +857,14 @@ func (r *Reconciler) reconcileDeletion(
 			r.log.WarnContext(ctx, "mark sandbox deletion requested",
 				"session_id", record.SessionID, "err", err)
 		}
-	} else if time.Since(*record.DeletionRequestedAt) >= r.options.DeletionDeadline {
+	} else if elapsed := time.Since(*record.DeletionRequestedAt); elapsed >= r.options.DeletionDeadline &&
+		elapsed >= r.deletionDeadline(ctx, record) {
 		r.log.WarnContext(ctx, "abandoning unreclaimable sandbox after deletion deadline",
 			"session_id", record.SessionID,
 			"provider", record.Provider,
 			"provider_id", record.ProviderEnvironmentID,
 			"provider_state", environment.State,
-			"deadline", r.options.DeletionDeadline,
+			"deadline", r.deletionDeadline(ctx, record),
 		)
 		// One last Delete without the project's Cleanup, so a Cleanup that
 		// outlived the deadline (a slow script, or a control plane restart
@@ -910,6 +911,24 @@ func (r *Reconciler) reconcileDeletion(
 		"",
 		2*time.Second,
 	)
+}
+
+// deletionDeadline is how long the reconciler keeps re-requesting a
+// sandbox's deletion: DeletionDeadline, plus how far the project's Cleanup
+// run may exceed the default budget (sandbox.CleanupBudget of its current and
+// its worker's installed commands, at most sandbox.MaxCleanupBudget). A Cleanup
+// whose steps set long time limits still finishes before the deletion is
+// abandoned, and a deletion is never held for more than that bound.
+func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox) time.Duration {
+	installed, _ := domain.InstalledCleanupCommands(record.BootstrapContext)
+	var current []string
+	if lookup, ok := r.store.(cleanupCommandsStore); ok {
+		if commands, err := lookup.ProjectCleanupCommands(ctx, record.OrgID, record.SessionID); err == nil {
+			current = commands
+		}
+	}
+	extra := sandbox.CleanupBudget(current, installed) - sandbox.MinCleanupBudget
+	return r.options.DeletionDeadline + max(0, extra)
 }
 
 // cleanupCommandsStore is the optional Store capability that reads a

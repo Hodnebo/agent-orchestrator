@@ -264,3 +264,66 @@ describe("ScriptRunPanel", () => {
 		expect(screen.queryByLabelText(/Elapsed/)).toBeNull();
 	});
 });
+
+describe("ScriptRunPanel step time limit", () => {
+	it("shows the running step's limit beside its time, and only while it runs", () => {
+		const run = runOf(
+			{ step: 1, status: "succeeded", command: "npm ci", exitCode: 0, startedAt: "2026-10-18T10:00:00Z", durationMs: 4000, output: "", timeoutMinutes: 10 },
+			{ step: 2, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:04Z", output: "", timeoutMinutes: 45 },
+		);
+		render(<ScriptRunPanel run={run} />);
+		const [first, second] = steps();
+		expect(within(second).getByText("/ 45:00", { exact: false })).toBeInTheDocument();
+		expect(within(second).getByText(", limit 45:00")).toHaveClass("sr-only");
+		expect(within(first).queryByText(/\/ 10:00/)).toBeNull();
+	});
+
+	it("shows no limit for a step from a worker that does not report one", () => {
+		const run = runOf({ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:04Z", output: "" });
+		render(<ScriptRunPanel run={run} />);
+		expect(within(steps()[0]).queryByText(/limit/)).toBeNull();
+		expect(within(steps()[0]).getByText("0:08")).toBeInTheDocument();
+	});
+});
+
+describe("ScriptRunPanel quiet step note", () => {
+	function quietRun(createdAts: string[], payloads: Record<string, unknown>[]) {
+		return groupScriptRuns(payloads.map((payload, index) => ({ ...stepEvent(payload), createdAt: createdAts[index] })))[0];
+	}
+
+	it("says a running step has printed nothing for 3 minutes, with its limit, and keeps counting", () => {
+		vi.setSystemTime(new Date("2026-10-18T10:02:59Z"));
+		// Started at 10:00:00; its output last changed at 10:00:30.
+		const run = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:00:30Z"], [
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "", timeoutMinutes: 10 },
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "seeding", timeoutMinutes: 10 },
+		]);
+		render(<ScriptRunPanel run={run} />);
+		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
+		act(() => { vi.advanceTimersByTime(31_000); });
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 3 min. The step is still running (limit 10 min).");
+		act(() => { vi.advanceTimersByTime(60_000); });
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
+	});
+
+	it("goes away when new output arrives or the step ends, and omits an unknown limit", () => {
+		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
+		const quiet = quietRun(["2026-10-18T10:00:00Z"], [
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "" },
+		]);
+		const { rerender } = render(<ScriptRunPanel run={quiet} />);
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 5 min. The step is still running.");
+		expect(screen.getByTestId("script-step-quiet")).not.toHaveTextContent("limit");
+		const fresh = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:04:50Z"], [
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "" },
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "row 1" },
+		]);
+		rerender(<ScriptRunPanel run={fresh} />);
+		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
+		const done = quietRun(["2026-10-18T10:00:00Z"], [
+			{ step: 1, status: "succeeded", command: "make seed", startedAt: "2026-10-18T10:00:00Z", exitCode: 0, durationMs: 300_000, output: "" },
+		]);
+		rerender(<ScriptRunPanel run={done} />);
+		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
+	});
+});

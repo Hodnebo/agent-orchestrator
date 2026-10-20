@@ -53,6 +53,8 @@ export interface ScriptStepEventPayload {
 	groups?: string[];
 	dir?: string;
 	hint?: string;
+	/** The step's time limit in minutes (1 to 120); absent when not known (an older worker or Cleanup hook). */
+	timeoutMinutes?: number;
 }
 
 /** A step slot. `pending` is a step the run has not reached (no event yet). */
@@ -73,6 +75,14 @@ export interface ScriptRunStep {
 	groups?: string[];
 	dir?: string;
 	hint?: string;
+	/** See {@link ScriptStepEventPayload.timeoutMinutes}. */
+	timeoutMinutes?: number;
+	/**
+	 * While the step runs: when its newest event arrived. The worker sends a
+	 * running step's update only when its output changes, so this is when its
+	 * output last changed (or when it started, before any).
+	 */
+	outputAt?: string;
 }
 
 /**
@@ -156,7 +166,14 @@ export function parseScriptStepPayload(payload: unknown): ScriptStepEventPayload
 		groups: groups && groups.length > 0 ? groups : undefined,
 		dir: nonEmpty(value.dir),
 		hint: nonEmpty(value.hint),
+		timeoutMinutes: timeoutMinutes(value.timeoutMinutes),
 	};
+}
+
+/** A step's time limit as the control plane bounds it (1 to 120 minutes), else undefined. */
+function timeoutMinutes(value: unknown): number | undefined {
+	const minutes = integer(value);
+	return minutes !== undefined && minutes >= 1 && minutes <= 120 ? minutes : undefined;
 }
 
 /** True for a step that has ended (any outcome but running or not started). */
@@ -185,7 +202,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 	const runs = new Map<string, {
 		phase: ScriptPhase;
 		total: number;
-		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload }>;
+		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload; createdAt: string }>;
 		firstSequence: number;
 		lastSequence: number;
 		firstCreatedAt: string;
@@ -205,13 +222,14 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		run.firstSequence = Math.min(run.firstSequence, event.sequence);
 		run.lastSequence = Math.max(run.lastSequence, event.sequence);
 		const previous = run.latest.get(payload.step);
-		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload });
+		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload, createdAt: event.createdAt });
 	}
 	const ordered = [...runs.entries()].sort((a, b) => a[1].firstSequence - b[1].firstSequence);
 	return ordered.map(([runId, run], index) => {
 		const steps: ScriptRunStep[] = [];
 		for (let step = 1; step <= run.total; step++) {
-			const payload = run.latest.get(step)?.payload;
+			const latest = run.latest.get(step);
+			const payload = latest?.payload;
 			if (!payload) {
 				steps.push(pendingStep(step));
 				continue;
@@ -235,6 +253,8 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 				groups: failed && !payload.outputHidden ? payload.groups : undefined,
 				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
+				timeoutMinutes: payload.timeoutMinutes,
+				outputAt: payload.status === "running" ? latest?.createdAt : undefined,
 			});
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;

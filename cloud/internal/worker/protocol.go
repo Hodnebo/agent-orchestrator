@@ -64,6 +64,22 @@ type LaunchContext struct {
 	// Cleanup runs before the workspace is deleted.
 	PostCreate []string `json:"postCreate,omitempty"`
 	PreRemove  []string `json:"preRemove,omitempty"`
+	// PostCreateTimeoutMinutes and PreRemoveTimeoutMinutes are each Setup and
+	// Cleanup command's own time limit in minutes, by index; 0 or a missing
+	// entry is domain.DefaultScriptStepTimeoutMinutes. Absent when every step
+	// has the default. A worker that predates per-step limits ignores them and
+	// gives every step the default; a worker given none (an older control
+	// plane) does too.
+	PostCreateTimeoutMinutes []int `json:"postCreateTimeoutMinutes,omitempty"`
+	PreRemoveTimeoutMinutes  []int `json:"preRemoveTimeoutMinutes,omitempty"`
+}
+
+// ProjectScripts are the launch's Setup and Cleanup commands, each led by its
+// time limit's marker when it sets one (domain.TimedScriptCommand), as
+// SetupRunner.Run and WriteCleanupHook take them.
+func (l LaunchContext) ProjectScripts() (postCreate, preRemove []string) {
+	return domain.JoinTimedScriptCommands(l.PostCreate, l.PostCreateTimeoutMinutes),
+		domain.JoinTimedScriptCommands(l.PreRemove, l.PreRemoveTimeoutMinutes)
 }
 
 // RepoRef is one additional repository the worker clones beside the primary

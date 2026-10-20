@@ -126,8 +126,15 @@ export function additionalReposProblem(mainUrl: string | undefined, urls: readon
 /**
  * One Setup or Cleanup step as the editor holds it. folder is the repository
  * folder the step runs in ("" for the main repository), as repoDirName gives it.
+ * timeout is the step's own time limit in minutes as typed ("" or absent for
+ * the default); see scriptStepTimeoutMinutes.
  */
-export type ScriptStepDraft = { command: string; folder: string };
+export type ScriptStepDraft = { command: string; folder: string; timeout?: string };
+
+/** A step's time limit, in whole minutes, mirroring the control plane's domain.ScriptStepTimeout bounds. */
+export const DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES = 10;
+export const MIN_SCRIPT_STEP_TIMEOUT_MINUTES = 1;
+export const MAX_SCRIPT_STEP_TIMEOUT_MINUTES = 120;
 
 // The stored form of a step in another repository, written by the control
 // plane's domain.RepoScriptCommand: the command run in a subshell from that
@@ -135,6 +142,11 @@ export type ScriptStepDraft = { command: string; folder: string };
 // control plane or desktop release without per-repository steps still runs
 // and keeps the step.
 const repoScriptCommandPattern = /^\(\ncd -- '\.\.\/([A-Za-z0-9_.-]+)' \|\| exit 1\n([\s\S]*)\n\)$/;
+
+// The stored form of a step with its own time limit (domain.TimedScriptCommand,
+// in the control plane and the local daemon): a first line that is a shell
+// comment, so a release without per-step limits keeps and runs the step.
+const timedScriptCommandPattern = /^# ao-timeout: ([0-9]{1,4})m\r?\n/;
 
 /** The stored command for a step that runs in folder beside the main checkout. */
 export function repoScriptCommand(folder: string, command: string): string {
@@ -147,21 +159,66 @@ export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
 	return match ? { folder: match[1] ?? "", command: match[2] ?? "" } : { folder: "", command: stored };
 }
 
+/** The stored step with its own time limit; one with the default (or none) is the command as is. */
+export function timedScriptCommand(minutes: number | undefined, command: string): string {
+	if (minutes === undefined || minutes <= 0 || minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES) return command;
+	return `# ao-timeout: ${minutes}m\n${command}`;
+}
+
+/** Splits a stored step into its time limit in minutes (undefined when it sets none) and the rest. */
+export function parseTimedScriptCommand(stored: string): { minutes?: number; command: string } {
+	const match = timedScriptCommandPattern.exec(stored);
+	if (!match) return { command: stored };
+	return { minutes: Number(match[1]), command: stored.slice(match[0].length) };
+}
+
+/**
+ * A typed time limit as whole minutes: undefined for "" (the default), null
+ * when it is not a whole number from MIN to MAX.
+ */
+export function scriptStepTimeoutMinutes(text: string | undefined): number | undefined | null {
+	const value = (text ?? "").trim();
+	if (value === "") return undefined;
+	if (!/^[0-9]+$/.test(value)) return null;
+	const minutes = Number(value);
+	return minutes >= MIN_SCRIPT_STEP_TIMEOUT_MINUTES && minutes <= MAX_SCRIPT_STEP_TIMEOUT_MINUTES ? minutes : null;
+}
+
+/** A stored step as the editor holds it, without its repository folder (a local step). */
+export function parseLocalScriptStep(stored: string): ScriptStepDraft {
+	const { minutes, command } = parseTimedScriptCommand(stored);
+	return { command, folder: "", ...timeoutText(minutes) };
+}
+
+/** The stored form of a local step: its command with its own time limit. */
+export function serializeLocalScriptStep(step: ScriptStepDraft): string {
+	return timedScriptCommand(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
+}
+
+/** A draft's time limit for a stored one: none for the default. */
+function timeoutText(minutes: number | undefined): Pick<ScriptStepDraft, "timeout"> {
+	return minutes === undefined || minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES ? {} : { timeout: String(minutes) };
+}
+
 /**
  * Reads stored steps. Each is a plain command, the per-repository form above,
- * or (from an earlier build of this feature) {command, repository}. A step in
- * the main repository's own folder counts as a main repository step.
+ * either led by its own time limit, or (from an earlier build of this feature)
+ * {command, repository, timeoutMinutes}. A step in the main repository's own
+ * folder counts as a main repository step.
  */
 export function parseScriptSteps(value: unknown, mainUrl?: string): ScriptStepDraft[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const mainFolder = mainUrl ? repoDirName(mainUrl) : undefined;
 	const normalize = (step: ScriptStepDraft): ScriptStepDraft => step.folder === mainFolder ? { ...step, folder: "" } : step;
 	return value.flatMap((item): ScriptStepDraft[] => {
-		if (typeof item === "string") return [normalize(parseRepoScriptCommand(item))];
+		if (typeof item === "string") {
+			const { minutes, command } = parseTimedScriptCommand(item);
+			return [normalize({ ...parseRepoScriptCommand(command), ...timeoutText(minutes) })];
+		}
 		if (item && typeof item === "object" && typeof (item as { command?: unknown }).command === "string") {
-			const { command, repository } = item as { command: string; repository?: unknown };
+			const { command, repository, timeoutMinutes } = item as { command: string; repository?: unknown; timeoutMinutes?: unknown };
 			const folder = typeof repository === "string" && repository.trim() !== "" ? repoDirName(repository) : "";
-			return [normalize({ command, folder })];
+			return [normalize({ command, folder, ...timeoutText(typeof timeoutMinutes === "number" ? timeoutMinutes : undefined) })];
 		}
 		return [];
 	});
@@ -169,12 +226,16 @@ export function parseScriptSteps(value: unknown, mainUrl?: string): ScriptStepDr
 
 /**
  * The stored form of the steps: a step in the main repository stays the plain
- * command, any other is wrapped to run from its folder. Blank commands are dropped.
+ * command, any other is wrapped to run from its folder, and a step with its own
+ * time limit is led by it. Blank commands are dropped.
  */
 export function serializeScriptSteps(steps: readonly ScriptStepDraft[]): string[] {
 	return steps
 		.filter((step) => step.command.trim() !== "")
-		.map((step) => step.folder === "" ? step.command : repoScriptCommand(step.folder, step.command));
+		.map((step) => timedScriptCommand(
+			scriptStepTimeoutMinutes(step.timeout) ?? undefined,
+			step.folder === "" ? step.command : repoScriptCommand(step.folder, step.command),
+		));
 }
 
 /** The folders the stored Setup and Cleanup steps run in, other than the main repository's. */

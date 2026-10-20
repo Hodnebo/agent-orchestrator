@@ -105,7 +105,8 @@ func TestDeleteRunsCleanupInTheVMBeforeDeletingIt(t *testing.T) {
 	for _, want := range []string{
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
 		`set -- runuser -u "$ao_owner" -- "$ao_hook"`,
-		"timeout -k 5 600 ",
+		// The run's budget: both steps' limits and their grace.
+		"timeout -k 5 1220 ",
 		// The hook runs as the provisioned worker user, not its file's owner.
 		"ao_owner='ao-worker'",
 		// The resumed worker and agent are stopped before the hook runs.
@@ -115,7 +116,7 @@ func TestDeleteRunsCleanupInTheVMBeforeDeletingIt(t *testing.T) {
 			t.Fatalf("hook command missing %q:\n%s", want, command)
 		}
 	}
-	if exec["linuxUser"] != "root" || exec["timeoutMs"] != float64((cleanuphook.Budget+cleanuphook.Margin)/time.Millisecond) {
+	if exec["linuxUser"] != "root" || exec["timeoutMs"] != float64((sandbox.CleanupBudget(commands)+cleanuphook.Margin)/time.Millisecond) {
 		t.Fatalf("exec = %v", exec)
 	}
 	if !strings.Contains(script, "sh -c 'make down'") || !strings.Contains(script, "sh -c 'docker compose down'") {
@@ -356,12 +357,15 @@ func TestDeleteRunsALongCleanupAsABackgroundedExec(t *testing.T) {
 		return stepOutput(nonce), 0
 	}
 	recorder := &cleanuphooktest.Recorder{}
-	ctx := recorder.Context(sandbox.WithCleanupCommands(context.Background(), []string{"make down", "docker compose down"}))
+	// One step may run for two hours: the backgrounded exec gets the whole
+	// run's budget.
+	commands := []string{"# ao-timeout: 120m\nmake down", "docker compose down"}
+	ctx := recorder.Context(sandbox.WithCleanupCommands(context.Background(), commands))
 	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	exec := api.last(http.MethodPost, "/exec-await")
-	if exec.background == "" || exec.body["timeoutMs"] != float64((cleanuphook.Budget+cleanuphook.Margin)/time.Millisecond) {
+	if exec.background == "" || exec.body["timeoutMs"] != float64((sandbox.MaxCleanupBudget+cleanuphook.Margin)/time.Millisecond) {
 		t.Fatalf("exec = %+v; want the whole budget, backgrounded", exec)
 	}
 	if polls := strings.Count(strings.Join(api.calls(), ","), "GET /v5/background-requests/bgr-1"); polls != 3 {

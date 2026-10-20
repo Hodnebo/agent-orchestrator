@@ -1,0 +1,161 @@
+package domain
+
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestScriptStepTimeout(t *testing.T) {
+	for minutes, want := range map[int]time.Duration{
+		0:   10 * time.Minute,
+		-1:  10 * time.Minute,
+		1:   time.Minute,
+		10:  10 * time.Minute,
+		45:  45 * time.Minute,
+		120: 2 * time.Hour,
+		500: 2 * time.Hour,
+	} {
+		if got := ScriptStepTimeout(minutes); got != want {
+			t.Errorf("ScriptStepTimeout(%d) = %s, want %s", minutes, got, want)
+		}
+	}
+}
+
+func TestTimedScriptCommandRoundTrip(t *testing.T) {
+	if got := TimedScriptCommand(0, "npm ci"); got != "npm ci" {
+		t.Fatalf("default = %q", got)
+	}
+	if got := TimedScriptCommand(10, "npm ci"); got != "npm ci" {
+		t.Fatalf("explicit default = %q", got)
+	}
+	timed := TimedScriptCommand(45, "npm ci\nmake")
+	if timed != "# ao-timeout: 45m\nnpm ci\nmake" {
+		t.Fatalf("timed = %q", timed)
+	}
+	minutes, command, ok := ParseTimedScriptCommand(timed)
+	if !ok || minutes != 45 || command != "npm ci\nmake" {
+		t.Fatalf("parsed = %d %q %v", minutes, command, ok)
+	}
+	if _, command, ok := ParseTimedScriptCommand("# a comment\nnpm ci"); ok || command != "# a comment\nnpm ci" {
+		t.Fatalf("a plain comment is not a marker: %q %v", command, ok)
+	}
+	if command, timeout := SplitScriptStepTimeout(timed); command != "npm ci\nmake" || timeout != 45*time.Minute {
+		t.Fatalf("split = %q %s", command, timeout)
+	}
+	if command, timeout := SplitScriptStepTimeout("npm ci"); command != "npm ci" || timeout != 10*time.Minute {
+		t.Fatalf("split plain = %q %s", command, timeout)
+	}
+}
+
+func TestProjectScriptStepTimeoutJSON(t *testing.T) {
+	var steps []ProjectScriptStep
+	input := `["make up",{"command":"npm ci","timeoutMinutes":30},{"command":"seed","repository":"https://github.com/acme/web","timeoutMinutes":120},"# ao-timeout: 5m\n(\ncd -- '../web' || exit 1\nmake down\n)"]`
+	if err := json.Unmarshal([]byte(input), &steps); err != nil {
+		t.Fatal(err)
+	}
+	want := []ProjectScriptStep{
+		{Command: "make up"},
+		{Command: "npm ci", TimeoutMinutes: 30, object: true},
+		{Command: "seed", Repository: "https://github.com/acme/web", TimeoutMinutes: 120, object: true},
+		{Command: "make down", Folder: "web", TimeoutMinutes: 5},
+	}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("steps = %+v", steps)
+	}
+	// Stored as plain strings: the time limit leads the repository form, so a
+	// release that predates per-step limits keeps and runs the step.
+	encoded, _ := json.Marshal(steps)
+	wantStored := `["make up","# ao-timeout: 30m\nnpm ci","# ao-timeout: 120m\n(\ncd -- '../web' || exit 1\nseed\n)","# ao-timeout: 5m\n(\ncd -- '../web' || exit 1\nmake down\n)"]`
+	if string(encoded) != wantStored {
+		t.Fatalf("encoded = %s", encoded)
+	}
+	var back []ProjectScriptStep
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := json.Marshal(back); string(again) != wantStored {
+		t.Fatalf("re-encoded = %s", again)
+	}
+}
+
+func TestParseProjectScriptStepsValidatesTimeouts(t *testing.T) {
+	for _, valid := range []string{
+		`["npm ci"]`,
+		`[{"command":"npm ci","timeoutMinutes":1}]`,
+		`[{"command":"npm ci","timeoutMinutes":120}]`,
+		`[{"command":"npm ci","timeoutMinutes":null}]`,
+		`["make up",{"command":"npm ci","timeoutMinutes":45},"# ao-timeout: 60m\nmake seed"]`,
+	} {
+		if _, err := ParseProjectScriptSteps("postCreate", json.RawMessage(valid)); err != nil {
+			t.Errorf("%s: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{
+		`[{"command":"npm ci","timeoutMinutes":0}]`,
+		`[{"command":"npm ci","timeoutMinutes":121}]`,
+		`[{"command":"npm ci","timeoutMinutes":-5}]`,
+		`[{"command":"npm ci","timeoutMinutes":2.5}]`,
+		`[{"command":"npm ci","timeoutMinutes":"30"}]`,
+		`["make up","# ao-timeout: 0m\nnpm ci"]`,
+		`["# ao-timeout: 500m\nnpm ci"]`,
+	} {
+		_, err := ParseProjectScriptSteps("preRemove", json.RawMessage(invalid))
+		if err == nil || !strings.Contains(err.Error(), "from 1 to 120") {
+			t.Errorf("%s: err = %v, want the time limit refused", invalid, err)
+		}
+	}
+	if _, err := ParseProjectScriptSteps("postCreate", json.RawMessage(`["ok",{"command":"x","timeoutMinutes":200}]`)); err == nil ||
+		!strings.Contains(err.Error(), "postCreate step 2") {
+		t.Fatalf("err = %v, want it to name the step", err)
+	}
+	// A marker with nothing after it is an empty command.
+	if _, err := ParseProjectScriptSteps("postCreate", json.RawMessage(`["# ao-timeout: 30m\n"]`)); err == nil {
+		t.Fatal("an empty timed command must be refused")
+	}
+}
+
+func TestNormalizeProjectRepoSettingsStoresTimeoutsAsStrings(t *testing.T) {
+	config := json.RawMessage(`{
+		"repos":[{"url":"https://github.com/acme/web"}],
+		"postCreate":[{"command":"npm ci","timeoutMinutes":30},{"command":"make","repository":"https://github.com/acme/web","timeoutMinutes":90},{"command":"plain"}],
+		"preRemove":["# ao-timeout: 15m\nmake down"]
+	}`)
+	normalized, err := NormalizeProjectRepoSettings(mainRepo, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	_ = json.Unmarshal(normalized, &got)
+	if string(got["postCreate"]) != `["# ao-timeout: 30m\nnpm ci","# ao-timeout: 90m\n(\ncd -- '../web' || exit 1\nmake\n)","plain"]` {
+		t.Fatalf("postCreate = %s", got["postCreate"])
+	}
+	if string(got["preRemove"]) != `["# ao-timeout: 15m\nmake down"]` {
+		t.Fatalf("preRemove = %s", got["preRemove"])
+	}
+	if _, err := NormalizeProjectRepoSettings(mainRepo, json.RawMessage(`{"postCreate":[{"command":"x","timeoutMinutes":121}]}`)); err == nil {
+		t.Fatal("an out-of-range limit must be refused")
+	}
+}
+
+func TestProjectScriptsCarriesTimeoutMarkers(t *testing.T) {
+	config := json.RawMessage(`{"postCreate":["make up","# ao-timeout: 45m\nnpm ci"],"preRemove":["# ao-timeout: 3m\n(\ncd -- '../web' || exit 1\nmake down\n)"]}`)
+	postCreate, preRemove := ProjectScripts(config, mainRepo)
+	if !reflect.DeepEqual(postCreate, []string{"make up", "# ao-timeout: 45m\nnpm ci"}) {
+		t.Fatalf("postCreate = %q", postCreate)
+	}
+	if !reflect.DeepEqual(preRemove, []string{"# ao-timeout: 3m\n(\ncd -- '../web' || exit 1\nmake down\n)"}) {
+		t.Fatalf("preRemove = %q", preRemove)
+	}
+}
+
+func TestSettingsPatchValidatesScriptTimeouts(t *testing.T) {
+	if err := ValidateProjectScriptsConfig(json.RawMessage(`{"postCreate":[{"command":"x","timeoutMinutes":60}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateProjectScriptsConfig(json.RawMessage(`{"preRemove":[{"command":"x","timeoutMinutes":0}]}`)); err == nil {
+		t.Fatal("a zero limit must be refused")
+	}
+}

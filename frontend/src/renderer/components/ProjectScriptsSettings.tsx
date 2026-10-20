@@ -13,12 +13,16 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, FREESTYLE_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
-import { gitHubFullName, parseScriptSteps, projectAdditionalRepos, repoDirName, serializeScriptSteps, type ScriptStepDraft } from "../lib/cloud-project-repos";
+import {
+	DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES, MAX_SCRIPT_STEP_TIMEOUT_MINUTES, MIN_SCRIPT_STEP_TIMEOUT_MINUTES, gitHubFullName, parseLocalScriptStep,
+	parseScriptSteps, projectAdditionalRepos, repoDirName, scriptStepTimeoutMinutes, serializeLocalScriptStep, serializeScriptSteps, type ScriptStepDraft,
+} from "../lib/cloud-project-repos";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 type Project = components["schemas"]["Project"];
@@ -41,10 +45,11 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 	const project = query.data;
 	const scratch = project.kind === "scratch";
 	const save = async (steps: ScriptSteps) => {
-		// A local step always runs in the project's own workspace.
+		// A local step always runs in the project's own workspace; its own time
+		// limit is stored with it, as a Cloud step's is.
 		const scripts = {
-			postCreate: steps.postCreate.map((step) => step.command),
-			...(steps.preRemove && { preRemove: steps.preRemove.map((step) => step.command) }),
+			postCreate: steps.postCreate.map(serializeLocalScriptStep),
+			...(steps.preRemove && { preRemove: steps.preRemove.map(serializeLocalScriptStep) }),
 		};
 		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: project.id } } });
 		if (current.error) throw new Error(apiErrorMessage(current.error));
@@ -119,10 +124,59 @@ function cleanupRunsOn(provider: string): boolean {
 type ScriptSteps = { postCreate: ScriptStepDraft[]; preRemove?: ScriptStepDraft[] };
 
 function localSteps(commands: string[] | undefined): ScriptStepDraft[] | undefined {
-	return commands?.map((command) => ({ command, folder: "" }));
+	return commands?.map(parseLocalScriptStep);
 }
 
-const emptyStep = (): ScriptStepDraft => ({ command: "", folder: "" });
+const emptyStep = (): ScriptStepDraft => ({ command: "", folder: "", timeout: "" });
+
+/** The shown placeholder of a step with no time limit of its own and no default (a local Cleanup step). */
+const NO_TIME_LIMIT = "\u221e";
+
+/**
+ * A step's own time limit: a compact minutes field beside the step's other
+ * controls. Empty is the default (placeholder); a value outside 1 to 120 is
+ * marked invalid at once and keeps the form from saving.
+ */
+function StepTimeoutField({ id, number, value, disabled, noDefault, onChange }: {
+	id: string;
+	number: number;
+	value: string;
+	disabled: boolean;
+	/** Cleanup of a local project: an empty field means no limit at all. */
+	noDefault: boolean;
+	onChange: (value: string) => void;
+}) {
+	const { t } = useTranslation();
+	const invalid = scriptStepTimeoutMinutes(value) === null;
+	const hint = noDefault
+		? t("settings.project.stepTimeoutNoLimitHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES })
+		: t("settings.project.stepTimeoutHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES, default: DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES });
+	return <label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id} title={hint}>
+		<Input
+			aria-description={hint}
+			aria-invalid={invalid || undefined}
+			aria-label={t("settings.project.stepTimeout", { number })}
+			autoComplete="off"
+			className="h-7 w-12 px-2 text-right text-xs tabular-nums"
+			disabled={disabled}
+			id={id}
+			inputMode="numeric"
+			maxLength={3}
+			onChange={(event) => onChange(event.target.value.replace(/[^0-9]/g, ""))}
+			onKeyDown={(event) => {
+				if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+				event.preventDefault();
+				const current = scriptStepTimeoutMinutes(value) ?? (noDefault ? 0 : DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES);
+				const step = event.shiftKey ? 10 : 1;
+				const next = event.key === "ArrowUp" ? current + step : current - step;
+				onChange(String(Math.min(MAX_SCRIPT_STEP_TIMEOUT_MINUTES, Math.max(MIN_SCRIPT_STEP_TIMEOUT_MINUTES, next))));
+			}}
+			placeholder={noDefault ? NO_TIME_LIMIT : String(DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES)}
+			value={value}
+		/>
+		<span aria-hidden="true">{t("settings.project.stepTimeoutUnit")}</span>
+	</label>;
+}
 
 /** The variables a Cloud project's Setup and Cleanup steps can use. */
 const cloudScriptVariables = [
@@ -171,10 +225,19 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	// A step keeps its folder as stored, even one that is not among the project's
 	// repositories any more (it is listed by folder name), so saving never moves
 	// a step into another repository on its own.
+	const kept = (steps: ScriptStepDraft[]) => steps.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder, timeout: (step.timeout ?? "").trim() }));
 	const commands: ScriptSteps = {
-		postCreate: drafts.setup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder })),
-		...(!scratch && { preRemove: drafts.cleanup.filter((step) => step.command.trim()).map((step) => ({ command: step.command, folder: step.folder })) }),
+		postCreate: kept(drafts.setup),
+		...(!scratch && { preRemove: kept(drafts.cleanup) }),
 	};
+	// The first step whose time limit is not a whole number of minutes in range.
+	const invalidTimeout = (["setup", "cleanup"] as const).flatMap((kind) => kind === "cleanup" && scratch ? [] : drafts[kind]
+		.map((step, index) => ({ kind, number: index + 1, invalid: step.command.trim() !== "" && scriptStepTimeoutMinutes(step.timeout) === null })))
+		.find((step) => step.invalid);
+	const timeoutError = invalidTimeout ? t("settings.project.stepTimeoutInvalid", {
+		phase: t(invalidTimeout.kind === "setup" ? "settings.project.scriptSetup" : "settings.project.scriptCleanup"),
+		number: invalidTimeout.number, min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES,
+	}) : undefined;
 	const folderOptions = (current: string) => {
 		const options = [
 			{ value: "", label: t("settings.project.stepMainRepository", { defaultValue: "Main repository" }) },
@@ -223,7 +286,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		setDrafts((current) => ({ ...current, [kind]: steps }));
 		setSavedAt(false);
 	};
-	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate(commands); }}>
+	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-3" onSubmit={(event) => { event.preventDefault(); if (!timeoutError) mutation.mutate(commands); }}>
 		<Tabs className="flex flex-1 flex-col gap-3" value={activeTab} onValueChange={(value) => setActiveTab(value as ScriptKind)}>
 			<TabsList aria-label={t("settings.project.scripts")} className="shrink-0 self-start">
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>
@@ -264,6 +327,14 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 								<div className="mb-1 flex items-center justify-between gap-2">
 									<label className="text-sm font-medium text-settings-label" htmlFor={`${kind}-step-${index}`}>{t(`settings.project.${kind}Step`, { number: index + 1 })}</label>
 									<div className="flex min-w-0 items-center gap-1">
+										<StepTimeoutField
+											disabled={locked}
+											id={`${kind}-step-${index}-timeout`}
+											noDefault={!cloud && kind === "cleanup"}
+											number={index + 1}
+											value={step.timeout ?? ""}
+											onChange={(timeout) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, timeout } : item))}
+										/>
 										{cloud && showRepositoryMenu ? <SettingsOptionMenu
 											aria-label={t("settings.project.stepRepository", { defaultValue: "Repository for step {{number}}", number: index + 1 })}
 											disabled={locked}
@@ -293,7 +364,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 				</ProjectSettingsSection>}
 			</TabsContent>)}
 		</Tabs>
-		<SettingsSaveFooter dirty={dirty} disabled={locked}
-			error={mutation.isError ? mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed") : undefined} />
+		<SettingsSaveFooter dirty={dirty} disabled={locked || timeoutError !== undefined}
+			error={timeoutError ?? (mutation.isError ? mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed") : undefined)} />
 	</form>;
 }

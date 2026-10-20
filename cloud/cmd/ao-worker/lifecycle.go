@@ -141,7 +141,8 @@ func scriptStepPublisher(logger *slog.Logger, client *client) func(context.Conte
 var scriptStepsUnsupportedOnce sync.Once
 
 // projectScripts are the project's Setup and Cleanup commands (Project
-// settings > Scripts).
+// settings > Scripts), each led by its time limit's marker when it sets one
+// (worker.LaunchContext.ProjectScripts).
 type projectScripts struct {
 	PostCreate []string
 	PreRemove  []string
@@ -188,7 +189,8 @@ func refreshProjectScripts(
 		logger.Warn("project scripts: could not read the current Setup and Cleanup commands; retrying with the known ones", "error", err)
 		return current
 	}
-	refreshed := projectScripts{PostCreate: response.Launch.PostCreate, PreRemove: response.Launch.PreRemove}
+	var refreshed projectScripts
+	refreshed.PostCreate, refreshed.PreRemove = response.Launch.ProjectScripts()
 	if err := worker.WriteCleanupHook(dataDir, refreshed.PreRemove, workspace, environment); err != nil {
 		logger.Warn("reinstall project cleanup hook", "error", err)
 	}

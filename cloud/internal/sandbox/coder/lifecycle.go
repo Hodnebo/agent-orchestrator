@@ -36,7 +36,6 @@ const (
 	StageCleanup       = cleanuphook.Stage
 	cleanupMarker      = cleanuphook.Marker
 	cleanupSkipped     = cleanuphook.Skipped
-	cleanupBudget      = cleanuphook.Budget
 	cleanupMargin      = cleanuphook.Margin
 	cleanupOutputLimit = cleanuphook.OutputLimit
 )
@@ -74,7 +73,7 @@ func (c *Client) addLifecycleEnvironment(environment map[string]string, workspac
 // (cleanuphook.Tracker.SkipOnce). One still starting, stopping, or with its
 // agent still connecting is left for a later Delete. A client without a
 // durable root has nothing to clean up. Cleanup never
-// blocks deletion: a failure or a run over cleanupBudget is only reported as
+// blocks deletion: a failure or a run over its budget is only reported as
 // a stage. Like local cleanup it runs only before permanent removal, never on
 // stop or pause.
 func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
@@ -124,7 +123,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	plan, _ := cleanuphook.NewPlan(ctx, "workspace_id", string(id))
 	wait := c.cleanupWait
 	if wait <= 0 {
-		wait = cleanupBudget
+		wait = plan.Budget
 	}
 	// Detached from the reconcile pass's cancellation, but keeping its stage
 	// observer so the outcome is still logged against the session.

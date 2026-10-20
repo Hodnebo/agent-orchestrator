@@ -96,3 +96,22 @@ it("allows scratch setup without enabling cleanup or changing its stored cleanup
 	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
 	expect(putMock.mock.calls[0][1].body.config).toEqual({ ...config, postCreate: ["echo scratch", "echo second"] });
 });
+
+it("gives local steps the same time limit field, with no limit by default for Cleanup", async () => {
+	getMock.mockResolvedValue({ data: { status: "ok", project: { id: "p", name: "Example", kind: "single_repo", config: {
+		...config, postCreate: ["# ao-timeout: 30m\nnpm ci"], preRemove: ["docker compose down"],
+	} } } });
+	renderScripts();
+	expect(await screen.findByLabelText("Step 1")).toHaveValue("npm ci");
+	expect(screen.getByLabelText("Time limit for step 1, in minutes")).toHaveValue("30");
+	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
+	const cleanup = screen.getByLabelText("Time limit for step 1, in minutes");
+	expect(cleanup).toHaveValue("");
+	expect(cleanup).not.toHaveAttribute("placeholder", "10");
+	fireEvent.change(cleanup, { target: { value: "5" } });
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	expect(putMock.mock.calls[0][1].body.config).toMatchObject({
+		postCreate: ["# ao-timeout: 30m\nnpm ci"], preRemove: ["# ao-timeout: 5m\ndocker compose down"],
+	});
+});

@@ -107,6 +107,10 @@ type ScriptStepEvent struct {
 	Groups []string `json:"groups,omitempty"`
 	Dir    string   `json:"dir,omitempty"`
 	Hint   string   `json:"hint,omitempty"`
+	// TimeoutMinutes is the step's time limit (domain.ScriptStepTimeout); 0
+	// when it is not known (a worker or Cleanup hook that predates per-step
+	// limits, whose steps had the default).
+	TimeoutMinutes int `json:"timeoutMinutes,omitempty"`
 }
 
 // finish records a finished step's exit status and duration.
@@ -163,6 +167,9 @@ func SanitizeScriptStepEvent(event ScriptStepEvent) ScriptStepEvent {
 	}
 	for index, group := range event.Groups {
 		event.Groups[index] = activity.Truncate(group, 64)
+	}
+	if !domain.ValidScriptStepTimeoutMinutes(event.TimeoutMinutes) {
+		event.TimeoutMinutes = 0
 	}
 	return fitScriptStepEvent(event)
 }
@@ -1024,7 +1031,7 @@ func (r SetupRunner) startStepEvents(ctx context.Context, total int, redactor sc
 
 // start reports a step as running and returns the writer that feeds its live
 // updates (nil without Publish).
-func (s *setupStepEvents) start(step int, command, logPath string) io.Writer {
+func (s *setupStepEvents) start(step int, command, logPath string, timeout time.Duration) io.Writer {
 	if s.publisher == nil {
 		return nil
 	}
@@ -1033,6 +1040,7 @@ func (s *setupStepEvents) start(step int, command, logPath string) io.Writer {
 	s.current = ScriptStepEvent{
 		Phase: ScriptPhaseSetup, RunID: s.runID, Step: step, Total: s.total,
 		Status: ScriptStepRunning, StartedAt: scriptTimestamp(s.started), LogPath: logPath,
+		TimeoutMinutes: timeoutMinutes(timeout),
 	}
 	s.current.Command, s.current.Repository = scriptStepCommand(command, s.redactor)
 	s.publisher.update(fitScriptStepEvent(s.current))
@@ -1071,15 +1079,16 @@ func (s *setupStepEvents) finish(outcome SetupEvent) {
 	s.publisher.final(fitScriptStepEvent(event))
 }
 
-// skip reports the steps after a failure, which never ran.
-func (s *setupStepEvents) skip(commands []string) {
+// skip reports the steps after a failure, which never ran, with their time
+// limits.
+func (s *setupStepEvents) skip(commands []string, timeouts []time.Duration) {
 	if s.publisher == nil {
 		return
 	}
 	for index, command := range commands {
 		event := ScriptStepEvent{
 			Phase: ScriptPhaseSetup, RunID: s.runID, Step: s.current.Step + 1 + index, Total: s.total,
-			Status: ScriptStepSkipped,
+			Status: ScriptStepSkipped, TimeoutMinutes: timeoutMinutes(timeouts[index]),
 		}
 		event.Command, event.Repository = scriptStepCommand(command, s.redactor)
 		s.publisher.final(event)

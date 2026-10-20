@@ -357,3 +357,24 @@ func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
 		t.Fatalf("retry did not clear the failure: result=%+v facts=%+v err=%v", retry, facts, err)
 	}
 }
+
+// A Cleanup step runs without a limit unless it sets one; one that sets one
+// is stopped at it and reported as timed out, keeping the worktree.
+func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
+	previous := scriptStepMinute
+	scriptStepMinute = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute = previous })
+	slow := "sleep 2"
+	if runtime.GOOS == "windows" {
+		slow = "ping -n 3 127.0.0.1 > NUL"
+	}
+	m, _, _, rec := newCleanupFixture(t, slow)
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+		t.Fatalf("a step without a limit must run to its end: %v", err)
+	}
+	m, _, _, rec = newCleanupFixture(t, "# ao-timeout: 1m\n"+slow)
+	err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath)
+	if !errors.Is(err, ErrCleanupScript) || err.Error() != "cleanup step 1 failed: timed out after 1 minute" {
+		t.Fatalf("err = %v, want the step timed out", err)
+	}
+}
