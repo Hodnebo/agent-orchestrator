@@ -394,6 +394,7 @@ export function CloudSessionChatSurface({
 		onSuccess: () => {
 			setRetriedFailureAt(workspaceFailure?.at);
 			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: ["cloud-session"] });
 		},
 	});
 	const setupFailed = workspaceFailure?.code === "project_setup_failed";
@@ -506,17 +507,23 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
-	const startStopped = Boolean(workspaceFailure) && !rerunning;
+	const startFailed = Boolean(workspaceFailure);
+	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
 		const projected = toSnapshot(session, eventsQuery.data ?? []);
-		// The checklist reports a failed Setup, as a failed local start does; once a
-		// retry passes, only the Setup that passed stays in the conversation.
-		const items = projected.items.filter((item) => item.kind !== "activity" || item.detail?.event !== "workspace.setup" ||
-			item.detail.setupStatus === "succeeded");
+		// A failed Setup is reported by the checklist while the start is failed, as a
+		// failed local start does; once a retry passes, only the Setup that passed stays.
+		const setupStatus = (item: ConversationItem) =>
+			item.kind === "activity" && item.detail?.event === "workspace.setup" ? item.detail.setupStatus : undefined;
+		const lastPassed = Math.max(-1, ...projected.items.filter((item) => setupStatus(item) === "succeeded").map((item) => item.sequence));
+		const items = projected.items.filter((item) => {
+			const status = setupStatus(item);
+			return !status || status === "succeeded" || (!startFailed && item.sequence > lastPassed);
+		});
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings };
-	}, [eventsQuery.data, session, settings, startStopped]);
+	}, [eventsQuery.data, session, settings, startFailed, startStopped]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {

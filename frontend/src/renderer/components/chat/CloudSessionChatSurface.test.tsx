@@ -210,6 +210,21 @@ describe("CloudSessionChatSurface", () => {
 		expect(setupRows()[0]).toMatchObject({ detail: { setupStatus: "succeeded" } });
 	});
 
+	it("keeps a failed Setup row when no startup failure reports it", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toEqual([
+			expect.objectContaining({ detail: expect.objectContaining({ event: "workspace.setup", setupStatus: "failed" }) }),
+		]));
+	});
+
 	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [], modes: ["default", "plan"] });
