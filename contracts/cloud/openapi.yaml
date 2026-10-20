@@ -4215,7 +4215,7 @@ components:
           enum: [failed, ready]
         code:
           type: string
-          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed]
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied]
           description: Required when status is failed.
         message:
           type: string
@@ -5045,9 +5045,13 @@ components:
             unsupported_architecture, durable_root_unavailable,
             worker_never_started, bootstrap_failed,
             workspace_setup_not_ready (a Coder connection's workspace ready
-            check never passed), repository_checkout_failed,
-            working_directory_unusable or project_setup_failed (reported by
-            the worker). Clients must tolerate codes added later.
+            check never passed), working_directory_not_durable (the project's
+            working folder is outside the Coder connection's durable root),
+            repository_checkout_failed, working_directory_unusable (also
+            reported when the Coder bootstrap cannot prepare the project's
+            working folder), working_directory_occupied or
+            project_setup_failed (reported by the worker). Clients must
+            tolerate codes added later.
         message:
           type: string
           description: Human-readable explanation suitable for display as-is.

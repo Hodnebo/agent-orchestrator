@@ -2332,7 +2332,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -2708,7 +2708,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), repository_checkout_failed, working_directory_unusable or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
