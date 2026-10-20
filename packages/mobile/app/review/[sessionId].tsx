@@ -18,6 +18,7 @@ import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { rowDividerWidth } from "../../lib/divider";
+import { SwipeToMerge } from "../../lib/SwipeToMerge";
 import { space, type } from "../../lib/tokens";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 
@@ -183,16 +184,20 @@ function ReviewDetailContent() {
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
+	const merging = mutation === "merge";
+	// The swipe itself is the confirmation; only the screen reader path asks again.
+	const runMerge = async (): Promise<boolean> => {
+		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		setMutation("merge"); setError("");
+		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); return false; }
+		finally { setMutation(undefined); }
+	};
 	const confirmMerge = () => {
 		if (!config || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
-			{ text: "Merge", onPress: () => void (async () => {
-				setMutation("merge"); setError("");
-				try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); }
-				catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); }
-				finally { setMutation(undefined); }
-			})() },
+			{ text: "Merge", onPress: () => void runMerge() },
 		]);
 	};
 
@@ -215,7 +220,7 @@ function ReviewDetailContent() {
 		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
-			<View style={styles.row}>
+			<View style={[styles.row, merge?.canMerge && styles.rowAboveSlider]}>
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
 						<Feather name="git-pull-request" size={13} color={t.textSecondary} />
@@ -228,8 +233,10 @@ function ReviewDetailContent() {
 					</View> : null}
 					{merge?.reason ? <Text style={styles.detail}>{merge.reason}</Text> : null}
 				</View>
-				{merge?.canMerge ? <RowPill label={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" tone="merge" busy={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
 			</View>
+			{merge?.canMerge && pr ? <View style={styles.sliderSlot}>
+				<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+			</View> : null}
 
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its pill and menu are laid over the row rather
@@ -294,14 +301,14 @@ function ReviewDetailContent() {
 	);
 }
 
-type PillTone = "solid" | "outline" | "danger" | "merge";
+type PillTone = "solid" | "outline" | "danger";
 
 /** The board's row pill: solid for the live action, outlined for the rest. */
 function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }: { label: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const filled = tone === "solid" || tone === "merge";
-	const ink = tone === "solid" ? t.bgBase : tone === "merge" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
+	const filled = tone === "solid";
+	const ink = tone === "solid" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
 	return <Pressable
 		accessibilityRole="button"
 		accessibilityLabel={label}
@@ -309,7 +316,7 @@ function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }:
 		disabled={disabled || busy}
 		hitSlop={8}
 		onPress={() => { haptics.tap(); onPress(); }}
-		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, tone === "merge" && styles.pillMerge, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
+		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
 	>
 		{busy ? <ActivityIndicator size="small" color={ink} /> : <Feather name={icon} size={14} color={ink} />}
 		<Text style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>{label}</Text>
@@ -366,6 +373,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	// A worker row's metrics: eyebrow, title, status line, divider underneath.
 	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
+	rowAboveSlider: { borderBottomWidth: 0 },
+	sliderSlot: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.md, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
 	rowPressed: { backgroundColor: t.bgSubtle },
 	// Room for the pill and menu laid over the row's trailing edge.
 	rowWithOverlay: { paddingRight: 150 },
@@ -391,7 +400,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	markdown: { marginTop: space.xs },
 	pill: { flexDirection: "row", alignItems: "center", gap: space.xs, height: 28, paddingHorizontal: space.md, borderRadius: 12 },
 	pillSolid: { backgroundColor: t.textPrimary },
-	pillMerge: { backgroundColor: t.green },
 	pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
 	pillDanger: { borderColor: t.red },
 	pillDisabled: { opacity: 0.45 },
