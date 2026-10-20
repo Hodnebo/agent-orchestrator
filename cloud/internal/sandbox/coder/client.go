@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,6 +133,11 @@ type Client struct {
 	workingDirectory   string
 	protectSecretFiles bool
 	durableRoot        string
+	// checkoutDirectory and checkoutSiblings are a dedicated-worker-user
+	// session's working-folder checkout (sandbox.CoderSessionProfile), for
+	// example ~/work/alice; empty keeps the durable root's repository folder.
+	checkoutDirectory string
+	checkoutSiblings  []string
 	// cleanupWait bounds how long one Delete waits for the project's Cleanup
 	// commands; zero uses cleanupBudget.
 	cleanupWait time.Duration
@@ -269,8 +275,13 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.durableRoot = profile.DurableRoot
 	sessionClient.workingDirectory = ""
 	sessionClient.protectSecretFiles = profile.ProtectsSecretFiles()
+	sessionClient.checkoutDirectory = ""
+	sessionClient.checkoutSiblings = nil
 	if profile.RunsAsWorkspaceUser() {
 		sessionClient.workingDirectory = profile.WorkingDirectory
+	} else {
+		sessionClient.checkoutDirectory = profile.CheckoutDirectory
+		sessionClient.checkoutSiblings = slices.Clone(profile.CheckoutSiblings)
 	}
 	sessionClient.readyProbe = profile.ReadyProbe
 	sessionClient.readyProbeTimeout = 0
@@ -907,8 +918,11 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	home := ""
 	workspaceUser := ""
 	// The workspace user mode always probes: it needs the login user and the
-	// real HOME the worker will run with, whatever the durable root is.
-	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot || c.runAsWorkspaceUser {
+	// real HOME the worker will run with, whatever the durable root is. A
+	// working-folder checkout needs the login user's HOME too: "~" in it is
+	// that user's home, and the agent must never start in it.
+	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot ||
+		c.runAsWorkspaceUser || c.checkoutDirectory != "" {
 		finishProbe := sandbox.BeginStage(ctx, sandbox.StageDurableRootProbe)
 		probe, err := c.probeWorkspace(ctx, id, ptyURL)
 		if err != nil {
@@ -946,6 +960,9 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 	installAttrs["durable_root"] = resolved.DurableRoot
 	installAttrs["worker_user"] = c.workerUserLabel(workspaceUser)
 	installAttrs["checkout_reuse"] = c.checkoutReuseLabel()
+	if resolved.CheckoutDirectory != "" {
+		installAttrs["checkout_directory"] = resolved.CheckoutDirectory
+	}
 	err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, arch)
 	var mismatch *architectureMismatchError
 	if errors.As(err, &mismatch) {
@@ -1044,6 +1061,11 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 		resolved.Environment[ProtectSecretFilesEnv] = "1"
 	}
 	if !c.runAsWorkspaceUser {
+		if c.checkoutDirectory != "" {
+			if err := c.addCheckoutDirectory(&resolved, home); err != nil {
+				return sandbox.WorkerBootstrap{}, err
+			}
+		}
 		return resolved, nil
 	}
 	home = strings.TrimSpace(home)
@@ -1062,6 +1084,69 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 	}
 	c.addLifecycleEnvironment(resolved.Environment, c.workspaceName(bootstrap.DurableIdentity))
 	return resolved, nil
+}
+
+// Worker environment for a working-folder checkout (mirrored by the worker
+// package's constants of the same names).
+const (
+	// CheckoutDirectoryEnv is the absolute folder AO checks the main
+	// repository out in; the worker verifies it is AO's own before cloning.
+	CheckoutDirectoryEnv = "AO_WORKER_CHECKOUT_DIRECTORY"
+	// UserHomeEnv is the workspace login user's home, which the worker never
+	// lets the agent start in and shows as "~" in messages.
+	UserHomeEnv = "AO_WORKER_USER_HOME"
+)
+
+// addCheckoutDirectory points a dedicated-worker-user bootstrap at the
+// session's working-folder checkout: "~/" (or "$HOME/") becomes the login
+// user's home, the worker's workspace becomes that folder instead of the
+// durable root's repository folder, and the bootstrap prepares it.
+func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home string) error {
+	directory, err := ExpandCheckoutDirectory(c.checkoutDirectory, home)
+	if err != nil {
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorBootstrapFailed,
+			Message: fmt.Sprintf("AO couldn't use this project's working folder (%s) in the workspace: %v. "+
+				"Fix it in Project settings > Repositories, then start a new session.", c.checkoutDirectory, err),
+			Err: err,
+		}
+	}
+	resolved.CheckoutDirectory = directory
+	resolved.CheckoutSiblings = slices.Clone(c.checkoutSiblings)
+	resolved.Environment["AO_WORKSPACE_DIR"] = directory
+	resolved.Environment[CheckoutDirectoryEnv] = directory
+	if home = strings.TrimSpace(home); home != "" {
+		resolved.Environment[UserHomeEnv] = home
+	}
+	return nil
+}
+
+// ExpandCheckoutDirectory resolves a session's working-folder checkout (see
+// sandbox.CoderSessionProfile.CheckoutDirectory) against the workspace login
+// user's home. The result is a clean absolute path below the filesystem root
+// that is not the home directory itself.
+func ExpandCheckoutDirectory(directory, home string) (string, error) {
+	directory = strings.TrimSpace(directory)
+	for _, prefix := range []string{"~/", "$HOME/"} {
+		if rest, ok := strings.CutPrefix(directory, prefix); ok {
+			home = strings.TrimSpace(home)
+			if !sandbox.SafeCoderDurableRoot(home) {
+				return "", errors.New("the workspace user has no usable home directory")
+			}
+			directory = path.Join(home, rest)
+			break
+		}
+	}
+	if !sandbox.SafeCoderDurableRoot(path.Clean(directory)) || path.Clean(directory) != directory {
+		return "", errors.New("it is not a safe absolute path")
+	}
+	if home != "" && directory == path.Clean(home) {
+		return "", errors.New("it is the home directory")
+	}
+	if path.Dir(directory) == "/" {
+		return "", errors.New("it is directly below the filesystem root")
+	}
+	return directory, nil
 }
 
 // ReuseExistingCheckoutEnv is the worker environment variable that asks the
@@ -1718,11 +1803,17 @@ func bootstrapCommandForArchive(
 	if bootstrap.RunAsWorkspaceUser {
 		return "sh -lc " + shellQuote(script+workspaceUserLaunchScript(bootstrap, layout, binaryPreparation))
 	}
+	// A working-folder checkout replaces the durable root's repository folder:
+	// it is never created, so the session has exactly one AO checkout.
+	repository := shellQuote(layout.Repository) + " "
+	if bootstrap.CheckoutDirectory != "" {
+		repository = ""
+	}
 	script += "sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
 		dockerGroupScript(workerUser) +
 		durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
 		"sudo -n chmod o+x \"$durable_root\"\n" +
-		"sudo -n mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
+		"sudo -n mkdir -p " + repository + shellQuote(layout.WorkerData) + " " +
 		shellQuote(layout.Home) + " " + shellQuote(layout.ClaudeConfig) + " " + shellQuote(layout.CodexHome) + "\n" +
 		"identity_file=" + shellQuote(layout.DurableIdentity) + "\n" +
 		"if sudo -n test -f \"$identity_file\"; then\n" +
@@ -1733,23 +1824,9 @@ func bootstrapCommandForArchive(
 		"  echo 'Coder durable state did not survive workspace stop/start' >&2\n  exit 1\n" +
 		"else\n" +
 		"  printf '%s\\n' " + shellQuote(strings.TrimSpace(bootstrap.DurableIdentity)) + " | sudo -n tee \"$identity_file\" >/dev/null\nfi\n" +
-		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + shellQuote(layout.Repository) + " " + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
-		// The dev-kit clones each extra repository as a sibling of the primary
-		// checkout (…/repository -> …/<name>), so the worker user must be able to
-		// create new entries directly in the durable root. Coder owns the root as
-		// the coder user and leaves it group-unwritable, which is why extra-repo
-		// clones failed with "could not create work tree dir: Permission denied".
-		// Grant the worker's group only write+traverse (g+wx, deliberately not
-		// read): a clone must create and enter <root>/<name>, never list the root.
-		// Applied to the root entry itself, non-recursively so Coder's own home
-		// entries keep their existing modes, and without transferring ownership so
-		// Coder (the owner) keeps full access. This widens the root from
-		// traversal-only to group-writable for the worker; see
-		// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
-		// permits unlink/rename of the root's top-level entries (no sticky bit);
-		// isolating the worker to a dedicated sub-root would need a larger change.
-		"sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
-		"sudo -n chmod g+wx \"$durable_root\"\n" +
+		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + repository + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
+		durableRootSiblingsScript(workerUser, bootstrap.CheckoutDirectory == "") +
+		checkoutDirectoryScript(workerUser, bootstrap.CheckoutDirectory, bootstrap.CheckoutSiblings) +
 		binaryPreparation +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0600 \"$stage/worker.env\" " + shellQuote(workerEnvironment) + "\n" +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
@@ -1773,6 +1850,73 @@ func bootstrapCommandForArchive(
 		"sleep 1\nsudo -n -u " + shellQuote(workerUser) + " kill -0 \"$worker_pid\" 2>/dev/null || { echo 'AO worker exited during startup' >&2; exit 1; }\n" +
 		"rm -rf \"$stage\"\ntrap - EXIT\necho " + bootstrapOK + "\n"
 	return "sh -lc " + shellQuote(script)
+}
+
+// durableRootSiblingsScript lets the dedicated worker user add the extra
+// repositories' folders beside a durable root checkout (enabled false, for a
+// working-folder checkout, adds nothing: those folders live beside it).
+//
+// The dev-kit clones each extra repository as a sibling of the primary
+// checkout (…/repository -> …/<name>), so the worker user must be able to
+// create new entries directly in the durable root. Coder owns the root as
+// the coder user and leaves it group-unwritable, which is why extra-repo
+// clones failed with "could not create work tree dir: Permission denied".
+// Grant the worker's group only write+traverse (g+wx, deliberately not
+// read): a clone must create and enter <root>/<name>, never list the root.
+// Applied to the root entry itself, non-recursively so Coder's own home
+// entries keep their existing modes, and without transferring ownership so
+// Coder (the owner) keeps full access. This widens the root from
+// traversal-only to group-writable for the worker; see
+// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
+// permits unlink/rename of the root's top-level entries (no sticky bit);
+// isolating the worker to a dedicated sub-root would need a larger change.
+func durableRootSiblingsScript(workerUser string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return "sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
+		"sudo -n chmod g+wx \"$durable_root\"\n"
+}
+
+// checkoutDirectoryScript prepares a working-folder checkout for the dedicated
+// worker user (directory is absolute; siblings are the additional
+// repositories' folder names beside it). A missing parent (for example ~/work)
+// is created for the workspace login user, with group write for the worker
+// user so additional repositories can be cloned beside the checkout later.
+// Each ancestor the worker user cannot traverse gets o+x (traversal only, as
+// the durable root does). A missing checkout or sibling folder is created
+// owned by the worker user. A folder that already exists is never chowned or
+// changed: the worker checks it is its own (worker.ResolveOwnedCheckoutDirectory)
+// and refuses a folder the template created. Failing to create a folder does
+// not fail the bootstrap; the worker reports it on the session.
+func checkoutDirectoryScript(workerUser, directory string, siblings []string) string {
+	if directory == "" {
+		return ""
+	}
+	user := shellQuote(workerUser)
+	parent := path.Dir(directory)
+	var script strings.Builder
+	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n" +
+		"if [ ! -e \"$checkout_parent\" ] && [ ! -L \"$checkout_parent\" ]; then\n" +
+		"  sudo -n mkdir -p \"$checkout_parent\"\n" +
+		"  sudo -n chown \"$(id -u):\"" + user + " \"$checkout_parent\"\n" +
+		"  sudo -n chmod g+wx \"$checkout_parent\"\nfi\n")
+	var ancestors []string
+	for dir := parent; dir != "/" && dir != "."; dir = path.Dir(dir) {
+		ancestors = append(ancestors, dir)
+	}
+	for index := len(ancestors) - 1; index >= 0; index-- {
+		quoted := shellQuote(ancestors[index])
+		script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted + "\n")
+	}
+	script.WriteString("ao_checkout_folder() {\n" +
+		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
+		"  sudo -n mkdir \"$1\" && sudo -n chown " + shellQuote(workerUser+":"+workerUser) + " \"$1\"\n}\n")
+	script.WriteString("ao_checkout_folder " + shellQuote(directory) + " || true\n")
+	for _, name := range siblings {
+		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
+	}
+	return script.String()
 }
 
 // durableRootScript prepares the durable root before anything is written

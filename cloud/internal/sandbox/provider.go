@@ -197,6 +197,15 @@ type WorkerBootstrap struct {
 	// HOME, groups and environment. The Coder provider sets it from the
 	// session profile; callers leave it false.
 	RunAsWorkspaceUser bool
+	// CheckoutDirectory (Coder only, dedicated worker user) is the absolute
+	// folder the session's main repository is checked out in instead of the
+	// durable root's repository folder, and CheckoutSiblings the folder names
+	// of its additional repositories beside it. The bootstrap creates any of
+	// them that is missing, owned by User, and never touches one that exists.
+	// The Coder provider sets them from the session profile; callers leave
+	// them empty.
+	CheckoutDirectory string
+	CheckoutSiblings  []string
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.
