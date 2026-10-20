@@ -252,6 +252,13 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			observeCloudSessions([response.session]);
 			return response;
 		} catch (error) {
+			// A control plane that predates defaultInterfaceMode rejects the body
+			// with 400 invalid_request, and createCloudSession sends the create
+			// again without it: not a failed session.
+			if (body.defaultInterfaceMode !== undefined && errorStatus(error) === 400 &&
+				errorCode(error) === "invalid_request") {
+				throw error;
+			}
 			void captureRendererEvent("ao.renderer.cloud_session_failed", {
 				provider,
 				session_kind: body.kind,

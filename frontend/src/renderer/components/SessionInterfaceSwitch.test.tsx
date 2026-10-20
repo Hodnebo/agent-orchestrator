@@ -482,6 +482,49 @@ describe("SessionInterfaceTransitionNotice", () => {
 	});
 });
 
+describe("a Cloud session that started in the terminal", () => {
+	it.each([
+		["CHAT_ADAPTER_UNAVAILABLE", "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet."],
+		["CHAT_START_UNSUPPORTED", "The AO worker in this workspace can't start sessions in Chat. You can switch this session to Chat."],
+	])("reads as information, not a failed switch (%s)", (errorCode, message) => {
+		const onDismiss = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					policy: "interrupt",
+					errorCode,
+					errorDetail: "Started in the terminal: control plane copy",
+				}}
+				onDismiss={onDismiss}
+				onRetry={vi.fn()}
+				onSwitchWithInterrupt={vi.fn()}
+			/>,
+		);
+
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("Started in the terminal");
+		expect(status).toHaveTextContent(message);
+		expect(status).not.toHaveTextContent(/failed|Interface switch/);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(status.querySelector(".text-warning")).toBeNull();
+		const buttons = screen.getAllByRole("button");
+		expect(buttons).toHaveLength(1);
+		fireEvent.click(buttons[0]!);
+		expect(onDismiss).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps an unrelated failed switch to Chat a failure", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE", sourceMode: "chat", targetMode: "tui" }}
+				onDismiss={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("Interface switch failed");
+	});
+});
+
 describe("account moves", () => {
 	function accountMove(phase: SessionInterfaceTransition["phase"]): SessionInterfaceTransition {
 		return {

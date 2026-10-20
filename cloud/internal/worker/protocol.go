@@ -90,7 +90,7 @@ const (
 	ChatStartUnsupported = "CHAT_START_UNSUPPORTED"
 	// ChatStartAdapterUnavailable: Claude's Chat controller needs the Claude
 	// ACP adapter, which the workspace lacks and the worker could not install
-	// (no npm, or the install failed).
+	// in time (no npm, an install that failed, or one still running).
 	ChatStartAdapterUnavailable = "CHAT_ADAPTER_UNAVAILABLE"
 )
 

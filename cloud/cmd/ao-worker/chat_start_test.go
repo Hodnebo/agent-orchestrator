@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
@@ -22,6 +23,7 @@ func TestStartInterface(t *testing.T) {
 		startable func() error
 		moved     bool
 		moveErr   error
+		restart   bool
 		want      string
 		wantAsked bool
 	}{
@@ -33,11 +35,13 @@ func TestStartInterface(t *testing.T) {
 		{name: "no adapter and no npm moves to the terminal", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, moved: true, want: "tui", wantAsked: true},
 		{name: "a session switched to chat stays", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, want: "chat", wantAsked: true},
 		{name: "an older control plane keeps chat", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, moveErr: errors.New("404"), want: "chat", wantAsked: true},
+		{name: "a restarted worker never moves the session", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, moved: true, restart: true, want: "chat"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			asked := false
 			got := startInterface(context.Background(), logger, tc.launch, chatStartChecks{
+				firstStart:       !tc.restart,
 				harnessInstalled: func(string) bool { return tc.installed },
 				claudeChatStartable: func() error {
 					if tc.startable == nil {
@@ -73,6 +77,7 @@ func TestSettleClaudeChatStart(t *testing.T) {
 		moved      bool
 		moveErr    error
 		switchErr  error
+		restart    bool
 		want       bool
 		wantAsked  bool
 		wantSwitch bool
@@ -80,17 +85,19 @@ func TestSettleClaudeChatStart(t *testing.T) {
 		{name: "codex chat", launch: worker.LaunchContext{Harness: "codex", Interface: "chat"}, ensure: failedInstall},
 		{name: "claude terminal", launch: worker.LaunchContext{Harness: "claude-code", Interface: "tui"}, ensure: failedInstall},
 		{name: "adapter installed", launch: claudeChat, ensure: func(context.Context) error { return nil }},
-		{name: "still installing past the wait", launch: claudeChat, ensure: func(context.Context) error { return workerexec.ErrChatAdapterInstalling }},
+		{name: "still installing past the wait moves to the terminal", launch: claudeChat, ensure: func(context.Context) error { return workerexec.ErrChatAdapterInstalling }, moved: true, want: true, wantAsked: true, wantSwitch: true},
 		{name: "install failed moves to the terminal", launch: claudeChat, ensure: failedInstall, moved: true, want: true, wantAsked: true, wantSwitch: true},
 		{name: "a session switched to chat stays", launch: claudeChat, ensure: failedInstall, wantAsked: true},
 		{name: "an older control plane keeps chat", launch: claudeChat, ensure: failedInstall, moveErr: errors.New("404"), wantAsked: true},
 		{name: "the terminal could not start", launch: claudeChat, ensure: failedInstall, moved: true, switchErr: errors.New("pty"), wantAsked: true, wantSwitch: true},
+		{name: "a restarted worker never moves the session", launch: claudeChat, ensure: failedInstall, moved: true, restart: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			asked, switched := false, false
 			got := settleClaudeChatStart(context.Background(), logger, tc.launch, chatAdapterSettle{
-				ensure: tc.ensure,
+				firstStart: !tc.restart,
+				ensure:     tc.ensure,
 				fallBack: func(_ context.Context, code string) (bool, error) {
 					asked = true
 					if code != worker.ChatStartAdapterUnavailable {
@@ -107,5 +114,52 @@ func TestSettleClaudeChatStart(t *testing.T) {
 				t.Fatalf("settle = %v (asked %v, switched %v), want %v (%v, %v)", got, asked, switched, tc.want, tc.wantAsked, tc.wantSwitch)
 			}
 		})
+	}
+}
+
+// A session never waits on npm: the settle gives the adapter's install at
+// most claudeChatAdapterWait (about 15 seconds) once the workspace is ready.
+func TestSettleClaudeChatStartWaitsBriefly(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if claudeChatAdapterWait > 20*time.Second {
+		t.Fatalf("claudeChatAdapterWait = %v, want a short window", claudeChatAdapterWait)
+	}
+	var waited time.Duration
+	settleClaudeChatStart(context.Background(), logger, worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, chatAdapterSettle{
+		firstStart: true,
+		ensure: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("the adapter wait has no deadline")
+			}
+			waited = time.Until(deadline)
+			return nil
+		},
+		fallBack:    func(context.Context, string) (bool, error) { t.Fatal("fell back"); return false, nil },
+		switchToTUI: func(context.Context) error { t.Fatal("switched"); return nil },
+	})
+	if waited <= 0 || waited > claudeChatAdapterWait {
+		t.Fatalf("waited up to %v, want at most %v", waited, claudeChatAdapterWait)
+	}
+}
+
+type claimedChatRunner bool
+
+func (claimedChatRunner) Run(context.Context) error { return nil }
+func (r claimedChatRunner) ClaimedTurn() bool       { return bool(r) }
+
+// A terminal agent started after this worker's Chat controller claimed a
+// turn (a switch from Chat) does not get the session's task again; before
+// that (a Chat start falling back to the terminal) it does, exactly once.
+func TestWithoutPromptChatRan(t *testing.T) {
+	launch := worker.LaunchContext{Harness: "claude-code", Prompt: "do the work"}
+	if got := withoutPromptChatRan(launch, claimedChatRunner(false)).Prompt; got != "do the work" {
+		t.Fatalf("before any Chat turn: prompt = %q", got)
+	}
+	if got := withoutPromptChatRan(launch, nil).Prompt; got != "do the work" {
+		t.Fatalf("without a Chat controller: prompt = %q", got)
+	}
+	if got := withoutPromptChatRan(launch, claimedChatRunner(true)).Prompt; got != "" {
+		t.Fatalf("after a Chat turn: prompt = %q, want none", got)
 	}
 }

@@ -332,15 +332,19 @@ func (s *Supervisor) stopChat(ctx context.Context) error {
 // controller and opens the agent terminal with a freshly built command. It is
 // for a session whose Chat controller has not taken a turn yet (it still
 // waits on ChatWorkspaceReady), after the control plane moved the session to
-// the TUI. A session not in Chat is left alone.
+// the TUI. A session not in Chat is left alone. It runs on Run's serial loop,
+// as the control plane's interface commands do, so it never interleaves with
+// one of them; it waits for that loop.
 func (s *Supervisor) FallBackToTUI(ctx context.Context) error {
-	if s.iface.Current() != InterfaceChat {
-		return nil
-	}
-	if err := s.stopChat(ctx); err != nil {
-		return err
-	}
-	return s.startInterface(ctx, interfacePayload{TargetInterface: InterfaceTUI})
+	return s.runOnLoop(ctx, func(ctx context.Context) error {
+		if s.iface.Current() != InterfaceChat {
+			return nil
+		}
+		if err := s.stopChat(ctx); err != nil {
+			return err
+		}
+		return s.startInterface(ctx, interfacePayload{TargetInterface: InterfaceTUI})
+	})
 }
 
 func (s *Supervisor) startChat(ctx context.Context) error {

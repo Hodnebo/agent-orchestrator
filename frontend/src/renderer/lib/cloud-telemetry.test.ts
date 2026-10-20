@@ -115,6 +115,31 @@ describe("cloud funnel telemetry", () => {
 		});
 	});
 
+	it("does not report the older control plane's rejection of the default interface, which the create retries", async () => {
+		const rejection = new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" });
+		const createSession = vi.fn(async (_orgId: string, body: { defaultInterfaceMode?: string }) => {
+			if (body.defaultInterfaceMode !== undefined) throw rejection;
+			return { session: session() };
+		});
+		const client = instrumentCloudClient(fakeClient({ createSession } as unknown as Partial<CloudCpClient>));
+		const body = { projectId: "p", kind: "worker" as const, harness: "claude-code", displayName: "w", prompt: "" };
+		await expect(client.createSession("org-1", { ...body, defaultInterfaceMode: "chat" })).rejects.toBe(rejection);
+		await client.createSession("org-1", body);
+		expect(events()).not.toContain("ao.renderer.cloud_session_failed");
+
+		// The same 400 without the field is a real failure.
+		const invalid = instrumentCloudClient(fakeClient({
+			createSession: vi.fn(async () => {
+				throw rejection;
+			}),
+		} as Partial<CloudCpClient>));
+		await expect(invalid.createSession("org-1", body)).rejects.toBe(rejection);
+		expect(captured.at(-1)).toMatchObject({
+			event: "ao.renderer.cloud_session_failed",
+			properties: { stage: "create", code: "invalid_request", status: 400 },
+		});
+	});
+
 	it("counts a sign-in only when a new user signs in, not on mount or token refresh", () => {
 		const account = { authProvider: "workos", user: { id: "user-1" } };
 		noteCloudSession(null, true);

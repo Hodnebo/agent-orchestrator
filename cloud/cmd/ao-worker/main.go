@@ -285,6 +285,7 @@ func run(logger *slog.Logger) error {
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
 	committedInterface := startInterface(ctx, logger, bootstrap.Launch, chatStartChecks{
+		firstStart:          firstStart,
 		harnessInstalled:    func(harness string) bool { return verifyHarnessAvailable(harness) == nil },
 		claudeChatStartable: workerexec.ClaudeACPAdapterStartable,
 		fallBack:            client.fallBackChatStart,
@@ -336,6 +337,7 @@ func run(logger *slog.Logger) error {
 			if err != nil {
 				return workerexec.Command{}, err
 			}
+			launch = withoutPromptChatRan(launch, chatRunner)
 			if launch.Harness == "claude-code" {
 				// A fresh workspace is still upgrading Claude Code; the older
 				// install it ships refuses current models.
@@ -612,6 +614,7 @@ func run(logger *slog.Logger) error {
 			// adapter installed; the Chat controller takes no turn until then.
 			go func() {
 				if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
+					firstStart: firstStart,
 					ensure: func(ctx context.Context) error {
 						_, err := workerexec.EnsureClaudeACPAdapter(ctx)
 						return err
@@ -658,6 +661,18 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 	return first
+}
+
+// withoutPromptChatRan drops the session's task from a terminal agent's
+// launch once this worker's Chat controller claimed a turn: the task (the
+// first turn) already ran in Chat, and a switch to the terminal must not run
+// it again. A control plane that knows a turn was claimed before this worker
+// started sends no prompt at all.
+func withoutPromptChatRan(launch worker.LaunchContext, chatRunner workertransport.ChatRunner) worker.LaunchContext {
+	if claimed, ok := chatRunner.(interface{ ClaimedTurn() bool }); ok && claimed.ClaimedTurn() {
+		launch.Prompt = ""
+	}
+	return launch
 }
 
 func interactiveLaunchSettings(launch worker.LaunchContext, dataDir, nativeConversationID, selectedModel, selectedEffort string) (worker.LaunchContext, error) {

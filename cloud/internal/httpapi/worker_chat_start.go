@@ -20,12 +20,10 @@ type chatStartFallbackStore interface {
 // start shows, by the error code its interface notice carries. They are
 // authored here, not by the worker, so every worker's notice reads the same.
 var chatStartFallbackDetails = map[string]string{
-	worker.ChatStartUnsupported: "The AO worker in this workspace cannot start sessions in Chat, " +
-		"so this session started in the terminal. You can switch it to Chat.",
-	worker.ChatStartAdapterUnavailable: "Chat for Claude needs the Claude ACP adapter " +
-		"(@agentclientprotocol/claude-agent-acp), which this workspace does not have and AO could " +
-		"not install, so this session started in the terminal. Add Node.js and npm (or the adapter) " +
-		"to the workspace template to start Claude sessions in Chat.",
+	worker.ChatStartUnsupported: "Started in the terminal: the AO worker in this workspace can't " +
+		"start sessions in Chat. You can switch it to Chat.",
+	worker.ChatStartAdapterUnavailable: "Started in the terminal: Chat for Claude needs the Claude ACP " +
+		"adapter, which this workspace doesn't have yet.",
 }
 
 // startLaunchInTUIIfChatUnsupported keeps a worker that does not report

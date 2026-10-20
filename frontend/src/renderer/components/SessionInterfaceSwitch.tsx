@@ -7,6 +7,7 @@ import {
 	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type {
 	SessionInterfaceMode,
 	SessionInterfaceTransition,
@@ -285,6 +286,24 @@ export function SessionInterfaceSwitchDialog({
 	);
 }
 
+// A Cloud session created in Chat whose workspace could not start Chat yet
+// starts in the terminal instead; the control plane records that as a failed
+// tui-to-chat transition carrying one of these codes. It is information, not
+// a failed switch.
+function interfaceStartFallbackMessageKey(transition: SessionInterfaceTransition) {
+	if (transition.phase !== "failed" || transition.sourceMode !== "tui" || transition.targetMode !== "chat") {
+		return undefined;
+	}
+	switch (transition.errorCode) {
+		case "CHAT_ADAPTER_UNAVAILABLE":
+			return "session.interfaceStartFallbackAdapter" as const;
+		case "CHAT_START_UNSUPPORTED":
+			return "session.interfaceStartFallbackUnsupported" as const;
+		default:
+			return undefined;
+	}
+}
+
 export function interfaceTransitionOffersHistoryRecovery(transition?: SessionInterfaceTransition): boolean {
 	return interfaceTransitionHistoryRecoveryPolicy(transition) !== undefined;
 }
@@ -325,6 +344,7 @@ export function SessionInterfaceTransitionNotice({
 	onUseProviderHistory?: () => void;
 	recoveryError?: string;
 }) {
+	const { t } = useTranslation();
 	const needsRestart = interfaceTransitionNeedsRestart(transition);
 	if (
 		!transition ||
@@ -333,6 +353,43 @@ export function SessionInterfaceTransitionNotice({
 				(transition.phase !== "failed" && transition.phase !== "recovery_required")))
 	) {
 		return null;
+	}
+	const startFallbackMessageKey = interfaceStartFallbackMessageKey(transition);
+	if (startFallbackMessageKey) {
+		return (
+			<div
+				role="status"
+				aria-live="polite"
+				aria-atomic="true"
+				className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-2 rounded-lg border border-border bg-popover px-3 py-2.5 shadow-md"
+			>
+				<SquareTerminal aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<div className="min-w-0 flex-1">
+					<strong className="block text-xs font-medium text-foreground">
+						{t("session.interfaceStartFallbackTitle")}
+					</strong>
+					<p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{t(startFallbackMessageKey)}</p>
+					{dismissError ? (
+						<p className="mt-1 text-[11px] leading-4 text-destructive">
+							Could not dismiss this message. Try again.
+						</p>
+					) : null}
+				</div>
+				<button
+					type="button"
+					className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+					onClick={onDismiss}
+					disabled={dismissing}
+					aria-label="Dismiss interface switch message"
+				>
+					{dismissing ? (
+						<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+					) : (
+						<X aria-hidden="true" className="size-3.5" />
+					)}
+				</button>
+			</div>
+		);
 	}
 	const recovered =
 		transition.phase === "recovery_required" && transition.errorCode === "DAEMON_RESTARTED";
