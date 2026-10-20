@@ -788,6 +788,14 @@ func createSessionTx(
 	}
 	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
+	// A Chat session's opening prompt is its first queued turn (below), so its
+	// terminal launch carries no prompt: a later switch to the terminal starts
+	// the agent without it, as a local Chat session's does, and the terminal's
+	// turn forwarder runs the queued turn once if Chat never claimed it.
+	launchPrompt := input.Prompt
+	if input.Interface == domain.SessionInterfaceChat {
+		launchPrompt = ""
+	}
 	err = scanSession(tx.QueryRow(
 		ctx,
 		`WITH generated AS (SELECT gen_random_uuid() AS id)
@@ -805,7 +813,7 @@ func createSessionTx(
 		input.Kind,
 		input.Harness,
 		input.DisplayName,
-		input.Prompt,
+		launchPrompt,
 		input.Mode,
 		input.Model,
 		input.DeniedCommands,
@@ -887,7 +895,7 @@ func createSessionTx(
 		}
 		// A TUI agent gets the prompt on its command line. The Chat controller
 		// takes work only from the turn queue, so a session that starts in Chat
-		// queues its prompt as the first turn.
+		// queues its prompt as the first turn (and launches without it, above).
 		if session.Interface == domain.SessionInterfaceChat {
 			if err := queueInitialChatTurnTx(ctx, tx, orgID, session.ID, event); err != nil {
 				return domain.Session{}, err

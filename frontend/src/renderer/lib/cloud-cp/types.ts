@@ -90,6 +90,12 @@ export interface CloudCpMeResponse {
 	 */
 	sandboxProviders?: CloudCpSandboxProviders;
 	/**
+	 * Harnesses a session can start in Chat with, as the local daemon's settings
+	 * chatHarnesses. Absent on an older control plane: every harness starts in
+	 * the terminal.
+	 */
+	chatHarnesses?: string[];
+	/**
 	 * The organization the app works in: the one the sign-in token's WorkOS
 	 * organization maps to, else organizations[0]. Absent on an older control
 	 * plane.
@@ -380,14 +386,15 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/** Interface the session starts in. Omitted, or a harness without Chat, starts in the terminal. */
+	interfaceMode?: CloudCpInterfaceMode;
 	/**
-	 * The user's default session interface (Settings > General). The control
-	 * plane resolves the session's interface from it exactly as the local
-	 * daemon resolves a spawn's: an orchestrator starts in Chat, a worker in
-	 * this default, and Chat only for a harness that can start there. An
-	 * orchestrator's workers resolve from the default it was created with.
-	 * Optional: omitted is "tui". An older control plane rejects the field
-	 * (see createCloudSession).
+	 * The user's default session interface (Settings > General), for a create
+	 * without interfaceMode: the control plane resolves the session's
+	 * interface from it exactly as the local daemon resolves a spawn's (an
+	 * orchestrator starts in Chat where its harness can), and an orchestrator
+	 * keeps it for the workers it spawns. An older control plane rejects the
+	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
 }

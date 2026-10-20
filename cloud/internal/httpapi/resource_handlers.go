@@ -104,11 +104,17 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// InterfaceMode is the interface the session starts in: "chat" or "tui".
+	// Omitted resolves it from DefaultInterfaceMode, else the terminal; Chat
+	// needs a harness with a Chat controller (domain.ChatHarnesses).
+	InterfaceMode string `json:"interfaceMode,omitempty"`
 	// DefaultInterfaceMode is the user's default session interface ("tui" or
-	// "chat"), the desktop's setting, which the control plane resolves the
-	// session's interface from as the local daemon does
-	// (domain.StartInterface). A current desktop always sends it; a create
-	// without it (an older desktop) starts in the TUI, an orchestrator too.
+	// "chat"), the desktop's setting. A create without interfaceMode resolves
+	// the session's interface from it as the local daemon does
+	// (domain.StartInterface): an orchestrator starts in Chat where its
+	// harness can. An orchestrator keeps it for the workers it spawns. A
+	// create with neither (an older desktop) starts in the TUI, an
+	// orchestrator too.
 	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
@@ -527,6 +533,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
 	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
@@ -537,6 +544,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
+		return
+	}
+	// As the local daemon does, Chat for a harness without a Chat controller is
+	// refused with the code the desktop offers to retry in the terminal.
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !chatControllerSupported(request.Harness) {
+		writeError(w, r, http.StatusConflict, "SESSION_MODE_UNSUPPORTED", request.Harness+" can't run in Chat in AO Cloud. Start it in the terminal.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -703,6 +716,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Interface:           domain.SessionInterface(request.InterfaceMode),
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
@@ -1309,7 +1323,8 @@ func validSessionInput(request createSessionRequest) bool {
 		// with "Session ... is invalid" for any brief over 80 chars).
 		len(request.DisplayName) < 1 || utf8.RuneCountInString(request.DisplayName) > 100 ||
 		len(request.Prompt) > 65536 ||
-		len(request.DeniedCommands) > 128 {
+		len(request.DeniedCommands) > 128 ||
+		(request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid()) {
 		return false
 	}
 	for _, command := range request.DeniedCommands {

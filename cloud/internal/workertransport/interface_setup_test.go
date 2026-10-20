@@ -514,3 +514,113 @@ func TestDrainDuringAFailedStartupIsBounded(t *testing.T) {
 		}
 	})
 }
+
+// onceTurnControl hands out its queued turn to one claim, as the control
+// plane's turn queue does, and records how often it was claimed and settled.
+type onceTurnControl struct {
+	supervisorControlStub
+	mu        sync.Mutex
+	turn      *worker.Turn
+	claimed   int
+	completed int
+}
+
+func (c *onceTurnControl) ClaimTurn(context.Context) (*worker.Turn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	turn := c.turn
+	c.turn = nil
+	if turn != nil {
+		c.claimed++
+	}
+	return turn, nil
+}
+
+func (c *onceTurnControl) CompleteTurn(context.Context, string, int, bool) error {
+	c.mu.Lock()
+	c.completed++
+	c.mu.Unlock()
+	return nil
+}
+
+// A session created in Chat launches its terminal without the prompt; its
+// task waits in the turn queue. Moved to the terminal (a switch, or the Chat
+// start fallback) while Setup runs, the terminal agent starts once the
+// workspace is ready and the turn forwarder types the task into it exactly
+// once: never before the agent starts, never a second time.
+func TestSessionTaskQueuedForTheTerminalIsDeliveredOnce(t *testing.T) {
+	for _, path := range []string{"switch", "fallback"} {
+		t.Run(path, func(t *testing.T) {
+			dir := t.TempDir()
+			input := filepath.Join(dir, "input")
+			control := &onceTurnControl{
+				supervisorControlStub: supervisorControlStub{agentTerminal: "00000000-0000-0000-0000-000000000071"},
+				turn:                  &worker.Turn{ID: "turn-task", Prompt: "do the work", Attempt: 1},
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			started := make(chan error, 1)
+			done := make(chan error, 1)
+			supervisor := &Supervisor{
+				Control: control, Workspace: t.TempDir(), Started: started,
+				InitialInterface: InterfaceChat, ChatWorkspaceReady: make(chan struct{}),
+				ChatRunner: blockingChatRunner{started: make(chan struct{})},
+				// The launch carries no prompt, so the terminal has no task of its own.
+				StartupTask: false,
+				AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
+					return workerexec.Command{
+						Path: "/bin/sh", Args: []string{"-c", "stty -echo; cat >> '" + input + "'"},
+					}, nil
+				},
+				AgentReady:           func(context.Context) {},
+				agentStartRetryDelay: 10 * time.Millisecond,
+			}
+			supervisor.HoldAgentInputUntilWorkspaceReady()
+			go func() { done <- supervisor.Run(ctx) }()
+			if err := <-started; err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			if path == "switch" {
+				if err := supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+					if err := supervisor.stopInterface(ctx, "drain"); err != nil {
+						return err
+					}
+					return supervisor.startInterface(ctx, interfacePayload{TargetInterface: InterfaceTUI})
+				}); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := supervisor.FallBackToTUI(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(300 * time.Millisecond)
+			control.mu.Lock()
+			early := control.claimed
+			control.mu.Unlock()
+			if early != 0 {
+				t.Fatalf("the task was claimed %d times before the workspace was ready", early)
+			}
+			supervisor.MarkWorkspaceReady()
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				if data, _ := os.ReadFile(input); strings.Contains(string(data), "do the work") {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			// Long enough for a duplicate delivery to show.
+			time.Sleep(500 * time.Millisecond)
+			data, _ := os.ReadFile(input)
+			if got := strings.Count(string(data), "do the work"); got != 1 {
+				t.Fatalf("the task reached the terminal agent %d times, want 1 (input %q)", got, data)
+			}
+			control.mu.Lock()
+			defer control.mu.Unlock()
+			if control.claimed != 1 || control.completed != 1 {
+				t.Fatalf("claimed %d, completed %d; want 1, 1", control.claimed, control.completed)
+			}
+		})
+	}
+}

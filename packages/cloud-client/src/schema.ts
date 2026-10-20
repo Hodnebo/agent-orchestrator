@@ -1361,9 +1361,11 @@ export interface paths {
          *     sessions in Chat). A session created in Chat that never started (no
          *     interface transition ever touched it, no turn was claimed or settled,
          *     and the agent never reported its conversation) moves to tui: its
-         *     queued first turn is settled (the terminal agent gets the prompt on its
-         *     command line) and a failed tui-to-chat interface transition carries the
-         *     notice the desktop shows. A session the person switched to Chat, or
+         *     terminal launches without the prompt and its queued first turn stays
+         *     for the terminal's turn forwarder, which delivers it once after the
+         *     agent starts (a session whose launch still carries the prompt has that
+         *     turn settled instead), and a failed tui-to-chat interface transition
+         *     carries the notice the desktop shows. A session the person switched to Chat, or
          *     whose Chat already ran, does not move; the worker then stays on Chat.
          *     Requires the worker:connect scope. A worker that reports the
          *     agent.chat-start capability uses it; for one that does not, the
@@ -1646,6 +1648,8 @@ export interface components {
             organizations: components["schemas"]["OrganizationMembership"][];
             offering?: components["schemas"]["Offering"];
             sandboxProviders?: components["schemas"]["SandboxProviders"];
+            /** @description Harnesses a session can start in, or switch to, Chat with. */
+            chatHarnesses?: string[];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -2737,7 +2741,9 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description The user's default session interface. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness the control plane starts in Chat (any other starts in tui without an error). Optional, but a current desktop always sends it, tui included; a create without it (from a desktop that predates the field) starts in tui unless it requests chat, an orchestrator too. An orchestrator's workers resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {

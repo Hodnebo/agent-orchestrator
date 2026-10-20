@@ -47,7 +47,7 @@ func TestCreateSessionStartInterface(t *testing.T) {
 	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
-	create := func(kind, harness string, defaultInterface domain.SessionInterface) domain.Session {
+	create := func(kind, harness string, requested, defaultInterface domain.SessionInterface) domain.Session {
 		t.Helper()
 		// A project has one active orchestrator, so each gets its own.
 		projectID := fixture.projectID
@@ -60,7 +60,7 @@ func TestCreateSessionStartInterface(t *testing.T) {
 		}
 		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
 			ProjectID: projectID, Kind: kind, Harness: harness, DisplayName: "s", Prompt: "do the work",
-			Provider: "docker", DefaultInterface: defaultInterface,
+			Provider: "docker", Interface: requested, DefaultInterface: defaultInterface,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -68,21 +68,26 @@ func TestCreateSessionStartInterface(t *testing.T) {
 		return session
 	}
 	for _, tc := range []struct {
-		name, kind, harness string
-		defaultInterface    domain.SessionInterface
-		want                domain.SessionInterface
+		name, kind, harness         string
+		requested, defaultInterface domain.SessionInterface
+		want                        domain.SessionInterface
 	}{
-		{"claude worker, chat default", "worker", "claude-code", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
-		{"codex worker, chat default", "worker", "codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
-		{"cursor worker, chat default", "worker", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
-		{"worker, tui default", "worker", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceTUI},
-		{"worker, no default", "worker", "claude-code", "", domain.SessionInterfaceTUI},
-		{"codex orchestrator, no default", "orchestrator", "codex", "", domain.SessionInterfaceTUI},
-		{"codex orchestrator, tui default", "orchestrator", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
-		{"claude orchestrator, tui default", "orchestrator", "claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
-		{"cursor orchestrator", "orchestrator", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+		{"claude worker, chat default", "worker", "claude-code", "", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"codex worker, chat default", "worker", "codex", "", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"cursor worker, chat default", "worker", "cursor", "", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"opencode worker, chat default", "worker", "opencode", "", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+		{"worker, tui default", "worker", "codex", "", domain.SessionInterfaceTUI, domain.SessionInterfaceTUI},
+		{"worker, no default", "worker", "claude-code", "", "", domain.SessionInterfaceTUI},
+		// A task's interfaceMode (the composer's resolution) wins over a default.
+		{"worker, explicit chat", "worker", "cursor", domain.SessionInterfaceChat, "", domain.SessionInterfaceChat},
+		{"worker, explicit tui over a chat default", "worker", "claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+		{"codex orchestrator, no default", "orchestrator", "codex", "", "", domain.SessionInterfaceTUI},
+		{"codex orchestrator, tui default", "orchestrator", "codex", "", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
+		{"claude orchestrator, tui default", "orchestrator", "claude-code", "", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
+		{"cursor orchestrator", "orchestrator", "cursor", "", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"opencode orchestrator", "orchestrator", "opencode", "", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
 	} {
-		session := create(tc.kind, tc.harness, tc.defaultInterface)
+		session := create(tc.kind, tc.harness, tc.requested, tc.defaultInterface)
 		if session.Interface != tc.want {
 			t.Fatalf("%s: interface = %q, want %q", tc.name, session.Interface, tc.want)
 		}
@@ -108,6 +113,15 @@ func TestCreateSessionStartInterface(t *testing.T) {
 		var agentConfig domain.ProjectAgentConfig
 		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
 			t.Fatalf("%s: agent config %s: %v", tc.name, launch.AgentConfig, err)
+		}
+		// The task runs from one place: a Chat session's queued turn (its
+		// terminal launch carries no prompt), or a TUI session's command line.
+		wantPrompt := "do the work"
+		if tc.want == domain.SessionInterfaceChat {
+			wantPrompt = ""
+		}
+		if launch.Prompt != wantPrompt {
+			t.Fatalf("%s: launch prompt = %q, want %q", tc.name, launch.Prompt, wantPrompt)
 		}
 	}
 }
@@ -185,8 +199,8 @@ func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T
 	} else if state, found, _ := initialTurn(t, admin, child.ID); !found || state != "queued" {
 		t.Fatalf("chat child initial turn: state=%q found=%v", state, found)
 	}
-	if child := spawn("cursor"); child.Interface != domain.SessionInterfaceTUI {
-		t.Fatalf("cursor child = %q, want tui", child.Interface)
+	if child := spawn("cursor"); child.Interface != domain.SessionInterfaceChat {
+		t.Fatalf("cursor child = %q, want chat", child.Interface)
 	}
 	for _, defaultInterface := range []string{"tui", ""} {
 		setParent(defaultInterface)
@@ -197,8 +211,9 @@ func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T
 }
 
 // A session created in Chat whose worker cannot start Chat moves to the TUI
-// before anything ran: the prompt's queued turn is settled (the TUI gets the
-// prompt on its command line) and a failed TUI-to-Chat transition carries the
+// before anything ran: the prompt's queued turn stays queued for the
+// terminal's turn forwarder (the TUI launches without the prompt), unless the
+// launch still carries the prompt, and a failed TUI-to-Chat transition carries the
 // notice. A session the person switched to Chat does not move.
 func TestFallBackChatStart(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
@@ -220,11 +235,13 @@ func TestFallBackChatStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if launch.Interface != domain.SessionInterfaceTUI || launch.Prompt != "do the work" {
-		t.Fatalf("launch interface = %q prompt = %q, want the TUI with the prompt", launch.Interface, launch.Prompt)
+	// The terminal launches without the prompt; the task stays queued for the
+	// terminal's turn forwarder, which delivers it once after the agent starts.
+	if launch.Interface != domain.SessionInterfaceTUI || launch.Prompt != "" {
+		t.Fatalf("launch interface = %q prompt = %q, want the TUI without the prompt", launch.Interface, launch.Prompt)
 	}
-	if state, found, _ := initialTurn(t, admin, session.ID); !found || state != "completed" {
-		t.Fatalf("initial turn state = %q (found %v), want completed", state, found)
+	if state, found, _ := initialTurn(t, admin, session.ID); !found || state != "queued" {
+		t.Fatalf("initial turn state = %q (found %v), want queued for the forwarder", state, found)
 	}
 	transition, found, err := store.GetLatestRelevantSessionInterfaceTransition(ctx, principal, fixture.orgID, session.ID)
 	if err != nil || !found {
@@ -266,6 +283,28 @@ func TestFallBackChatStart(t *testing.T) {
 	if moved, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fresh.ID, "worker-fresh", 1,
 		"CHAT_ADAPTER_UNAVAILABLE", "no npm"); err != nil || !moved {
 		t.Fatalf("fresh session: WorkerFallBackChatStart = %v, %v; want moved", moved, err)
+	}
+	// A Chat session whose terminal launch still carries the prompt (created
+	// before Chat sessions launched without it) gets it on the command line,
+	// so its queued task turn is settled: the forwarder must not type it again.
+	legacy, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "legacy task",
+		Provider: "docker", Interface: domain.SessionInterfaceChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET prompt = 'legacy task' WHERE id = $1`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := store.FallBackChatStart(ctx, fixture.orgID, legacy.ID, "CHAT_START_UNSUPPORTED", "x"); err != nil || !moved {
+		t.Fatalf("legacy session: FallBackChatStart = %v, %v; want moved", moved, err)
+	}
+	if state, found, _ := initialTurn(t, admin, legacy.ID); !found || state != "completed" {
+		t.Fatalf("legacy initial turn state = %q (found %v), want completed", state, found)
+	}
+	if launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, legacy.ID); err != nil || launch.Prompt != "legacy task" {
+		t.Fatalf("legacy launch prompt = %q (%v), want the prompt", launch.Prompt, err)
 	}
 	// Only the session's current worker may ask.
 	if _, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fixture.sessionID, "worker-stale", fixture.epoch,
@@ -416,6 +455,14 @@ func TestWorkerLaunchSpecDropsThePromptOnceChatClaimedATurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A session created in Chat launches without the prompt at all.
+	if launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID); err != nil || launch.Prompt != "" {
+		t.Fatalf("new Chat session: prompt = %q, err = %v; want none", launch.Prompt, err)
+	}
+	// One created before that keeps it until Chat claims a turn.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET prompt = 'do the work' WHERE id = $1`, session.ID); err != nil {
+		t.Fatal(err)
+	}
 	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
 	if err != nil || launch.Prompt != "do the work" {
 		t.Fatalf("before a claim: prompt = %q, err = %v", launch.Prompt, err)
@@ -455,7 +502,7 @@ func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
 		{"codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
 		{"claude-code", "", domain.SessionInterfaceTUI},
 		{"claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
-		{"cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+		{"cursor", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
 	} {
 		repositoryID := time.Now().UnixNano() + int64(index)
 		url := fmt.Sprintf("https://github.com/octo/scratch-%d", repositoryID)

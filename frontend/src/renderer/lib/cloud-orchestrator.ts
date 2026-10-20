@@ -104,7 +104,8 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 			// Role instructions are standing system configuration assembled by the
 			// worker; do not duplicate them as a visible user message.
 			prompt: "",
-		}, cloudDefaultInterfaceMode(settings));
+			defaultInterfaceMode: cloudDefaultInterfaceMode(settings),
+		});
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;
 	} catch (error) {

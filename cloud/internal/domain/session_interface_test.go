@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -67,13 +68,20 @@ func TestStartInterfaceGatesChatByHarness(t *testing.T) {
 		for harness, want := range map[string]SessionInterface{
 			"claude-code": SessionInterfaceChat,
 			"codex":       SessionInterfaceChat,
-			// Cursor can switch to Chat but does not start in it.
-			"cursor":   SessionInterfaceTUI,
+			// The one list of Chat harnesses (chatHarnesses, /me): Cursor
+			// starts in Chat as it switches to it.
+			"cursor":   SessionInterfaceChat,
 			"opencode": SessionInterfaceTUI,
 		} {
 			if got := StartInterface(kind, "", SessionInterfaceChat, harness); got != want {
 				t.Errorf("StartInterface(%s, %s) = %q, want %q", kind, harness, got, want)
 			}
+			if HarnessHasChat(harness) != (want == SessionInterfaceChat) {
+				t.Errorf("HarnessHasChat(%s) disagrees with the start", harness)
+			}
 		}
+	}
+	if !slices.Equal(ChatHarnesses(), []string{"claude-code", "codex", "cursor"}) {
+		t.Fatalf("ChatHarnesses() = %v", ChatHarnesses())
 	}
 }

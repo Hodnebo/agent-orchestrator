@@ -38,17 +38,23 @@ func (i SessionInterface) Normalized() SessionInterface {
 	return SessionInterfaceTUI
 }
 
-// chatStartHarnesses are the harnesses a new cloud session may start in Chat.
-// Every other harness starts in the terminal TUI and may still switch to Chat
-// later where interface handoff supports it (cursor). Adding a harness here is
-// the whole change: every cloud session create resolves through
-// StartInterface, and the desktop sends the user's default unfiltered.
-var chatStartHarnesses = []string{"claude-code", "codex"}
+// chatHarnesses are the harnesses with a headless Chat controller in the
+// worker: a session can start in Chat or switch to it. The control plane's
+// create, its interface switching and /me (chatHarnesses, which the
+// new-task composer reads as it reads the local daemon's settings
+// chatHarnesses) all use this one list; adding a harness here is the whole
+// change.
+var chatHarnesses = []string{"claude-code", "codex", "cursor"}
 
-// HarnessStartsInChat reports whether a new session of harness may start in
-// Chat.
-func HarnessStartsInChat(harness string) bool {
-	return slices.Contains(chatStartHarnesses, harness)
+// ChatHarnesses lists the harnesses with a Chat controller (a copy).
+func ChatHarnesses() []string {
+	return slices.Clone(chatHarnesses)
+}
+
+// HarnessHasChat reports whether a session of harness can run in Chat: start
+// there, or switch to it.
+func HarnessHasChat(harness string) bool {
+	return slices.Contains(chatHarnesses, harness)
 }
 
 // StartInterface is the interface a new session starts in, resolved as the
@@ -69,12 +75,14 @@ func HarnessStartsInChat(harness string) bool {
 // command. The local daemon always has a default, so rule 2 never applies
 // there; a current desktop always sends its default, "tui" included.
 //
-// Chat then holds only for a harness that may start in Chat; any other
-// harness starts in the TUI without an error, as the local daemon falls back
-// when Chat is unavailable for a mode it did not explicitly request.
+// Chat then holds only for a harness with a Chat controller (HarnessHasChat);
+// any other harness starts in the TUI without an error, as the local daemon
+// falls back when Chat is unavailable for a mode it did not explicitly
+// request. (The create API refuses an explicit Chat request for such a
+// harness with SESSION_MODE_UNSUPPORTED before it gets here.)
 func StartInterface(kind string, requested, defaultInterface SessionInterface, harness string) SessionInterface {
 	resolved := startPrecedence(kind, requested, defaultInterface)
-	if resolved == SessionInterfaceChat && !HarnessStartsInChat(harness) {
+	if resolved == SessionInterfaceChat && !HarnessHasChat(harness) {
 		return SessionInterfaceTUI
 	}
 	return resolved

@@ -17,8 +17,10 @@ import (
 // or reconnect, rather than showing a false notice and running its first
 // task again in the terminal.
 //
-// In the same transaction the prompt's queued first turn is settled (the TUI
-// agent receives the prompt on its command line instead), and a failed
+// In the same transaction the prompt's queued first turn is settled when the
+// TUI agent receives the prompt on its command line (settleUnclaimedPromptTurn;
+// a session created in Chat launches without it, and its turn stays for the
+// terminal's forwarder), and a failed
 // TUI-to-Chat transition carrying code and detail is recorded, which the
 // desktop shows as the session's interface notice. It reports whether the
 // session moved.
@@ -118,12 +120,13 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 }
 
 // settleUnclaimedPromptTurn settles the turn a session created in Chat queued
-// for its prompt, while no Chat controller has claimed any turn. The session
-// is moving to the TUI, whose agent receives the prompt on its command line
-// (WorkerLaunchSpec keeps it until a turn is claimed); left queued, the
-// terminal's turn forwarder would type the same task into it again. A session
-// whose Chat claimed a turn launches without the prompt, so its queued turns
-// stay for the forwarder.
+// for its prompt, while no Chat controller has claimed any turn, as the
+// session moves to the TUI, only when its terminal launch carries the prompt
+// (ao_sessions.prompt, kept by a control plane that predates Chat sessions
+// launching without it): that agent gets the task on its command line, and
+// left queued the terminal's turn forwarder would type it again. A session
+// created in Chat now launches without the prompt, so nothing is settled and
+// the forwarder delivers the turn, once, after the terminal agent starts.
 func settleUnclaimedPromptTurn(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
 	// The create records the prompt as the session's first user message.
 	_, err := tx.Exec(ctx,

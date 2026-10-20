@@ -128,11 +128,20 @@ func (s *Store) StartSessionInterfaceTransition(
 // Stop-now cancels turns that have not reached the Chat controller. The active
 // turn is interrupted by the worker; queued turns must not be claimed by the
 // replacement TUI after the handoff commits.
+//
+// The session's task is the exception while it never ran: a session created
+// in Chat queues its create prompt as its first turn (marked sessionTask, see
+// queueInitialChatTurnTx) and launches its terminal without it, so that turn
+// stays queued for the terminal's turn forwarder, which delivers it once the
+// agent starts. A session whose terminal launch still carries the prompt
+// (created before Chat sessions launched without it) gets it on the command
+// line, so its turn is cancelled with the rest.
 func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
-	rows, err := tx.Query(ctx, `UPDATE ao_turns
+	rows, err := tx.Query(ctx, `UPDATE ao_turns turn
 		SET state = 'completed', completed_at = now(), updated_at = now()
-		WHERE org_id = $1 AND session_id = $2 AND state = 'queued'
-		RETURNING id, attempt_count`, orgID, sessionID)
+		WHERE turn.org_id = $1 AND turn.session_id = $2 AND turn.state = 'queued'
+		  AND NOT (`+unrunSessionTaskTurnSQL+`)
+		RETURNING turn.id, turn.attempt_count`, orgID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -163,6 +172,22 @@ func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 	}
 	return nil
 }
+
+// unrunSessionTaskTurnSQL is the condition that turn (an ao_turns alias, of
+// session $2 in organization $1) is the session's never-claimed task: the turn
+// its create queued for the prompt of a session that launches its terminal
+// without it.
+const unrunSessionTaskTurnSQL = `turn.attempt_count = 0
+		  AND EXISTS (
+			SELECT 1 FROM ao_events event
+			WHERE event.org_id = $1 AND event.session_id = $2
+			  AND event.sequence = turn.user_message_sequence AND event.type = 'chat.user_message'
+			  AND event.payload ->> '` + sessionTaskEventKey + `' = 'true'
+		  )
+		  AND EXISTS (
+			SELECT 1 FROM ao_sessions session
+			WHERE session.org_id = $1 AND session.id = $2 AND session.prompt = ''
+		  )`
 
 // GetActiveSessionInterfaceTransition returns the active transition for a
 // session, if any, under the caller's tenant context.
@@ -811,9 +836,11 @@ func (s *Store) CommitCoordinatedSessionInterface(
 			return err
 		}
 		// A drain stops a Chat controller that never claimed the session's
-		// first turn without settling it. The terminal starts with the prompt
-		// on its command line, so the prompt's turn is settled in the same
-		// transaction as the commit, as a start that falls back to the TUI does.
+		// first turn without settling it. When the terminal starts with the
+		// prompt on its command line (a session created before Chat sessions
+		// launched without it) the prompt's turn is settled in the same
+		// transaction as the commit, as a start that falls back to the TUI does;
+		// otherwise it stays queued for the terminal's turn forwarder.
 		if interfaceValue == domain.SessionInterfaceTUI {
 			if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
 				return err

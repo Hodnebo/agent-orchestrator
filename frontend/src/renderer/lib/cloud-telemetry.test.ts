@@ -76,7 +76,8 @@ describe("cloud funnel telemetry", () => {
 		const client = instrumentCloudClient(fakeClient());
 		const { session: created } = await createCloudSession(client, "org-1", {
 			projectId: "project-1", kind: "worker", harness: "claude-code", displayName: "x", prompt: "secret prompt", provider: "freestyle",
-		}, "tui");
+			interfaceMode: "tui",
+		});
 		expect(created.id).toBe("session-1");
 		expect(events()).toEqual(["ao.renderer.cloud_session_create_requested"]);
 		expect(JSON.stringify(captured)).not.toContain("secret prompt");
@@ -118,13 +119,13 @@ describe("cloud funnel telemetry", () => {
 
 	it("does not report the older control plane's rejection of the default interface, which the create retries", async () => {
 		const rejection = new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" });
-		const createSession = vi.fn(async (_orgId: string, body: { defaultInterfaceMode?: string }) => {
-			if (body.defaultInterfaceMode !== undefined) throw rejection;
+		const createSession = vi.fn(async (_orgId: string, body: { interfaceMode?: string }) => {
+			if (body.interfaceMode !== undefined) throw rejection;
 			return { session: session() };
 		});
 		const client = instrumentCloudClient(fakeClient({ createSession } as unknown as Partial<CloudCpClient>));
 		const body = { projectId: "p", kind: "worker" as const, harness: "claude-code", displayName: "w", prompt: "" };
-		await createCloudSession(client, "org-1", body, "chat");
+		await createCloudSession(client, "org-1", { ...body, interfaceMode: "chat" });
 		expect(createSession).toHaveBeenCalledTimes(2);
 		expect(events()).not.toContain("ao.renderer.cloud_session_failed");
 		// One user create is one request, however many calls it takes.

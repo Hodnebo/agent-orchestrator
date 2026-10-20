@@ -518,9 +518,17 @@ func appendUserMessage(
 	return event, nil
 }
 
+// sessionTaskEventKey marks, in its chat.user_message payload, the prompt a
+// session created in Chat queued as its first turn: the session's task, which
+// its terminal launch does not carry. A stop-now switch to the terminal keeps
+// that turn queued for the terminal's forwarder (interruptQueuedChatTurns)
+// while it cancels the messages sent after it.
+const sessionTaskEventKey = "sessionTask"
+
 // queueInitialChatTurnTx queues a new Chat session's prompt (its first
 // chat.user_message event) as the session's first turn, as a message sent to
-// an idle Chat session is. No worker exists yet, so nobody is woken.
+// an idle Chat session is, marked as the session's task. No worker exists
+// yet, so nobody is woken.
 func queueInitialChatTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, event domain.ClientEvent) error {
 	var turnID string
 	if err := tx.QueryRow(ctx,
@@ -530,7 +538,13 @@ func queueInitialChatTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID str
 	).Scan(&turnID); err != nil {
 		return normalizeConstraintError(err)
 	}
-	return attachTurnID(ctx, tx, orgID, sessionID, event.Sequence, turnID, &event)
+	if err := attachTurnID(ctx, tx, orgID, sessionID, event.Sequence, turnID, &event); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE ao_events SET payload = payload || jsonb_build_object($4::text, true)
+		WHERE org_id = $1 AND session_id = $2 AND sequence = $3 AND type = 'chat.user_message'`,
+		orgID, sessionID, event.Sequence, sessionTaskEventKey)
+	return err
 }
 
 func attachTurnID(ctx context.Context, tx pgx.Tx, orgID, sessionID string, sequence int64, turnID string, event *domain.ClientEvent) error {

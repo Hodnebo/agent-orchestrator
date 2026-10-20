@@ -206,7 +206,7 @@ function projectProvider(config: Record<string, unknown> | undefined): string {
 /**
  * Reports a user's request for a cloud session, once per create
  * (createCloudSession): a create that a control plane predating
- * defaultInterfaceMode rejects is sent again without it, and that retry is
+ * interfaceMode and defaultInterfaceMode rejects is sent again without them, and that retry is
  * not a second request.
  */
 export function reportCloudSessionCreateRequested(body: Pick<CloudCpCreateSessionRequest, "provider" | "kind" | "projectId">): void {
@@ -263,10 +263,10 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			observeCloudSessions([response.session]);
 			return response;
 		} catch (error) {
-			// A control plane that predates defaultInterfaceMode rejects the body
-			// with 400 invalid_request, and createCloudSession sends the create
-			// again without it: not a failed session.
-			if (body.defaultInterfaceMode !== undefined && errorStatus(error) === 400 &&
+			// A control plane that predates interfaceMode and defaultInterfaceMode
+			// rejects the body with 400 invalid_request, and createCloudSession
+			// sends the create again without them: not a failed session.
+			if ((body.interfaceMode !== undefined || body.defaultInterfaceMode !== undefined) && errorStatus(error) === 400 &&
 				errorCode(error) === "invalid_request") {
 				throw error;
 			}
