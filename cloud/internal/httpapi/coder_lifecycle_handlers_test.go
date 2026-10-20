@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -292,6 +293,22 @@ func TestLaunchContextCarriesProjectScripts(t *testing.T) {
 	}
 	if strings.Join(launch.PostCreate, "|") != "npm ci|make up" || strings.Join(launch.PreRemove, "|") != "make down" {
 		t.Fatalf("scripts = %q / %q", launch.PostCreate, launch.PreRemove)
+	}
+	if launch.PostCreateTimeoutMinutes != nil || launch.PreRemoveTimeoutMinutes != nil {
+		t.Fatalf("default limits were sent: %v / %v", launch.PostCreateTimeoutMinutes, launch.PreRemoveTimeoutMinutes)
+	}
+	// A step's own time limit goes beside the plain commands, which an older
+	// worker runs with the default.
+	launch, err = launchContextFrom(domain.WorkerLaunch{
+		SessionID: "session-1", ProjectID: "project-1", Kind: "worker", Harness: "claude-code",
+		ProjectConfig: json.RawMessage(`{"postCreate":["npm ci","# ao-timeout: 45m\nmake up"],"preRemove":["# ao-timeout: 120m\nmake down"]}`),
+	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(launch.PostCreate, "|") != "npm ci|make up" || strings.Join(launch.PreRemove, "|") != "make down" ||
+		!reflect.DeepEqual(launch.PostCreateTimeoutMinutes, []int{0, 45}) || !reflect.DeepEqual(launch.PreRemoveTimeoutMinutes, []int{120}) {
+		t.Fatalf("timed scripts = %q %v / %q %v", launch.PostCreate, launch.PostCreateTimeoutMinutes, launch.PreRemove, launch.PreRemoveTimeoutMinutes)
 	}
 	launch, err = launchContextFrom(domain.WorkerLaunch{
 		SessionID: "session-1", Kind: "worker", Harness: "claude-code",

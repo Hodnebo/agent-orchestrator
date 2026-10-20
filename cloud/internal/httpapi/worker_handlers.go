@@ -169,7 +169,8 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.recordInstalledCleanup(r, ticket.OrgID, ticket.SessionID, workerID, ticket.WorkerEpoch, launchContext.PreRemove)
+	_, installedCleanup := launchContext.ProjectScripts()
+	s.recordInstalledCleanup(r, ticket.OrgID, ticket.SessionID, workerID, ticket.WorkerEpoch, installedCleanup)
 
 	scopes := issuedWorkerScopes(ticket.Scopes, launch)
 	token, err := s.workerTokens.Issue(worker.Claims{
@@ -250,7 +251,8 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	}
 	// A reconnecting worker (a restart, or a reopened session refreshing its
 	// scripts) reinstalls its Cleanup hook with these commands.
-	s.recordInstalledCleanup(r, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, launchContext.PreRemove)
+	_, installedCleanup := launchContext.ProjectScripts()
+	s.recordInstalledCleanup(r, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch, installedCleanup)
 	writeJSON(w, http.StatusOK, worker.BootstrapResponse{
 		WorkerID:  claims.WorkerID,
 		Epoch:     claims.Epoch,
@@ -266,8 +268,9 @@ type installedCleanupRecorder interface {
 	RecordInstalledCleanupCommands(ctx context.Context, orgID, sessionID, workerID string, epoch int64, commands []string) error
 }
 
-// recordInstalledCleanup stores the Cleanup commands a worker is being given,
-// which it installs as its Cleanup hook's commands, so a Cleanup that runs
+// recordInstalledCleanup stores the Cleanup commands a worker is being given
+// (each led by its time limit's marker when it sets one), which it installs as
+// its Cleanup hook's commands, so a Cleanup that runs
 // them after the project's config changed is read knowing the values they
 // assign to secret-named variables. A failure only loses that knowledge
 // (the project's current Cleanup is used instead) and never fails the
@@ -317,7 +320,11 @@ func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabiliti
 	if err != nil {
 		return worker.LaunchContext{}, err
 	}
-	postCreate, preRemove := domain.ProjectScripts(launch.ProjectConfig, launch.RepositoryURL)
+	// Each step's own time limit goes beside the commands, so a worker that
+	// predates per-step limits runs the plain commands with the default.
+	timedPostCreate, timedPreRemove := domain.ProjectScripts(launch.ProjectConfig, launch.RepositoryURL)
+	postCreate, postCreateTimeouts := domain.SplitTimedScriptCommands(timedPostCreate)
+	preRemove, preRemoveTimeouts := domain.SplitTimedScriptCommands(timedPreRemove)
 	// Additional repositories are project-level (stored on the project config),
 	// so every session of the project clones the same set, on every sandbox
 	// provider. Decoded before the prompt is built so both the project context
@@ -382,6 +389,9 @@ func launchContextFrom(launch domain.WorkerLaunch, capabilities launchCapabiliti
 		SystemPrompt:    systemPrompt,
 		PostCreate:      postCreate,
 		PreRemove:       preRemove,
+
+		PostCreateTimeoutMinutes: postCreateTimeouts,
+		PreRemoveTimeoutMinutes:  preRemoveTimeouts,
 	}, nil
 }
 
@@ -1142,6 +1152,9 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		for index, group := range outcome.Groups {
 			outcome.Groups[index] = activitylog.Truncate(group, 64)
+		}
+		if !domain.ValidScriptStepTimeoutMinutes(outcome.TimeoutMinutes) {
+			outcome.TimeoutMinutes = 0
 		}
 		logArgs := []any{
 			"org_id", claims.OrgID, "session_id", claims.SessionID, "status", outcome.Status,

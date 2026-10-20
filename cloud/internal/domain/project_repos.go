@@ -274,6 +274,49 @@ func SplitScriptStepTimeout(stored string) (string, time.Duration) {
 	return command, ScriptStepTimeout(minutes)
 }
 
+// SplitTimedScriptCommands splits commands that may lead with a timeout
+// marker into the plain commands and each one's time limit in minutes (0 for
+// the default), for a worker's launch context. minutes is nil when every
+// command has the default limit.
+func SplitTimedScriptCommands(timed []string) (commands []string, minutes []int) {
+	if timed == nil {
+		return nil, nil
+	}
+	commands = make([]string, len(timed))
+	limits := make([]int, len(timed))
+	custom := false
+	for index, stored := range timed {
+		limit, command, _ := ParseTimedScriptCommand(stored)
+		if !ValidScriptStepTimeoutMinutes(limit) || limit == DefaultScriptStepTimeoutMinutes {
+			limit = 0
+		}
+		commands[index], limits[index] = command, limit
+		custom = custom || limit != 0
+	}
+	if custom {
+		minutes = limits
+	}
+	return commands, minutes
+}
+
+// JoinTimedScriptCommands is the inverse of SplitTimedScriptCommands: each
+// command led by its time limit's marker when minutes sets one. A missing or
+// zero entry is the default limit.
+func JoinTimedScriptCommands(commands []string, minutes []int) []string {
+	if commands == nil {
+		return nil
+	}
+	timed := make([]string, len(commands))
+	for index, command := range commands {
+		limit := 0
+		if index < len(minutes) && ValidScriptStepTimeoutMinutes(minutes[index]) {
+			limit = minutes[index]
+		}
+		timed[index] = TimedScriptCommand(limit, command)
+	}
+	return timed
+}
+
 // ProjectScriptStep is one Setup or Cleanup command. Repository, when set, is
 // the canonical URL of the project repository the command runs in; Folder,
 // when set, is that repository's folder beside the main checkout as read back

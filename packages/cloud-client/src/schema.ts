@@ -2215,6 +2215,8 @@ export interface components {
             logPath?: string;
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
+            /** @description The failed step's time limit in minutes; absent from a worker that predates per-step limits (the step had 10). */
+            timeoutMinutes?: number;
             /** @description Set by the control plane, true on the event served to someone outside the session's organization (a share-grant holder): output, logPath, user, groups, dir and hint are absent. */
             outputHidden?: boolean;
         };
@@ -2270,6 +2272,8 @@ export interface components {
             dir?: string;
             /** @description What to change when the output shows the step's user could not do something (Docker, sudo, a path, SSH). */
             hint?: string;
+            /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had 10). */
+            timeoutMinutes?: number;
         };
         /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
         WorkerScriptStepEventInput: {

@@ -216,7 +216,8 @@ func run(logger *slog.Logger) error {
 	}
 	// The project's Cleanup commands run before the workspace is deleted; the
 	// provider runs this hook (cleanuphook) since the worker is gone by then.
-	if err := worker.WriteCleanupHook(dataDir, bootstrap.Launch.PreRemove, workspace, scriptEnvironment); err != nil {
+	_, launchCleanup := bootstrap.Launch.ProjectScripts()
+	if err := worker.WriteCleanupHook(dataDir, launchCleanup, workspace, scriptEnvironment); err != nil {
 		logger.Warn("install project cleanup hook", "error", err)
 	}
 
@@ -394,7 +395,11 @@ func run(logger *slog.Logger) error {
 		SelectedEffort: bootstrap.Launch.ReasoningEffort,
 		SelectionAt:    bootstrap.Launch.SelectionAt,
 	}
-	busyProbe := transportSupervisor.Busy
+	// A Setup step counts as activity for its whole run, however quiet: idle
+	// pause must never stop a long Setup (one step may run for up to two
+	// hours) whose command prints nothing and waits on the network.
+	var setupRunning atomic.Bool
+	busyProbe := func() bool { return setupRunning.Load() || transportSupervisor.Busy() }
 	client.busy.Store(&busyProbe)
 	transportSupervisor.ProjectReviewCommand = func(ctx context.Context, input worker.TerminalCommand) (workerexec.Command, error) {
 		launch, err := reviewerLaunch(bootstrap.Launch, input)
@@ -549,12 +554,15 @@ func run(logger *slog.Logger) error {
 		// The project's Setup commands run last, in the prepared checkout, and
 		// gate the agent like the checkout does: a failed step keeps the agent
 		// from starting until the session is reopened.
-		scripts := projectScripts{PostCreate: bootstrap.Launch.PostCreate, PreRemove: bootstrap.Launch.PreRemove}
+		var scripts projectScripts
+		scripts.PostCreate, scripts.PreRemove = bootstrap.Launch.ProjectScripts()
 		for {
 			if reopened {
 				scripts = refreshProjectScripts(runCtx, logger, client, dataDir, workspace, scriptEnvironment, scripts)
 			}
+			setupRunning.Store(true)
 			failed := runProjectSetup(runCtx, logger, client, dataDir, firstStart, scripts.PostCreate, workspace, scriptEnvironment)
+			setupRunning.Store(false)
 			if failed == nil {
 				break
 			}
