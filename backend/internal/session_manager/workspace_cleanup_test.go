@@ -378,3 +378,19 @@ func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 		t.Fatalf("err = %v, want the step timed out", err)
 	}
 }
+
+// A step that exits cleanly at the very moment its limit expires succeeded and
+// must not be reported as timed out.
+func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
+	previousMinute, previousRun := scriptStepMinute, runCleanupStep
+	scriptStepMinute = 20 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute, runCleanupStep = previousMinute, previousRun })
+	runCleanupStep = func(ctx context.Context, _, _ string, _ map[string]string, _ io.Writer) error {
+		<-ctx.Done()
+		return nil
+	}
+	m, _, _, rec := newCleanupFixture(t, "# ao-timeout: 1m\necho done")
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+		t.Fatalf("a step that succeeded at its deadline must not fail: %v", err)
+	}
+}

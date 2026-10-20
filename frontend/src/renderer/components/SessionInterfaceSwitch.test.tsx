@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
+import { appI18n } from "../i18n";
 import type { SessionInterfaceTransition } from "../hooks/useSessionInterfaceTransition";
 import {
 	SessionInterfaceActionGroup,
@@ -528,6 +529,7 @@ describe("a Cloud session that started in the terminal", () => {
 				/>,
 			);
 			const status = screen.getByRole("status");
+			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(516, 72, 544, 60));
 			expect(status.style.left).toBe("");
 			act(() => publishHarnessUpdateNoticeRect({ left: 1004, top: 72, right: 1304, bottom: 140 }));
 			// The pane reaches 1316px; the notice starts at 1004px, 12px of gap kept.
@@ -541,6 +543,49 @@ describe("a Cloud session that started in the terminal", () => {
 			act(() => publishHarnessUpdateNoticeRect(null));
 			vi.restoreAllMocks();
 			pane.remove();
+		}
+	});
+
+	it("stays centered in a wide pane where the harness update notice does not reach it", () => {
+		const pane = document.createElement("div");
+		document.body.append(pane);
+		vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(pane);
+		vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(260, 60, 2000, 800));
+		try {
+			const view = render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+				/>,
+			);
+			const status = screen.getByRole("status");
+			// Centered, the 544px notice spans 988px to 1532px, well left of the update notice.
+			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(988, 72, 544, 60));
+			act(() => publishHarnessUpdateNoticeRect({ left: 1956, top: 72, right: 2256, bottom: 140 }));
+			expect(status.style.left).toBe("");
+			expect(status.style.maxWidth).toBe("");
+			view.unmount();
+		} finally {
+			act(() => publishHarnessUpdateNoticeRect(null));
+			vi.restoreAllMocks();
+			pane.remove();
+		}
+	});
+
+	it("names its dismiss control and dismissal failure in the app's language", async () => {
+		await appI18n.changeLanguage("de");
+		try {
+			render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+					dismissError="rejected"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Meldung zum Oberflächenwechsel schließen" })).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Diese Meldung konnte nicht geschlossen werden. Versuche es erneut.");
+		} finally {
+			await act(() => appI18n.changeLanguage("en"));
 		}
 	});
 

@@ -103,6 +103,23 @@ it("closes an open picker on a backdrop click before the dialog, then the dialog
 	await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 });
 
+it("closes on a backdrop click while a picker is still playing its exit animation", async () => {
+	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-1" });
+	renderSettings();
+	await screen.findByText("acme/alice");
+	// Radix keeps a closing picker mounted, with data-state="closed", until its exit animation ends.
+	const closing = document.createElement("div");
+	closing.setAttribute("data-radix-popper-content-wrapper", "");
+	closing.innerHTML = '<div data-state="closed" role="dialog"><div role="listbox"></div></div>';
+	document.body.append(closing);
+	try {
+		await userEvent.click(screen.getByTestId("settings-dialog-overlay"));
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+	} finally {
+		closing.remove();
+	}
+});
+
 it("still closes on a click on the backdrop", async () => {
 	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-1" });
 	renderSettings();

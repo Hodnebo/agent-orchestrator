@@ -6,7 +6,7 @@ import {
 	TriangleAlert,
 	X,
 } from "lucide-react";
-import { type CSSProperties, type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
 	SessionInterfaceMode,
@@ -19,6 +19,7 @@ import {
 	interfaceTransitionNeedsRestart,
 } from "../hooks/useSessionInterfaceTransition";
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
+import type { ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
@@ -322,6 +323,21 @@ function interfaceTransitionHistoryRecoveryPolicy(
 	return undefined;
 }
 
+/** The notice's widest size: w-[min(34rem,calc(100%-1.5rem))]. */
+const TRANSITION_NOTICE_WIDTH_REM = 34;
+const TRANSITION_NOTICE_GUTTER_REM = 1.5;
+
+/** Where the notice sits centered in `pane`, before any clearance moves it. */
+function centeredTransitionNoticeBox(pane: HTMLElement, notice: HTMLElement): ViewportRect {
+	const paneBox = pane.getBoundingClientRect();
+	const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+	const width = Math.max(0, Math.min(TRANSITION_NOTICE_WIDTH_REM * rem, paneBox.width - TRANSITION_NOTICE_GUTTER_REM * rem));
+	const left = paneBox.left + (paneBox.width - width) / 2;
+	// The move is horizontal only, so the notice's own top and bottom stand.
+	const { top, bottom } = notice.getBoundingClientRect();
+	return { left, top, right: left + width, bottom };
+}
+
 export function SessionInterfaceTransitionNotice({
 	transition,
 	onDismiss,
@@ -351,7 +367,13 @@ export function SessionInterfaceTransitionNotice({
 	// the part of the pane the notice leaves clear, so its dismiss stays reachable.
 	const [noticeElement, setNoticeElement] = useState<HTMLDivElement | null>(null);
 	const pane = noticeElement?.offsetParent instanceof HTMLElement ? noticeElement.offsetParent : null;
-	const clearance = useHarnessUpdateNoticeClearance(pane);
+	// Move only when the notice, where it centers without the move, would sit
+	// under the update notice; a wide pane leaves it clear in place.
+	const centeredNoticeBox = useCallback(
+		(paneElement: HTMLElement) => (noticeElement ? centeredTransitionNoticeBox(paneElement, noticeElement) : null),
+		[noticeElement],
+	);
+	const clearance = useHarnessUpdateNoticeClearance(pane, centeredNoticeBox);
 	const placement: CSSProperties | undefined = clearance
 		? { left: `calc((100% - ${clearance}px) / 2)`, maxWidth: `calc(100% - 1.5rem - ${clearance}px)` }
 		: undefined;
@@ -380,26 +402,12 @@ export function SessionInterfaceTransitionNotice({
 					<strong className="block text-xs font-medium text-foreground">
 						{t("session.interfaceStartFallbackTitle")}
 					</strong>
-					<p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{t(startFallbackMessageKey)}</p>
+					<p className="mt-0.5 text-caption leading-4 text-muted-foreground">{t(startFallbackMessageKey)}</p>
 					{dismissError ? (
-						<p className="mt-1 text-[11px] leading-4 text-destructive">
-							Could not dismiss this message. Try again.
-						</p>
+						<p className="mt-1 text-caption leading-4 text-destructive">{t("session.dismissInterfaceNoticeFailed")}</p>
 					) : null}
 				</div>
-				<button
-					type="button"
-					className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-					onClick={onDismiss}
-					disabled={dismissing}
-					aria-label="Dismiss interface switch message"
-				>
-					{dismissing ? (
-						<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-					) : (
-						<X aria-hidden="true" className="size-3.5" />
-					)}
-				</button>
+				<NoticeDismissButton dismissing={dismissing} onDismiss={onDismiss} />
 			</div>
 		);
 	}
@@ -437,7 +445,7 @@ export function SessionInterfaceTransitionNotice({
 							? accountMove ? "Account switch recovered" : "Interface switch recovered"
 							: copy[transition.phase]}
 				</strong>
-				<p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+				<p className="mt-0.5 text-caption leading-4 text-muted-foreground">
 					{(interactiveSourceUnverified
 						? "AO cannot verify whether this Terminal is idle. It was left running; terminate it to switch interfaces."
 						: transition.errorDetail) ||
@@ -458,7 +466,7 @@ export function SessionInterfaceTransitionNotice({
 						type="button"
 						size="sm"
 						variant="outline"
-						className="mt-2 h-7 text-[11px]"
+						className="mt-2 h-7 text-caption"
 						disabled={interrupting}
 						onClick={onSwitchWithInterrupt}
 					>
@@ -472,7 +480,7 @@ export function SessionInterfaceTransitionNotice({
 							type="button"
 							size="sm"
 							variant="outline"
-							className="h-7 text-[11px]"
+							className="h-7 text-caption"
 							disabled={retrying || dismissing}
 							onClick={onRetry}
 						>
@@ -484,7 +492,7 @@ export function SessionInterfaceTransitionNotice({
 								type="button"
 								size="sm"
 								variant="outline"
-								className="h-7 text-[11px]"
+								className="h-7 text-caption"
 								disabled={retrying || dismissing}
 								onClick={onUseProviderHistory}
 							>
@@ -495,7 +503,7 @@ export function SessionInterfaceTransitionNotice({
 							type="button"
 							size="sm"
 							variant="ghost"
-							className="h-7 text-[11px]"
+							className="h-7 text-caption"
 							disabled={retrying || dismissing}
 							onClick={onDismiss}
 						>
@@ -504,32 +512,39 @@ export function SessionInterfaceTransitionNotice({
 					</div>
 				) : null}
 				{recoveryError && !needsRestart ? (
-					<p className="mt-1 text-[11px] leading-4 text-destructive">
+					<p className="mt-1 text-caption leading-4 text-destructive">
 						Recovery attempt failed: {recoveryError}
 					</p>
 				) : null}
 				{dismissError && !needsRestart ? (
-					<p className="mt-1 text-[11px] leading-4 text-destructive">
-						Could not dismiss this message. Try again.
-					</p>
+					<p className="mt-1 text-caption leading-4 text-destructive">{t("session.dismissInterfaceNoticeFailed")}</p>
 				) : null}
 			</div>
 			{!needsRestart ? (
-				<button
-					type="button"
-					className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-					onClick={onDismiss}
-					disabled={dismissing}
-					aria-label="Dismiss interface switch message"
-				>
-					{dismissing ? (
-						<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-					) : (
-						<X aria-hidden="true" className="size-3.5" />
-					)}
-				</button>
+				<NoticeDismissButton dismissing={dismissing} onDismiss={onDismiss} />
 			) : null}
 		</div>
+	);
+}
+
+function NoticeDismissButton({ dismissing, onDismiss }: { dismissing?: boolean; onDismiss: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon-sm"
+			className="size-control-xs rounded text-muted-foreground hover:text-foreground"
+			onClick={onDismiss}
+			disabled={dismissing}
+			aria-label={t("session.dismissInterfaceNotice")}
+		>
+			{dismissing ? (
+				<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+			) : (
+				<X aria-hidden="true" className="size-3.5" />
+			)}
+		</Button>
 	);
 }
 

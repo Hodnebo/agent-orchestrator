@@ -58,8 +58,15 @@ export function harnessUpdateNoticeIntrusion(element: ViewportRect, notice: View
  * re-measured as it resizes, the window resizes, or anything scrolls (a chat
  * timeline moves its content under the fixed notice). Listens only while the
  * notice is shown.
+ *
+ * `contentBox`, when given, returns where the content that must stay clear
+ * would sit inside `element` without any inset; the inset then applies only
+ * while that box actually reaches under the notice. Keep it stable.
  */
-export function useHarnessUpdateNoticeClearance(element: HTMLElement | null): number {
+export function useHarnessUpdateNoticeClearance(
+	element: HTMLElement | null,
+	contentBox?: (element: HTMLElement) => ViewportRect | null,
+): number {
 	const notice = useHarnessUpdateNoticeRect();
 	const [clearance, setClearance] = useState(0);
 	useLayoutEffect(() => {
@@ -71,7 +78,9 @@ export function useHarnessUpdateNoticeClearance(element: HTMLElement | null): nu
 		const measure = () => {
 			frame = 0;
 			const box = element.getBoundingClientRect();
-			setClearance(box.width > 0 ? harnessUpdateNoticeIntrusion(box, notice) : 0);
+			const content = contentBox ? contentBox(element) : box;
+			const covered = box.width > 0 && content !== null && harnessUpdateNoticeIntrusion(content, notice) > 0;
+			setClearance(covered ? harnessUpdateNoticeIntrusion(box, notice) : 0);
 		};
 		const schedule = () => {
 			if (!frame) frame = requestAnimationFrame(measure);
@@ -87,6 +96,6 @@ export function useHarnessUpdateNoticeClearance(element: HTMLElement | null): nu
 			window.removeEventListener("resize", schedule);
 			document.removeEventListener("scroll", schedule, { capture: true });
 		};
-	}, [element, notice]);
+	}, [contentBox, element, notice]);
 	return clearance;
 }

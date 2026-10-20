@@ -17,6 +17,7 @@ import {
 	DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES, MAX_SCRIPT_STEP_TIMEOUT_MINUTES, MIN_SCRIPT_STEP_TIMEOUT_MINUTES, gitHubFullName, parseLocalScriptStep,
 	parseScriptSteps, projectAdditionalRepos, repoDirName, scriptStepTimeoutMinutes, serializeLocalScriptStep, serializeScriptSteps, type ScriptStepDraft,
 } from "../lib/cloud-project-repos";
+import { cn } from "../lib/utils";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsSaveFooter } from "./settings/SettingsSaveFooter";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
@@ -24,6 +25,7 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 type Project = components["schemas"]["Project"];
 type ScriptKind = "setup" | "cleanup";
@@ -129,53 +131,69 @@ function localSteps(commands: string[] | undefined): ScriptStepDraft[] | undefin
 
 const emptyStep = (): ScriptStepDraft => ({ command: "", folder: "", timeout: "" });
 
-/** The shown placeholder of a step with no time limit of its own and no default (a local Cleanup step). */
-const NO_TIME_LIMIT = "\u221e";
+/**
+ * A step whose time limit keeps the form from saving: one with a command (an
+ * empty step is dropped on save) and a limit that is not 1 to 120 minutes.
+ */
+const stepTimeoutInvalid = (step: ScriptStepDraft) => step.command.trim() !== "" && scriptStepTimeoutMinutes(step.timeout) === null;
 
 /**
  * A step's own time limit: a compact minutes field beside the step's other
  * controls. Empty is the default (placeholder); a value outside 1 to 120 is
- * marked invalid at once and keeps the form from saving.
+ * marked invalid at once and keeps the form from saving. Its hint (the range
+ * and what empty means) shows in a tooltip on hover and keyboard focus, and is
+ * the field's description.
  */
-function StepTimeoutField({ id, number, value, disabled, noDefault, onChange }: {
+function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onChange }: {
 	id: string;
 	number: number;
 	value: string;
 	disabled: boolean;
+	/** The form will not save this limit (see stepTimeoutInvalid). */
+	invalid: boolean;
 	/** Cleanup of a local project: an empty field means no limit at all. */
 	noDefault: boolean;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
-	const invalid = scriptStepTimeoutMinutes(value) === null;
+	const hintId = `${id}-hint`;
 	const hint = noDefault
 		? t("settings.project.stepTimeoutNoLimitHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES })
 		: t("settings.project.stepTimeoutHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES, default: DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES });
-	return <label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id} title={hint}>
-		<Input
-			aria-description={hint}
-			aria-invalid={invalid || undefined}
-			aria-label={t("settings.project.stepTimeout", { number })}
-			autoComplete="off"
-			className="h-7 w-12 px-2 text-right text-xs tabular-nums"
-			disabled={disabled}
-			id={id}
-			inputMode="numeric"
-			maxLength={3}
-			onChange={(event) => onChange(event.target.value.replace(/[^0-9]/g, ""))}
-			onKeyDown={(event) => {
-				if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-				event.preventDefault();
-				const current = scriptStepTimeoutMinutes(value) ?? (noDefault ? 0 : DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES);
-				const step = event.shiftKey ? 10 : 1;
-				const next = event.key === "ArrowUp" ? current + step : current - step;
-				onChange(String(Math.min(MAX_SCRIPT_STEP_TIMEOUT_MINUTES, Math.max(MIN_SCRIPT_STEP_TIMEOUT_MINUTES, next))));
-			}}
-			placeholder={noDefault ? NO_TIME_LIMIT : String(DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES)}
-			value={value}
-		/>
-		<span aria-hidden="true">{t("settings.project.stepTimeoutUnit")}</span>
-	</label>;
+	// "none" in the field stands for no limit, not a number of minutes; the unit
+	// keeps its room so the row does not shift once a number is typed.
+	const showsNoLimit = noDefault && value === "";
+	return <TooltipProvider><label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id}>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Input
+					aria-describedby={hintId}
+					aria-invalid={invalid || undefined}
+					aria-label={t("settings.project.stepTimeout", { number })}
+					autoComplete="off"
+					className="h-7 w-12 px-2 text-right text-xs tabular-nums"
+					disabled={disabled}
+					id={id}
+					inputMode="numeric"
+					maxLength={3}
+					onChange={(event) => onChange(event.target.value.replace(/[^0-9]/g, ""))}
+					onKeyDown={(event) => {
+						if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+						event.preventDefault();
+						const current = scriptStepTimeoutMinutes(value) ?? (noDefault ? 0 : DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES);
+						const step = event.shiftKey ? 10 : 1;
+						const next = event.key === "ArrowUp" ? current + step : current - step;
+						onChange(String(Math.min(MAX_SCRIPT_STEP_TIMEOUT_MINUTES, Math.max(MIN_SCRIPT_STEP_TIMEOUT_MINUTES, next))));
+					}}
+					placeholder={noDefault ? t("settings.project.stepTimeoutNoLimitPlaceholder") : String(DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES)}
+					value={value}
+				/>
+			</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-64">{hint}</TooltipContent>
+		</Tooltip>
+		<span aria-hidden="true" className={cn(showsNoLimit && "invisible")}>{t("settings.project.stepTimeoutUnit")}</span>
+		<span className="sr-only" id={hintId}>{hint}</span>
+	</label></TooltipProvider>;
 }
 
 /** The variables a Cloud project's Setup and Cleanup steps can use. */
@@ -232,7 +250,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 	};
 	// The first step whose time limit is not a whole number of minutes in range.
 	const invalidTimeout = (["setup", "cleanup"] as const).flatMap((kind) => kind === "cleanup" && scratch ? [] : drafts[kind]
-		.map((step, index) => ({ kind, number: index + 1, invalid: step.command.trim() !== "" && scriptStepTimeoutMinutes(step.timeout) === null })))
+		.map((step, index) => ({ kind, number: index + 1, invalid: stepTimeoutInvalid(step) })))
 		.find((step) => step.invalid);
 	const timeoutError = invalidTimeout ? t("settings.project.stepTimeoutInvalid", {
 		phase: t(invalidTimeout.kind === "setup" ? "settings.project.scriptSetup" : "settings.project.scriptCleanup"),
@@ -330,6 +348,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 										<StepTimeoutField
 											disabled={locked}
 											id={`${kind}-step-${index}-timeout`}
+											invalid={stepTimeoutInvalid(step)}
 											noDefault={!cloud && kind === "cleanup"}
 											number={index + 1}
 											value={step.timeout ?? ""}

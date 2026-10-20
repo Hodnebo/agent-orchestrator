@@ -4,7 +4,13 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import { stripAnsi } from "../lib/ansi";
-import { formatScriptDuration, type ScriptRun, type ScriptRunStep } from "../lib/cloud-script-runs";
+import {
+	desktopClockLeadMs,
+	formatScriptDuration,
+	noteControlPlaneEventArrival,
+	type ScriptRun,
+	type ScriptRunStep,
+} from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
 import { CopyButton } from "./chat/CopyButton";
 
@@ -156,27 +162,87 @@ function StepNotes({ step }: { step: ScriptRunStep }) {
 export const QUIET_STEP_MS = 3 * 60_000;
 
 /**
+ * How long a running step has printed nothing, once that reaches
+ * QUIET_STEP_MS, else undefined. Server times only (outputAt): the worker's
+ * own clock may be off, and the desktop's is moved onto the control plane's.
+ */
+function quietStepSilence(step: ScriptRunStep, now: number): number | undefined {
+	const silentMs = elapsedSince(step.outputAt, now - desktopClockLeadMs());
+	return silentMs !== undefined && silentMs >= QUIET_STEP_MS ? silentMs : undefined;
+}
+
+function quietStepText(step: ScriptRunStep, silentMs: number, t: TFunction): string {
+	const minutes = Math.floor(silentMs / 60_000);
+	return step.timeoutMinutes !== undefined
+		? t("scriptRun.quiet", { minutes, limit: step.timeoutMinutes })
+		: t("scriptRun.quietNoLimit", { minutes });
+}
+
+/**
  * A quiet note under a running step that has printed nothing new for
  * QUIET_STEP_MS: how long, and its time limit, so a long silent step reads as
  * still working rather than stuck. It updates with the panel's clock and goes
- * away once output arrives or the step ends.
+ * away once output arrives or the step ends. Screen readers hear it once, from
+ * the panel (useQuietStepAnnouncement), not on every minute it counts.
  */
 function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
 	const { t } = useTranslation();
-	// Server times only (outputAt): the worker's own clock may be off.
-	const silentMs = elapsedSince(step.outputAt, now);
-	if (silentMs === undefined || silentMs < QUIET_STEP_MS) return null;
-	const minutes = Math.floor(silentMs / 60_000);
+	const silentMs = quietStepSilence(step, now);
+	if (silentMs === undefined) return null;
 	return (
-		<p className="flex items-center gap-1.5 px-2.5 pb-1.5 text-caption leading-relaxed text-muted-foreground" data-testid="script-step-quiet" role="status">
+		<p className="flex items-center gap-1.5 px-2.5 pb-1.5 text-caption leading-relaxed text-muted-foreground" data-testid="script-step-quiet">
 			<Clock aria-hidden="true" className="size-3 shrink-0 text-passive" />
-			<span className="min-w-0">
-				{step.timeoutMinutes !== undefined
-					? t("scriptRun.quiet", { minutes, limit: step.timeoutMinutes })
-					: t("scriptRun.quietNoLimit", { minutes })}
-			</span>
+			<span className="min-w-0">{quietStepText(step, silentMs, t)}</span>
 		</p>
 	);
+}
+
+/**
+ * Quiet notes already announced, by run, step and last output. A session can
+ * show the same run in up to three panels at once (chat, inspector, startup
+ * card); only the first to see a step go quiet announces it.
+ */
+const announcedQuietSteps = new Set<string>();
+
+/**
+ * The quiet note to announce, said once when a step's note appears: the
+ * message stays as first worded while the note's minute count moves on, so the
+ * live region does not speak again each minute. Cleared once the step writes
+ * output or ends.
+ */
+function useQuietStepAnnouncement(run: ScriptRun, now: number, shown: boolean): string {
+	const { t } = useTranslation();
+	const step = shown ? run.steps.find((item) => displayStatus(item, run) === "running") : undefined;
+	const silentMs = step ? quietStepSilence(step, now) : undefined;
+	const key = step && silentMs !== undefined ? `${run.runId}:${step.step}:${step.outputAt ?? ""}` : undefined;
+	const text = step && silentMs !== undefined ? quietStepText(step, silentMs, t) : "";
+	const latestText = useRef(text);
+	latestText.current = text;
+	const [message, setMessage] = useState("");
+	useEffect(() => {
+		if (!key) {
+			setMessage("");
+			return;
+		}
+		if (announcedQuietSteps.has(key)) return;
+		announcedQuietSteps.add(key);
+		setMessage(latestText.current);
+	}, [key]);
+	return message;
+}
+
+/**
+ * Feeds the desktop clock's lead over the control plane's from this run's
+ * events as they arrive live; the events the panel first draws may be old, so
+ * they say nothing about the clock.
+ */
+function useControlPlaneClock(run: ScriptRun): void {
+	const seen = useRef<number | undefined>(undefined);
+	useEffect(() => {
+		const before = seen.current;
+		seen.current = run.lastSequence;
+		if (before !== undefined && run.lastSequence > before) noteControlPlaneEventArrival(run.lastEventAt);
+	}, [run.lastEventAt, run.lastSequence]);
 }
 
 function StepRow({
@@ -314,6 +380,8 @@ export function ScriptRunPanel({
 	const noticeClearance = useHarnessUpdateNoticeClearance(panel);
 	const title = scriptRunTitle(run, t);
 	const announcement = useStepAnnouncement(run, title);
+	useControlPlaneClock(run);
+	const quietAnnouncement = useQuietStepAnnouncement(run, now, live && listOpen);
 	const summary = scriptRunStatusText(run, t);
 	const elapsed = live ? elapsedSince(run.startedAt, now) : run.durationMs;
 	const headerIcon = run.status === "running" ? "running" : run.status === "succeeded" ? "succeeded" : run.status === "failed" ? "failed" : "stopped";
@@ -341,6 +409,7 @@ export function ScriptRunPanel({
 			style={noticeClearance ? { "--script-run-notice-clearance": `${noticeClearance}px` } as CSSProperties : undefined}
 		>
 			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-announcer" role="status">{announcement}</div>
+			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-quiet-announcer" role="status">{quietAnnouncement}</div>
 			{collapsible ? (
 				<button
 					aria-controls={listId}

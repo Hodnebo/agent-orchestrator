@@ -2,7 +2,7 @@ import { act, fireEvent, render as rtlRender, screen, within } from "@testing-li
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent } from "../lib/cloud-cp";
-import { groupScriptRuns, SCRIPT_STEP_EVENT } from "../lib/cloud-script-runs";
+import { forgetControlPlaneClock, groupScriptRuns, SCRIPT_STEP_EVENT } from "../lib/cloud-script-runs";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { TooltipProvider } from "./ui/tooltip";
@@ -31,6 +31,7 @@ const toggleOf = (row: HTMLElement) => row.querySelector<HTMLButtonElement>("but
 
 beforeEach(() => {
 	sequence = 0;
+	forgetControlPlaneClock();
 	vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
 	vi.setSystemTime(new Date("2026-10-18T10:00:12Z"));
 });
@@ -324,6 +325,52 @@ describe("ScriptRunPanel quiet step note", () => {
 		]);
 		rerender(<ScriptRunPanel run={silent} />);
 		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
+	});
+
+	it("announces a quiet step once when its note appears, not on every minute it counts", () => {
+		vi.setSystemTime(new Date("2026-10-18T10:02:59Z"));
+		const run = quietRun(["2026-10-18T10:00:00Z"], [
+			{ runId: "run-quiet-once", step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "", timeoutMinutes: 10 },
+		]);
+		render(<ScriptRunPanel run={run} />);
+		const announcer = screen.getByTestId("script-run-quiet-announcer");
+		expect(announcer).toBeEmptyDOMElement();
+		act(() => { vi.advanceTimersByTime(1_000); });
+		expect(announcer).toHaveTextContent("No output for 3 min. The step is still running (limit 10 min).");
+		act(() => { vi.advanceTimersByTime(60_000); });
+		// The note counts on; the live region keeps its first wording, so it is not spoken again.
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
+		expect(screen.getByTestId("script-step-quiet")).not.toHaveAttribute("role");
+		expect(screen.getByTestId("script-step-quiet").closest("[role=status], [aria-live]")).toBeNull();
+		expect(announcer).toHaveTextContent("No output for 3 min.");
+	});
+
+	it("announces a quiet step from only one of the panels showing its run", () => {
+		vi.setSystemTime(new Date("2026-10-18T10:04:00Z"));
+		const run = quietRun(["2026-10-18T10:00:00Z"], [
+			{ runId: "run-quiet-shared", step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "" },
+		]);
+		render(<><ScriptRunPanel run={run} /><ScriptRunPanel run={run} showTitle={false} /><ScriptRunPanel collapsible run={run} /></>);
+		expect(screen.getAllByTestId("script-step-quiet")).toHaveLength(3);
+		const spoken = screen.getAllByTestId("script-run-quiet-announcer").filter((node) => node.textContent !== "");
+		expect(spoken).toHaveLength(1);
+	});
+
+	it("measures the silence on the control plane's clock when the desktop clock runs fast", () => {
+		// The desktop clock is 5 minutes ahead: control plane 10:00:00 is 10:05:00 here.
+		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
+		const started = { runId: "run-fast-clock", step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:59:59Z", output: "" };
+		const { rerender } = render(<ScriptRunPanel run={quietRun(["2026-10-18T09:59:59Z"], [started])} />);
+		// Output arrives live: written at 10:00:10 control plane time, seen at 10:05:10 here.
+		act(() => { vi.advanceTimersByTime(10_000); });
+		rerender(<ScriptRunPanel run={quietRun(["2026-10-18T09:59:59Z", "2026-10-18T10:00:10Z"], [
+			started,
+			{ ...started, output: "seeding", outputAt: "2026-10-18T10:00:10Z" },
+		])} />);
+		act(() => { vi.advanceTimersByTime(1_000); });
+		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
+		act(() => { vi.advanceTimersByTime(3 * 60_000); });
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 3 min.");
 	});
 
 	it("goes away when new output arrives or the step ends, and omits an unknown limit", () => {

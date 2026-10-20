@@ -101,19 +101,19 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor?: st
 function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workingDirectoryProblem>): string {
 	switch (problem) {
 		case "length":
-			return t("settings.cloudProject.workingDirectoryTooLong", { defaultValue: "The working folder must be at most 512 characters." });
+			return t("settings.cloudProject.workingDirectoryTooLong");
 		case "characters":
-			return t("settings.cloudProject.workingDirectoryCharacters", { defaultValue: "The working folder contains invalid characters." });
+			return t("settings.cloudProject.workingDirectoryCharacters");
 		case "segments":
-			return t("settings.cloudProject.workingDirectorySegments", { defaultValue: "The working folder must not contain . or .. segments." });
+			return t("settings.cloudProject.workingDirectorySegments");
 		case "aoState":
-			return t("settings.cloudProject.workingDirectoryAOState", { defaultValue: "The working folder must not be inside AO's own .ao folder." });
+			return t("settings.cloudProject.workingDirectoryAOState");
 		case "standaloneRepo":
-			return t("settings.cloudProject.workingDirectoryStandaloneRepo", { defaultValue: "This project has no repository, so its working folder cannot use {repo}. Name the folder, for example ~/work/scratch." });
+			return t("settings.cloudProject.workingDirectoryStandaloneRepo");
 		case "placeholder":
-			return t("settings.cloudProject.workingDirectoryPlaceholderOnly", { defaultValue: "The working folder may only use {repo} as a placeholder." });
+			return t("settings.cloudProject.workingDirectoryPlaceholderOnly");
 		default:
-			return t("settings.cloudProject.workingDirectoryInvalid", { defaultValue: "The working folder must be an absolute path or start with ~/ or $HOME/, and name a folder below it." });
+			return t("settings.cloudProject.workingDirectoryInvalid");
 	}
 }
 
@@ -223,16 +223,16 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			</Field>
 		</>}
 		{showWorkingDirectory ? (
-			<Field label={t("settings.cloudProject.workingDirectory", { defaultValue: "Working folder" })} htmlFor="cloudProjectWorkingDirectory"
+			<Field label={t("settings.cloudProject.workingDirectory")} htmlFor="cloudProjectWorkingDirectory"
 				hint={workingDirectoryInvalid
 					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
 					: standalone
-						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "Where sessions start in your Coder workspace. Leave empty for the default." })
+						? t("settings.cloudProject.workingDirectoryHintStandalone")
 						: offering.coderWorkerWorkingFolder
-							? t("settings.cloudProject.workingDirectoryHintCheckout", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty for the default location." })
-							: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty to use your Coder connection's folder." })}>
+							? t("settings.cloudProject.workingDirectoryHintCheckout")
+							: t("settings.cloudProject.workingDirectoryHint")}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
-					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone", { defaultValue: "~/work/scratch" }) : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
+					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone") : t("settings.cloudProject.workingDirectoryPlaceholder")} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}
 					onChange={(event) => { setWorkingDirectory(event.target.value); edited(); }} />
 			</Field>

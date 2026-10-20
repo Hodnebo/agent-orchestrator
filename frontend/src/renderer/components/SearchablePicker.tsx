@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Lock, Plus, Search } from "lucide-react";
+import { Check, ChevronDown, Loader2, Lock, Plus, Search } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
@@ -27,6 +27,8 @@ export function SearchablePicker({
 	action,
 	defaultOpen = false,
 	onDismiss,
+	loading = false,
+	loadingText,
 }: {
 	ariaLabel: string;
 	placeholder: string;
@@ -43,6 +45,9 @@ export function SearchablePicker({
 	defaultOpen?: boolean;
 	/** Called when the list closes without a choice (Escape, outside click, trigger). */
 	onDismiss?: () => void;
+	/** The options are still loading: an empty list says `loadingText`, not "No matches". */
+	loading?: boolean;
+	loadingText?: string;
 }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(defaultOpen && !disabled);
@@ -134,7 +139,12 @@ export function SearchablePicker({
 						fixedScroll ? "repository-picker-scrollbar max-h-72 overflow-y-auto" : "settings-thin-scrollbar max-h-72 overflow-y-auto",
 					)}
 				>
-					{filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}
+					{filtered.length === 0 && loading ? (
+						<p className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground" role="status">
+							<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+							{loadingText ?? t("common.loading")}
+						</p>
+					) : filtered.length === 0 ? <p className="px-3 py-5 text-center text-xs text-muted-foreground">{t("common.noMatches", { defaultValue: "No matches" })}</p> : null}
 					{filtered.map((option) => (
 						<button
 							key={option.value}

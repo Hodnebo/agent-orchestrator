@@ -137,6 +137,8 @@ export interface ScriptRun {
 	firstSequence: number;
 	/** Sequence of its newest event: changes whenever the run does. */
 	lastSequence: number;
+	/** When the control plane recorded its newest event (control plane time). */
+	lastEventAt?: string;
 }
 
 const statuses = new Set<ScriptStepStatus>(["running", "succeeded", "failed", "timed_out", "skipped"]);
@@ -222,6 +224,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		firstSequence: number;
 		lastSequence: number;
 		firstCreatedAt: string;
+		lastCreatedAt: string;
 	}>();
 	let lastEndSequence = -Infinity;
 	for (const event of events) {
@@ -231,12 +234,18 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		if (!payload) continue;
 		let run = runs.get(payload.runId);
 		if (!run) {
-			run = { phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence, firstCreatedAt: event.createdAt };
+			run = {
+				phase: payload.phase, total: 0, latest: new Map(), firstSequence: event.sequence, lastSequence: event.sequence,
+				firstCreatedAt: event.createdAt, lastCreatedAt: event.createdAt,
+			};
 			runs.set(payload.runId, run);
 		}
 		run.total = Math.max(run.total, payload.total);
 		run.firstSequence = Math.min(run.firstSequence, event.sequence);
-		run.lastSequence = Math.max(run.lastSequence, event.sequence);
+		if (event.sequence >= run.lastSequence) {
+			run.lastSequence = event.sequence;
+			run.lastCreatedAt = event.createdAt;
+		}
 		const previous = run.latest.get(payload.step);
 		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload, createdAt: event.createdAt });
 	}
@@ -304,9 +313,43 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		}
 		return {
 			runId, phase: run.phase, total: run.total, steps, status, failedStep, runningStep, startedAt, durationMs,
-			firstSequence: run.firstSequence, lastSequence: run.lastSequence,
+			firstSequence: run.firstSequence, lastSequence: run.lastSequence, lastEventAt: timestamp(run.lastCreatedAt),
 		};
 	});
+}
+
+/** How many recent live arrivals bound the desktop clock's lead. */
+const CLOCK_SAMPLES = 8;
+/** A lead this small is delivery time or harmless drift, not a clock to correct. */
+const CLOCK_TOLERANCE_MS = 60_000;
+let clockSamples: number[] = [];
+
+/**
+ * Records that an event the control plane created at `createdAt` (its clock)
+ * reached the desktop just now, live. The control plane cannot have created it
+ * later than its own now, so the arrival time minus `createdAt` bounds how far
+ * the desktop clock runs ahead of the control plane's.
+ */
+export function noteControlPlaneEventArrival(createdAt: string | undefined, arrivedAt = Date.now()): void {
+	const created = timeOf(createdAt);
+	if (created === undefined) return;
+	clockSamples = [...clockSamples, arrivedAt - created].slice(-CLOCK_SAMPLES);
+}
+
+/**
+ * How far the desktop clock runs ahead of the control plane's (negative when
+ * behind), from the tightest recent live arrival; 0 until one is seen or while
+ * the two are within a minute of each other.
+ */
+export function desktopClockLeadMs(): number {
+	if (clockSamples.length === 0) return 0;
+	const lead = Math.min(...clockSamples);
+	return Math.abs(lead) <= CLOCK_TOLERANCE_MS ? 0 : lead;
+}
+
+/** Forgets what arrivals said about the desktop clock (tests). */
+export function forgetControlPlaneClock(): void {
+	clockSamples = [];
 }
 
 /** The newest run of a phase, if any. */
