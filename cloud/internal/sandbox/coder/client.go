@@ -1308,6 +1308,11 @@ func sha256Hex(data []byte) string {
 
 // classifyBootstrapError attaches the user-facing startup error a failed
 // bootstrap should surface. Errors already classified pass through.
+// workingFolderUnusableMarker starts the line the bootstrap prints when it
+// could not prepare the folders of a working-folder checkout
+// (checkoutDirectoryScript), followed by what failed.
+const workingFolderUnusableMarker = "AO working folder unusable:"
+
 func classifyBootstrapError(err error, durableRoot string) error {
 	var startupErr *sandbox.StartupError
 	if err == nil || errors.As(err, &startupErr) || errors.Is(err, context.Canceled) {
@@ -1321,6 +1326,17 @@ func classifyBootstrapError(err error, durableRoot string) error {
 		}
 	}
 	text := err.Error()
+	if _, rest, found := strings.Cut(text, workingFolderUnusableMarker); found {
+		// The same folder fails the same way on every retry: the session
+		// stops with the reason (the reconciler parks it) until it changes.
+		detail, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: "AO couldn't prepare this project's working folder in the workspace: " + strings.TrimSpace(detail) +
+				". Fix the folder or the project's working folder (Project settings > Repositories), then start a new session.",
+			Err: err,
+		}
+	}
 	switch {
 	case strings.Contains(text, "is not a mounted directory"):
 		return &sandbox.StartupError{
@@ -1961,8 +1977,11 @@ func durableRootSiblingsScript(workerUser string, enabled bool) string {
 // the durable root does). A missing checkout or sibling folder is created
 // owned by the worker user. A folder that already exists is never chowned or
 // changed: the worker checks it is its own (worker.ResolveOwnedCheckoutDirectory)
-// and refuses a folder the template created. Failing to create a folder does
-// not fail the bootstrap; the worker reports it on the session.
+// and refuses a folder the template created. Failing to create the checkout
+// or a sibling folder does not fail the bootstrap; the worker reports it on the
+// session. Failing to prepare the parent folders does: it reports
+// workingFolderUnusableMarker with what failed, which the control plane turns
+// into the session's working_directory_unusable startup error.
 func checkoutDirectoryScript(workerUser, directory string, siblings []string) string {
 	if directory == "" {
 		return ""
@@ -1970,18 +1989,21 @@ func checkoutDirectoryScript(workerUser, directory string, siblings []string) st
 	user := shellQuote(workerUser)
 	parent := path.Dir(directory)
 	var script strings.Builder
+	script.WriteString("ao_folder_unusable() { printf '%s %s\\n' " + shellQuote(workingFolderUnusableMarker) + " \"$1\" >&2; exit 1; }\n")
 	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n" +
 		"if [ ! -e \"$checkout_parent\" ] && [ ! -L \"$checkout_parent\" ]; then\n" +
-		"  sudo -n mkdir -p \"$checkout_parent\"\n" +
-		"  sudo -n chown \"$(id -u):\"" + user + " \"$checkout_parent\"\n" +
-		"  sudo -n chmod g+wx \"$checkout_parent\"\nfi\n")
+		"  { sudo -n mkdir -p \"$checkout_parent\" &&\n" +
+		"    sudo -n chown \"$(id -u):\"" + user + " \"$checkout_parent\" &&\n" +
+		"    sudo -n chmod g+wx \"$checkout_parent\"; } ||\n" +
+		"    ao_folder_unusable " + shellQuote("could not create "+parent) + "\nfi\n")
 	var ancestors []string
 	for dir := parent; dir != "/" && dir != "."; dir = path.Dir(dir) {
 		ancestors = append(ancestors, dir)
 	}
 	for index := len(ancestors) - 1; index >= 0; index-- {
 		quoted := shellQuote(ancestors[index])
-		script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted + "\n")
+		script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted +
+			" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+ancestors[index]) + "\n")
 	}
 	script.WriteString("ao_checkout_folder() {\n" +
 		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +

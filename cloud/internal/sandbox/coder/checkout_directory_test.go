@@ -65,8 +65,8 @@ func TestAOWorkerBootstrapUsesTheWorkingFolderCheckout(t *testing.T) {
 			}
 			for _, want := range []string{
 				"checkout_parent='/home/ubuntu/work'\n",
-				"sudo -n -u 'ao-worker' test -x '/home' || sudo -n chmod o+x '/home'\n",
-				"sudo -n -u 'ao-worker' test -x '/home/ubuntu/work' || sudo -n chmod o+x '/home/ubuntu/work'\n",
+				"sudo -n -u 'ao-worker' test -x '/home' || sudo -n chmod o+x '/home' || ao_folder_unusable ",
+				"sudo -n -u 'ao-worker' test -x '/home/ubuntu/work' || sudo -n chmod o+x '/home/ubuntu/work' || ao_folder_unusable ",
 				"ao_checkout_folder '/home/ubuntu/work/alice' || true\n",
 				"ao_checkout_folder '/home/ubuntu/work/billing' || true\n",
 				"useradd -m 'ao-worker'",
@@ -228,6 +228,33 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 			t.Errorf("the missing sibling was not prepared: %q", changes)
 		}
 	})
+}
+
+// A parent folder the bootstrap cannot prepare stops the bootstrap with the
+// working-folder marker, which becomes the session's
+// working_directory_unusable startup error (parked, not retried forever).
+func TestCheckoutDirectoryScriptReportsAnUnusableWorkingFolder(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is required")
+	}
+	parent := filepath.Join(t.TempDir(), "work")
+	script := "set -eu\n" +
+		"sudo() {\n" +
+		"  while [ $# -gt 0 ]; do case \"$1\" in -n|-b) shift ;; -u) shift 2 ;; *) break ;; esac; done\n" +
+		"  case \"$1\" in mkdir) echo \"mkdir: permission denied\" >&2; return 1 ;; chown|chmod|chgrp) return 0 ;; esac\n" +
+		"  \"$@\"\n}\n" +
+		checkoutDirectoryScript("ao-worker", filepath.Join(parent, "alice"), nil) + "echo __DONE__\n"
+	output, err := exec.Command("sh", "-c", script).CombinedOutput()
+	if err == nil || strings.Contains(string(output), "__DONE__") || !strings.Contains(string(output), workingFolderUnusableMarker+" could not create "+parent) {
+		t.Fatalf("script = %v\n%s", err, output)
+	}
+	classified := classifyBootstrapError(errors.New("coder: bootstrap failed: "+string(output)), "/home/ubuntu")
+	var startupErr *sandbox.StartupError
+	if !errors.As(classified, &startupErr) || startupErr.Code != sandbox.StartupErrorWorkingDirectoryUnusable ||
+		!strings.Contains(startupErr.Message, "working folder in the workspace: could not create "+parent+". ") {
+		t.Fatalf("classified = %#v", classified)
+	}
 }
 
 // A session profile stamps the checkout on the session client only for the
