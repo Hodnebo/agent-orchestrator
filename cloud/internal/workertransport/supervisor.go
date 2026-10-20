@@ -122,7 +122,8 @@ type Supervisor struct {
 	// publishes).
 	AgentReady func(context.Context)
 	// AgentStartFailed, when set, reports that the terminal agent a switch to
-	// the terminal committed could not start, after a few attempts, so the
+	// the terminal committed (or the session's own, OwnAgentStartFailed)
+	// could not start, after a few attempts, so the
 	// session shows a startup error with a Retry (the workspace.checkout
 	// request, see retryFailedAgentStart). With a nil error it reports that
 	// the failure no longer stands: a retry started the agent, or a switch
@@ -161,6 +162,9 @@ type Supervisor struct {
 	// workspaceStartupFailed records a failed checkout or Setup that waits for
 	// the session's retry (SetWorkspaceStartupFailed).
 	workspaceStartupFailed bool
+	// ownAgentStartFailed records that the session's own terminal agent could
+	// not start and waits for the session's retry (OwnAgentStartFailed).
+	ownAgentStartFailed bool
 
 	// The worker's own commands (FallBackToTUI) run on Run's serial loop,
 	// like the control plane's interface commands, never beside them.
@@ -287,9 +291,41 @@ func (s *Supervisor) SetWorkspaceStartupFailed(failed bool) {
 	s.mu.Unlock()
 }
 
+// OwnAgentStartFailed reports that the session's own terminal agent (its
+// first start in this worker, StartStartupAgent) could not start and waits for
+// the session's retry, as AgentStartFailed reports a switch's start. Until the
+// retry (ClearOwnAgentStartFailed) a drain to Chat is bounded as for a failed
+// Setup (startupFailureWaiting), and a switch away from the terminal clears
+// the failure (stopInterface). It runs on Run's serial loop, so it never
+// interleaves with a switch: a session a switch already took off the terminal
+// reports nothing.
+func (s *Supervisor) OwnAgentStartFailed(ctx context.Context, err error) error {
+	return s.runOnLoop(ctx, func(ctx context.Context) error {
+		if s.iface.Current() != InterfaceTUI {
+			return nil
+		}
+		s.mu.Lock()
+		s.ownAgentStartFailed = true
+		s.mu.Unlock()
+		if s.AgentStartFailed != nil {
+			s.AgentStartFailed(ctx, err)
+		}
+		return nil
+	})
+}
+
+// ClearOwnAgentStartFailed records that the session's retry starts its own
+// terminal agent again.
+func (s *Supervisor) ClearOwnAgentStartFailed() {
+	s.mu.Lock()
+	s.ownAgentStartFailed = false
+	s.mu.Unlock()
+}
+
 // startupFailureWaiting reports a startup that failed and waits for the
 // session's retry with no terminal agent running: the workspace's checkout
-// or Setup, or the terminal agent's own start (startPendingTUI).
+// or Setup, or the terminal agent's start (startPendingTUI, or the session's
+// own, OwnAgentStartFailed).
 func (s *Supervisor) startupFailureWaiting() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -297,16 +333,18 @@ func (s *Supervisor) startupFailureWaiting() bool {
 		return false
 	}
 	return (s.holdAgentInput && !s.workspaceReady && s.workspaceStartupFailed) ||
-		(s.pendingTUIStart != nil && s.pendingTUIStart.failed)
+		(s.pendingTUIStart != nil && s.pendingTUIStart.failed) || s.ownAgentStartFailed
 }
 
 // startupTaskWaiting reports a terminal agent that has not started yet and
 // runs the session's task once it does: a terminal session's own agent, or the
 // one a switch to the terminal made while the workspace was being prepared.
+// An own start that failed and waits for the session's retry still holds the
+// task: the retry runs it.
 func (s *Supervisor) startupTaskWaiting() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.StartupTask && !s.agentStarted && !s.startupTaskAbandoned &&
+	return s.StartupTask && !s.agentStarted && (!s.startupTaskAbandoned || s.ownAgentStartFailed) &&
 		(s.pendingTUIStart != nil || s.InitialInterface != InterfaceChat)
 }
 

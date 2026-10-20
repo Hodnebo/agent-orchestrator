@@ -197,12 +197,15 @@ func (s *Supervisor) stopInterface(ctx context.Context, policy string) error {
 			}
 		}
 		s.tuiHandoffClosing = true
-		failureReported := false
+		// The session's own terminal agent that could not start never starts
+		// now either; its failure must not stay set in Chat.
+		failureReported := s.ownAgentStartFailed
+		s.ownAgentStartFailed = false
 		if pending := s.pendingTUIStart; pending != nil {
 			// A switch away before the workspace became ready (or while the
 			// terminal agent's start failed): the terminal agent never
 			// started, and now never does.
-			failureReported = pending.reported
+			failureReported = failureReported || pending.reported
 			s.pendingTUIStart = nil
 			s.agentStarting = false
 			s.pendingAgentTerminalData = nil

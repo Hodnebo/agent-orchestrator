@@ -708,12 +708,16 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			logger.Error("background coding-agent startup failed; waiting for the session's retry", "error", err)
-			failure := agentStartFailure(err)
 			ownAgentStartFailed.Store(true)
 			retried := awaitStartupRetry(runCtx, checkoutRequested, func() {
-				reportWorkspaceStartup(runCtx, logger, client, failure)
+				// Reported through the transport, which keeps the failure from
+				// outliving a switch to Chat (Supervisor.OwnAgentStartFailed).
+				if err := transportSupervisor.OwnAgentStartFailed(runCtx, err); err != nil && runCtx.Err() == nil {
+					logger.Warn("report the coding agent's failed start", "error", err)
+				}
 			})
 			ownAgentStartFailed.Store(false)
+			transportSupervisor.ClearOwnAgentStartFailed()
 			if !retried {
 				return
 			}

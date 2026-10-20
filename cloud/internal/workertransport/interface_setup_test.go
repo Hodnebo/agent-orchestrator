@@ -647,3 +647,43 @@ func TestChatStartFallbackWhoseTerminalStartFailsIsReportedAndRetried(t *testing
 		t.Fatalf("after the retry reported %v, want the failure cleared", reports[1])
 	}
 }
+
+// A terminal session whose own agent could not start waits for the session's
+// retry with its task. A drain to Chat cannot prove the terminal idle, so it
+// is bounded as for a failed Setup instead of committing at once as idle, and
+// a switch away (stop now) clears the failure, so Chat does not show a failed
+// start and a stopped composer. A failure reported after a switch already
+// took the session off the terminal is not reported at all.
+func TestOwnTerminalAgentStartFailureBoundsTheDrainAndClearsOnASwitchAway(t *testing.T) {
+	h := newSetupSwitchHarness(t, InterfaceTUI)
+	h.supervisor.MarkWorkspaceReady()
+	h.supervisor.AbandonStartupTask()
+	if err := h.supervisor.OwnAgentStartFailed(context.Background(), errors.New("coding-agent harness unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if reports := h.waitForReports(t, 1); reports[0] == nil {
+		t.Fatal("the own start's failure was not reported")
+	}
+	if got := h.inspect(t); got.Idle || !got.QuiescenceUnverified {
+		t.Fatalf("inspect after the own start failed = %+v, want quiescence unverified", got)
+	}
+	err := h.supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+		if err := h.supervisor.stopInterface(ctx, "interrupt"); err != nil {
+			return err
+		}
+		return h.supervisor.startInterface(ctx, interfacePayload{TargetInterface: InterfaceChat})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reports := h.waitForReports(t, 2); reports[1] != nil {
+		t.Fatalf("after the switch to Chat reported %v, want the failure cleared", reports[1])
+	}
+	if h.supervisor.startupFailureWaiting() {
+		t.Fatal("the failed start still reads as waiting after the switch to Chat")
+	}
+	if err := h.supervisor.OwnAgentStartFailed(context.Background(), errors.New("late")); err != nil {
+		t.Fatal(err)
+	}
+	h.waitForReports(t, 2)
+}
