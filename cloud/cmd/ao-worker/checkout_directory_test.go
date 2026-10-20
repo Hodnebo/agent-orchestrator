@@ -243,3 +243,13 @@ func TestARefusedRepositoryFolderIsNotCheckpointedOrAdvertised(t *testing.T) {
 		t.Errorf("session repositories without the mark = %q", got)
 	}
 }
+
+// A terminal agent that could not start after Setup is reported with its own
+// code, a message naming the Retry, and what failed as the detail.
+func TestAgentStartFailureIsAWorkspaceStartupError(t *testing.T) {
+	event := agentStartFailure(errors.New("load coding-agent credential: unavailable"))
+	if event.Status != worker.WorkspaceStartupFailed || event.Code != domain.WorkspaceStartupErrorAgentStart ||
+		!strings.Contains(event.Message, "Retry") || !strings.Contains(event.Detail, "credential") {
+		t.Fatalf("agent start failure = %+v", event)
+	}
+}

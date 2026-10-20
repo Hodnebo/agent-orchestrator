@@ -4219,7 +4219,8 @@ components:
       description: >-
         Whether the worker could prepare the session's workspace for its agent
         (repository checkout, the Coder connection's working directory and the
-        project's Setup commands). A failure becomes the session's startup
+        project's Setup commands) and start the terminal agent a switch to the
+        terminal made meanwhile. A failure becomes the session's startup
         error and stays until a later ready report clears it.
       properties:
         status:
@@ -4227,7 +4228,7 @@ components:
           enum: [failed, ready]
         code:
           type: string
-          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied]
+          enum: [repository_checkout_failed, working_directory_unusable, project_setup_failed, working_directory_occupied, agent_start_failed]
           description: Required when status is failed.
         message:
           type: string
@@ -5061,9 +5062,10 @@ components:
             working folder is outside the Coder connection's durable root),
             repository_checkout_failed, working_directory_unusable (also
             reported when the Coder bootstrap cannot prepare the project's
-            working folder), working_directory_occupied or
-            project_setup_failed (reported by the worker). Clients must
-            tolerate codes added later.
+            working folder), working_directory_occupied,
+            project_setup_failed or agent_start_failed (the terminal agent
+            could not start in the ready workspace), all reported by the
+            worker. Clients must tolerate codes added later.
         message:
           type: string
           description: Human-readable explanation suitable for display as-is.

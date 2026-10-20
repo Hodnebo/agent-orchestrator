@@ -92,6 +92,18 @@ describe("cloudStartupProblem", () => {
 		});
 	});
 
+	it("reports a terminal agent that could not start in the ready workspace even though the worker is connected", () => {
+		const agentStart = {
+			code: "agent_start_failed",
+			message: "AO couldn't start the coding agent in the terminal. Select Retry on this session to try again.",
+			at: "2026-10-20T10:00:00Z",
+			detail: "load coding-agent credential: control plane unavailable",
+		};
+		expect(cloudStartupProblem(withRuntime("running", { startupError: agentStart }, true))).toEqual({
+			phase: "failed", message: agentStart.message, code: "agent_start_failed", detail: agentStart.detail, at: agentStart.at,
+		});
+	});
+
 	it("reports a final startup failure once AO gives up", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
 			phase: "failed",

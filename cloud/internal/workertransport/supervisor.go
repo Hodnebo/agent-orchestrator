@@ -125,6 +125,15 @@ type Supervisor struct {
 	// (worker.CapabilityPromptSettledOnAgentReady). One that fails is sent
 	// again before the forwarder claims a turn.
 	AgentReady func(context.Context) error
+	// AgentStartFailed, when set, reports that the terminal agent a switch to
+	// the terminal committed could not start, after a few attempts, so the
+	// session shows a startup error with a Retry (the workspace.checkout
+	// request, see retryFailedAgentStart). With a nil error it reports that
+	// the failure no longer stands: a retry started the agent, or a switch
+	// away cancelled the start.
+	AgentStartFailed func(context.Context, error)
+	// agentStartRetryDelay overrides defaultAgentStartRetryDelay (tests).
+	agentStartRetryDelay time.Duration
 
 	persistOnce              sync.Once
 	persist                  *persistentAgent
@@ -692,7 +701,12 @@ func (s *Supervisor) handle(
 		}
 		response = summary
 	case "workspace.checkout":
-		if s.RequestCheckout == nil {
+		// A session's Retry: a terminal agent start that failed after the
+		// workspace became ready tries again; otherwise the workspace's
+		// checkout and Setup do.
+		if s.retryFailedAgentStart() {
+			response = map[string]bool{"requested": true}
+		} else if s.RequestCheckout == nil {
 			err = errors.New("workspace checkout is unavailable")
 		} else {
 			err = s.RequestCheckout()

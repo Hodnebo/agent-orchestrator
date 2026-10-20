@@ -442,6 +442,15 @@ func run(logger *slog.Logger) error {
 			"version": workerVersion, "capabilities": workerCapabilities,
 		})
 	}
+	// A terminal agent a switch made during Setup that cannot start once the
+	// workspace is ready shows as the session's startup error, with a Retry.
+	transportSupervisor.AgentStartFailed = func(ctx context.Context, err error) {
+		if err == nil {
+			reportWorkspaceStartup(ctx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
+			return
+		}
+		reportWorkspaceStartup(ctx, logger, client, agentStartFailure(err))
+	}
 	// A Setup step counts as activity for its whole run, however quiet: idle
 	// pause must never stop a long Setup (one step may run for up to two
 	// hours) whose command prints nothing and waits on the network.

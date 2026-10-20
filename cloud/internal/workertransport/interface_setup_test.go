@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,11 @@ type setupSwitchHarness struct {
 	builds     atomic.Int32
 	ready      atomic.Int32
 	cleanups   atomic.Int32
+	// failBuilds fails that many agent command builds, as a credential that
+	// could not be read does.
+	failBuilds atomic.Int32
+	failuresMu sync.Mutex
+	failures   []error
 	chatReady  chan struct{}
 	cancel     context.CancelFunc
 	done       chan error
@@ -40,6 +46,10 @@ func newSetupSwitchHarness(t *testing.T, initial string) *setupSwitchHarness {
 		ChatRunner:  blockingChatRunner{started: make(chan struct{})},
 		StartupTask: true,
 		AgentCommandFactory: func(context.Context, string, string, string) (workerexec.Command, error) {
+			if h.failBuilds.Add(-1) >= 0 {
+				return workerexec.Command{}, errors.New("load coding-agent credential: control plane unavailable")
+			}
+			h.failBuilds.Store(0)
 			h.builds.Add(1)
 			return workerexec.Command{
 				Path: "/bin/sh", Args: []string{"-c", "echo started >> '" + h.marker + "'; sleep 30"},
@@ -47,6 +57,12 @@ func newSetupSwitchHarness(t *testing.T, initial string) *setupSwitchHarness {
 			}, nil
 		},
 		AgentReady: func(context.Context) error { h.ready.Add(1); return nil },
+		AgentStartFailed: func(_ context.Context, err error) {
+			h.failuresMu.Lock()
+			h.failures = append(h.failures, err)
+			h.failuresMu.Unlock()
+		},
+		agentStartRetryDelay: 10 * time.Millisecond,
 	}
 	h.supervisor.HoldAgentInputUntilWorkspaceReady()
 	go func() { h.done <- h.supervisor.Run(ctx) }()
@@ -380,5 +396,117 @@ func TestSecondSwitchToTerminalDuringSetupTakesTerminalInput(t *testing.T) {
 			h.supervisor.MarkWorkspaceReady()
 			h.waitForAgentStarts(t, 1)
 		})
+	}
+}
+
+// reported is what AgentStartFailed reported: an error for a failure, nil
+// for one that no longer stands.
+func (h *setupSwitchHarness) reported() []error {
+	h.failuresMu.Lock()
+	defer h.failuresMu.Unlock()
+	return append([]error(nil), h.failures...)
+}
+
+func (h *setupSwitchHarness) waitForReports(t *testing.T, want int) []error {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.reported()) < want && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	reports := h.reported()
+	if len(reports) != want {
+		t.Fatalf("AgentStartFailed reported %v, want %d reports", reports, want)
+	}
+	return reports
+}
+
+// retry is the session's Retry: the workspace.checkout request, on the loop.
+func (h *setupSwitchHarness) retry(t *testing.T) {
+	t.Helper()
+	if err := h.supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+		h.supervisor.handle(ctx, nil, &worker.TransportRequest{ID: "retry", Kind: "workspace.checkout"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A terminal start after Setup that fails once (the credential could not be
+// read) is tried again shortly and starts the agent, once, with nothing
+// reported.
+func TestFailedTerminalStartAfterSetupIsTriedAgain(t *testing.T) {
+	h := newSetupSwitchHarness(t, InterfaceChat)
+	h.switchTo(t, InterfaceTUI)
+	h.failBuilds.Store(1)
+	h.supervisor.MarkWorkspaceReady()
+	h.waitForAgentStarts(t, 1)
+	if reports := h.reported(); len(reports) != 0 {
+		t.Fatalf("a start that worked on its second attempt reported %v", reports)
+	}
+	if got := h.ready.Load(); got != 1 {
+		t.Fatalf("agent.ready reported %d times, want 1", got)
+	}
+}
+
+// A terminal start after Setup that keeps failing is reported, so the
+// session shows a startup error instead of a dead terminal. Its Retry starts
+// the agent and its task once, and clears the error.
+func TestLastingTerminalStartFailureIsReportedAndRetryStartsTheAgentOnce(t *testing.T) {
+	h := newSetupSwitchHarness(t, InterfaceChat)
+	h.switchTo(t, InterfaceTUI)
+	h.failBuilds.Store(agentStartAttempts)
+	h.supervisor.MarkWorkspaceReady()
+	reports := h.waitForReports(t, 1)
+	if reports[0] == nil || !strings.Contains(reports[0].Error(), "credential") {
+		t.Fatalf("reported %v, want the credential failure", reports[0])
+	}
+	if h.agentStarts() != 0 || h.supervisor.controllerReady(InterfaceTUI).Ready || h.ready.Load() != 0 {
+		t.Fatal("the terminal agent reads as started after its start failed")
+	}
+	// Input sent to the dead terminal meanwhile is kept for the agent.
+	if err := h.supervisor.writeTerminal(worker.TerminalCommand{
+		TerminalID: "00000000-0000-0000-0000-000000000061", Data: []byte("x"),
+	}); err != nil {
+		t.Fatalf("input while the start failed: %v", err)
+	}
+
+	h.retry(t)
+	h.waitForAgentStarts(t, 1)
+	if reports := h.waitForReports(t, 2); reports[1] != nil {
+		t.Fatalf("after the retry reported %v, want the failure cleared", reports[1])
+	}
+	if got := h.ready.Load(); got != 1 {
+		t.Fatalf("agent.ready reported %d times, want 1", got)
+	}
+	// A second Retry with nothing failed is the workspace's own.
+	h.retry(t)
+	h.waitForAgentStarts(t, 1)
+}
+
+// A switch back to Chat while the terminal start waits for a retry cancels it
+// and clears the reported failure: the session's task runs in Chat instead.
+func TestSwitchToChatAfterAFailedTerminalStartClearsTheFailure(t *testing.T) {
+	h := newSetupSwitchHarness(t, InterfaceChat)
+	h.switchTo(t, InterfaceTUI)
+	h.failBuilds.Store(agentStartAttempts)
+	h.supervisor.MarkWorkspaceReady()
+	h.waitForReports(t, 1)
+	err := h.supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+		if err := h.supervisor.stopInterface(ctx, "interrupt"); err != nil {
+			return err
+		}
+		return h.supervisor.startInterface(ctx, interfacePayload{TargetInterface: InterfaceChat})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reports := h.waitForReports(t, 2); reports[1] != nil {
+		t.Fatalf("after the switch to Chat reported %v, want the failure cleared", reports[1])
+	}
+	h.retry(t)
+	time.Sleep(200 * time.Millisecond)
+	if got := h.agentStarts(); got != 0 {
+		t.Fatalf("terminal agent started %d times after the switch to Chat", got)
 	}
 }

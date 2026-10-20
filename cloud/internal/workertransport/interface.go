@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 )
 
 const (
@@ -188,15 +189,22 @@ func (s *Supervisor) stopInterface(ctx context.Context, policy string) error {
 			}
 		}
 		s.tuiHandoffClosing = true
-		if s.pendingTUIStart != nil {
-			// A switch away before the workspace became ready: the terminal
-			// agent never started, and now never does.
+		failureReported := false
+		if pending := s.pendingTUIStart; pending != nil {
+			// A switch away before the workspace became ready (or while the
+			// terminal agent's start failed): the terminal agent never
+			// started, and now never does.
+			failureReported = pending.reported
 			s.pendingTUIStart = nil
 			s.agentStarting = false
 			s.pendingAgentTerminalData = nil
 			s.pendingAgentTerminalSize = nil
 		}
 		s.mu.Unlock()
+		if failureReported && s.AgentStartFailed != nil {
+			// The start that failed no longer stands in the session's way.
+			s.AgentStartFailed(ctx, nil)
+		}
 		err := s.closeTerminalForInterfaceHandoff(ctx, id)
 		if err != nil {
 			s.mu.Lock()
@@ -252,35 +260,118 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 }
 
 // pendingTUIStart is a switch to the terminal committed while the workspace
-// was not ready yet. MarkWorkspaceReady starts it.
+// was not ready yet. MarkWorkspaceReady starts it. A start that fails is
+// tried again (attempts) and then waits for the session's Retry (failed); its
+// failure was reported to the control plane (reported). Guarded by s.mu.
 type pendingTUIStart struct {
 	input    interfacePayload
 	terminal worker.AgentTerminalResponse
+	attempts int
+	failed   bool
+	reported bool
 }
+
+// agentStartAttempts is how many times a terminal agent start that fails
+// (the coding-agent credential could not be read, the command could not be
+// built, the process did not start) is tried before it waits for a Retry.
+const agentStartAttempts = 3
+
+// defaultAgentStartRetryDelay is the pause before the second attempt; each
+// later one waits longer.
+const defaultAgentStartRetryDelay = 2 * time.Second
 
 // startPendingTUI starts the terminal agent a switch committed while the
 // workspace was not ready. It runs on Run's serial loop, queued by
-// MarkWorkspaceReady, so it never interleaves with an interface command; a
-// switch away from the terminal in the meantime cancelled it (stopInterface).
+// MarkWorkspaceReady (or a retry of a failed start), so it never interleaves
+// with an interface command; a switch away from the terminal in the meantime
+// cancelled it (stopInterface).
+//
+// A failed start is tried again after a short pause, and after
+// agentStartAttempts it is reported (AgentStartFailed) as the session's
+// startup error, whose Retry (retryFailedAgentStart) tries again. The
+// terminal stays reserved meanwhile, and the session's task with it: it runs
+// once, when a start succeeds (or in Chat, after a switch back).
 func (s *Supervisor) startPendingTUI(ctx context.Context) error {
 	s.mu.Lock()
 	pending := s.pendingTUIStart
-	s.pendingTUIStart = nil
+	ready := !s.holdAgentInput || s.workspaceReady
 	s.mu.Unlock()
-	if pending == nil || s.iface.Current() != InterfaceTUI {
+	if pending == nil || !ready {
 		return nil
 	}
-	if err := s.openTUIAgent(ctx, pending.input, pending.terminal); err != nil {
+	if s.iface.Current() != InterfaceTUI {
 		s.mu.Lock()
-		s.agentStarting = false
-		s.startupTaskAbandoned = true
-		s.pendingAgentTerminalData = nil
-		s.pendingAgentTerminalSize = nil
+		if s.pendingTUIStart == pending {
+			s.pendingTUIStart = nil
+		}
 		s.mu.Unlock()
-		s.Logger.Error("start the terminal agent after the workspace became ready", "error", err)
+		return nil
+	}
+	err := s.openTUIAgent(ctx, pending.input, pending.terminal)
+	s.mu.Lock()
+	if s.pendingTUIStart != pending {
+		s.mu.Unlock()
 		return err
 	}
-	return nil
+	if err == nil {
+		s.pendingTUIStart = nil
+		reported := pending.reported
+		s.mu.Unlock()
+		if reported && s.AgentStartFailed != nil {
+			s.AgentStartFailed(ctx, nil)
+		}
+		return nil
+	}
+	pending.attempts++
+	attempt := pending.attempts
+	lasting := attempt >= agentStartAttempts
+	if lasting {
+		pending.failed = true
+		pending.reported = true
+	}
+	delay := s.agentStartRetryDelay
+	s.mu.Unlock()
+	if !lasting {
+		if delay <= 0 {
+			delay = defaultAgentStartRetryDelay
+		}
+		s.Logger.Warn("start the terminal agent after the workspace became ready; trying again",
+			"attempt", attempt, "error", err)
+		time.AfterFunc(time.Duration(attempt)*delay, func() {
+			s.queueOnLoop(func(ctx context.Context) error {
+				s.mu.Lock()
+				current := s.pendingTUIStart == pending && !pending.failed
+				s.mu.Unlock()
+				if !current {
+					return nil
+				}
+				return s.startPendingTUI(ctx)
+			})
+		})
+		return err
+	}
+	s.Logger.Error("start the terminal agent after the workspace became ready; waiting for a retry", "error", err)
+	if s.AgentStartFailed != nil {
+		s.AgentStartFailed(ctx, err)
+	}
+	return err
+}
+
+// retryFailedAgentStart tries again a terminal agent start that failed and
+// waits for a retry (startPendingTUI), on Run's serial loop. It reports
+// whether there was one.
+func (s *Supervisor) retryFailedAgentStart() bool {
+	s.mu.Lock()
+	pending := s.pendingTUIStart
+	if pending == nil || !pending.failed {
+		s.mu.Unlock()
+		return false
+	}
+	pending.failed = false
+	pending.attempts = 0
+	s.mu.Unlock()
+	s.queueOnLoop(s.startPendingTUI)
+	return true
 }
 
 // openTUIAgent starts the terminal agent of a switch to the terminal on the
@@ -308,6 +399,11 @@ func (s *Supervisor) openTUIAgent(ctx context.Context, input interfacePayload, t
 		NextOutputSequence: terminal.NextOutputSequence,
 		Kind:               "agent",
 	}); err != nil {
+		// openTerminal ran the command's cleanup: the next start builds it
+		// again rather than reusing its removed launch files.
+		s.mu.Lock()
+		s.AgentCommand = workerexec.Command{}
+		s.mu.Unlock()
 		return err
 	}
 	s.mu.Lock()

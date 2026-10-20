@@ -333,6 +333,19 @@ func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
 	}
 }
 
+// agentStartFailure is the session startup error for a terminal agent that
+// a switch to the terminal made during Setup could not start once the
+// workspace was ready (Supervisor.AgentStartFailed), with what failed as the
+// detail.
+func agentStartFailure(err error) worker.WorkspaceStartupEvent {
+	return worker.WorkspaceStartupEvent{
+		Status:  worker.WorkspaceStartupFailed,
+		Code:    domain.WorkspaceStartupErrorAgentStart,
+		Message: "AO couldn't start the coding agent in the terminal. Select Retry on this session to try again.",
+		Detail:  activity.Excerpt(err.Error(), setupMessageOutputLimit),
+	}
+}
+
 // reportWorkspaceStartup tells the control plane whether the workspace is
 // ready for the agent, so a failure is shown on the session's startup screen
 // (and cleared once a retry succeeds). A control plane that predates the event

@@ -101,7 +101,7 @@ func (s *Store) ClearWorkspaceStartupError(
 // SQL literals (a constant, so the constant session select can use it).
 const workspaceStartupErrorCodesSQL = "'" + domain.WorkspaceStartupErrorCheckout + "', '" +
 	domain.WorkspaceStartupErrorWorkingDirectory + "', '" + domain.WorkspaceStartupErrorProjectSetup + "', '" +
-	domain.WorkspaceStartupErrorWorkingDirectoryOccupied + "'"
+	domain.WorkspaceStartupErrorWorkingDirectoryOccupied + "', '" + domain.WorkspaceStartupErrorAgentStart + "'"
 
 // workerBusyRecentSQL is how recently the worker's busy mark (last_busy_at,
 // written by MarkSandboxBusy on a busy heartbeat, every 20 seconds while a
