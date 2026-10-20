@@ -843,7 +843,7 @@
 	"mobile.keepAwake.lidIdle": "덮개를 닫은 상태의 깨어 있기가 시작되기를 기다리는 중입니다.",
 	"mobile.keepAwake.lidReason.starting": "덮개를 닫은 상태의 깨어 있기 기능을 준비하는 중…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS나 다른 도구가 이미 덮개 잠자기를 관리하고 있습니다. AO는 이 제어를 변경하지 않습니다.",
-	"mobile.keepAwake.lidReason.low_battery": "배터리가 10% 미만이어서 중지되었습니다. 충전한 뒤 이 옵션을 껐다가 다시 켜세요.",
+	"mobile.keepAwake.lidReason.low_battery": "배터리가 {{percent}}% 미만이어서 중지되었습니다. 충전한 뒤 이 옵션을 껐다가 다시 켜세요.",
 	"mobile.keepAwake.lidReason.critical_heat": "Mac을 식혀야 해서 중지되었습니다. 식은 뒤 이 옵션을 껐다가 다시 켜세요.",
 	"mobile.keepAwake.lidReason.battery_unknown": "배터리 상태를 읽을 수 없어 중지되었습니다. 이 옵션을 껐다가 다시 켜세요.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO가 정상 덮개 잠자기를 복원하지 못했습니다. 덮개를 열고 AO를 다시 시작하세요.",

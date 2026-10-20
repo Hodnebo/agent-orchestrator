@@ -45,12 +45,12 @@ const { mobileStatus } = vi.hoisted(() => ({
 	},
 }));
 
-const desktopWake = vi.hoisted(() => ({ active: false, lidActive: false, act: vi.fn() }));
+const desktopWake = vi.hoisted(() => ({ active: false, lidActive: false, stopBatteryPercent: 10, act: vi.fn() }));
 
 // This suite exercises the mobile UI; shared desktop/mobile ownership is
 // covered with the real useAwake hook in AwakeControl.test.tsx.
 vi.mock("../hooks/useAwake", () => ({
-	useAwake: () => ({ state: { active: desktopWake.active, lidActive: desktopWake.lidActive, sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: desktopWake.act, busy: false }),
+	useAwake: () => ({ state: { settings: { stopBatteryPercent: desktopWake.stopBatteryPercent }, active: desktopWake.active, lidActive: desktopWake.lidActive, sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: desktopWake.act, busy: false }),
 	awakeCapability: (_state: unknown, id: string) => ({ available: id === "idle" || !!mobileStatus.keepAwake?.lidSupported }),
 }));
 
@@ -111,6 +111,7 @@ beforeEach(() => {
 	window.localStorage.clear();
 	desktopWake.active = false;
 	desktopWake.lidActive = false;
+	desktopWake.stopBatteryPercent = 10;
 	desktopWake.act.mockReset().mockImplementation(async (action: { kind: string; request?: { lidClosed?: boolean } }) => {
 		if (action.kind === "start") {
 			desktopWake.active = true;
@@ -921,7 +922,8 @@ test("shows sidebar-owned closed-lid wake as active while mobile access is off",
 	expect(apiClient.POST).not.toHaveBeenCalled();
 });
 
-test("shows a latched low-battery stop without claiming native activation", async () => {
+test.each([10, 30])("shows a latched low-battery stop at the configured %s%% cutoff", async (percent) => {
+	desktopWake.stopBatteryPercent = percent;
 	mobileStatus.keepAwake = {
 		supported: true,
 		enabled: true,
@@ -934,7 +936,8 @@ test("shows a latched low-battery stop without claiming native activation", asyn
 	};
 	renderMobileSettings();
 	expect(await screen.findByRole("switch", { name: "Keep awake with lid closed" })).toBeChecked();
-	expect(screen.getByText(/Stopped below 10% battery/)).toBeInTheDocument();
+	expect(screen.getByText(new RegExp(`Stopped below ${percent}% battery`))).toBeInTheDocument();
+	expect(screen.getByTestId("mobile-lid-awake")).toHaveTextContent(`Stops below ${percent}% battery`);
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
 });
 

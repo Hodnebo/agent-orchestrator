@@ -7,6 +7,14 @@ import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./use
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
 type Change = { on: boolean; lidClosed?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
+// The overall wake reason also carries persistence, observation and recovery
+// failures that do not diagnose closed-lid wake.
+const lidReasons = new Set([
+	"starting", "system_managed", "low_battery", "critical_heat", "battery_unknown",
+	"recovery_failed", "native_failed", "display_failed", "helper_unavailable",
+	"setup_needed", "isolated_data_dir", "unsupported", "helper_missing",
+	"helper_upgrade_required", "setup_failed", "lease_failed",
+]);
 
 function lidSetupFailure(state: AwakeState | undefined) {
 	return [state?.reason, awakeCapability(state, "lid")?.reason].find(
@@ -53,7 +61,9 @@ export function useStayAwake(enabled = true) {
 	const lidActive = !!awake.state?.lidActive || !!mobile.data?.keepAwake?.lidActive;
 	// The desktop status reports its lid failure as the overall reason.
 	const lidReason = lidOn && !lidActive
-		? (desktopLid ? awake.state?.reason : mobile.data?.keepAwake?.lidReason) || undefined
+		? (desktopLid
+			? [awake.state?.reason, awakeCapability(awake.state, "lid")?.reason].find((reason) => reason && lidReasons.has(reason))
+			: mobile.data?.keepAwake?.lidReason) || undefined
 		: undefined;
 	// Status also includes recovery/lid errors unrelated to an inactive request.
 	const pauseReason = awake.state?.paused ? awake.state.reason : undefined;

@@ -843,7 +843,7 @@
 	"mobile.keepAwake.lidIdle": "正在等待合盖保持唤醒启动。",
 	"mobile.keepAwake.lidReason.starting": "正在准备合盖保持唤醒…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS 或其他工具已在管理合盖睡眠。AO 不会更改该控制。",
-	"mobile.keepAwake.lidReason.low_battery": "因电量低于 10% 而停止。请充电后关闭并重新开启此选项。",
+	"mobile.keepAwake.lidReason.low_battery": "因电量低于 {{percent}}% 而停止。请充电后关闭并重新开启此选项。",
 	"mobile.keepAwake.lidReason.critical_heat": "因 Mac 需要降温而停止。冷却后请关闭并重新开启此选项。",
 	"mobile.keepAwake.lidReason.battery_unknown": "无法读取电池状态，已停止。请关闭并重新开启此选项重试。",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO 无法恢复正常合盖睡眠。请打开盖子并重启 AO 以重试恢复。",

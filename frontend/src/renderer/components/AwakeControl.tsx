@@ -29,7 +29,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 				? t("awake.stopReason.battery_unknown", "Stopped because battery state could not be read. Turn Stay Awake off and on to retry.")
 				: "";
 	const lidReason = stay.lidReason
-		? t(`mobile.keepAwake.lidReason.${stay.lidReason}`, "Closed-lid keep awake is unavailable. Turn the option off and on to retry.")
+		? t(`mobile.keepAwake.lidReason.${stay.lidReason}`, "Closed-lid keep awake is unavailable. Turn the option off and on to retry.", { percent: stay.stopBatteryPercent })
 		: "";
 	const description = stay.error ?? (stay.starting
 		? t("awake.startingTooltip", "Starting Stay Awake…")

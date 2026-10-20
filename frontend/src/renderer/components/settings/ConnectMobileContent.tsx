@@ -843,6 +843,7 @@ function KeepAwakeRow({
 											? t(
 													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
 													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
+													{ percent: stopBatteryPercent },
 												)
 											: t("mobile.keepAwake.lidIdle", "Waiting for closed-lid wake to start.")}
 								</span>

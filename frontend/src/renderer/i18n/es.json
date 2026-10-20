@@ -851,7 +851,7 @@
 	"mobile.keepAwake.lidIdle": "Esperando a que se active la función con la tapa cerrada.",
 	"mobile.keepAwake.lidReason.starting": "Preparando la función con la tapa cerrada…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS u otra utilidad ya controla el reposo al cerrar la tapa. AO no cambia ese control.",
-	"mobile.keepAwake.lidReason.low_battery": "Se detuvo con menos del 10% de batería. Carga el Mac y desactiva y vuelve a activar esta opción.",
+	"mobile.keepAwake.lidReason.low_battery": "Se detuvo con menos del {{percent}}% de batería. Carga el Mac y desactiva y vuelve a activar esta opción.",
 	"mobile.keepAwake.lidReason.critical_heat": "Se detuvo porque el Mac necesita enfriarse. Después, desactiva y vuelve a activar esta opción.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Se detuvo porque no se pudo leer el estado de la batería. Desactiva y vuelve a activar esta opción.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO no pudo restaurar el reposo normal al cerrar la tapa. Abre la tapa y reinicia AO para reintentar.",

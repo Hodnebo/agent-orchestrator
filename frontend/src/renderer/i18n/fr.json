@@ -851,7 +851,7 @@
 	"mobile.keepAwake.lidIdle": "En attente du démarrage du maintien éveillé avec le capot fermé.",
 	"mobile.keepAwake.lidReason.starting": "Préparation du maintien éveillé avec le capot fermé…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS ou un autre utilitaire gère déjà la veille du capot. AO laisse ce contrôle inchangé.",
-	"mobile.keepAwake.lidReason.low_battery": "Arrêt sous 10 % de batterie. Rechargez le Mac, puis désactivez et réactivez cette option.",
+	"mobile.keepAwake.lidReason.low_battery": "Arrêt sous {{percent}} % de batterie. Rechargez le Mac, puis désactivez et réactivez cette option.",
 	"mobile.keepAwake.lidReason.critical_heat": "Arrêt car le Mac doit refroidir. Ensuite, désactivez et réactivez cette option.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Arrêt car l’état de la batterie est illisible. Désactivez et réactivez cette option.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO n’a pas pu restaurer la veille normale du capot. Ouvrez le capot et redémarrez AO pour réessayer.",

@@ -843,7 +843,7 @@
 	"mobile.keepAwake.lidIdle": "ふたを閉じた状態のスリープ防止が開始されるのを待っています。",
 	"mobile.keepAwake.lidReason.starting": "ふたを閉じた状態のスリープ防止を準備中…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS または別のツールがふたのスリープを管理しています。AO は変更しません。",
-	"mobile.keepAwake.lidReason.low_battery": "残量が 10% 未満になったため停止しました。充電後、この設定をオフにしてからオンにしてください。",
+	"mobile.keepAwake.lidReason.low_battery": "残量が {{percent}}% 未満になったため停止しました。充電後、この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.battery_unknown": "バッテリー状態を読み取れないため停止しました。この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.recovery_failed": "通常のふたのスリープを復元できませんでした。ふたを開き、AO を再起動してください。",

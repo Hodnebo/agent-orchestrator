@@ -338,6 +338,31 @@ describe("shared Stay Awake controls", () => {
 		await show();
 		expect(coffee()).toHaveAccessibleDescription(/closed-lid wake is not active\. macOS did not confirm the lid control/);
 	});
+	it.each(["persistence_failed", "observation_unavailable", "low_power_revocation_pending", "unknown_future_reason"])("does not mislabel %s as a lid failure", async (reason) => {
+		state.sessions = [awakeSession({ lidClosed: true })];
+		state.active = true;
+		state.reason = reason;
+		await show();
+		expect(coffee()).toHaveAccessibleDescription("This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.");
+		expect(coffee()).not.toHaveAccessibleDescription(/Closed-lid keep awake is unavailable/);
+	});
+	it("uses the lid capability reason when an unrelated overall failure masks it", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "setup_failed" });
+		state.sessions = [awakeSession({ lidClosed: true })];
+		state.active = true;
+		state.reason = "persistence_failed";
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/recovery helper could not be registered/);
+	});
+	it("uses the configured cutoff in a low-battery lid warning", async () => {
+		state.sessions = [awakeSession({ lidClosed: true })];
+		state.active = true;
+		state.reason = "low_battery";
+		state.settings.stopBatteryPercent = 30;
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/Stopped below 30% battery/);
+		expect(coffee()).not.toHaveAccessibleDescription(/10%/);
+	});
 	it("states the configured battery cutoff", async () => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
 		state.settings.stopBatteryPercent = 25;
@@ -443,6 +468,21 @@ describe("shared Stay Awake controls", () => {
 		expect(state.sessions.filter((s) => !s.endedAt)).toEqual([expect.objectContaining({ id: "idle" })]);
 		expect(state.active).toBe(true);
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+	});
+	it("pauses all automatic rules and replaces all owners when disabling a lid rule", async () => {
+		state.sessions = [awakeSession({ id: "timer", mode: "duration" }), awakeSession({ id: "agent", scope: "session", sessionId: "work" })];
+		state.rules = [{ id: "lid-rule", enabled: true, lidClosed: true }, { id: "idle-rule", enabled: true, lidClosed: false }] as AwakeState["rules"];
+		state.activeRules = ["lid-rule", "idle-rule"];
+		state.active = true;
+		state.lidActive = true;
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false"));
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/stop");
+		expect(state.paused).toBe(true);
+		expect(state.activeRules).toEqual([]);
+		expect(state.sessions.filter((s) => !s.endedAt)).toEqual([expect.objectContaining({ id: "new", scope: "ao", mode: "indefinite", lidClosed: false })]);
+		expect(state.active).toBe(true);
 	});
 	it("replaces a sidebar lid session with idle wake when closed-lid is turned off", async () => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });

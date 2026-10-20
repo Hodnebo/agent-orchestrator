@@ -840,7 +840,7 @@
 	"mobile.keepAwake.lidIdle": "Waiting for closed-lid wake to start.",
 	"mobile.keepAwake.lidReason.starting": "Starting closed-lid keep awake…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS or another utility already manages lid sleep. AO is leaving that control unchanged.",
-	"mobile.keepAwake.lidReason.low_battery": "Stopped below 10% battery. Charge your Mac, then turn this option off and on to restart.",
+	"mobile.keepAwake.lidReason.low_battery": "Stopped below {{percent}}% battery. Charge your Mac, then turn this option off and on to restart.",
 	"mobile.keepAwake.lidReason.critical_heat": "Stopped because the Mac needs to cool down. After it cools, turn this option off and on to restart.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Stopped because battery state could not be read. Turn this option off and on to retry.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO could not restore normal lid sleep. Open the lid and restart AO to retry recovery.",
