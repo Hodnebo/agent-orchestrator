@@ -65,11 +65,11 @@ export function useStayAwake(enabled = true) {
 				const deadline = Date.now() + 5_000;
 				while (!latest.active && !latest.paused && (!latest.reason || latest.reason === "starting" || latest.reason === "helper_unavailable") && Date.now() < deadline) {
 					await new Promise((resolve) => setTimeout(resolve, 500));
-					let timeout: ReturnType<typeof setTimeout> | undefined;
+					let timeout: number | undefined;
 					try {
 						const confirmed = await Promise.race([
 							cache.fetchQuery<AwakeState>({ queryKey: awakeQueryKey, staleTime: 0 }),
-							new Promise<undefined>((resolve) => { timeout = setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+							new Promise<undefined>((resolve) => { timeout = window.setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
 						]);
 						if (!confirmed) break;
 						latest = confirmed;
@@ -77,7 +77,7 @@ export function useStayAwake(enabled = true) {
 						// An unavailable status endpoint must not leave the controls busy.
 						break;
 					} finally {
-						clearTimeout(timeout);
+						window.clearTimeout(timeout);
 					}
 				}
 			};
