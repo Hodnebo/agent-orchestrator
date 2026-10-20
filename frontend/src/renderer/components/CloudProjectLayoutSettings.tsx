@@ -142,7 +142,7 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	// The working folder is where a Coder session checks the main repository
 	// out (or, run as the workspace user, the folder it adopts); show it for a
 	// bring-your-own Coder org, or while a value is stored so it can be cleared.
-	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder).data != null;
+	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder, project.orgId).data != null;
 	const showWorkingDirectory = (orgOwnsCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER) || saved.workingDirectory !== "";
 	// A Setup or Cleanup step runs in its repository's folder, so a repository a
 	// step still uses cannot be removed until that step is moved or deleted (the

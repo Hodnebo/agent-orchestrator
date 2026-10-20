@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 	evaluateCoderTemplateParameters: vi.fn(),
 	hasCoder: true,
 	orgCoder: { data: null, isLoading: false, isError: false } as { data: Record<string, unknown> | null | undefined; isLoading: boolean; isError: boolean },
+	orgCoderOrgIds: [] as (string | undefined)[],
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -26,7 +27,12 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ hasCoder: mocks.hasCoder }) }));
-vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => mocks.orgCoder }));
+vi.mock("../hooks/useOrgCoderConfig", () => ({
+	useOrgCoderConfig: (_enabled?: boolean, orgId?: string) => {
+		mocks.orgCoderOrgIds.push(orgId);
+		return mocks.orgCoder;
+	},
+}));
 
 const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "branch", displayName: "Base branch", description: "Checked out on boot.", type: "string", mutable: true, required: false, defaultValue: "main", order: 2 },
@@ -307,6 +313,14 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
 		expect(await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).toBeInTheDocument();
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("reads the Coder connection of the project's org", async () => {
+		mocks.orgCoderOrgIds = [];
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(mocks.orgCoderOrgIds.length).toBeGreaterThan(0);
+		expect(mocks.orgCoderOrgIds.every((orgId) => orgId === "org-1")).toBe(true);
 	});
 
 	it("warns for the default ao-worker when the org has no Coder connection of its own", async () => {

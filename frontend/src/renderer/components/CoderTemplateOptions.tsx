@@ -71,7 +71,8 @@ export function CoderTemplateOptions({
 	// session adopts the template's checkout (workspace user with reuse or a
 	// working folder). Stay quiet until the connection's mode is known; a
 	// disabled read (no own Coder connection) means the default ao-worker.
-	const orgCoder = useOrgCoderConfig();
+	// The project's org decides the mode, which need not be the signed-in org.
+	const orgCoder = useOrgCoderConfig(true, orgId);
 	const modeKnown = orgCoder.data !== undefined || (!orgCoder.isLoading && !orgCoder.isError);
 	const duplicates = modeKnown && !coderReusesTemplateCheckout(orgCoder.data ?? null, projectWorkingDirectory)
 		? duplicateCloneOptions(parameters, overrides, repositoryUrls)
