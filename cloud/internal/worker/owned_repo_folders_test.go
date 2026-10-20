@@ -183,9 +183,64 @@ func TestCleanupSkipsTheStepsOfARepositoryFolderThatIsNotAOs(t *testing.T) {
 			continue
 		}
 		if skipped.Status != ScriptStepSkipped || skipped.Repository != "billing" || skipped.Command != "touch volumes-removed" ||
-			skipped.Hint != ForeignRepoFolderHint("../billing") || skipped.LogPath != "" || skipped.ExitCode != nil {
+			skipped.Hint != ForeignRepoFolderHint(filepath.Join(filepath.Dir(workspace), "billing")) || skipped.LogPath != "" || skipped.ExitCode != nil {
 			t.Fatalf("skipped step = %+v", skipped)
 		}
+	}
+}
+
+// A skipped step's hint names the refused folder the same way in Setup and
+// in Cleanup: below the workspace user's home with "~/", else absolute. A
+// commands script from before folder markers names it beside the main
+// checkout.
+func TestSetupAndCleanupNameARefusedFolderAlike(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	workspace, _ := siblingLayout(t)
+	home := filepath.Dir(filepath.Dir(workspace))
+	t.Setenv(UserHomeEnv, home+"/")
+	commands := []string{domain.RepoScriptCommand("billing", "touch volumes-removed")}
+
+	setupData := t.TempDir()
+	if _, err := RecordOwnedRepoFolders(setupData, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &stepRecorder{}
+	runner := SetupRunner{DataDir: setupData, FirstStart: true, Publish: recorder.publish}
+	if _, ran := runner.Run(t.Context(), commands, workspace, scriptEnvironment(workspace)); !ran {
+		t.Fatal("setup did not run")
+	}
+	setupHint := finals(recorder.all())[1].Hint
+	want := ForeignRepoFolderHint("~/" + filepath.Base(filepath.Dir(workspace)) + "/billing")
+	if setupHint != want {
+		t.Fatalf("setup hint = %q, want %q", setupHint, want)
+	}
+
+	cleanupData := t.TempDir()
+	if _, err := RecordOwnedRepoFolders(cleanupData, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCleanupHook(cleanupData, commands, workspace, scriptEnvironment(workspace)); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(filepath.Join(cleanupData, CleanupHookFile)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook: %v (%s)", err, output)
+	}
+	events := CleanupStepEvents(string(output), CleanupRun{RunID: "r", StartedAt: time.Now()})
+	if len(events) != 1 || events[0].Status != ScriptStepSkipped || events[0].Hint != setupHint {
+		t.Fatalf("cleanup events = %+v, want the hint %q", events, setupHint)
+	}
+	if strings.Contains(string(output), cleanupUserHomeEnv) {
+		t.Fatalf("the hook printed its internal variable: %s", output)
+	}
+
+	// An older commands script prints no folder marker.
+	nonce := NewScriptMarkerNonce()
+	older := "@@ao-step-" + nonce + " 1 1 skip " + scriptSkipForeignFolder + " billing touch volumes-removed\n"
+	if events := CleanupStepEvents(older, CleanupRun{RunID: "r"}); len(events) != 1 || events[0].Hint != ForeignRepoFolderHint("../billing") {
+		t.Fatalf("older script events = %+v", events)
 	}
 }
 

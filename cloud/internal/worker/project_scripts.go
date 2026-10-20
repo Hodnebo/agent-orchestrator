@@ -518,6 +518,17 @@ func CleanupCommandsScript(steps []string, nonce string) string {
 		// Coder template's, and no step runs in it. The steps never see it.
 		script.WriteString("ao_owned_only=${" + ownedRepoFoldersEnv + ":-}\nunset " + ownedRepoFoldersEnv + "\n" +
 			"ao_foreign() { [ -L \"$1\" ] || { [ -e \"$1\" ] && { ! [ -d \"$1\" ] || ! [ -O \"$1\" ]; }; }; }\n")
+		// ao_shown REPOSITORY names that repository's folder beside the main
+		// checkout as Setup does (DisplayPath): absolute, or below the
+		// workspace user's home (cleanupUserHomeEnv) with "~/".
+		script.WriteString("ao_user_home=${" + cleanupUserHomeEnv + ":-}\nunset " + cleanupUserHomeEnv + "\n" +
+			"while [ \"${ao_user_home%/}\" != \"$ao_user_home\" ]; do ao_user_home=${ao_user_home%/}; done\n" +
+			"ao_shown() {\n" +
+			"  ao_parent=$(dirname \"$(pwd)\"); [ \"$ao_parent\" = / ] && ao_parent=\n" +
+			"  ao_path=$ao_parent/$1\n" +
+			"  case \"$ao_user_home\" in /?*) case \"$ao_path\" in \"$ao_user_home\"/*) ao_path=\"~/${ao_path#\"$ao_user_home\"/}\" ;; esac ;; esac\n" +
+			"  printf '%s' \"$ao_path\"\n" +
+			"}\n")
 	}
 	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
@@ -529,6 +540,7 @@ func CleanupCommandsScript(steps []string, nonce string) string {
 		}
 		if guarded {
 			script.WriteString("if [ \"$ao_owned_only\" = 1 ] && ao_foreign " + shellQuote("../"+repository) + "; then\n" +
+				"  printf '%s %s\\n' " + shellQuote(marker+step+" "+total+" folder") + " \"$(ao_shown " + shellQuote(repository) + ")\"\n" +
 				"  printf '%s\\n' " + shellQuote(marker+step+" "+total+" skip "+scriptSkipForeignFolder+" "+repository+" "+summary) + "\n" +
 				"else\n")
 		}
@@ -594,6 +606,11 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	sort.Strings(keys)
 	for _, key := range keys {
 		content.WriteString("export " + key + "=" + shellQuote(values[key]) + "\n")
+	}
+	if home := strings.TrimSpace(os.Getenv(UserHomeEnv)); home != "" {
+		// The commands script names a skipped step's folder below it with
+		// "~/", as Setup does (CleanupCommandsScript).
+		content.WriteString("export " + cleanupUserHomeEnv + "=" + shellQuote(home) + "\n")
 	}
 	if OwnedRepoFoldersOnly(dataDir) {
 		// The commands script skips an additional repository's step whose

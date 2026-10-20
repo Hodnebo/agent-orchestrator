@@ -20,11 +20,15 @@ import (
 //	@@ao-step-<nonce> log <path>
 //	@@ao-step-<nonce> <n> <total> start <epochMs> <repository or /> <command>
 //	@@ao-step-<nonce> <n> <total> end <exitCode> <durationMs> [<timeoutSeconds>]
+//	@@ao-step-<nonce> <n> <total> folder <folder>
 //	@@ao-step-<nonce> <n> <total> skip <reason> <repository> <command>
 //
 // A skip marker stands for a step the script did not run, for reason: so far
 // only scriptSkipForeignFolder, an additional repository's folder that is not
-// AO's (ForeignRepoFolderHint).
+// AO's (ForeignRepoFolderHint). The folder marker before it names that folder
+// as Setup's skip names it: absolute, or below the workspace user's home with
+// "~/" (DisplayPath). A script from before folder markers prints none; its
+// folder is named relative to the main checkout.
 //
 // A script from before per-step time limits leaves the timeout out; its steps
 // had ProjectScriptStepTimeout.
@@ -43,6 +47,10 @@ const (
 	// checkouts must be AO's own (OwnedRepoFoldersOnly), makes its commands
 	// script skip the steps of an additional repository whose folder is not.
 	ownedRepoFoldersEnv = "AO_CLEANUP_OWNED_REPO_FOLDERS_ONLY"
+	// cleanupUserHomeEnv, set by a Cleanup hook to the workspace login user's
+	// home (UserHomeEnv) when the worker knows it, lets its commands script
+	// name a skipped step's folder below it with "~/", as Setup does.
+	cleanupUserHomeEnv = "AO_CLEANUP_USER_HOME"
 )
 
 var (
@@ -156,6 +164,8 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		return 0
 	}
 	steps := map[int]*cleanupStep{}
+	// The folder markers' folders, by step.
+	folders := map[int]string{}
 	var current *cleanupStep
 	var preamble, trailer strings.Builder
 	logPath, total, lastFinished := "", 0, 0
@@ -228,6 +238,8 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		}
 		total = max(total, count)
 		switch fields[2] {
+		case "folder":
+			folders[step] = activity.Truncate(strings.TrimSpace(rest), 1024)
 		case "start":
 			if current != nil && !current.finished {
 				// A start without the previous step's end: that step stopped
@@ -259,7 +271,11 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				skipped.event.Command = boundScriptCommand(redactor.redactCommand(parts[2]))
 			}
 			if parts[0] == scriptSkipForeignFolder && skipped.event.Repository != "" {
-				skipped.event.Hint = ForeignRepoFolderHint("../" + skipped.event.Repository)
+				folder := folders[step]
+				if folder == "" {
+					folder = "../" + skipped.event.Repository
+				}
+				skipped.event.Hint = ForeignRepoFolderHint(folder)
 			}
 			steps[step] = skipped
 			current, lastFinished = nil, step
