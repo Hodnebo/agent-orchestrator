@@ -69,7 +69,9 @@ type Options struct {
 	// recovery_required handoff asks its worker to prove a controller is live.
 	// Each failed attempt doubles the wait, from the base up to the max, so a
 	// session whose worker is gone (paused, or never coming back) is not asked
-	// on every tick.
+	// on every tick. The max stays short: the handoff holds the session's
+	// prompts, and a worker that comes back with the same epoch (a resumed VM)
+	// waits out at most one interval.
 	RecoveryRetryBase time.Duration
 	RecoveryRetryMax  time.Duration
 	Logger            *slog.Logger
@@ -85,7 +87,7 @@ const (
 	// plane, so a turn that is just starting is never mistaken for idle.
 	defaultUnverifiedIdleLimit = 30 * time.Second
 	defaultRecoveryRetryBase   = 2 * time.Second
-	defaultRecoveryRetryMax    = 5 * time.Minute
+	defaultRecoveryRetryMax    = 30 * time.Second
 )
 
 // SessionTerminatedCode fails a handoff whose session was deleted before it
@@ -113,11 +115,12 @@ type Coordinator struct {
 	now             func() time.Time
 }
 
-// recoveryRetry is when a failed recovery may next be attempted, and the wait
-// after the attempt that failed.
+// recoveryRetry is when a failed recovery may next be attempted, the wait
+// after the attempt that failed, and the session's live worker epoch then.
 type recoveryRetry struct {
 	next  time.Time
 	delay time.Duration
+	epoch int64
 }
 
 // New creates an interface handoff coordinator.
@@ -411,21 +414,33 @@ func (c *Coordinator) retryRecoveryLater(transition postgres.CoordinatedInterfac
 	if errors.Is(err, errCoordinationLost) {
 		return err
 	}
+	if errors.Is(err, errPendingWorkerCommand) {
+		// A worker answering slowly is there: try again on the next tick.
+		delete(c.recoveryRetries, transition.ID)
+		return err
+	}
 	delay := c.options.RecoveryRetryBase
-	if previous, ok := c.recoveryRetries[transition.ID]; ok {
+	if previous, ok := c.recoveryRetries[transition.ID]; ok && previous.epoch == transition.LiveWorkerEpoch {
 		delay = min(previous.delay*2, c.options.RecoveryRetryMax)
 	}
-	c.recoveryRetries[transition.ID] = recoveryRetry{next: c.now().Add(delay), delay: delay}
+	c.recoveryRetries[transition.ID] = recoveryRetry{next: c.now().Add(delay), delay: delay, epoch: transition.LiveWorkerEpoch}
 	return fmt.Errorf("recover controller (next attempt in %s): %w", delay, err)
 }
 
 // waitingToRetryRecovery reports a recovery whose next attempt is not due yet.
+// A session whose live worker epoch changed since the failed attempt (a new
+// worker connected, or the last one went away) is tried at once, starting its
+// backoff over.
 func (c *Coordinator) waitingToRetryRecovery(transition postgres.CoordinatedInterfaceTransition) bool {
 	if transition.Phase != domain.SessionInterfaceTransitionRecovery || transition.SessionTerminated {
 		delete(c.recoveryRetries, transition.ID)
 		return false
 	}
 	retry, ok := c.recoveryRetries[transition.ID]
+	if ok && retry.epoch != transition.LiveWorkerEpoch {
+		delete(c.recoveryRetries, transition.ID)
+		return false
+	}
 	return ok && c.now().Before(retry.next)
 }
 

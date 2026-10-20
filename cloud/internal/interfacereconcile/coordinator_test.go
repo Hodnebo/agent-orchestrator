@@ -944,3 +944,56 @@ func TestReconcileDrainFailureRecoveryVerifiesUncommittedSource(t *testing.T) {
 		t.Fatalf("drain recovery committed an interface: %q", store.committed)
 	}
 }
+
+// The backoff is capped at about 30 seconds by default: a recovery holds the
+// session's prompts, so a worker back with the same epoch waits at most that.
+func TestRecoveryBackoffDefaultCapIsShort(t *testing.T) {
+	coordinator := New(&fakeStore{}, &fakeDriver{}, Options{})
+	if got := coordinator.options.RecoveryRetryMax; got > 30*time.Second || got < coordinator.options.RecoveryRetryBase {
+		t.Fatalf("default recovery backoff cap = %s, want at most 30s", got)
+	}
+}
+
+// A recovery backing off tries again at once when the session's live worker
+// epoch changes (a new worker connected), and a slow but answering worker
+// (a pending command) is not backed off at all.
+func TestReconcileRecoveryRetriesAtOnceForANewWorkerAndNeverBacksOffAPendingOne(t *testing.T) {
+	store := &fakeStore{transitions: []postgres.CoordinatedInterfaceTransition{testTransition(domain.SessionInterfaceTransitionRecovery)}}
+	driver := &fakeDriver{readyErr: errors.New("dispatch interface.ready: worker unavailable")}
+	coordinator := New(store, driver, Options{
+		Interval: time.Millisecond, Logger: slog.New(slog.DiscardHandler),
+		RecoveryRetryBase: 10 * time.Second, RecoveryRetryMax: 30 * time.Second,
+	})
+	now := time.Unix(1_800_000_000, 0)
+	coordinator.now = func() time.Time { return now }
+	pass := func(advance time.Duration, calls int, what string) {
+		t.Helper()
+		now = now.Add(advance)
+		if err := coordinator.ReconcileOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if driver.readyCalls != calls {
+			t.Fatalf("%s: readiness calls = %d, want %d", what, driver.readyCalls, calls)
+		}
+	}
+	pass(0, 1, "first attempt, no worker")
+	pass(time.Second, 1, "backing off")
+	store.transitions[0].LiveWorkerEpoch = 42
+	pass(time.Second, 2, "a new worker connected")
+	// Its failure starts the backoff over from the base.
+	pass(9*time.Second, 2, "backing off again from the base")
+	pass(time.Second, 3, "base backoff over")
+
+	driver.readyErr = errPendingWorkerCommand
+	pass(25*time.Second, 4, "attempt after the doubled backoff")
+	pass(500*time.Millisecond, 5, "pending command retried on the next tick")
+	pass(500*time.Millisecond, 6, "still pending, still not backed off")
+	if _, backedOff := coordinator.recoveryRetries[store.transitions[0].ID]; backedOff {
+		t.Fatal("a pending worker command left a backoff")
+	}
+	driver.readyErr = nil
+	pass(500*time.Millisecond, 7, "controller ready")
+	if store.transitions[0].Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("phase = %q, want completed", store.transitions[0].Phase)
+	}
+}

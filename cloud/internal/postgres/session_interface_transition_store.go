@@ -483,6 +483,11 @@ type CoordinatedInterfaceTransition struct {
 	// SessionTerminated reports that the session was deleted (archived) when
 	// the transition was claimed: no worker will ever run its handoff steps.
 	SessionTerminated bool
+	// LiveWorkerEpoch is the epoch of the session's connected worker when a
+	// recovery_required transition was claimed, or 0 when none is connected
+	// (read for recovery only). A new epoch means a new worker came back, so a
+	// recovery waiting out its backoff tries again at once.
+	LiveWorkerEpoch int64
 }
 
 // ClaimCoordinatedInterfaceTransitions atomically claims one active or
@@ -574,7 +579,28 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				SessionTerminated:          terminated,
 			})
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		for index := range transitions {
+			transition := &transitions[index]
+			if transition.Phase != domain.SessionInterfaceTransitionRecovery {
+				continue
+			}
+			// Worker connections are tenant rows: read them in the
+			// transition's tenant.
+			if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, transition.OrgID); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(epoch), 0)
+				FROM ao_worker_connections
+				WHERE org_id = $1 AND session_id = $2 AND disconnected_at IS NULL`,
+				transition.OrgID, transition.SessionID).Scan(&transition.LiveWorkerEpoch); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
