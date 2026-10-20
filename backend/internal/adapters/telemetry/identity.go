@@ -103,9 +103,9 @@ func freshInstall(dataDir string) bool {
 	return err == nil && time.Since(info.ModTime()) < 24*time.Hour
 }
 
-// OptedOut reports whether the user switched telemetry off. The queue gate,
-// dequeue gate and each send attempt read the marker separately so an opt-out
-// between those stages stops export without a cache delay.
+// OptedOut reports whether the user switched telemetry off. Queue admission
+// and each send attempt read the marker so an opt-out stops export without a
+// cache delay.
 func (i *Identity) OptedOut() bool {
 	_, err := os.Stat(i.optOutPath)
 	return err == nil
@@ -213,4 +213,15 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
 	}
 	return snap
+}
+
+// eventAttributes avoids another marker read while constructing an export.
+// The sender checks ExportSuppressed immediately before each HTTP attempt.
+func (i *Identity) eventAttributes() (cloudUserID, githubLogin string) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if i.persistFailed {
+		return "", ""
+	}
+	return i.cloudUserID, i.githubLogin
 }

@@ -367,10 +367,6 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 func (s *PostHogSink) loop() {
 	defer s.wg.Done()
 	for ev := range s.ch {
-		// Re-check: the user may have opted out while this event was queued.
-		if s.suppressed() {
-			continue
-		}
 		s.send(s.ctx, ev)
 	}
 }
@@ -545,10 +541,10 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 func (s *PostHogSink) stampIdentity(props map[string]any) {
 	var uid string
 	if s.ident != nil {
-		snap := s.ident.Snapshot()
-		uid = snap.CloudUserID
-		if _, ok := props["github_actor"]; !ok && snap.GitHubLogin != "" {
-			props["github_actor"] = snap.GitHubLogin
+		var login string
+		uid, login = s.ident.eventAttributes()
+		if _, ok := props["github_actor"]; !ok && login != "" {
+			props["github_actor"] = login
 		}
 	}
 	actor, _ := props["github_actor"].(string)

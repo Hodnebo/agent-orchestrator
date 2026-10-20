@@ -376,6 +376,48 @@ func TestSendRechecksOptOutBeforeRetry(t *testing.T) {
 	}
 }
 
+func TestQueuedEventStopsAtSendGateAfterOptOut(t *testing.T) {
+	dir := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var attempts atomic.Int32
+	sink, err := NewPostHogSink(dir, "phc_test", "https://example.test", "", "", roundTripClient(func(_ *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		_ = sink.Close(context.Background())
+	}()
+	sink.Emit(context.Background(), activeEvent())
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first send did not start")
+	}
+	sink.Emit(context.Background(), activeEvent())
+	if err := os.WriteFile(filepath.Join(dir, OptOutFile), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("HTTP attempts = %d, want 1 after opt-out", got)
+	}
+}
+
 func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 	dir := t.TempDir()
 	ident, err := NewIdentity(dir)
