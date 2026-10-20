@@ -156,8 +156,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return restoreSource(err, "could not publish target provider ownership")
 	}
 	if launchStore != nil {
-		// The note is saved with them until the target has it, so a relaunch after
-		// a crash in between still hands over instead of replaying the task.
+		// The note stays saved with them. A relaunch while the target has no native
+		// session to resume (it crashed first, or it is one that records none, such
+		// as deepseek-harness) hands over again instead of replaying the task.
 		targetLaunch.HandoffNote = request.HandoffNote
 		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
 			return restoreSource(err, "could not save the target's launch options")
@@ -168,12 +169,6 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		true, false, "", domain.SessionInterfaceTransitionHistoryStrict, &request.HandoffNote)
 	if err != nil {
 		return restoreSource(err, "target provider failed to start")
-	}
-	if launchStore != nil {
-		targetLaunch.HandoffNote = ""
-		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
-			m.logger.Warn("clear delivered handoff note", "session", id, "error", err)
-		}
 	}
 	if err := m.confirmTUISwitchTargetAlive(ctx, started.Session); err != nil {
 		// The target's terminal outlives it to keep its last output. It has to
