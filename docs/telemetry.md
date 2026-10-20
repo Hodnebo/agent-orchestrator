@@ -264,7 +264,7 @@ contract.
 ## Signing in to AO Cloud
 
 When you sign in to AO Cloud, the desktop app calls PostHog `identify` with your
-AO Cloud (WorkOS) user ID as the identity and sets three person properties:
+AO Cloud user ID as the identity and sets three person properties:
 `email`, `ao_cloud_user_id`, and `github_login`. The installation identifier is
 merged into that identity, so activity from this installation, its daemon, and a
 paired phone belongs to one person. Only the user ID and, once resolved, the

@@ -1,6 +1,6 @@
 // Package analytics sends the small set of server-side product events AO Cloud
 // emits (invites and, once billing exists, pricing and subscription events) to
-// PostHog. Every event is attributed to the signed-in WorkOS user ID, the same
+// PostHog. Every event is attributed to the signed-in AO Cloud user ID, the same
 // distinct ID the desktop passes to posthog.identify, so cloud events join the
 // desktop person. Email is never sent from here: it is set once, by the
 // desktop, as a person property at identify time.

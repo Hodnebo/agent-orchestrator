@@ -304,13 +304,18 @@ func Run() error {
 			"agent": cfg.Agent,
 		},
 	})
-	if fresh, ok := telemetryIdentity.(interface{ FreshInstall() bool }); ok && fresh.FreshInstall() {
-		telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.app.installed",
-			Source:     "daemon",
-			OccurredAt: time.Now().UTC(),
-			Level:      ports.TelemetryLevelInfo,
-		})
+	if install, ok := telemetryIdentity.(interface{ MarkInstalledEvent() (bool, error) }); ok && cfg.Telemetry.Events {
+		marked, err := install.MarkInstalledEvent()
+		if err != nil {
+			log.Warn("record telemetry install event", "error", err)
+		} else if marked {
+			telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
+				Name:       "ao.app.installed",
+				Source:     "daemon",
+				OccurredAt: time.Now().UTC(),
+				Level:      ports.TelemetryLevelInfo,
+			})
+		}
 	}
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the

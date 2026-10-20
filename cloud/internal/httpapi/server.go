@@ -818,8 +818,8 @@ func (s *Server) capture(r *http.Request, event string, props map[string]any) {
 	if s.analytics == nil {
 		return
 	}
-	if p := principalFrom(r); p.Provider == "workos" && p.ExternalID != "" {
-		s.analytics.Capture(p.ExternalID, event, props)
+	if p := principalFrom(r); p.Provider == "workos" && p.UserID != "" {
+		s.analytics.Capture(p.UserID, event, props)
 	}
 }
 

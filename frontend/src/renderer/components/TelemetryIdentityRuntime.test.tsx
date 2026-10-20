@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const hooks = vi.hoisted(() => ({
 	session: null as unknown,
 	status: "authenticated" as string,
-	setCloudUser: vi.fn(async (_id: string | null) => true),
+	setCloudUser: vi.fn(async (_id: string | null): Promise<boolean | "unsupported"> => true),
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
 }));
@@ -138,6 +138,17 @@ describe("TelemetryIdentityRuntime", () => {
 		});
 		expect(calls).toBe(attemptsInSchedule + 3); // acknowledged on the next attempt, then it stops
 		expect(hooks.identifyCloudUser).not.toHaveBeenCalled();
+	});
+
+	it("stops retrying a sign-out when the daemon does not support the identity route", async () => {
+		vi.useFakeTimers();
+		hooks.session = null;
+		hooks.setCloudUser.mockResolvedValue("unsupported");
+		render(<TelemetryIdentityRuntime />);
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(BINDING_RETRY_MS.reduce((a, b) => a + b, 0) * 3);
+		});
+		expect(hooks.setCloudUser).toHaveBeenCalledTimes(1);
 	});
 
 	it("still gives up on a sign-in after the schedule", async () => {

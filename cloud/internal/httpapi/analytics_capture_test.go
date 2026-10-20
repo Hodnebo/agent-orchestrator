@@ -28,16 +28,16 @@ func TestCaptureReportsOnlyWorkOSUsers(t *testing.T) {
 	spy := &spySink{}
 	s := &Server{analytics: spy}
 
-	s.capture(requestAs(domain.Principal{Provider: "workos", ExternalID: "user_01H", Email: "me@example.com"}), "invite.sent", map[string]any{"role": "member"})
+	s.capture(requestAs(domain.Principal{Provider: "workos", UserID: "ao_user_01H", ExternalID: "workos_user_02H", Email: "me@example.com"}), "invite.sent", map[string]any{"role": "member"})
 	s.capture(requestAs(domain.Principal{Provider: "local", ExternalID: "dev"}), "invite.sent", nil)
-	s.capture(requestAs(domain.Principal{Provider: "workos"}), "invite.sent", nil)
+	s.capture(requestAs(domain.Principal{Provider: "workos", ExternalID: "workos_only"}), "invite.sent", nil)
 	s.capture(httptest.NewRequest(http.MethodPost, "/", nil), "invite.sent", nil)
 
-	if len(spy.events) != 1 || spy.ids[0] != "user_01H" {
-		t.Fatalf("captured ids=%v events=%v, want exactly the WorkOS user", spy.ids, spy.events)
+	if len(spy.events) != 1 || spy.ids[0] != "ao_user_01H" {
+		t.Fatalf("captured ids=%v events=%v, want exactly the AO Cloud user ID", spy.ids, spy.events)
 	}
 	if _, ok := spy.props[0]["email"]; ok {
 		t.Fatal("email must not be passed to analytics")
 	}
-	(&Server{}).capture(requestAs(domain.Principal{Provider: "workos", ExternalID: "u"}), "invite.sent", nil) // nil sink is a no-op
+	(&Server{}).capture(requestAs(domain.Principal{Provider: "workos", UserID: "u"}), "invite.sent", nil) // nil sink is a no-op
 }

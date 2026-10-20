@@ -28,6 +28,8 @@ const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
  */
 export class TelemetryIdentityController {
 	private cloudUserId: string | null = null;
+	// The renderer has not resolved its Cloud session until the first hand-off.
+	private known = false;
 	private pushed = true;
 	// Bumped whenever the daemon's copy goes stale (restart, or a new user), so an
 	// in-flight hand-off to the previous daemon cannot mark the new one as synced.
@@ -36,6 +38,7 @@ export class TelemetryIdentityController {
 	// recorded. Tracked apart from `pushed`, which also stops retrying against an
 	// older daemon that has no such route.
 	private ackedGeneration = -1;
+	private unsupportedGeneration = -1;
 	// Hand-offs run one at a time. A request cannot be recalled once sent, so two
 	// in flight could commit in the opposite order and leave the daemon on the
 	// older user; queued runs always send the latest state when their turn comes.
@@ -75,13 +78,15 @@ export class TelemetryIdentityController {
 	 * that binding, or a later sign-out could not retire the ID. Unreachable
 	 * daemon, an error response or a superseding call all resolve false.
 	 */
-	async setCloudUser(userId: string | null): Promise<boolean> {
+	async setCloudUser(userId: string | null): Promise<boolean | "unsupported"> {
 		if (userId !== null && !CLOUD_USER_ID_PATTERN.test(userId)) throw new Error("invalid cloud user id");
+		this.known = true;
 		this.cloudUserId = userId;
 		this.pushed = false;
 		const mine = ++this.generation;
 		await this.flush();
-		return this.ackedGeneration === mine;
+		if (this.ackedGeneration === mine) return true;
+		return this.unsupportedGeneration === mine ? "unsupported" : false;
 	}
 
 	/**
@@ -90,6 +95,7 @@ export class TelemetryIdentityController {
 	 * the next ready transition must replay the signed-in user.
 	 */
 	invalidate(): void {
+		if (!this.known) return;
 		this.pushed = false;
 		this.generation++;
 	}
@@ -108,7 +114,7 @@ export class TelemetryIdentityController {
 	}
 
 	private async flushOnce(): Promise<void> {
-		if (this.pushed) return;
+		if (!this.known || this.pushed) return;
 		const base = this.origin();
 		if (!base) return;
 		const sent = this.cloudUserId ?? "";
@@ -128,8 +134,10 @@ export class TelemetryIdentityController {
 						continue;
 					}
 				}
-				this.pushed = response.ok || response.status === 404 || response.status === 405;
+				const unsupported = response.status === 404 || response.status === 405;
+				this.pushed = response.ok || unsupported;
 				if (response.ok) this.ackedGeneration = generation;
+				if (unsupported) this.unsupportedGeneration = generation;
 				return;
 			}
 		} catch {

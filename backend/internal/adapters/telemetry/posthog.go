@@ -250,7 +250,7 @@ type PostHogSink struct {
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
-	// setKey is the last identity the identified person `$set` was sent for, so
+	// setKey is the last identity whose person `$set` send succeeded, so
 	// it goes out once per identity change rather than on every event. See
 	// properties().
 	setMu  sync.Mutex
@@ -426,6 +426,13 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
+			if _, hasSet := props["$set"]; hasSet {
+				actor, _ := props["github_actor"].(string)
+				uid, _ := props["ao_cloud_user_id"].(string)
+				s.setMu.Lock()
+				s.setKey = actor + "|" + uid
+				s.setMu.Unlock()
+			}
 			return
 		}
 		if !retryable || attempt == postHogSendMaxAttempts {
@@ -557,7 +564,6 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	key := actor + "|" + uid
 	s.setMu.Lock()
 	changed := key != s.setKey
-	s.setKey = key
 	s.setMu.Unlock()
 	if !changed {
 		return

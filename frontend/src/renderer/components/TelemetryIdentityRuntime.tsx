@@ -39,9 +39,10 @@ export function TelemetryIdentityRuntime() {
 				const delay = attempt === 0 ? 0 : BINDING_RETRY_MS[Math.min(attempt, BINDING_RETRY_MS.length) - 1];
 				if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 				if (cancelled) return;
-				const acknowledged = await Promise.resolve(aoBridge.telemetry.setCloudUser(userId)).catch(() => false);
+				const result = await Promise.resolve(aoBridge.telemetry.setCloudUser(userId)).catch(() => false);
 				if (cancelled) return;
-				if (acknowledged) {
+				if (result === "unsupported" && !userId) return;
+				if (result === true) {
 					if (userId) await identifyCloudUser({ id: userId, email });
 					return;
 				}

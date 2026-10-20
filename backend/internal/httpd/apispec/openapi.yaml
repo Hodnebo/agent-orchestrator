@@ -11937,7 +11937,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ControllersTelemetryIdentityResponse'
+                $ref: '#/components/schemas/TelemetryIdentityResponse'
           description: OK
         "501":
           content:
@@ -14760,20 +14760,6 @@ components:
           type: boolean
       required:
       - enabled
-      type: object
-    ControllersTelemetryIdentityResponse:
-      properties:
-        cloudUserId:
-          type: string
-        distinctId:
-          type: string
-        githubLogin:
-          type: string
-        optedOut:
-          type: boolean
-      required:
-      - distinctId
-      - optedOut
       type: object
     ControllersUpdateCloudOfferingRequest:
       properties:
@@ -20100,6 +20086,20 @@ components:
       required:
       - ready
       - requirements
+      type: object
+    TelemetryIdentityResponse:
+      properties:
+        cloudUserId:
+          type: string
+        distinctId:
+          type: string
+        githubLogin:
+          type: string
+        optedOut:
+          type: boolean
+      required:
+      - distinctId
+      - optedOut
       type: object
     TrackerIntakeConfig:
       properties:

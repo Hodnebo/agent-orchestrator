@@ -20,7 +20,8 @@ import (
 const OptOutFile = "telemetry_opt_out"
 
 const (
-	installIDFile = "telemetry_install_id"
+	installIDFile      = "telemetry_install_id"
+	installedEventFile = "telemetry_installed_emitted"
 	// boundUserFile remembers which AO Cloud user the install ID may be linked
 	// to. The desktop identify() merges the install ID into that person for good,
 	// so once the user changes or signs out the ID is retired.
@@ -64,11 +65,37 @@ func NewIdentity(dataDir string) (*Identity, error) {
 // install, the one moment ao.app.installed is emitted.
 func (i *Identity) FreshInstall() bool { return i.fresh }
 
-// freshInstall is true when no event has ever been exported (the tenure file is
-// written on the first one) and the install ID was created in the last day. The
-// age check keeps an upgrade from a build that predates tenure from counting
-// as a new install.
+// MarkInstalledEvent reserves the one install event before it enters the
+// best-effort queue. A restart cannot emit it again if the queued send is lost.
+func (i *Identity) MarkInstalledEvent() (bool, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.fresh || i.OptedOut() {
+		return false, nil
+	}
+	file, err := os.OpenFile(filepath.Join(i.dataDir, installedEventFile), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if os.IsExist(err) {
+		i.fresh = false
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("mark telemetry install event: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return false, fmt.Errorf("close telemetry install event marker: %w", err)
+	}
+	i.fresh = false
+	return true, nil
+}
+
+// freshInstall is true when the install event has not been reserved, no event
+// has been exported, and the install ID was created in the last day. The age
+// check keeps an upgrade from a build that predates tenure from counting as a
+// new install.
 func freshInstall(dataDir string) bool {
+	if _, err := os.Stat(filepath.Join(dataDir, installedEventFile)); !os.IsNotExist(err) {
+		return false
+	}
 	if _, err := os.Stat(filepath.Join(dataDir, tenureStateFile)); err == nil {
 		return false
 	}
@@ -76,9 +103,9 @@ func freshInstall(dataDir string) bool {
 	return err == nil && time.Since(info.ModTime()) < 24*time.Hour
 }
 
-// OptedOut reports whether the user switched telemetry off.
-// ponytail: one stat per exported event, cached nowhere; events are rate
-// limited upstream, add an mtime cache if that ever stops being true.
+// OptedOut reports whether the user switched telemetry off. The queue gate,
+// dequeue gate and each send attempt read the marker separately so an opt-out
+// between those stages stops export without a cache delay.
 func (i *Identity) OptedOut() bool {
 	_, err := os.Stat(i.optOutPath)
 	return err == nil

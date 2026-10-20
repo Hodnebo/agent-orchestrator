@@ -67,6 +67,8 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if _, ok := set["email"]; ok {
 		t.Fatal("daemon must never $set email")
 	}
+	// The key advances only after the sender receives a successful response.
+	sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 
 	second := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if second["github_actor"] != "octocat" || second["ao_cloud_user_id"] != "user_01HABC" || second["$process_person_profile"] != true {
@@ -86,6 +88,43 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if _, ok := out["ao_cloud_user_id"]; ok {
 		t.Fatal("ao_cloud_user_id survived sign-out")
+	}
+}
+
+func TestPersonPropertiesAreRetriedAfterARejectedSend(t *testing.T) {
+	var sent []map[string]any
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		sent = append(sent, body)
+		status := http.StatusOK
+		if len(sent) == 1 {
+			status = http.StatusBadRequest
+		}
+		return &http.Response{StatusCode: status, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+	if err := sink.Identity().SetCloudUserID("user_A"); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		sink.send(context.Background(), ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
+	}
+	if len(sent) != 3 {
+		t.Fatalf("sends = %d, want 3", len(sent))
+	}
+	for index, wantSet := range []bool{true, true, false} {
+		props := sent[index]["properties"].(map[string]any)
+		_, hasSet := props["$set"]
+		if hasSet != wantSet {
+			t.Fatalf("send %d has $set = %t, want %t", index, hasSet, wantSet)
+		}
 	}
 }
 
@@ -168,6 +207,30 @@ func TestFreshInstallOnlyBeforeFirstExportedEvent(t *testing.T) {
 	upgraded, _ := NewIdentity(old)
 	if upgraded.FreshInstall() {
 		t.Fatal("upgrade counted as a new install")
+	}
+}
+
+func TestInstalledEventIsReservedOnceEvenWithoutAnExport(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marked, err := first.MarkInstalledEvent()
+	if err != nil || !marked {
+		t.Fatalf("first install mark = %t, %v", marked, err)
+	}
+	// No sender processed the queued event before this restart.
+	second, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.FreshInstall() {
+		t.Fatal("restart must not emit the install event again")
+	}
+	marked, err = second.MarkInstalledEvent()
+	if err != nil || marked {
+		t.Fatalf("second install mark = %t, %v", marked, err)
 	}
 }
 

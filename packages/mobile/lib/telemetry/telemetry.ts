@@ -21,7 +21,8 @@ export interface MobileTelemetryClient {
 
 /**
  * What a paired desktop reports at GET /api/v1/telemetry/identity. distinctId is
- * the AO Cloud user ID when the desktop is signed in, else its install ID. There
+ * the AO Cloud user ID when the desktop is signed in, else its install ID. The
+ * phone identifies only the Cloud ID; the install ID remains anonymous. There
  * is no email here by design: the desktop sets it once as a person property.
  */
 export type DesktopTelemetryIdentity = {
@@ -143,8 +144,17 @@ export function createMobileTelemetry(
 		if (optedOut || !identity.distinctId) return;
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin]);
 		if (key === adoptedKey) return;
+		const signedIn = Boolean(identity.cloudUserId);
+		if (identified && (!signedIn || adoptedId !== identity.distinctId)) {
+			// An account's identified SDK state cannot become another account's or
+			// a signed-out phone's anonymous identity.
+			client.reset();
+			void client.optIn();
+			void client.register(context);
+			adoptedId = null;
+		}
 		adoptedKey = key;
-		identified = true;
+		identified = signedIn;
 		// Registered properties merge in the SDK and the identify payload is built
 		// from the ones registered at that moment, so the new identity's properties
 		// go in first: a property it lacks (signed out, or a desktop with no GitHub
@@ -157,10 +167,10 @@ export function createMobileTelemetry(
 			if (!(name in props)) void client.unregister(name);
 		}
 		if (Object.keys(props).length > 0) void client.register(props);
-		if (adoptedId !== identity.distinctId) {
+		if (signedIn && adoptedId !== identity.distinctId) {
 			adoptedId = identity.distinctId;
-			// Same distinct id as the desktop (and its daemon), so the phone's events
-			// land on the person the desktop already identified.
+			// Only a signed-in Cloud ID is identified. An ins_ ID must remain
+			// anonymous so the desktop can later merge it into the Cloud person.
 			client.identify(identity.distinctId);
 		}
 	};

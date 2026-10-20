@@ -1049,6 +1049,9 @@ export async function initTelemetry(): Promise<boolean> {
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
 		posthog = await loadPostHog();
+		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
+		// both SDK initialization and the unconditional opt-in below.
+		if (analyticsOptedOut) return false;
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
 		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
 		// source of truth and the bootstrap is only handed out when it is absent.

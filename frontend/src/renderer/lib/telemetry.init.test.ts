@@ -248,4 +248,30 @@ describe("PostHog identity and opt-out", () => {
 		expect(posthogStub.init).not.toHaveBeenCalled();
 		expect(posthogStub.opt_in_capturing).not.toHaveBeenCalled();
 	});
+
+	it("honors an opt-out while the PostHog module is loading", async () => {
+		let releaseModule!: () => void;
+		let moduleStarted!: () => void;
+		const gate = new Promise<void>((resolve) => (releaseModule = resolve));
+		const started = new Promise<void>((resolve) => (moduleStarted = resolve));
+		vi.doMock("posthog-js/dist/module.full.no-external", async () => {
+			moduleStarted();
+			await gate;
+			return { default: posthogStub, PostHog: class {} };
+		});
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const { initTelemetry, applyAnalyticsOptOut } = await import("./telemetry");
+		const init = initTelemetry();
+		await started;
+		await applyAnalyticsOptOut(true);
+		releaseModule();
+		expect(await init).toBe(false);
+		expect(posthogStub.init).not.toHaveBeenCalled();
+		expect(posthogStub.opt_in_capturing).not.toHaveBeenCalled();
+	});
 });

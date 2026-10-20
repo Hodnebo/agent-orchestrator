@@ -5119,12 +5119,6 @@ export interface components {
         ControllersSetSessionAutoReviewRequest: {
             enabled: boolean;
         };
-        ControllersTelemetryIdentityResponse: {
-            cloudUserId?: string;
-            distinctId: string;
-            githubLogin?: string;
-            optedOut: boolean;
-        };
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
         };
@@ -7192,6 +7186,12 @@ export interface components {
             ready: boolean;
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
+        };
+        TelemetryIdentityResponse: {
+            cloudUserId?: string;
+            distinctId: string;
+            githubLogin?: string;
+            optedOut: boolean;
         };
         TrackerIntakeConfig: {
             assignee?: string;
@@ -22325,7 +22325,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControllersTelemetryIdentityResponse"];
+                    "application/json": components["schemas"]["TelemetryIdentityResponse"];
                 };
             };
             /** @description Not Implemented */

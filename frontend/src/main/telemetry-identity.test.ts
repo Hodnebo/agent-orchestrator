@@ -27,6 +27,16 @@ describe("TelemetryIdentityController opt-out", () => {
 });
 
 describe("TelemetryIdentityController cloud user hand-off", () => {
+	it("does not send a launch-time sign-out before the renderer resolves its session", async () => {
+		const { ctl, fetcher } = await controller();
+		ctl.invalidate();
+		await ctl.flush();
+		expect(fetcher).not.toHaveBeenCalled();
+		expect(await ctl.setCloudUser("user_A")).toBe(true);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		expect(JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string).cloudUserId).toBe("user_A");
+	});
+
 	it("posts only the user id to the loopback daemon", async () => {
 		const { ctl, fetcher } = await controller();
 		await ctl.setCloudUser("user_01HABC");
@@ -229,7 +239,7 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		expect(await noDaemon.ctl.setCloudUser("user_A")).toBe(false);
 		// An older daemon without the route cannot record a binding either.
 		const old = await controller(vi.fn(async () => new Response(null, { status: 404 })));
-		expect(await old.ctl.setCloudUser("user_A")).toBe(false);
+		expect(await old.ctl.setCloudUser("user_A")).toBe("unsupported");
 	});
 
 	it("A unavailable, sign-out, recovery: the daemon ends signed out and A was never acknowledged", async () => {

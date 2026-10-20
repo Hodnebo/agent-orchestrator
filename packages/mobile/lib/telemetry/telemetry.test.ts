@@ -125,6 +125,17 @@ describe("createMobileTelemetry", () => {
 			expect(captures[0].props?.$process_person_profile).toBe(false);
 		});
 
+		it("keeps an install ID anonymous so a later Cloud sign-in can merge its history", () => {
+			const { client, captures, calls } = fakeClient();
+			const t = createMobileTelemetry(client, {});
+			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(calls).not.toContain("identify:ins_abc");
+			expect(captures[0].props?.$process_person_profile).toBe(false);
+			t.adoptDesktopIdentity({ distinctId: "user_A", cloudUserId: "user_A", githubLogin: "octocat", optedOut: false });
+			expect(calls).toContain("identify:user_A");
+		});
+
 		it("opt-out stops capture, resets the SDK, persists, and is lifted by an opted-in desktop", () => {
 			const { client, captures, calls } = fakeClient();
 			const persisted: boolean[] = [];
@@ -133,10 +144,10 @@ describe("createMobileTelemetry", () => {
 			t.adoptDesktopIdentity({ optedOut: true });
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);
-			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["identify:ins_abc", "reset", "optOut"]);
+			expect(calls.filter((c) => !c.startsWith("unregister"))).toEqual(["reset", "optOut"]);
 
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", optedOut: false });
-			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn", "identify:ins_abc"]);
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(2)).toEqual(["optIn"]);
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toHaveLength(1);
 			expect(persisted).toEqual([true, false]);
@@ -156,7 +167,7 @@ describe("createMobileTelemetry", () => {
 
 			// A later sync after the daemon recovers adopts the replacement ID.
 			t.adoptDesktopIdentity({ distinctId: "ins_new", optedOut: false });
-			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn", "identify:ins_new"]);
+			expect(calls.filter((c) => !c.startsWith("unregister")).slice(3)).toEqual(["optIn"]);
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toHaveLength(1);
 		});
@@ -230,15 +241,19 @@ describe("createMobileTelemetry", () => {
 		});
 
 		it("removes the previous identity properties when the new identity lacks them", () => {
-			const { client, calls, registered } = fakeClient();
+			const { client, calls, registered, captures } = fakeClient();
 			const t = createMobileTelemetry(client, {});
 			t.adoptDesktopIdentity({ distinctId: "user_01H", cloudUserId: "user_01H", githubLogin: "octocat", optedOut: false });
 			calls.length = 0;
 			// Signed out: install id only, no user id, GitHub login still known.
 			t.adoptDesktopIdentity({ distinctId: "ins_abc", githubLogin: "octocat", optedOut: false });
+			expect(calls).toContain("reset");
+			expect(calls).not.toContain("identify:ins_abc");
 			expect(calls).toContain("unregister:ao_cloud_user_id");
 			expect(calls).not.toContain("unregister:github_actor");
 			expect(registered.at(-1)).toEqual({ github_actor: "octocat" });
+			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
+			expect(captures.at(-1)?.props?.$process_person_profile).toBe(false);
 			// A desktop with no GitHub login at all clears the old handle too.
 			calls.length = 0;
 			t.adoptDesktopIdentity({ distinctId: "ins_def", optedOut: false });
