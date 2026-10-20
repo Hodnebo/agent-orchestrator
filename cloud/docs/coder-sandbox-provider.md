@@ -126,12 +126,14 @@ new defaults. Coder workspace responses must match the planned owner,
 workspace name, and template ID before AO adopts the workspace, accepts a
 provider ID, or uploads worker credentials. The workspace name is chosen once,
 when the session is created, and stored on the profile (`workspaceName`,
-`<prefix>-o-<id8>` or `<prefix>-w-<word>-<id8>`); profiles written before that
-keep the name computed from the prefix and session id. Because the readable
-name carries only 8 characters of the session id, a workspace that already
-held the name more than five minutes before the session chose it is treated
-as another session's: AO never adopts or deletes it, and the create fails on
-Coder's name conflict instead. Configure
+`<prefix>-o-<id12>` or `<prefix>-w-<word>-<id12>`, plus a longer
+`workspaceNameRetry`); profiles written before that keep the name computed
+from the prefix and session id. Lookup only ever uses the session's own stored
+or computed name. A workspace that already held that name more than five
+minutes before the session chose it is treated as another session's: AO never
+adopts or deletes it. When Coder refuses the create as a name conflict, the
+reconciler records the retry name as the session's workspace name (fenced by
+its lease) and provisions again under it; a second conflict fails the create. Configure
 `AO_CLOUD_CODER_OWNER` as the canonical owner name returned by Coder, not an
 alias such as `me`.
 

@@ -37,6 +37,10 @@ type Store interface {
 	RecordSandboxStartupError(ctx context.Context, owner, orgID, sessionID, code, message string) error
 	RecordSandboxProviderFailure(ctx context.Context, owner, orgID, sessionID, failureID string) error
 	CompleteSandboxDeletion(ctx context.Context, owner, orgID, sessionID string) error
+	// UseSandboxCoderWorkspaceRetryName records the session's retry workspace
+	// name as its workspace name after a create found takenName held by
+	// another workspace (see sandbox.WorkspaceNameTakenError).
+	UseSandboxCoderWorkspaceRetryName(ctx context.Context, owner, orgID, sessionID, takenName string) (string, error)
 	DisconnectSessionWorkers(ctx context.Context, orgID, sessionID string) error
 }
 
@@ -1682,6 +1686,22 @@ func (r *Reconciler) provision(
 	startedAt := time.Now()
 	environment, err := provider.Create(ctx, spec)
 	if err != nil {
+		var nameTaken *sandbox.WorkspaceNameTakenError
+		if errors.As(err, &nameTaken) {
+			// Another workspace holds the session's name. Never adopt it:
+			// record the retry name first, so the next pass looks up and
+			// creates under the name actually used, crash or not.
+			name, useErr := r.store.UseSandboxCoderWorkspaceRetryName(
+				ctx, r.owner, record.OrgID, record.SessionID, nameTaken.Name,
+			)
+			if useErr != nil {
+				return r.failCreate(ctx, record, errors.Join(err, useErr))
+			}
+			r.log.WarnContext(ctx, "workspace name taken by another workspace; retrying with a longer name",
+				"session_id", record.SessionID, "provider", record.Provider,
+				"taken_name", nameTaken.Name, "workspace_name", name)
+			return r.observe(ctx, record, "", domain.SandboxObservedProvisioning, "", time.Second)
+		}
 		if errors.Is(err, sandbox.ErrAlreadyExists) {
 			existing, found, findErr := provider.FindBySession(ctx, record.SessionID)
 			if findErr != nil {

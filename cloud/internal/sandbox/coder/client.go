@@ -120,7 +120,11 @@ type Client struct {
 	// for a session whose name is computed, see sandbox.CoderSessionProfile).
 	sessionID             string
 	workspaceNameIssuedAt time.Time
-	http                  *http.Client
+	// retryWorkspaceName is the stored name a create retries with when Coder
+	// reports expectedWorkspaceName as taken; empty once used, and for
+	// sessions whose name is computed.
+	retryWorkspaceName string
+	http               *http.Client
 	// Dev-environment options a bring-your-own connection stamps on the
 	// session profile (see sandbox.CoderSessionProfile). The zero values are
 	// the historical behavior: a dedicated ao-worker user, no ready check and
@@ -278,6 +282,7 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	if profile.WorkspaceName != "" && profile.WorkspaceNameIssuedAt != nil {
 		sessionClient.workspaceNameIssuedAt = *profile.WorkspaceNameIssuedAt
 	}
+	sessionClient.retryWorkspaceName = profile.WorkspaceNameRetry
 	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
 	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
 	sessionClient.durableRoot = profile.DurableRoot
@@ -691,6 +696,13 @@ func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 	}
 	var view workspace
 	if err := c.do(ctx, http.MethodPost, "/api/v2/users/"+url.PathEscape(c.owner)+"/workspaces", body, &view); err != nil {
+		if isConflict(err) && c.retryWorkspaceName != "" && name == c.expectedWorkspaceName {
+			// The reconciler looked the name up first and found no workspace
+			// of this session's, so the name belongs to another workspace.
+			return sandbox.Environment{}, &sandbox.WorkspaceNameTakenError{
+				Name: name, Retry: c.retryWorkspaceName, Err: err,
+			}
+		}
 		return sandbox.Environment{}, err
 	}
 	if err := c.validateWorkspaceIdentity(view, name); err != nil {
@@ -2058,6 +2070,23 @@ func sanitizePTYOutput(output string) string {
 	return strings.TrimSpace(output)
 }
 
+// apiError is a non-2xx Coder API response other than not-found.
+type apiError struct {
+	status int
+	body   string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("coder: API returned %d: %s", e.status, e.body)
+}
+
+// isConflict reports Coder's 409 Conflict, which a workspace create returns
+// when the owner already has a workspace with that name.
+func isConflict(err error) bool {
+	var api *apiError
+	return errors.As(err, &api) && api.status == http.StatusConflict
+}
+
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
 	var requestBody io.Reader
 	if body != nil {
@@ -2085,7 +2114,7 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return fmt.Errorf("coder: API returned %d: %s", response.StatusCode, strings.TrimSpace(string(snippet)))
+		return &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))

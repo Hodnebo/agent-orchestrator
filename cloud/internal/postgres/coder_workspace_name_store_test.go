@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -57,18 +59,18 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	}
 
 	orchestrator := create("orchestrator", "Orchestrator")
-	if got, want := storedName(orchestrator.ID), domain.CoderWorkspaceName("acme", "orchestrator", "", orchestrator.ID); got != want || got != "acme-o-"+orchestrator.ID[:8] {
+	if got, want := storedName(orchestrator.ID), domain.CoderWorkspaceName("acme", "orchestrator", "", orchestrator.ID); got != want || got != "acme-o-"+idChars(orchestrator.ID, 12) {
 		t.Fatalf("orchestrator workspace name = %q, want %q", got, want)
 	}
 	worker := create("worker", "Fix the login bug")
-	if got := storedName(worker.ID); got != "acme-w-fix-"+worker.ID[:8] {
-		t.Fatalf("worker workspace name = %q, want acme-w-fix-%s", got, worker.ID[:8])
+	if got := storedName(worker.ID); got != "acme-w-fix-"+idChars(worker.ID, 12) {
+		t.Fatalf("worker workspace name = %q, want acme-w-fix-%s", got, idChars(worker.ID, 12))
 	}
 	read, err := store.GetSession(ctx, principal, fixture.orgID, worker.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if read.BYOCoderWorkspace == nil || read.BYOCoderWorkspace.Name != "acme-w-fix-"+worker.ID[:8] || read.BYOCoderWorkspace.NamePrefix != "acme" {
+	if read.BYOCoderWorkspace == nil || read.BYOCoderWorkspace.Name != "acme-w-fix-"+idChars(worker.ID, 12) || read.BYOCoderWorkspace.NamePrefix != "acme" {
 		t.Fatalf("workspace ref = %+v, want the stored name", read.BYOCoderWorkspace)
 	}
 
@@ -81,8 +83,34 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storedName(child.ID); got != "acme-w-add-"+child.ID[:8] {
-		t.Fatalf("child workspace name = %q, want acme-w-add-%s", got, child.ID[:8])
+	if got := storedName(child.ID); got != "acme-w-add-"+idChars(child.ID, 12) {
+		t.Fatalf("child workspace name = %q, want acme-w-add-%s", got, idChars(child.ID, 12))
+	}
+
+	// A create conflict moves the session to its retry name, once, and only
+	// under the reconcile lease while the session has no workspace.
+	if _, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, storedName(child.ID)); !errors.Is(err, ErrSandboxLeaseLost) {
+		t.Fatalf("retry without the lease = %v, want ErrSandboxLeaseLost", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes
+		SET reconcile_lease_owner = 'reconciler-a', reconcile_lease_until = now() + interval '1 minute'
+		WHERE org_id = $1 AND session_id = $2`, fixture.orgID, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	taken := storedName(child.ID)
+	if _, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, "some-other-name"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retry for a name that is not stored = %v, want ErrConflict", err)
+	}
+	retried, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, taken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, wantRetry := domain.CoderWorkspaceNames("acme", "worker", "Add retries", child.ID)
+	if retried != wantRetry || storedName(child.ID) != wantRetry || len(retried) != domain.MaxCoderWorkspaceName {
+		t.Fatalf("retry name = %q, stored %q; want %q", retried, storedName(child.ID), wantRetry)
+	}
+	if _, err := store.UseSandboxCoderWorkspaceRetryName(ctx, "reconciler-a", fixture.orgID, child.ID, retried); !errors.Is(err, ErrConflict) {
+		t.Fatalf("second retry = %v, want ErrConflict", err)
 	}
 
 	// A legacy row (written before names were stored) reads back no name.
@@ -99,4 +127,10 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	if legacy.BYOCoderWorkspace == nil || legacy.BYOCoderWorkspace.Name != "" || legacy.BYOCoderWorkspace.NamePrefix != "acme" {
 		t.Fatalf("legacy workspace ref = %+v, want the prefix and no stored name", legacy.BYOCoderWorkspace)
 	}
+}
+
+// idChars is the first n letters and digits of a session id, as workspace
+// names use them.
+func idChars(sessionID string, n int) string {
+	return strings.ReplaceAll(sessionID, "-", "")[:n]
 }

@@ -159,6 +159,11 @@ type CoderSessionProfile struct {
 	// existed, whose workspaces keep the name computed from the prefix and
 	// session id.
 	WorkspaceName string `json:"workspaceName,omitempty"`
+	// WorkspaceNameRetry is the one name a create retries with when Coder
+	// reports WorkspaceName as taken by another workspace
+	// (domain.CoderWorkspaceNames). Using it moves it to WorkspaceName and
+	// clears it, so a session retries at most once.
+	WorkspaceNameRetry string `json:"workspaceNameRetry,omitempty"`
 	// WorkspaceNameIssuedAt is when WorkspaceName was chosen. A workspace that
 	// already carried the name well before then belongs to another session (an
 	// id collision) and is never adopted. Nil on older rows.
@@ -404,8 +409,15 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 		return CoderSessionProfile{}, err
 	}
 	profile.WorkspaceName = strings.TrimSpace(profile.WorkspaceName)
-	if profile.WorkspaceName != "" {
-		if err := domain.ValidateCoderWorkspaceName(profile.WorkspaceName); err != nil {
+	profile.WorkspaceNameRetry = strings.TrimSpace(profile.WorkspaceNameRetry)
+	if profile.WorkspaceName == "" {
+		profile.WorkspaceNameRetry = ""
+	}
+	for _, name := range []string{profile.WorkspaceName, profile.WorkspaceNameRetry} {
+		if name == "" {
+			continue
+		}
+		if err := domain.ValidateCoderWorkspaceName(name); err != nil {
 			return CoderSessionProfile{}, err
 		}
 	}
@@ -435,9 +447,9 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 }
 
 // StampCoderWorkspaceName records, on a Coder session's resource profile, the
-// workspace name AO will create for it (domain.CoderWorkspaceName from the
-// profile's prefix, the session kind, its display name at creation and its
-// id) and when the name was chosen. It runs once, when the sandbox row is
+// workspace name AO will create for it and the one retry name for a name
+// conflict (domain.CoderWorkspaceNames from the profile's prefix, the session
+// kind, its display name at creation and its id), and when they were chosen. It runs once, when the sandbox row is
 // written, because the session id is only known then. A profile without a
 // Coder section, or one that already names its workspace, is returned
 // unchanged. Every other field keeps its value exactly.
@@ -468,19 +480,57 @@ func StampCoderWorkspaceName(raw json.RawMessage, kind, displayName, sessionID s
 			return nil, fmt.Errorf("decode Coder workspace name prefix: %w", err)
 		}
 	}
-	name, err := json.Marshal(domain.CoderWorkspaceName(prefix, kind, displayName, sessionID))
-	if err != nil {
-		return nil, err
+	primary, retry := domain.CoderWorkspaceNames(prefix, kind, displayName, sessionID)
+	for key, value := range map[string]any{
+		"workspaceName": primary, "workspaceNameRetry": retry, "workspaceNameIssuedAt": issuedAt.UTC(),
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		coder[key] = encoded
 	}
-	issued, err := json.Marshal(issuedAt.UTC())
-	if err != nil {
-		return nil, err
-	}
-	coder["workspaceName"], coder["workspaceNameIssuedAt"] = name, issued
+	var err error
 	if resource["coder"], err = json.Marshal(coder); err != nil {
 		return nil, err
 	}
 	return json.Marshal(resource)
+}
+
+// UseCoderWorkspaceRetryName returns the resource profile with its retry
+// workspace name made the workspace name and the retry cleared, along with
+// both names. ok is false when the profile has no retry name left.
+func UseCoderWorkspaceRetryName(raw json.RawMessage) (updated json.RawMessage, from, to string, ok bool, err error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, "", "", false, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	var coder map[string]json.RawMessage
+	if section, present := resource["coder"]; !present || json.Unmarshal(section, &coder) != nil || coder == nil {
+		return nil, "", "", false, errors.New("Coder session resource profile is required")
+	}
+	for key, target := range map[string]*string{"workspaceName": &from, "workspaceNameRetry": &to} {
+		if value, present := coder[key]; present {
+			if err := json.Unmarshal(value, target); err != nil {
+				return nil, "", "", false, fmt.Errorf("decode Coder %s: %w", key, err)
+			}
+		}
+	}
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || to == from {
+		return nil, "", "", false, nil
+	}
+	if coder["workspaceName"], err = json.Marshal(to); err != nil {
+		return nil, "", "", false, err
+	}
+	delete(coder, "workspaceNameRetry")
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, "", "", false, err
+	}
+	if updated, err = json.Marshal(resource); err != nil {
+		return nil, "", "", false, err
+	}
+	return updated, from, to, true, nil
 }
 
 func normalizedCoderBaseURL(value string) (string, error) {

@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -24,6 +25,23 @@ var ErrSnapshotNotFound = errors.New("sandbox snapshot not found")
 // present: the provider enforces one sandbox per session name. The caller
 // adopts that sandbox through FindBySession instead of creating another.
 var ErrAlreadyExists = errors.New("sandbox environment already exists")
+
+// WorkspaceNameTakenError reports that Create was refused because another
+// workspace, not the session's own, already holds the session's stored
+// workspace name, and that the session has one retry name left to use. The
+// caller records Retry as the session's workspace name and provisions again;
+// it never adopts or deletes the workspace that holds Name.
+type WorkspaceNameTakenError struct {
+	Name  string
+	Retry string
+	Err   error
+}
+
+func (e *WorkspaceNameTakenError) Error() string {
+	return fmt.Sprintf("workspace name %q is taken by another workspace (retrying as %q): %v", e.Name, e.Retry, e.Err)
+}
+
+func (e *WorkspaceNameTakenError) Unwrap() error { return e.Err }
 
 // DuplicateRejectingCreator marks a provider whose Create fails with
 // ErrAlreadyExists rather than making a second sandbox for the same session.

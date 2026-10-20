@@ -412,8 +412,8 @@ func TestStampCoderWorkspaceName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode stamped profile: %v (%s)", err, stamped)
 	}
-	if profile.WorkspaceName != "acme-w-fix-1a2b3c4d" {
-		t.Fatalf("workspace name = %q, want acme-w-fix-1a2b3c4d", profile.WorkspaceName)
+	if profile.WorkspaceName != "acme-w-fix-1a2b3c4d5e6f" || profile.WorkspaceNameRetry != "acme-w-fix-1a2b3c4d5e6f4a7b8c9d0" {
+		t.Fatalf("workspace names = %q, %q; want acme-w-fix-1a2b3c4d5e6f and its retry", profile.WorkspaceName, profile.WorkspaceNameRetry)
 	}
 	if profile.WorkspaceNameIssuedAt == nil || !profile.WorkspaceNameIssuedAt.Equal(issuedAt) {
 		t.Fatalf("issued at = %v, want %v", profile.WorkspaceNameIssuedAt, issuedAt)
@@ -436,8 +436,8 @@ func TestStampCoderWorkspaceName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile, err := DecodeCoderSessionProfile(orchestrator); err != nil || profile.WorkspaceName != "acme-o-1a2b3c4d" {
-		t.Fatalf("orchestrator workspace name = %q (%v), want acme-o-1a2b3c4d", profile.WorkspaceName, err)
+	if profile, err := DecodeCoderSessionProfile(orchestrator); err != nil || profile.WorkspaceName != "acme-o-1a2b3c4d5e6f" {
+		t.Fatalf("orchestrator workspace name = %q (%v), want acme-o-1a2b3c4d5e6f", profile.WorkspaceName, err)
 	}
 
 	// Profiles of other providers carry no Coder section and are left alone.
@@ -452,10 +452,39 @@ func TestDecodeCoderSessionProfileRejectsInvalidWorkspaceName(t *testing.T) {
 	profile := func(name string) json.RawMessage {
 		return json.RawMessage(`{"coder":{"baseUrl":"https://coder.example.com","owner":"owner","templateId":"2a2e262c-b31c-4202-946d-a19ad45d1fd2","durableRoot":"/mnt/ao","workspaceName":"` + name + `"}}`)
 	}
-	if decoded, err := DecodeCoderSessionProfile(profile(" acme-w-fix-1a2b3c4d ")); err != nil || decoded.WorkspaceName != "acme-w-fix-1a2b3c4d" {
+	if decoded, err := DecodeCoderSessionProfile(profile(" acme-w-fix-1a2b3c4d5e6f ")); err != nil || decoded.WorkspaceName != "acme-w-fix-1a2b3c4d5e6f" {
 		t.Fatalf("valid stored workspace name = %q (%v)", decoded.WorkspaceName, err)
 	}
 	if _, err := DecodeCoderSessionProfile(profile("Bad_Name")); err == nil {
 		t.Fatal("an invalid stored workspace name decoded")
+	}
+}
+
+// Using the retry name makes it the workspace name and consumes it, so a
+// session retries at most once.
+func TestUseCoderWorkspaceRetryName(t *testing.T) {
+	t.Parallel()
+	const sessionID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	raw := json.RawMessage(`{"provider":"coder","coder":{"baseUrl":"https://coder.example.com","owner":"owner","templateId":"2a2e262c-b31c-4202-946d-a19ad45d1fd2","durableRoot":"/mnt/ao","workspaceNamePrefix":"acme"}}`)
+	issuedAt := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	stamped, err := StampCoderWorkspaceName(raw, "worker", "Fix", sessionID, issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, from, to, ok, err := UseCoderWorkspaceRetryName(stamped)
+	if err != nil || !ok || from != "acme-w-fix-1a2b3c4d5e6f" || to != "acme-w-fix-1a2b3c4d5e6f4a7b8c9d0" {
+		t.Fatalf("use retry = %q -> %q, %v, %v", from, to, ok, err)
+	}
+	profile, err := DecodeCoderSessionProfile(updated)
+	if err != nil || profile.WorkspaceName != to || profile.WorkspaceNameRetry != "" ||
+		profile.WorkspaceNameIssuedAt == nil || !profile.WorkspaceNameIssuedAt.Equal(issuedAt) || profile.WorkspaceNamePrefix != "acme" {
+		t.Fatalf("profile after retry = %+v (%v)", profile, err)
+	}
+	if _, _, _, ok, err := UseCoderWorkspaceRetryName(updated); err != nil || ok {
+		t.Fatalf("second retry = %v, %v; want none left", ok, err)
+	}
+	// A legacy profile has no stored name and so no retry.
+	if _, _, _, ok, err := UseCoderWorkspaceRetryName(raw); err != nil || ok {
+		t.Fatalf("legacy retry = %v, %v; want none", ok, err)
 	}
 }

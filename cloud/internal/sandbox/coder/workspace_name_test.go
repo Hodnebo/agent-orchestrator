@@ -3,6 +3,7 @@ package coder
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -91,7 +92,7 @@ func TestScopedClientUsesStoredWorkspaceName(t *testing.T) {
 	defer server.Close()
 	issuedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	provider := storedNameProvider(t, server.URL,
-		`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d","workspaceNameIssuedAt":"`+issuedAt+`"`)
+		`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f","workspaceNameIssuedAt":"`+issuedAt+`"`)
 
 	ctx := context.Background()
 	if _, found, err := provider.FindBySession(ctx, storedNameSessionID); err != nil || found {
@@ -107,7 +108,7 @@ func TestScopedClientUsesStoredWorkspaceName(t *testing.T) {
 	if _, err := provider.Get(ctx, environment.ID); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	want := []string{"find:acme-w-fix-1a2b3c4d", "create:acme-w-fix-1a2b3c4d", "find:acme-w-fix-1a2b3c4d"}
+	want := []string{"find:acme-w-fix-1a2b3c4d5e6f", "create:acme-w-fix-1a2b3c4d5e6f", "find:acme-w-fix-1a2b3c4d5e6f"}
 	if fmt.Sprint(fake.requested) != fmt.Sprint(want) {
 		t.Fatalf("requests = %v, want %v", fake.requested, want)
 	}
@@ -168,12 +169,12 @@ func TestStoredWorkspaceNameNeverAdoptsAnOlderWorkspace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			other := healthyWorkspace()
-			other.Name, other.OwnerName, other.CreatedAt = "acme-w-fix-1a2b3c4d", "planned-owner", tc.createdAt
+			other.Name, other.OwnerName, other.CreatedAt = "acme-w-fix-1a2b3c4d5e6f", "planned-owner", tc.createdAt
 			fake := &workspaceNameServer{existing: &other}
 			server := httptest.NewServer(fake.handler(t))
 			defer server.Close()
 			provider := storedNameProvider(t, server.URL,
-				`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
+				`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
 
 			ctx := context.Background()
 			_, found, err := provider.FindBySession(ctx, storedNameSessionID)
@@ -191,7 +192,7 @@ func TestStoredWorkspaceNameNeverAdoptsAnOlderWorkspace(t *testing.T) {
 
 func TestSessionWorkspaceNameAndURL(t *testing.T) {
 	t.Parallel()
-	if got := SessionWorkspaceName(" acme-o-1a2b3c4d ", "acme", storedNameSessionID); got != "acme-o-1a2b3c4d" {
+	if got := SessionWorkspaceName(" acme-o-1a2b3c4d5e6f ", "acme", storedNameSessionID); got != "acme-o-1a2b3c4d5e6f" {
 		t.Fatalf("stored name = %q", got)
 	}
 	if got := SessionWorkspaceName("", "acme", storedNameSessionID); got != WorkspaceNameWithPrefix("acme", storedNameSessionID) {
@@ -200,16 +201,109 @@ func TestSessionWorkspaceNameAndURL(t *testing.T) {
 	if got := SessionWorkspaceName("", "", storedNameSessionID); got != WorkspaceName(storedNameSessionID) {
 		t.Fatalf("legacy default name = %q", got)
 	}
-	if got := WorkspaceURL("https://coder.example.com/", "dev", "acme-o-1a2b3c4d"); got != "https://coder.example.com/@dev/acme-o-1a2b3c4d" {
+	if got := WorkspaceURL("https://coder.example.com/", "dev", "acme-o-1a2b3c4d5e6f"); got != "https://coder.example.com/@dev/acme-o-1a2b3c4d5e6f" {
 		t.Fatalf("workspace URL = %q", got)
 	}
 	for _, args := range [][3]string{
-		{"https://coder.example.com", "", "acme-o-1a2b3c4d"},
+		{"https://coder.example.com", "", "acme-o-1a2b3c4d5e6f"},
 		{"https://coder.example.com", "dev", ""},
-		{"ftp://coder.example.com", "dev", "acme-o-1a2b3c4d"},
+		{"ftp://coder.example.com", "dev", "acme-o-1a2b3c4d5e6f"},
 	} {
 		if got := WorkspaceURL(args[0], args[1], args[2]); got != "" {
 			t.Errorf("WorkspaceURL%v = %q, want empty", args, got)
 		}
+	}
+}
+
+// A create refused because another workspace holds the stored name reports
+// the session's retry name, and never adopts the other workspace.
+func TestCreateReportsTheRetryNameWhenTheNameIsTaken(t *testing.T) {
+	t.Parallel()
+	issuedAt := time.Now().UTC()
+	other := healthyWorkspace()
+	other.Name, other.OwnerName, other.CreatedAt = "acme-w-fix-1a2b3c4d5e6f", "planned-owner", issuedAt.Add(-24*time.Hour)
+	fake := &workspaceNameServer{existing: &other}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+	provider := storedNameProvider(t, server.URL,
+		`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f","workspaceNameRetry":"acme-w-fix-1a2b3c4d5e6f4a7b8c9d0","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
+
+	ctx := context.Background()
+	if _, found, err := provider.FindBySession(ctx, storedNameSessionID); err != nil || found {
+		t.Fatalf("find = %v, %v; want the older workspace reported absent", found, err)
+	}
+	_, err := provider.Create(ctx, sandbox.Spec{SessionID: storedNameSessionID})
+	var taken *sandbox.WorkspaceNameTakenError
+	if !errors.As(err, &taken) || taken.Name != "acme-w-fix-1a2b3c4d5e6f" || taken.Retry != "acme-w-fix-1a2b3c4d5e6f4a7b8c9d0" {
+		t.Fatalf("create err = %v, want a name-taken error naming the retry", err)
+	}
+
+	// Once the retry name is stored (and the retry used up), the next create
+	// uses it.
+	retried := storedNameProvider(t, server.URL,
+		`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f4a7b8c9d0","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
+	if _, found, err := retried.FindBySession(ctx, storedNameSessionID); err != nil || found {
+		t.Fatalf("find retry name = %v, %v; want absent", found, err)
+	}
+	if _, err := retried.Create(ctx, sandbox.Spec{SessionID: storedNameSessionID}); err != nil {
+		t.Fatalf("create under the retry name: %v", err)
+	}
+	if fake.existing.Name != "acme-w-fix-1a2b3c4d5e6f4a7b8c9d0" {
+		t.Fatalf("created %q, want the retry name", fake.existing.Name)
+	}
+}
+
+// With no retry left (or for a session whose name is computed), a name
+// conflict is an ordinary create failure.
+func TestCreateConflictWithoutARetryNameFails(t *testing.T) {
+	t.Parallel()
+	issuedAt := time.Now().UTC()
+	other := healthyWorkspace()
+	other.Name, other.OwnerName, other.CreatedAt = "acme-w-fix-1a2b3c4d5e6f4a7b8c9d0", "planned-owner", issuedAt.Add(-24*time.Hour)
+	fake := &workspaceNameServer{existing: &other}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+	provider := storedNameProvider(t, server.URL,
+		`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f4a7b8c9d0","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
+	_, err := provider.Create(context.Background(), sandbox.Spec{SessionID: storedNameSessionID})
+	var taken *sandbox.WorkspaceNameTakenError
+	if err == nil || errors.As(err, &taken) || !isConflict(err) {
+		t.Fatalf("create err = %v, want a plain conflict", err)
+	}
+}
+
+// A legacy <prefix>-<12> workspace can spell the same name as a new session's
+// readable name (a legacy prefix ending in "-o" with the same 12 id
+// characters). The new session looks up only its stored name, sees the older
+// workspace as another session's, and moves to its retry name; the legacy
+// session still finds its own workspace by its computed name. (Both sessions
+// use one id here; only its first 12 characters matter to the names.)
+func TestReadableNamesAreNotConfusedWithLegacyNames(t *testing.T) {
+	t.Parallel()
+	legacyName := WorkspaceNameWithPrefix("acme-o", storedNameSessionID)
+	if legacyName != "acme-o-1a2b3c4d5e6f" {
+		t.Fatalf("legacy name = %q; the scenario below is stale", legacyName)
+	}
+	legacy := healthyWorkspace()
+	legacy.Name, legacy.OwnerName, legacy.CreatedAt = legacyName, "planned-owner", time.Now().Add(-30*24*time.Hour)
+	fake := &workspaceNameServer{existing: &legacy}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+	ctx := context.Background()
+
+	legacySession := storedNameProvider(t, server.URL, `,"workspaceNamePrefix":"acme-o"`)
+	if _, found, err := legacySession.FindBySession(ctx, storedNameSessionID); err != nil || !found {
+		t.Fatalf("legacy session find = %v, %v; want its own workspace", found, err)
+	}
+
+	issuedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	newSession := storedNameProvider(t, server.URL,
+		`,"workspaceNamePrefix":"acme","workspaceName":"acme-o-1a2b3c4d5e6f","workspaceNameRetry":"acme-o-1a2b3c4d5e6f4a7b8c9d0e1f2","workspaceNameIssuedAt":"`+issuedAt+`"`)
+	if _, found, err := newSession.FindBySession(ctx, storedNameSessionID); err != nil || found {
+		t.Fatalf("new session find = %v, %v; want the legacy workspace reported absent", found, err)
+	}
+	var taken *sandbox.WorkspaceNameTakenError
+	if _, err := newSession.Create(ctx, sandbox.Spec{SessionID: storedNameSessionID}); !errors.As(err, &taken) {
+		t.Fatalf("new session create err = %v, want a name-taken error", err)
 	}
 }
