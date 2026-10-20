@@ -134,24 +134,50 @@ func TestCodexAppServerApprovalSettingsMatchLocal(t *testing.T) {
 	}
 }
 
+// Accept-edits approves only file changes, whether the turn chose it or a
+// standard session's turn without an approval mode follows it.
 func TestCursorACPAcceptEditsOnlyApprovesFileChanges(t *testing.T) {
 	options := []acp.PermissionOption{
 		{OptionId: "allow", Kind: acp.PermissionOptionKindAllowOnce},
 		{OptionId: "reject", Kind: acp.PermissionOptionKindRejectOnce},
 	}
-	for _, test := range []struct {
-		kind    acp.ToolKind
-		approve bool
-	}{
-		{acp.ToolKindEdit, true}, {acp.ToolKindDelete, true}, {acp.ToolKindMove, true}, {acp.ToolKindExecute, false},
+	for _, turn := range []worker.Turn{
+		{Harness: "cursor", Mode: "trusted", ApprovalMode: "accept-edits"},
+		{Harness: "cursor", Mode: "standard"},
 	} {
-		kind := test.kind
-		option, approved := automaticACPDecision(worker.Turn{Harness: "cursor", ApprovalMode: "accept-edits"}, acp.RequestPermissionRequest{
-			ToolCall: acp.ToolCallUpdate{Kind: &kind}, Options: options,
-		})
-		if approved != test.approve || (approved && option != "allow") {
-			t.Fatalf("%s = %s/%v", kind, option, approved)
+		for _, test := range []struct {
+			kind    acp.ToolKind
+			approve bool
+		}{
+			{acp.ToolKindEdit, true}, {acp.ToolKindDelete, true}, {acp.ToolKindMove, true}, {acp.ToolKindExecute, false},
+		} {
+			kind := test.kind
+			option, approved := automaticACPDecision(turn, acp.RequestPermissionRequest{
+				ToolCall: acp.ToolCallUpdate{Kind: &kind}, Options: options,
+			})
+			if approved != test.approve || (approved && option != "allow") {
+				t.Fatalf("%+v %s = %s/%v", turn, kind, option, approved)
+			}
 		}
+	}
+}
+
+// A trusted Cursor session's turn without an approval mode allows every tool
+// call, as its bypass-permissions badge says; an explicit pick of the turn
+// still wins.
+func TestCursorACPTrustedSessionAllowsEveryToolCall(t *testing.T) {
+	options := []acp.PermissionOption{
+		{OptionId: "always", Kind: acp.PermissionOptionKindAllowAlways},
+		{OptionId: "allow", Kind: acp.PermissionOptionKindAllowOnce},
+		{OptionId: "reject", Kind: acp.PermissionOptionKindRejectOnce},
+	}
+	execute := acp.ToolKindExecute
+	request := acp.RequestPermissionRequest{ToolCall: acp.ToolCallUpdate{Kind: &execute}, Options: options}
+	if option, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted"}, request); !approved || option != "always" {
+		t.Fatalf("trusted session = %s/%v, want always", option, approved)
+	}
+	if _, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted", ApprovalMode: "default"}, request); approved {
+		t.Fatal("a turn that chose to ask was approved automatically")
 	}
 }
 
@@ -213,17 +239,25 @@ func TestClaudeACPApprovalModesUseSessionSetMode(t *testing.T) {
 	}
 }
 
+// A Cursor turn's approval flags follow its own approval mode, or without
+// one the session mode, as Claude's and Codex's do: a trusted session
+// bypasses permission prompts, a standard one accepts edits, and a
+// read-only turn never runs with --force.
 func TestCursorACPLaunchApprovalFlags(t *testing.T) {
 	for _, test := range []struct {
-		approval string
-		want     []string
+		mode, approval string
+		want           []string
 	}{
-		{"default", []string{"--trust", "acp"}},
-		{"auto", []string{"--trust", "--auto-review", "acp"}},
-		{"bypass-permissions", []string{"--trust", "--force", "acp"}},
+		{"standard", "default", []string{"--trust", "acp"}},
+		{"standard", "auto", []string{"--trust", "--auto-review", "acp"}},
+		{"trusted", "bypass-permissions", []string{"--trust", "--force", "acp"}},
+		{"trusted", "", []string{"--trust", "--force", "acp"}},
+		{"standard", "", []string{"--trust", "acp"}},
+		{"read-only", "", []string{"--trust", "acp"}},
+		{"read-only", "bypass-permissions", []string{"--trust", "acp"}},
 	} {
-		t.Run(test.approval, func(t *testing.T) {
-			path, args, _, err := acpLaunch(context.Background(), worker.Turn{Harness: "cursor", ApprovalMode: test.approval}, Command{Path: "cursor-agent"})
+		t.Run(test.mode+"/"+test.approval, func(t *testing.T) {
+			path, args, _, err := acpLaunch(context.Background(), worker.Turn{Harness: "cursor", Mode: test.mode, ApprovalMode: test.approval}, Command{Path: "cursor-agent"})
 			if err != nil {
 				t.Fatal(err)
 			}

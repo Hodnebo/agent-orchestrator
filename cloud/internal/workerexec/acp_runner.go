@@ -204,7 +204,7 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 		return adapter, nil, env, nil
 	case "cursor":
 		args := []string{"--trust"}
-		switch turn.ApprovalMode {
+		switch cursorACPApprovalMode(turn) {
 		case "auto":
 			args = append(args, "--auto-review")
 		case "bypass-permissions":
@@ -294,6 +294,28 @@ func claudeACPApprovalMode(turn worker.Turn) string {
 		return "bypassPermissions"
 	case "standard":
 		return "acceptEdits"
+	}
+	return "default"
+}
+
+// cursorACPApprovalMode is the approval mode a Cursor Chat turn runs with, as
+// claudeACPApprovalMode is Claude's: a turn's own approval mode wins, and a
+// turn without one follows the session mode (trusted bypasses permission
+// prompts, standard accepts edits). A read-only turn approves nothing: it
+// launches without --force and every permission request is cancelled
+// (cloudACPClient.RequestPermission).
+func cursorACPApprovalMode(turn worker.Turn) string {
+	if turn.Mode == "read-only" {
+		return "default"
+	}
+	if turn.ApprovalMode != "" {
+		return turn.ApprovalMode
+	}
+	switch turn.Mode {
+	case "trusted":
+		return "bypass-permissions"
+	case "standard":
+		return "accept-edits"
 	}
 	return "default"
 }
@@ -475,11 +497,15 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 }
 
 func automaticACPDecision(turn worker.Turn, request acp.RequestPermissionRequest) (acp.PermissionOptionId, bool) {
+	approval := turn.ApprovalMode
+	if turn.Harness == "cursor" {
+		approval = cursorACPApprovalMode(turn)
+	}
 	allow := false
-	if turn.ApprovalMode == "bypass-permissions" {
+	if approval == "bypass-permissions" {
 		allow = true
 	}
-	if turn.Harness == "cursor" && turn.ApprovalMode == "accept-edits" && request.ToolCall.Kind != nil {
+	if turn.Harness == "cursor" && approval == "accept-edits" && request.ToolCall.Kind != nil {
 		switch *request.ToolCall.Kind {
 		case acp.ToolKindEdit, acp.ToolKindDelete, acp.ToolKindMove:
 			allow = true
@@ -489,7 +515,7 @@ func automaticACPDecision(turn worker.Turn, request acp.RequestPermissionRequest
 		return "", false
 	}
 	kinds := []acp.PermissionOptionKind{acp.PermissionOptionKindAllowOnce}
-	if turn.ApprovalMode == "bypass-permissions" {
+	if approval == "bypass-permissions" {
 		kinds = append([]acp.PermissionOptionKind{acp.PermissionOptionKindAllowAlways}, kinds...)
 	}
 	for _, kind := range kinds {
