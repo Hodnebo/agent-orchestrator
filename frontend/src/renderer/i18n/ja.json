@@ -2946,6 +2946,7 @@
 	"coder.workspacePrefix.settingsHint": "新しいセッションに適用されます。ワークスペースの名前は <prefix>-<id> です。空欄の場合はプロジェクト名です。",
 	"coder.templateOptions.title": "テンプレートオプション",
 	"coder.templateOptions.titleCount": "テンプレートオプション ({{total}})",
+	"coder.templateOptions.subtitle": "Coder テンプレート独自のオプションです。このプロジェクトのリポジトリは AO が自分でチェックアウトします。",
 	"coder.templateOptions.required": "必須",
 	"coder.templateOptions.loadFailed": "このテンプレートのオプションを読み込めませんでした。",
 	"coder.templateOptions.checkFailed": "これらのオプションをテンプレートで確認できませんでした。最後に編集した値を変更して、もう一度お試しください。",

@@ -81,6 +81,8 @@ describe("CoderTemplateOptions", () => {
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: PARAMETERS.slice(0, 3) });
 		renderOptions();
 		expect(await screen.findByText("Template options")).toBeInTheDocument();
+		// Set apart from the repositories AO checks out itself.
+		expect(screen.getByText("Your Coder template's own options. AO checks out this project's repositories itself.")).toBeInTheDocument();
 		expect(mocks.getCoderTemplateParameters).toHaveBeenCalledWith("org-1", "tpl-1", expect.anything());
 
 		const branch = screen.getByRole("textbox", { name: "Base branch" });

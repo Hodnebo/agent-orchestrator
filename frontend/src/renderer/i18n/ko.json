@@ -2946,6 +2946,7 @@
 	"coder.workspacePrefix.settingsHint": "새 세션에 적용됩니다. 작업 공간 이름은 <prefix>-<id> 형식이며, 비워 두면 프로젝트 이름을 사용합니다.",
 	"coder.templateOptions.title": "템플릿 옵션",
 	"coder.templateOptions.titleCount": "템플릿 옵션 ({{total}})",
+	"coder.templateOptions.subtitle": "Coder 템플릿 자체 옵션입니다. 이 프로젝트의 저장소는 AO가 직접 체크아웃합니다.",
 	"coder.templateOptions.required": "필수",
 	"coder.templateOptions.loadFailed": "이 템플릿의 옵션을 불러올 수 없습니다.",
 	"coder.templateOptions.checkFailed": "템플릿으로 이 옵션을 확인하지 못했습니다. 마지막으로 편집한 값을 바꾼 뒤 다시 시도하세요.",

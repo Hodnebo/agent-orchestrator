@@ -2928,6 +2928,7 @@
 	"coder.workspacePrefix.settingsHint": "Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses the project name.",
 	"coder.templateOptions.title": "Template options",
 	"coder.templateOptions.titleCount": "Template options ({{total}})",
+	"coder.templateOptions.subtitle": "Your Coder template's own options. AO checks out this project's repositories itself.",
 	"coder.templateOptions.required": "Required",
 	"coder.templateOptions.loadFailed": "Couldn't load this template's options.",
 	"coder.templateOptions.checkFailed": "Couldn't check these options with the template. Change the last value you edited and try again.",

@@ -2946,6 +2946,7 @@
 	"coder.workspacePrefix.settingsHint": "Gilt für neue Sitzungen. Workspaces heißen <prefix>-<id>; leer verwendet den Projektnamen.",
 	"coder.templateOptions.title": "Vorlagenoptionen",
 	"coder.templateOptions.titleCount": "Vorlagenoptionen ({{total}})",
+	"coder.templateOptions.subtitle": "Die eigenen Optionen deiner Coder-Vorlage. AO checkt die Repositorys dieses Projekts selbst aus.",
 	"coder.templateOptions.required": "Erforderlich",
 	"coder.templateOptions.loadFailed": "Die Optionen dieser Vorlage konnten nicht geladen werden.",
 	"coder.templateOptions.checkFailed": "Diese Optionen konnten nicht mit der Vorlage geprüft werden. Ändere den zuletzt bearbeiteten Wert und versuche es erneut.",

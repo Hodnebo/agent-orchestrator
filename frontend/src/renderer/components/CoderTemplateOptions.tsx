@@ -78,21 +78,24 @@ export function CoderTemplateOptions({
 	return (
 		<section className="flex flex-col gap-3 text-sm" aria-label={t("coder.templateOptions.title")} data-testid="coder-template-options">
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
-			{collapsible ? (
-				<button
-					type="button"
-					className="flex w-fit items-center gap-1 font-medium text-foreground"
-					aria-expanded={expanded}
-					onClick={() => setOpen((value) => !value)}
-				>
-					{expanded
-						? <ChevronDown aria-hidden="true" className="size-icon-sm text-muted-foreground" />
-						: <ChevronRight aria-hidden="true" className="size-icon-sm text-muted-foreground" />}
-					{t("coder.templateOptions.titleCount", { total: parameters.length })}
-				</button>
-			) : (
-				<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
-			)}
+			<div className="flex flex-col gap-1">
+				{collapsible ? (
+					<button
+						type="button"
+						className="flex w-fit items-center gap-1 font-medium text-foreground"
+						aria-expanded={expanded}
+						onClick={() => setOpen((value) => !value)}
+					>
+						{expanded
+							? <ChevronDown aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+							: <ChevronRight aria-hidden="true" className="size-icon-sm text-muted-foreground" />}
+						{t("coder.templateOptions.titleCount", { total: parameters.length })}
+					</button>
+				) : (
+					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
+				)}
+				<p className={onboardingFieldHintClass}>{t("coder.templateOptions.subtitle")}</p>
+			</div>
 			{expanded ? (
 				<div className="flex flex-col gap-4">
 					{parameters.map((parameter) => (

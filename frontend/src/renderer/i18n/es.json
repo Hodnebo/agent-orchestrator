@@ -2989,6 +2989,7 @@
 	"coder.workspacePrefix.settingsHint": "Se aplica a las sesiones nuevas. Los espacios de trabajo se llaman <prefix>-<id>; vacío usa el nombre del proyecto.",
 	"coder.templateOptions.title": "Opciones de la plantilla",
 	"coder.templateOptions.titleCount": "Opciones de la plantilla ({{total}})",
+	"coder.templateOptions.subtitle": "Las opciones propias de tu plantilla de Coder. AO hace el checkout de los repositorios de este proyecto por su cuenta.",
 	"coder.templateOptions.required": "Obligatorio",
 	"coder.templateOptions.loadFailed": "No se pudieron cargar las opciones de esta plantilla.",
 	"coder.templateOptions.checkFailed": "No se pudieron comprobar estas opciones con la plantilla. Cambia el último valor que editaste e inténtalo de nuevo.",
