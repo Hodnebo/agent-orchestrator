@@ -75,7 +75,7 @@ func TestSetupStepTimeout(t *testing.T) {
 	t.Parallel()
 	event, _ := SetupRunner{DataDir: t.TempDir(), FirstStart: true, StepTimeout: 200 * time.Millisecond}.Run(
 		context.Background(), []string{"sleep 30 & wait"}, t.TempDir(), scriptEnvironment(t.TempDir()))
-	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 10 minutes") {
+	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 30 minutes") {
 		t.Fatalf("event = %+v", event)
 	}
 }
