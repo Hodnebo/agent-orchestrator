@@ -50,6 +50,22 @@ func TestTimedScriptCommandRoundTrip(t *testing.T) {
 	}
 }
 
+// A marker line ending in CRLF (a step pasted from a Windows editor) sets the
+// step's limit too, as the desktop and the local daemon read it.
+func TestTimedScriptCommandAcceptsCRLF(t *testing.T) {
+	minutes, command, ok := ParseTimedScriptCommand("# ao-timeout: 45m\r\nmake down")
+	if !ok || minutes != 45 || command != "make down" {
+		t.Fatalf("parsed = %d %q %v", minutes, command, ok)
+	}
+	if command, timeout := SplitScriptStepTimeout("# ao-timeout: 90m\r\nmake down"); command != "make down" || timeout != 90*time.Minute {
+		t.Fatalf("split = %q %s", command, timeout)
+	}
+	if commands, limits := SplitTimedScriptCommands([]string{"# ao-timeout: 5m\r\nmake down"}); !reflect.DeepEqual(commands, []string{"make down"}) ||
+		!reflect.DeepEqual(limits, []int{5}) {
+		t.Fatalf("split commands = %q %v", commands, limits)
+	}
+}
+
 func TestProjectScriptStepTimeoutJSON(t *testing.T) {
 	var steps []ProjectScriptStep
 	input := `["make up",{"command":"npm ci","timeoutMinutes":30},{"command":"seed","repository":"https://github.com/acme/web","timeoutMinutes":120},"# ao-timeout: 5m\n(\ncd -- '../web' || exit 1\nmake down\n)"]`

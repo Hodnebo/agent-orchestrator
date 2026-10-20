@@ -241,7 +241,7 @@ func ValidScriptStepTimeoutMinutes(minutes int) bool {
 // and runs the step (with the default limit).
 const scriptTimeoutMarker = "# ao-timeout: "
 
-var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\n`)
+var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\r?\n`)
 
 // TimedScriptCommand is the stored form of a step with its own time limit:
 // command after a timeout marker line. A step with the default limit (0 or
