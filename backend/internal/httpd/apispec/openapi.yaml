@@ -16803,10 +16803,19 @@ components:
           type: boolean
         prNumber:
           type: integer
+        state:
+          enum:
+          - merged
+          type: string
+        stateChangedAt:
+          format: date-time
+          type: string
       required:
       - ok
       - prNumber
       - method
+      - state
+      - stateChangedAt
       type: object
     MobileDeviceResponse:
       properties:
