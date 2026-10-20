@@ -182,6 +182,7 @@ func TestLatestRelevantTransitionDoesNotResurfaceFailureAfterSuccess(t *testing.
 
 func TestClaimedTransitionCarriesProviderActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
@@ -235,6 +236,7 @@ func TestClaimedTransitionCarriesProviderActivity(t *testing.T) {
 
 func TestResumeDeletedSessionReportsTermination(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET is_terminated = true
@@ -253,6 +255,7 @@ func TestResumeDeletedSessionReportsTermination(t *testing.T) {
 // never queued, so a restored session does not run it unasked.
 func TestTerminatedHandoffEndsWithItsHeldPromptsNotSent(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
@@ -360,6 +363,7 @@ func TestTerminatedHandoffEndsWithItsHeldPromptsNotSent(t *testing.T) {
 // (pgx rejects that as "conn busy" and the handoff stayed activating forever).
 func TestCompletedHandoffDeliversEveryHeldPrompt(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
@@ -424,7 +428,8 @@ func TestCompletedHandoffDeliversEveryHeldPrompt(t *testing.T) {
 // prompt and every queued turn stays.
 func TestDrainToTerminalSettlesTheUnclaimedPromptTurn(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
-	rlsStore := openRLSStore(t, admin)
+	rlsStore := nonBypassStore(t, store, admin)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	switchToTerminal := func(sessionID string) {

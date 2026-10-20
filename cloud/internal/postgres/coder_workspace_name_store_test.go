@@ -188,6 +188,40 @@ func withOrgTx(t *testing.T, admin *pgxpool.Pool, orgID string, fn func(pgx.Tx) 
 	}
 }
 
+// orgAdminPool opens a pool on admin's database whose every connection is
+// scoped to orgID (ao.org_id), for tests that arrange and read one
+// organization's rows with plain statements: forced row-level security then
+// shows them the rows even when the test role does not bypass it.
+func orgAdminPool(t *testing.T, admin *pgxpool.Pool, orgID string) *pgxpool.Pool {
+	t.Helper()
+	config := admin.Config().Copy()
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, `SELECT set_config('ao.org_id', $1, false)`, orgID)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// nonBypassStore is store when the test role is already subject to
+// row-level security, and otherwise a store opened as a role that is
+// (openRLSStore, which needs CREATEROLE).
+func nonBypassStore(t *testing.T, store *Store, admin *pgxpool.Pool) *Store {
+	t.Helper()
+	var bypass bool
+	if err := admin.QueryRow(context.Background(), `SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&bypass); err != nil {
+		t.Fatal(err)
+	}
+	if !bypass {
+		return store
+	}
+	return openRLSStore(t, admin)
+}
+
 // execOneRowAsOrg runs a statement as orgID (withOrgTx) and fails the test
 // unless it changed exactly one row.
 func execOneRowAsOrg(t *testing.T, admin *pgxpool.Pool, orgID, query string, args ...any) {

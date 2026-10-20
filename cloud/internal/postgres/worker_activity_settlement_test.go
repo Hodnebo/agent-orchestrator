@@ -200,19 +200,16 @@ func TestClaimWorkerTurnClampsTheApprovalModeToTheEffectiveMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store, admin, fixture := openNotificationTestStore(t)
 			ctx := context.Background()
-			if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET interface = 'chat', harness = $3, mode = $4
-				WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID, tc.harness, tc.sessionMode); err != nil {
-				t.Fatal(err)
-			}
+			execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sessions SET interface = 'chat', harness = $3, mode = $4
+				WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID, tc.harness, tc.sessionMode)
 			principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 			if _, err := store.SendMessage(ctx, principal, fixture.orgID, fixture.sessionID,
 				uuid.NewString(), "hello", tc.settings); err != nil {
 				t.Fatal(err)
 			}
 			if tc.modeCap != "" {
-				if _, err := admin.Exec(ctx, `UPDATE ao_turns SET mode_cap = $2 WHERE session_id = $1`, fixture.sessionID, tc.modeCap); err != nil {
-					t.Fatal(err)
-				}
+				execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_turns SET mode_cap = $3 WHERE org_id = $1 AND session_id = $2`,
+					fixture.orgID, fixture.sessionID, tc.modeCap)
 			}
 			turn, claimed, err := store.ClaimWorkerTurn(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch)
 			if err != nil || !claimed {

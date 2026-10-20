@@ -44,6 +44,7 @@ func initialTurn(t *testing.T, admin *pgxpool.Pool, sessionID string) (state str
 // session keeps the prompt on the agent's command line and queues nothing.
 func TestCreateSessionStartInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	create := func(kind, harness string, defaultInterface domain.SessionInterface) domain.Session {
@@ -116,6 +117,7 @@ func TestCreateSessionStartInterface(t *testing.T) {
 // across the upgrade still replays the first create.
 func TestCreateSessionIdempotencyPayloadUnchangedWithoutInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	key := uuid.NewString()
@@ -156,6 +158,7 @@ func TestCreateSessionIdempotencyPayloadUnchangedWithoutInterface(t *testing.T) 
 // default; the orchestrator's own interface (Chat) does not decide it.
 func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	setParent := func(defaultInterface string) {
 		t.Helper()
@@ -199,6 +202,7 @@ func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T
 // notice. A session the person switched to Chat does not move.
 func TestFallBackChatStart(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
@@ -277,6 +281,7 @@ func TestFallBackChatStart(t *testing.T) {
 // false notice and run its first task again in the terminal.
 func TestFallBackChatStartLeavesAChatThatRan(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	for _, tc := range []struct {
@@ -326,6 +331,7 @@ func TestFallBackChatStartLeavesAChatThatRan(t *testing.T) {
 // before the switch committed.
 func TestFallBackChatStartWaitsForASwitchInProgress(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
@@ -400,6 +406,7 @@ func TestFallBackChatStartWaitsForASwitchInProgress(t *testing.T) {
 // the terminal, which settles the turn unclaimed) the launch keeps it.
 func TestWorkerLaunchSpecDropsThePromptOnceChatClaimedATurn(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
@@ -430,6 +437,7 @@ func TestWorkerLaunchSpecDropsThePromptOnceChatClaimedATurn(t *testing.T) {
 // replays a scratch create made before the field).
 func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	var installationID string
