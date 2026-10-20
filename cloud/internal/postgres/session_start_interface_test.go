@@ -91,11 +91,20 @@ func TestCreateSessionStartInterface(t *testing.T) {
 			t.Fatalf("%s: a TUI session queued its prompt as a turn", tc.name)
 		}
 		var stored string
-		if err := admin.QueryRow(ctx, `SELECT default_interface FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
+		if err := admin.QueryRow(ctx, `SELECT COALESCE(agent_config->>'defaultInterface', '') FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
 			t.Fatal(err)
 		}
 		if stored != string(tc.defaultInterface) {
 			t.Fatalf("%s: stored default = %q, want %q", tc.name, stored, tc.defaultInterface)
+		}
+		// The agent config keeps decoding as before beside the key.
+		launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var agentConfig domain.ProjectAgentConfig
+		if err := json.Unmarshal(launch.AgentConfig, &agentConfig); err != nil {
+			t.Fatalf("%s: agent config %s: %v", tc.name, launch.AgentConfig, err)
 		}
 	}
 }
@@ -148,8 +157,10 @@ func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T
 	ctx := context.Background()
 	setParent := func(defaultInterface string) {
 		t.Helper()
-		if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator', interface = 'chat', default_interface = $2 WHERE id = $1`,
-			fixture.sessionID, defaultInterface); err != nil {
+		if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator', interface = 'chat',
+			agent_config = CASE WHEN $2 = '' THEN agent_config - 'defaultInterface'
+				ELSE agent_config || jsonb_build_object('defaultInterface', $2::text) END
+			WHERE id = $1`, fixture.sessionID, defaultInterface); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -314,7 +325,7 @@ func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
 		}
 		var stored string
 		var payload []byte
-		if err := admin.QueryRow(ctx, `SELECT default_interface FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
+		if err := admin.QueryRow(ctx, `SELECT COALESCE(agent_config->>'defaultInterface', '') FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
 			t.Fatal(err)
 		}
 		if stored != string(tc.defaultInterface) {
@@ -326,5 +337,31 @@ func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
 		if hasDefault := strings.Contains(string(payload), `"DefaultInterface"`); hasDefault != (tc.defaultInterface != "") {
 			t.Fatalf("%s: payload %s, DefaultInterface present = %v", tc.harness, payload, hasDefault)
 		}
+	}
+}
+
+func TestSessionAgentConfigJSON(t *testing.T) {
+	config := domain.ProjectAgentConfig{Model: "gpt-5", Effort: "high"}
+	plain, err := sessionAgentConfigJSON(config, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := json.Marshal(config); string(plain) != string(want) {
+		t.Fatalf("without a default = %s, want the agent config alone %s", plain, want)
+	}
+	withDefault, err := sessionAgentConfigJSON(config, domain.SessionInterfaceChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(withDefault, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["defaultInterface"] != "chat" || fields["model"] != "gpt-5" || fields["effort"] != "high" {
+		t.Fatalf("with a default = %s", withDefault)
+	}
+	var decoded domain.ProjectAgentConfig
+	if err := json.Unmarshal(withDefault, &decoded); err != nil || decoded != config {
+		t.Fatalf("decoded = %+v, %v; want %+v", decoded, err, config)
 	}
 }

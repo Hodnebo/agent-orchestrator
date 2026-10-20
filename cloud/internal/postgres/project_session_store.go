@@ -612,13 +612,28 @@ func (s *Store) CreateGitHubScratchProject(
 	return project, session, err
 }
 
-// defaultInterfaceValue is the stored form of a session's default interface:
-// a valid interface, or empty when the client sent none.
-func defaultInterfaceValue(value domain.SessionInterface) string {
-	if value.Valid() {
-		return string(value)
+// sessionDefaultInterfaceKey is the key of ao_sessions.agent_config that holds
+// the user's default session interface the session was created with
+// (domain.CreateSession.DefaultInterface). The workers an orchestrator spawns
+// resolve their interface from it (CreateOrchestratorChild); a session created
+// without one has no key, which reads as the TUI default. It lives beside the
+// agent config, outside domain.ProjectAgentConfig, so project settings never
+// accept it and every reader of the agent config ignores it.
+const sessionDefaultInterfaceKey = "defaultInterface"
+
+// sessionAgentConfigJSON is a new session's agent_config: its agent config
+// and, when the client sent one, its default session interface.
+func sessionAgentConfigJSON(agentConfig domain.ProjectAgentConfig, defaultInterface domain.SessionInterface) ([]byte, error) {
+	encoded, err := json.Marshal(agentConfig)
+	if err != nil || !defaultInterface.Valid() {
+		return encoded, err
 	}
-	return ""
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	fields[sessionDefaultInterfaceKey] = string(defaultInterface)
+	return json.Marshal(fields)
 }
 
 func createSessionTx(
@@ -756,7 +771,7 @@ func createSessionTx(
 	}
 	input.Harness, input.Model = harness, agentConfig.Model
 	input.Interface = domain.StartInterface(input.Kind, requestedInterface, input.DefaultInterface, input.Harness)
-	agentConfigJSON, err := json.Marshal(agentConfig)
+	agentConfigJSON, err := sessionAgentConfigJSON(agentConfig, input.DefaultInterface)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -774,10 +789,10 @@ func createSessionTx(
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
-			auto_review_enabled, default_interface
+			auto_review_enabled
 		)
 		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16, $18
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -797,7 +812,6 @@ func createSessionTx(
 		prefix,
 		autoReview,
 		input.Branch,
-		defaultInterfaceValue(input.DefaultInterface),
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)

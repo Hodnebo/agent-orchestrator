@@ -175,9 +175,10 @@ type CreateSession struct {
 	Interface SessionInterface
 	// DefaultInterface is the user's default session interface the session was
 	// created with. It resolves this session's interface (StartInterface) and
-	// is stored for the workers an orchestrator spawns, which resolve theirs
-	// from it as local spawns resolve from the daemon's default. Omitted when
-	// empty so the idempotency payload of a create without it is unchanged.
+	// is stored with the session's agent config (agent_config.defaultInterface)
+	// for the workers an orchestrator spawns, which resolve theirs from it as
+	// local spawns resolve from the daemon's default. Omitted when empty so the
+	// idempotency payload of a create without it is unchanged.
 	DefaultInterface SessionInterface `json:",omitempty"`
 	// Branch is the session's git branch. Empty means a generated
 	// <prefix>/<short id>; a named branch that already exists on the remote is

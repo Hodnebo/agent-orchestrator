@@ -123,7 +123,8 @@ func (s *Store) CreateOrchestratorChild(
 		var parentDefault domain.SessionInterface
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id, created_by_user_id::text, default_interface
+			`SELECT project_id, created_by_user_id::text,
+				COALESCE(agent_config->>'`+sessionDefaultInterfaceKey+`', '')
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2
 			  AND kind = 'orchestrator' AND is_terminated = false`,
