@@ -1135,3 +1135,17 @@ func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
 		}
 	}
 }
+
+func TestGetAgentHooksTrustsTheWorkspaceForCopilot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "s-1"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.json"))
+	resolved, _ := filepath.EvalSymlinks(workspace)
+	if err != nil || !strings.Contains(string(data), resolved) {
+		t.Fatalf("config.json = %q (%v), want %s trusted", data, err, resolved)
+	}
+}

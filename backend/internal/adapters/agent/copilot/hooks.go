@@ -116,6 +116,11 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := installCopilotHooks(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("copilot.GetAgentHooks: %w", err)
 	}
+	// A new worktree is untrusted, and Copilot's "Confirm folder trust" dialog
+	// would take every message AO types into its terminal.
+	if err := EnsureWorkspaceTrusted(ctx, cfg.WorkspacePath); err != nil {
+		return fmt.Errorf("copilot.GetAgentHooks: %w", err)
+	}
 	return nil
 }
 
