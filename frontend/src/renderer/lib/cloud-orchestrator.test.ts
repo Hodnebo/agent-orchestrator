@@ -81,13 +81,15 @@ describe("spawnCloudOrchestrator", () => {
 			harness: "claude-code",
 			displayName: "Orchestrator",
 			prompt: "",
+			defaultInterfaceMode: "tui",
 		});
 	});
 
 	// The control plane starts the orchestrator in Chat as the local daemon does
-	// and keeps the default for the workers it spawns.
+	// and keeps the default for the workers it spawns. "tui" is sent too: an
+	// orchestrator created without a default starts in the terminal.
 	it("is created with the user's default session interface", async () => {
-		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", undefined]] as const) {
+		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", "tui"]] as const) {
 			const queryClient = primeClient({ id: "project-1" });
 			queryClient.setQueryData<Settings>(settingsQueryKey, {
 				cloudControlPlaneUrl: "https://cloud.example.com",

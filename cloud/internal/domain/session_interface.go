@@ -51,15 +51,23 @@ func HarnessStartsInChat(harness string) bool {
 	return slices.Contains(chatStartHarnesses, harness)
 }
 
-// StartInterface is the interface a new session starts in, resolved exactly as
-// the local daemon resolves a spawn's mode (backend session_manager
+// StartInterface is the interface a new session starts in, resolved as the
+// local daemon resolves a spawn's mode (backend session_manager
 // startSessionMode; both are tested against
 // contracts/session-start-interface.json):
 //
 //  1. the interface the caller explicitly requested;
-//  2. Chat for an orchestrator;
-//  3. the user's default session interface (the desktop's setting);
-//  4. TUI.
+//  2. TUI when the caller sent no default interface (cloud only);
+//  3. Chat for an orchestrator;
+//  4. the user's default session interface (the desktop's setting);
+//  5. TUI.
+//
+// A create without a default comes from a desktop that predates the field
+// (v0.14.3 and older), so its orchestrators keep starting in the TUI as they
+// did before: that desktop sends an explicit approval mode ("default") with
+// every Chat turn, which would make a trusted orchestrator ask before each
+// command. The local daemon always has a default, so rule 2 never applies
+// there; a current desktop always sends its default, "tui" included.
 //
 // Chat then holds only for a harness that may start in Chat; any other
 // harness starts in the TUI without an error, as the local daemon falls back
@@ -75,6 +83,9 @@ func StartInterface(kind string, requested, defaultInterface SessionInterface, h
 func startPrecedence(kind string, requested, defaultInterface SessionInterface) SessionInterface {
 	if requested.Valid() {
 		return requested
+	}
+	if defaultInterface == "" {
+		return SessionInterfaceTUI
 	}
 	if kind == "orchestrator" {
 		return SessionInterfaceChat

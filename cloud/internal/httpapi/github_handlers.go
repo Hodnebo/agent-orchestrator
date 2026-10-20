@@ -87,8 +87,9 @@ type scratchOrchestratorRequest struct {
 	Harness string `json:"harness"`
 	Prompt  string `json:"prompt,omitempty"`
 	// DefaultInterfaceMode is the user's default session interface, as on a
-	// session create: the orchestrator starts in Chat where its harness can,
-	// and the workers it spawns resolve their interface from this default.
+	// session create: with it the orchestrator starts in Chat where its
+	// harness can (without it, in the TUI), and the workers it spawns resolve
+	// their interface from this default.
 	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
