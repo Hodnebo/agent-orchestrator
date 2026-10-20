@@ -20,7 +20,8 @@ import (
 func TestWorkingFolderCheckoutFailuresHaveTheirOwnStartupErrors(t *testing.T) {
 	occupied := checkoutStartupFailure(fmt.Errorf("%w: ~/work/alice", worker.ErrWorkingDirectoryOccupied))
 	want := "~/work/alice already exists (created by your Coder template). " +
-		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it."
+		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+		"Start a new session after changing it."
 	if occupied.Code != domain.WorkspaceStartupErrorWorkingDirectoryOccupied || occupied.Status != worker.WorkspaceStartupFailed ||
 		occupied.Message != want {
 		t.Fatalf("occupied failure = %+v", occupied)
@@ -111,5 +112,44 @@ func TestExtraReposAreClonedBesideTheWorkingFolder(t *testing.T) {
 	scripts := worker.SessionScriptEnvironment{WorkspaceDir: workspace, ReposRoot: filepath.Dir(workspace)}.Map()
 	if scripts["AO_WORKTREE_PATH"] != workspace || scripts["AO_REPOS_ROOT"] != filepath.Join(home, "work") {
 		t.Fatalf("script environment = %v", scripts)
+	}
+}
+
+// A working folder that is not AO's is never the session's workspace: the
+// session works in an empty folder of AO's own (so its shell and agent never
+// open in the template's folder), and its Cleanup hook runs no Cleanup.
+func TestRefusedWorkingFolderGetsAWorkspaceOfAOsOwn(t *testing.T) {
+	home := t.TempDir()
+	dataDir := filepath.Join(t.TempDir(), "worker")
+	t.Setenv(worker.UserHomeEnv, home)
+	t.Setenv("AO_WORKSPACE_DIR", "")
+	occupied := filepath.Join(home, "work", "alice")
+	if err := os.MkdirAll(filepath.Dir(occupied), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), occupied); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := settleCheckoutDirectory(discardLogger(), occupied, dataDir)
+	if !errors.Is(err, worker.ErrWorkingDirectoryOccupied) {
+		t.Fatalf("error = %v", err)
+	}
+	if want := filepath.Join(dataDir, refusedCheckoutWorkspace); workspace != want || os.Getenv("AO_WORKSPACE_DIR") != want {
+		t.Fatalf("workspace = %q, AO_WORKSPACE_DIR = %q, want %q", workspace, os.Getenv("AO_WORKSPACE_DIR"), want)
+	}
+	if err := worker.WriteSkippedCleanupHook(dataDir, worker.CleanupSkipNoWorkingFolder); err != nil {
+		t.Fatal(err)
+	}
+	hook, err := os.ReadFile(filepath.Join(dataDir, worker.CleanupHookFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hook), occupied) || strings.Contains(string(hook), "cd ") ||
+		!strings.Contains(string(hook), worker.CleanupHookSkippedPrefix+worker.CleanupSkipNoWorkingFolder) {
+		t.Fatalf("hook = %q", hook)
+	}
+	owned := filepath.Join(home, "work", "bob")
+	if workspace, err := settleCheckoutDirectory(discardLogger(), owned, dataDir); err != nil || workspace != owned {
+		t.Fatalf("AO's own folder = %q, %v", workspace, err)
 	}
 }

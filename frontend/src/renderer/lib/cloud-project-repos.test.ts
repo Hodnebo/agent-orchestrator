@@ -7,6 +7,7 @@ import {
 	timedScriptCommand,
 	additionalReposProblem,
 	isStandaloneCloudProject,
+	normalizeWorkingDirectory,
 	parseRepoScriptCommand,
 	parseScriptSteps,
 	projectAdditionalRepos,
@@ -79,11 +80,26 @@ describe("cloud project repositories", () => {
 		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "" })).toBe("npm ci");
 	});
 
+	it("keeps a local step's typed 10 minute limit, which is not a local Cleanup step's default", () => {
+		expect(serializeLocalScriptStep({ command: "make down", folder: "", timeout: "10" })).toBe("# ao-timeout: 10m\nmake down");
+		expect(parseLocalScriptStep("# ao-timeout: 10m\nmake down")).toEqual({ command: "make down", folder: "", timeout: "10" });
+		// A Cloud step's default is 10 minutes, so there it stays implicit.
+		expect(timedScriptCommand(10, "make down")).toBe("make down");
+	});
+
 	it("accepts a time limit of 1 to 120 whole minutes", () => {
 		expect(scriptStepTimeoutMinutes("")).toBeUndefined();
 		expect(scriptStepTimeoutMinutes(" 1 ")).toBe(1);
 		expect(scriptStepTimeoutMinutes("120")).toBe(120);
 		for (const bad of ["0", "121", "1.5", "-3", "ten"]) expect(scriptStepTimeoutMinutes(bad)).toBeNull();
+	});
+
+	it("normalizes a working folder as the control plane stores it", () => {
+		expect(normalizeWorkingDirectory("/work/{repo}/")).toBe("/work/{repo}");
+		expect(normalizeWorkingDirectory(" ~/work//{repo}/ ")).toBe("~/work/{repo}");
+		expect(normalizeWorkingDirectory("$HOME//src/")).toBe("$HOME/src");
+		expect(normalizeWorkingDirectory("~/")).toBe("~/");
+		expect(normalizeWorkingDirectory("work/")).toBe("work/");
 	});
 
 	it("rejects working folders the control plane rejects", () => {
@@ -93,6 +109,8 @@ describe("cloud project repositories", () => {
 		expect(workingDirectoryProblem("/")).toBe("form");
 		expect(workingDirectoryProblem("work")).toBe("form");
 		expect(workingDirectoryProblem("~/work/../x")).toBe("segments");
+		expect(workingDirectoryProblem("~/.ao/{repo}")).toBe("aoState");
+		expect(workingDirectoryProblem("/home/coder/.ao/work")).toBe("aoState");
 		expect(workingDirectoryProblem("~/work/{name}")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/work/$USER")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/a\tb")).toBe("characters");

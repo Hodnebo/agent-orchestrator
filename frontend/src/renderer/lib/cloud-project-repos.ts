@@ -161,7 +161,12 @@ export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
 
 /** The stored step with its own time limit; one with the default (or none) is the command as is. */
 export function timedScriptCommand(minutes: number | undefined, command: string): string {
-	if (minutes === undefined || minutes <= 0 || minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES) return command;
+	return minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES ? command : withTimeoutMarker(minutes, command);
+}
+
+/** command led by its time limit's marker line; without a limit, command as is. */
+function withTimeoutMarker(minutes: number | undefined, command: string): string {
+	if (minutes === undefined || minutes <= 0) return command;
 	return `# ao-timeout: ${minutes}m\n${command}`;
 }
 
@@ -184,15 +189,23 @@ export function scriptStepTimeoutMinutes(text: string | undefined): number | und
 	return minutes >= MIN_SCRIPT_STEP_TIMEOUT_MINUTES && minutes <= MAX_SCRIPT_STEP_TIMEOUT_MINUTES ? minutes : null;
 }
 
-/** A stored step as the editor holds it, without its repository folder (a local step). */
+/**
+ * A stored step as the editor holds it, without its repository folder (a local
+ * step). Every limit it sets shows, 10 minutes too: a local Cleanup step
+ * without one has no limit at all, so 10 is not its default.
+ */
 export function parseLocalScriptStep(stored: string): ScriptStepDraft {
 	const { minutes, command } = parseTimedScriptCommand(stored);
-	return { command, folder: "", ...timeoutText(minutes) };
+	return { command, folder: "", ...(minutes === undefined ? {} : { timeout: String(minutes) }) };
 }
 
-/** The stored form of a local step: its command with its own time limit. */
+/**
+ * The stored form of a local step: its command with the time limit typed for
+ * it, 10 minutes included (a local Cleanup step without one runs without a
+ * limit, so 10 must be kept).
+ */
 export function serializeLocalScriptStep(step: ScriptStepDraft): string {
-	return timedScriptCommand(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
+	return withTimeoutMarker(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
 }
 
 /** A draft's time limit for a stored one: none for the default. */
@@ -257,7 +270,7 @@ export const MAX_WORKING_DIRECTORY_LENGTH = 512;
  * domain.ValidateCoderWorkingDirectory on the trimmed value; undefined when it
  * is accepted ("" keeps the connection's).
  */
-export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "placeholder" | "standaloneRepo" | undefined {
+export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "aoState" | "placeholder" | "standaloneRepo" | undefined {
 	const directory = value.trim();
 	if (directory === "") return undefined;
 	if ([...directory].length > MAX_WORKING_DIRECTORY_LENGTH) return "length";
@@ -267,10 +280,26 @@ export function workingDirectoryProblem(value: string, options: { standalone?: b
 	const rest = prefix === undefined ? undefined : directory.slice(prefix.length);
 	if (rest === undefined || rest.replace(/^\/+|\/+$/g, "") === "") return "form";
 	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return "segments";
+	// AO's own state (~/.ao, or the durable root's .ao) holds the worker's token.
+	if (rest.split("/").includes(".ao")) return "aoState";
 	if (/[{}$`\\]/.test(rest.split("{repo}").join(""))) return "placeholder";
 	// A standalone project has no repository to name the folder after.
 	if (options.standalone && rest.includes("{repo}")) return "standaloneRepo";
 	return undefined;
+}
+
+/**
+ * A working folder as the control plane stores it
+ * (domain.NormalizeCoderWorkingDirectory): trimmed, without repeated or
+ * trailing slashes after its ~/, $HOME/ or / prefix ("/work/{repo}/" becomes
+ * "/work/{repo}"). Anything else comes back trimmed.
+ */
+export function normalizeWorkingDirectory(value: string): string {
+	const directory = value.trim();
+	const prefix = ["~/", "$HOME/", "/"].find((candidate) => directory.startsWith(candidate));
+	if (prefix === undefined) return directory;
+	const segments = directory.slice(prefix.length).split("/").filter((segment) => segment !== "");
+	return segments.length === 0 ? directory : prefix + segments.join("/");
 }
 
 /** UTF-8 byte length, for the 16 KB rules limit. */

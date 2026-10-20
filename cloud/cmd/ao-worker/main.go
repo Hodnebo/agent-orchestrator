@@ -183,6 +183,9 @@ func run(logger *slog.Logger) error {
 	hasRepository := strings.TrimSpace(bootstrap.Launch.RepositoryURL) != "" &&
 		!worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL)
 	adoptStandaloneFolder := false
+	// checkoutRefused: the project's working folder is not AO's to use, so
+	// the session never works there and its Cleanup never runs there.
+	checkoutRefused := false
 	switch {
 	case workingDirectory != "" && hasRepository:
 		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
@@ -201,9 +204,9 @@ func run(logger *slog.Logger) error {
 			_ = os.Setenv("AO_WORKSPACE_DIR", dir)
 		}
 	case checkoutDirectory != "" && hasRepository:
-		workspace = checkoutDirectory
+		workspace, workingDirectoryErr = settleCheckoutDirectory(logger, checkoutDirectory, dataDir)
 		reuse.Workspace = workspace
-		workingDirectoryErr = resolveCheckoutDirectory(logger, workspace)
+		checkoutRefused = workingDirectoryErr != nil
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
@@ -225,20 +228,25 @@ func run(logger *slog.Logger) error {
 	}
 	// The project's Cleanup commands run before the workspace is deleted; the
 	// provider runs this hook (cleanuphook) since the worker is gone by then.
+	// A session that never got its working folder installs a hook that runs
+	// no Cleanup: the folder is someone else's (the template's stack), and the
+	// project's Cleanup (say `docker compose down -v`) must never run there.
 	_, launchCleanup := bootstrap.Launch.ProjectScripts()
-	if err := worker.WriteCleanupHook(dataDir, launchCleanup, workspace, scriptEnvironment); err != nil {
+	if checkoutRefused {
+		if err := worker.WriteSkippedCleanupHook(dataDir, worker.CleanupSkipNoWorkingFolder); err != nil {
+			logger.Warn("install project cleanup hook", "error", err)
+		}
+	} else if err := worker.WriteCleanupHook(dataDir, launchCleanup, workspace, scriptEnvironment); err != nil {
 		logger.Warn("install project cleanup hook", "error", err)
 	}
 
 	// The workspace shell is deliberately available before checkout starts. A
 	// developer can inspect the sandbox immediately while repository preparation
-	// and coding-agent authentication continue in the background.
-	// A working folder the session cannot use is reported on the session
-	// below; it is never created or changed here.
-	if checkoutDirectory == "" || workingDirectoryErr == nil {
-		if err := os.MkdirAll(workspace, 0o755); err != nil {
-			return fmt.Errorf("create workspace directory: %w", err)
-		}
+	// and coding-agent authentication continue in the background. A working
+	// folder the session cannot use is reported on the session below and never
+	// created or changed: the workspace is then an empty folder of AO's own.
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return fmt.Errorf("create workspace directory: %w", err)
 	}
 	for key, value := range map[string]string{
 		"AO_CLOUD_PUBLIC_URL":   publicURL,
@@ -889,6 +897,16 @@ func cloneExtraRepos(
 		// repo's .git/config. In the user's own workspace an existing checkout
 		// is adopted without writing AO's git configuration into it.
 		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
+		if blocked := worker.ExtraRepoFolderBlocked(checkout.Path); blocked != "" {
+			// Typically a repository added to the project after the session
+			// was created, beside a working folder whose parent the template
+			// made: the bootstrap prepared only the folders known then.
+			logger.Warn("multi-repo: additional repository skipped: AO cannot create its folder. "+
+				"A repository added to the project after this session was created is checked out in new sessions; "+
+				"start a new session to work on it.",
+				"repo", checkout.URL, "path", checkout.Path, "reason", blocked)
+			continue
+		}
 		adopted, err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, worker.ExtraRepoOptions{
 			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
 			Token: token, DataDir: dataDir, Adopt: userWorkspace,

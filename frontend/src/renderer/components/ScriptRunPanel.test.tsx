@@ -306,6 +306,25 @@ describe("ScriptRunPanel quiet step note", () => {
 		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
 	});
 
+	it("counts from when the step last wrote any output, not when its tail last changed", () => {
+		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
+		// The tail has not changed since 10:00:30, but a heartbeat at 10:04:40
+		// says the step wrote output at 10:04:20 (control plane time), so it is
+		// not silent; the worker's own startedAt clock is far behind and ignored.
+		const busy = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:04:40Z"], [
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:40:00Z", output: "" },
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T09:40:00Z", output: "seeding", outputAt: "2026-10-18T10:04:20Z" },
+		]);
+		const { rerender } = render(<ScriptRunPanel run={busy} />);
+		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
+		const silent = quietRun(["2026-10-18T10:00:00Z", "2026-10-18T10:04:40Z"], [
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "" },
+			{ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:00Z", output: "seeding", outputAt: "2026-10-18T10:01:00Z" },
+		]);
+		rerender(<ScriptRunPanel run={silent} />);
+		expect(screen.getByTestId("script-step-quiet")).toHaveTextContent("No output for 4 min.");
+	});
+
 	it("goes away when new output arrives or the step ends, and omits an unknown limit", () => {
 		vi.setSystemTime(new Date("2026-10-18T10:05:00Z"));
 		const quiet = quietRun(["2026-10-18T10:00:00Z"], [

@@ -287,6 +287,22 @@ func TestMeOfferingKinds(t *testing.T) {
 	}
 }
 
+// /me tells the desktop whether an ao-worker Coder session checks out in the
+// project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER), on the
+// top-level and the per-organization offering, so its copy follows the flag.
+func TestMeOfferingCarriesTheWorkerWorkingFolderFlag(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		store := &offeringStore{memberships: []domain.Membership{{OrgID: offeringTeamOrgID, Role: "member"}}}
+		server := newOfferingServer(store)
+		server.provisioning.Coder.WorkerWorkingFolder = enabled
+		body := getMe(t, server, teamPrincipal("coder"))
+		if body.Offering.CoderWorkerWorkingFolder != enabled || len(body.Organizations) != 1 ||
+			body.Organizations[0].Offering == nil || body.Organizations[0].Offering.CoderWorkerWorkingFolder != enabled {
+			t.Fatalf("flag %v: offering = %+v, organizations = %+v", enabled, body.Offering, body.Organizations)
+		}
+	}
+}
+
 // The personal organization listed first does not inherit the team org's coder
 // capability: it is offered the deployment defaults, while the team org entry
 // keeps coder. The token's team org is the active one, which the top-level

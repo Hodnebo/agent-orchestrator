@@ -655,10 +655,22 @@ func (c *Client) workspaceName(sessionID string) string {
 // predatesWorkspaceName reports a workspace created well before this session
 // chose its stored name: it carries the name but belongs to another session
 // (two sessions whose readable names collide), so AO must never adopt,
-// bootstrap or delete it as this session's.
-func (c *Client) predatesWorkspaceName(view workspace) bool {
-	return !c.workspaceNameIssuedAt.IsZero() && !view.CreatedAt.IsZero() &&
-		view.CreatedAt.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
+// bootstrap or delete it as this session's. The workspace's created_at is by
+// the Coder server's clock and the name's time by the control plane's, so
+// created_at is first moved onto the control plane's clock by how far the
+// Coder server's clock was off when it answered (its Date header, coderNow,
+// against receivedAt): a bring-your-own Coder whose clock runs minutes behind
+// never makes the session's own workspace look like another's. Without a
+// Date header created_at is taken as is.
+func (c *Client) predatesWorkspaceName(view workspace, coderNow, receivedAt time.Time) bool {
+	if c.workspaceNameIssuedAt.IsZero() || view.CreatedAt.IsZero() {
+		return false
+	}
+	created := view.CreatedAt
+	if !coderNow.IsZero() && !receivedAt.IsZero() {
+		created = created.Add(receivedAt.Sub(coderNow))
+	}
+	return created.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
 }
 
 // Create provisions a Coder workspace from the configured template.
@@ -749,7 +761,8 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	var view workspace
 	requestPath := "/api/v2/users/" + url.PathEscape(c.owner) + "/workspace/" +
 		url.PathEscape(expectedName)
-	err := c.do(ctx, http.MethodGet, requestPath, nil, &view)
+	coderNow, err := c.doAt(ctx, http.MethodGet, requestPath, nil, &view)
+	receivedAt := time.Now()
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return sandbox.Environment{}, false, nil
 	}
@@ -762,7 +775,7 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	if normalizeState(view.LatestBuild.Status) == sandbox.StateDeleted {
 		return sandbox.Environment{}, false, nil
 	}
-	if c.predatesWorkspaceName(view) {
+	if c.predatesWorkspaceName(view, coderNow, receivedAt) {
 		// Another session's workspace holds this name. Report it absent: a
 		// create then fails on Coder's name conflict instead of adopting it,
 		// and a deletion completes without touching it.
@@ -1164,14 +1177,30 @@ func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home st
 	directory, err := ExpandCheckoutDirectory(c.checkoutDirectory, home)
 	if err != nil {
 		return &sandbox.StartupError{
-			Code: sandbox.StartupErrorBootstrapFailed,
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
 			Message: fmt.Sprintf("AO couldn't use this project's working folder (%s) in the workspace: %v. "+
 				"Fix it in Project settings > Repositories, then start a new session.", c.checkoutDirectory, err),
 			Err: err,
 		}
 	}
+	// The checkout must survive a workspace restart like AO's own state:
+	// inside the durable root (for example $HOME), never a folder such as
+	// /workspace/<repo> a Docker template does not keep.
+	if root := path.Clean(resolved.DurableRoot); !strings.HasPrefix(directory, strings.TrimSuffix(root, "/")+"/") {
+		shown := root
+		if home = strings.TrimSpace(home); home != "" && root == path.Clean(home) {
+			shown = "your home folder (" + root + ")"
+		}
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryNotDurable,
+			Message: domain.CoderWorkingFolderNotDurableMessage(shown) + " " +
+				fmt.Sprintf("This project's working folder is %s. Change it in Project settings > Repositories, then start a new session.", c.checkoutDirectory),
+			Err: fmt.Errorf("coder: checkout directory %s is outside the durable root %s", directory, root),
+		}
+	}
 	resolved.CheckoutDirectory = directory
 	resolved.CheckoutSiblings = slices.Clone(c.checkoutSiblings)
+	resolved.CheckoutHome = strings.TrimSpace(home)
 	resolved.Environment["AO_WORKSPACE_DIR"] = directory
 	resolved.Environment[CheckoutDirectoryEnv] = directory
 	if home = strings.TrimSpace(home); home != "" {
@@ -1293,6 +1322,11 @@ func sha256Hex(data []byte) string {
 
 // classifyBootstrapError attaches the user-facing startup error a failed
 // bootstrap should surface. Errors already classified pass through.
+// workingFolderUnusableMarker starts the line the bootstrap prints when it
+// could not prepare the folders of a working-folder checkout
+// (checkoutDirectoryScript), followed by what failed.
+const workingFolderUnusableMarker = "AO working folder unusable:"
+
 func classifyBootstrapError(err error, durableRoot string) error {
 	var startupErr *sandbox.StartupError
 	if err == nil || errors.As(err, &startupErr) || errors.Is(err, context.Canceled) {
@@ -1306,6 +1340,17 @@ func classifyBootstrapError(err error, durableRoot string) error {
 		}
 	}
 	text := err.Error()
+	if _, rest, found := strings.Cut(text, workingFolderUnusableMarker); found {
+		// The same folder fails the same way on every retry: the session
+		// stops with the reason (the reconciler parks it) until it changes.
+		detail, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: "AO couldn't prepare this project's working folder in the workspace: " + strings.TrimSpace(detail) +
+				". Fix the folder or the project's working folder (Project settings > Repositories), then start a new session.",
+			Err: err,
+		}
+	}
 	switch {
 	case strings.Contains(text, "is not a mounted directory"):
 		return &sandbox.StartupError{
@@ -1885,7 +1930,8 @@ func bootstrapCommandForArchive(
 		"  printf '%s\\n' " + shellQuote(strings.TrimSpace(bootstrap.DurableIdentity)) + " | sudo -n tee \"$identity_file\" >/dev/null\nfi\n" +
 		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + repository + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
 		durableRootSiblingsScript(workerUser, bootstrap.CheckoutDirectory == "") +
-		checkoutDirectoryScript(workerUser, bootstrap.CheckoutDirectory, bootstrap.CheckoutSiblings) +
+		checkoutDirectoryScript(workerUser, bootstrap.CheckoutDirectory, bootstrap.CheckoutSiblings,
+			bootstrap.CheckoutHome, layout.DurableRoot) +
 		binaryPreparation +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0600 \"$stage/worker.env\" " + shellQuote(workerEnvironment) + "\n" +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
@@ -1939,34 +1985,55 @@ func durableRootSiblingsScript(workerUser string, enabled bool) string {
 
 // checkoutDirectoryScript prepares a working-folder checkout for the dedicated
 // worker user (directory is absolute; siblings are the additional
-// repositories' folder names beside it). A missing parent (for example ~/work)
-// is created for the workspace login user, with group write for the worker
-// user so additional repositories can be cloned beside the checkout later.
-// Each ancestor the worker user cannot traverse gets o+x (traversal only, as
-// the durable root does). A missing checkout or sibling folder is created
-// owned by the worker user. A folder that already exists is never chowned or
-// changed: the worker checks it is its own (worker.ResolveOwnedCheckoutDirectory)
-// and refuses a folder the template created. Failing to create a folder does
-// not fail the bootstrap; the worker reports it on the session.
-func checkoutDirectoryScript(workerUser, directory string, siblings []string) string {
+// repositories' folder names beside it; home is the workspace login user's
+// home and durableRoot the resolved durable root). A missing parent folder
+// (for example ~/work, or ~/src/acme of ~/src/acme/alice) is created one level
+// at a time, only below home or the durable root, each owned by the login
+// user; the checkout's own parent gets group write for the worker user so
+// additional repositories can be cloned beside the checkout later. Only the
+// home itself and the folders below it get o+x (traversal only, as the durable
+// root does) when the worker user cannot enter them; "/", "/root" and every
+// other folder outside the home are never changed. A missing checkout or
+// sibling folder is created owned by the worker user. A folder that already
+// exists is never chowned or changed: the worker checks it is its own
+// (worker.ResolveOwnedCheckoutDirectory) and refuses a folder the template
+// created. Failing to create the checkout or a sibling folder does not fail
+// the bootstrap; the worker reports it on the session. Failing to prepare the
+// parent folders does: it reports workingFolderUnusableMarker with what
+// failed, which the control plane turns into the session's
+// working_directory_unusable startup error.
+func checkoutDirectoryScript(workerUser, directory string, siblings []string, home, durableRoot string) string {
 	if directory == "" {
 		return ""
 	}
 	user := shellQuote(workerUser)
 	parent := path.Dir(directory)
+	home = cleanFolder(home)
+	durableRoot = cleanFolder(durableRoot)
 	var script strings.Builder
-	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n" +
-		"if [ ! -e \"$checkout_parent\" ] && [ ! -L \"$checkout_parent\" ]; then\n" +
-		"  sudo -n mkdir -p \"$checkout_parent\"\n" +
-		"  sudo -n chown \"$(id -u):\"" + user + " \"$checkout_parent\"\n" +
-		"  sudo -n chmod g+wx \"$checkout_parent\"\nfi\n")
+	script.WriteString("ao_folder_unusable() { printf '%s %s\\n' " + shellQuote(workingFolderUnusableMarker) + " \"$1\" >&2; exit 1; }\n")
+	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n")
 	var ancestors []string
 	for dir := parent; dir != "/" && dir != "."; dir = path.Dir(dir) {
 		ancestors = append(ancestors, dir)
 	}
 	for index := len(ancestors) - 1; index >= 0; index-- {
-		quoted := shellQuote(ancestors[index])
-		script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted + "\n")
+		dir := ancestors[index]
+		quoted := shellQuote(dir)
+		if folderBelow(dir, home) || folderBelow(dir, durableRoot) {
+			owner, mode := "\"$(id -u):$(id -g)\"", ""
+			if dir == parent {
+				owner, mode = "\"$(id -u):\""+user, " &&\n    sudo -n chmod g+wx "+quoted
+			}
+			script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
+				"  { sudo -n mkdir " + quoted + " &&\n" +
+				"    sudo -n chown " + owner + " " + quoted + mode + "; } ||\n" +
+				"    ao_folder_unusable " + shellQuote("could not create "+dir) + "\nfi\n")
+		}
+		if dir != "/root" && (dir == home || folderBelow(dir, home)) {
+			script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted +
+				" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+dir) + "\n")
+		}
 	}
 	script.WriteString("ao_checkout_folder() {\n" +
 		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
@@ -1976,6 +2043,25 @@ func checkoutDirectoryScript(workerUser, directory string, siblings []string) st
 		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
 	}
 	return script.String()
+}
+
+// cleanFolder is folder as a clean absolute path other than "/", or "" when
+// it is not one.
+func cleanFolder(folder string) string {
+	folder = strings.TrimSpace(folder)
+	if !strings.HasPrefix(folder, "/") {
+		return ""
+	}
+	if folder = path.Clean(folder); folder == "/" {
+		return ""
+	}
+	return folder
+}
+
+// folderBelow reports whether dir is strictly below base (a cleanFolder; ""
+// has nothing below it).
+func folderBelow(dir, base string) bool {
+	return base != "" && strings.HasPrefix(dir, base+"/")
 }
 
 // durableRootScript prepares the durable root before anything is written
@@ -2232,17 +2318,24 @@ func isConflict(err error) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
+	_, err := c.doAt(ctx, method, requestPath, body, output)
+	return err
+}
+
+// doAt is do that also returns the Coder server's clock when it answered
+// (its Date header; zero when it sent none or an unreadable one).
+func (c *Client) doAt(ctx context.Context, method, requestPath string, body, output any) (time.Time, error) {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("coder: encode request: %w", err)
+			return time.Time{}, fmt.Errorf("coder: encode request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+requestPath, requestBody)
 	if err != nil {
-		return fmt.Errorf("coder: create request: %w", err)
+		return time.Time{}, fmt.Errorf("coder: create request: %w", err)
 	}
 	request.Header.Set("Coder-Session-Token", c.token)
 	if body != nil {
@@ -2250,22 +2343,23 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
+		return time.Time{}, fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
 	}
 	defer response.Body.Close()
+	serverNow, _ := http.ParseTime(response.Header.Get("Date"))
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return sandbox.ErrNotFound
+		return serverNow, sandbox.ErrNotFound
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
+		return serverNow, &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))
-		return nil
+		return serverNow, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBody)).Decode(output); err != nil {
-		return fmt.Errorf("coder: decode API response: %w", err)
+		return serverNow, fmt.Errorf("coder: decode API response: %w", err)
 	}
-	return nil
+	return serverNow, nil
 }

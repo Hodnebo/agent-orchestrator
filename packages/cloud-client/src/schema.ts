@@ -1633,6 +1633,8 @@ export interface components {
             features: string[];
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
+            /** @description A Coder session whose worker runs as the dedicated ao-worker user checks the main repository out in the project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). When false, a project's working folder applies only with the workspace user. Absent from older control planes; clients treat absent as false. */
+            coderWorkerWorkingFolder?: boolean;
         };
         /** @description Legacy provider selector data; the same values as offering.providers and offering.defaultProvider. */
         SandboxProviders: {
@@ -2307,6 +2309,11 @@ export interface components {
             hint?: string;
             /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had 10). */
             timeoutMinutes?: number;
+            /**
+             * Format: date-time
+             * @description Set by the control plane on a running step's live update: when the step last wrote any output, by the control plane's clock (from the worker's outputAgeMs). It moves even when the output tail looks the same (a repeated line, a progress line redrawn with a carriage return): a worker updates a step that keeps writing at least every minute. Absent from an older worker; clients then use the event's createdAt.
+             */
+            outputAt?: string;
         };
         /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
         WorkerScriptStepEventInput: {
@@ -2318,6 +2325,8 @@ export interface components {
             payload: components["schemas"]["ScriptStepPayload"] & {
                 /** @enum {string} */
                 phase?: "setup";
+                /** @description On a running step's live update: how many milliseconds before the update the step last wrote any output. The control plane turns it into outputAt with its own clock and does not keep it; an outputAt the worker sends is replaced. */
+                outputAgeMs?: number;
             };
         };
         /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */
@@ -2328,7 +2337,7 @@ export interface components {
              * @description Required when status is failed.
              * @enum {string}
              */
-            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed";
+            code?: "repository_checkout_failed" | "working_directory_unusable" | "project_setup_failed" | "working_directory_occupied";
             /** @description User-facing explanation; required when status is failed. */
             message?: string;
             /** @description Redacted excerpt, for Setup the failed command's output tail. */
@@ -2704,7 +2713,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable and project_setup_failed are the exception: the worker has checked in but could not prepare the workspace, so the agent does not start; they stay until the worker reports the workspace ready after the user reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), repository_checkout_failed, working_directory_unusable or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied or project_setup_failed (reported by the worker). Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;

@@ -35,7 +35,9 @@ local project has: open the project's settings and choose **Scripts**.
   the session and never changes it otherwise: renaming the chat does not
   rename the workspace. Sessions created before
   this scheme keep their original `<prefix>-<id>` (or `ao-<id>`) workspace
-  names. The session's top bar shows the workspace name with a link that
+  names, and so do new sessions while the control plane's
+  `AO_CLOUD_CODER_READABLE_NAMES` is off (see
+  [Coder rollout flags](deployment.md#coder-rollout-flags)). The session's top bar shows the workspace name with a link that
   opens it in Coder, for as long as the session exists.
 - **Durable root.** AO keeps its own state under the workspace user's home
   (`$HOME/.ao`): the worker, its logs, and the agent's configuration and
@@ -124,21 +126,38 @@ remote, and falls back to a fresh clone in `$HOME/repository`.
 
 ### Working folder with the `ao-worker` user
 
-With **Run the agent as the workspace user** off (the default), a project's
+With **Run the agent as the workspace user** off (the default), and the
+control plane's `AO_CLOUD_CODER_WORKER_WORKING_FOLDER` on (see
+[Coder rollout flags](deployment.md#coder-rollout-flags)), a project's
 **Working folder** (Project settings > Repositories, for example
 `~/work/{repo}`) is where AO clones the main repository instead of
 `$HOME/repository`, and the additional repositories go beside it
 (`~/work/<name>`). `~` is the workspace login user's home; `{repo}` is the
-repository name, fixed when the session is created. The bootstrap creates a
-missing parent folder (owned by the login user, group-writable for
-`ao-worker`) and the checkout folders (owned by `ao-worker`), and adds
-traverse permission (`o+x`) to a parent folder `ao-worker` cannot enter. It
+repository name, fixed when the session is created. The folder must be inside
+the connection's durable root (your home by default, so start it with `~/`):
+a folder outside it, such as `/workspace/{repo}` on a Docker template, loses
+the agent's uncommitted work when the workspace restarts. AO refuses such a
+folder when the project is saved, or, when that is only known inside the
+workspace, stops the session with "The working folder must be inside ... so
+the agent's work survives restarts." The bootstrap creates missing parent
+folders below your home (owned by the login user; the checkout's own parent
+is group-writable for `ao-worker`) and the checkout folders (owned by
+`ao-worker`), and adds traverse permission (`o+x`) to your home or a folder
+below it that `ao-worker` cannot enter, never to `/`, `/root` or a folder
+outside your home. If it cannot prepare those folders the session stops with
+"The working directory can't be used" and the reason. It
 never takes over or changes a folder that already exists: if the template
 already cloned `~/work/<repo>` (for example because the project ticked that in
 its **Template options**), the session stops with "The working folder is already
 in use". Untick it in the Template options, or turn on **Run the agent as the
-workspace user** to work in the template's checkout instead. A restarted or
-restored session keeps using AO's own folder.
+workspace user** to work in the template's checkout instead. Such a session
+never opens its terminal in that folder, and deleting it runs no Cleanup
+("Cleanup did not run: this session never got its working folder"), so the
+project's Cleanup never touches the template's folder. A restarted or
+restored session keeps using AO's own folder. The additional repositories'
+folders are prepared for the repositories the project lists when the session
+is created; a repository added later is checked out in new sessions (an
+existing session skips it, and logs why, when it cannot create its folder).
 
 ### What goes where
 

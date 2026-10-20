@@ -1197,6 +1197,8 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
 			return
 		}
+		// When the step last wrote output, by this control plane's clock.
+		step = worker.StampScriptStepOutputAt(step, time.Now())
 		payload, err := json.Marshal(worker.SanitizeScriptStepEvent(step))
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")

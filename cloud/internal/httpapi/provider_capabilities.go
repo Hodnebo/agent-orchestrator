@@ -218,6 +218,12 @@ type offeringResponse struct {
 	// holds the coder capability), or still has a connection its sessions run
 	// on; the desktop shows the Coder settings page.
 	CustomCoder bool `json:"customCoder"`
+	// CoderWorkerWorkingFolder: a Coder session whose worker runs as the
+	// dedicated ao-worker user checks out in the project's working folder
+	// (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Off, a working folder applies
+	// only with the workspace user, as before; the desktop's copy follows it.
+	// An older control plane does not send it, which the desktop reads as off.
+	CoderWorkerWorkingFolder bool `json:"coderWorkerWorkingFolder"`
 }
 
 func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal, orgID string) (offeringResponse, error) {
@@ -235,6 +241,7 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 		Features: []string{},
 		CustomCoder: s.orgHasCustomCoder(principal, orgID) ||
 			(slices.Contains(providers, sandbox.ProviderCoder) && s.orgHasCoderConnection(ctx, principal, orgID)),
+		CoderWorkerWorkingFolder: s.provisioning.Coder.WorkerWorkingFolder,
 	}, nil
 }
 

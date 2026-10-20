@@ -14,14 +14,18 @@ import (
 func TestCoderPlanStampsTheWorkingFolderCheckout(t *testing.T) {
 	const templateID = "2a2e262c-b31c-4202-946d-a19ad45d1fd2"
 	options := &CoderSessionOptions{CheckoutDirectory: "~/work/alice", CheckoutSiblings: []string{"billing"}}
-	byo := ProvisioningDefaults{Provider: ProviderCoder}
+	byo := ProvisioningDefaults{Provider: ProviderCoder, Coder: CoderConfig{WorkerWorkingFolder: true}}
 	override := CoderDeploymentOverride{
 		BaseURL: "https://coder.acme.example", Owner: "dev", TemplateID: templateID, DurableRoot: "~",
 	}
 	deployment := ProvisioningDefaults{Provider: ProviderCoder, Coder: CoderConfig{
 		BaseURL: "https://coder.ao.example", Owner: "ao", TemplateID: templateID, DurableRoot: "/home/coder",
-		WorkerTokenTTL: DefaultWorkerTokenTTL,
+		WorkerTokenTTL: DefaultWorkerTokenTTL, WorkerWorkingFolder: true,
 	}}
+	// AO_CLOUD_CODER_WORKER_WORKING_FOLDER off: nothing is stamped, so a
+	// release that ignores the field is a safe rollback target.
+	flagOff := deployment
+	flagOff.Coder.WorkerWorkingFolder = false
 	workspaceUser := override
 	workspaceUser.WorkerUser = CoderWorkerUserWorkspace
 	for _, tc := range []struct {
@@ -36,6 +40,7 @@ func TestCoderPlanStampsTheWorkingFolderCheckout(t *testing.T) {
 		{"deployment coder", deployment, options, nil, "~/work/alice", []string{"billing"}},
 		{"workspace user", byo, options, &workspaceUser, "", nil},
 		{"no working folder", deployment, nil, nil, "", nil},
+		{"working folder off", flagOff, options, nil, "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			plan, err := tc.defaults.SessionPlanForProviderWithCoder("claude-code", ProviderCoder, tc.options, tc.override)

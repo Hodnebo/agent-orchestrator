@@ -23,6 +23,9 @@ type workspaceNameServer struct {
 	mu        sync.Mutex
 	existing  *workspace
 	requested []string
+	// clockOffset is how far the fake Coder server's clock is off; it sends
+	// that clock in its Date header.
+	clockOffset time.Duration
 }
 
 func (f *workspaceNameServer) handler(t *testing.T) http.Handler {
@@ -30,6 +33,9 @@ func (f *workspaceNameServer) handler(t *testing.T) http.Handler {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
+		if f.clockOffset != 0 {
+			writer.Header().Set("Date", time.Now().Add(f.clockOffset).UTC().Format(http.TimeFormat))
+		}
 		const lookup = "/api/v2/users/planned-owner/workspace/"
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v2/users/planned-owner/workspaces":
@@ -185,6 +191,45 @@ func TestStoredWorkspaceNameNeverAdoptsAnOlderWorkspace(t *testing.T) {
 				if _, err := provider.Create(ctx, sandbox.Spec{SessionID: storedNameSessionID}); err == nil {
 					t.Fatal("create over another session's workspace succeeded")
 				}
+			}
+		})
+	}
+}
+
+// A bring-your-own Coder whose clock runs well behind the control plane's
+// reports its own workspace's created_at minutes "before" the session chose
+// the name; read by the Coder server's own clock (its Date header) it is the
+// session's workspace and is adopted. A workspace that really predates the
+// name is still refused, and so is one on a Coder whose clock runs ahead.
+func TestStoredWorkspaceNameReadsCreatedAtByCodersClock(t *testing.T) {
+	t.Parallel()
+	issuedAt := time.Now().UTC().Add(-time.Minute)
+	for _, tc := range []struct {
+		name   string
+		offset time.Duration
+		// createdAfterIssue is when the workspace was created, by the control
+		// plane's clock, relative to the name's issue time.
+		createdAfterIssue time.Duration
+		adopt             bool
+	}{
+		{"coder 30 minutes behind, its own workspace", -30 * time.Minute, 20 * time.Second, true},
+		{"coder 30 minutes behind, an older workspace", -30 * time.Minute, -time.Hour, false},
+		{"coder 30 minutes ahead, an older workspace", 30 * time.Minute, -time.Hour, false},
+		{"coder 30 minutes ahead, its own workspace", 30 * time.Minute, 20 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			own := healthyWorkspace()
+			// created_at as the Coder server's clock records it.
+			own.Name, own.OwnerName, own.CreatedAt = "acme-w-fix-1a2b3c4d5e6f", "planned-owner", issuedAt.Add(tc.createdAfterIssue).Add(tc.offset)
+			fake := &workspaceNameServer{existing: &own, clockOffset: tc.offset}
+			server := httptest.NewServer(fake.handler(t))
+			defer server.Close()
+			provider := storedNameProvider(t, server.URL,
+				`,"workspaceNamePrefix":"acme","workspaceName":"acme-w-fix-1a2b3c4d5e6f","workspaceNameIssuedAt":"`+issuedAt.Format(time.RFC3339Nano)+`"`)
+			_, found, err := provider.FindBySession(context.Background(), storedNameSessionID)
+			if err != nil || found != tc.adopt {
+				t.Fatalf("find = %v, %v; want found=%v", found, err, tc.adopt)
 			}
 		})
 	}

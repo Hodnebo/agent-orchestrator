@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -45,6 +46,26 @@ func resolveCheckoutDirectory(logger *slog.Logger, dir string) error {
 	logger.Info("working folder: checking the repository out in the project's working folder", "workspace", dir)
 	_ = os.Setenv("AO_WORKSPACE_DIR", dir)
 	return nil
+}
+
+// refusedCheckoutWorkspace names the empty folder, in the worker's own data
+// directory, a session whose working folder was refused works in: its shell,
+// terminal and agent never open in the refused folder, which is not AO's.
+const refusedCheckoutWorkspace = "no-working-folder"
+
+// settleCheckoutDirectory settles the session's workspace on its working
+// folder (resolveCheckoutDirectory). When the folder cannot be used it returns
+// the error with a workspace of AO's own instead (refusedCheckoutWorkspace in
+// dataDir), named by AO_WORKSPACE_DIR, so nothing of the session (its shell,
+// agent or Cleanup) runs in a folder something else created.
+func settleCheckoutDirectory(logger *slog.Logger, dir, dataDir string) (string, error) {
+	err := resolveCheckoutDirectory(logger, dir)
+	if err == nil {
+		return dir, nil
+	}
+	fallback := filepath.Join(dataDir, refusedCheckoutWorkspace)
+	_ = os.Setenv("AO_WORKSPACE_DIR", fallback)
+	return fallback, err
 }
 
 // resolveConfiguredWorkspace settles the session on the connection's working
@@ -251,7 +272,8 @@ func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
 			Status: worker.WorkspaceStartupFailed,
 			Code:   domain.WorkspaceStartupErrorWorkingDirectoryOccupied,
 			Message: folder + " already exists (created by your Coder template). " +
-				"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.",
+				"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+				"Start a new session after changing it.",
 		}
 	}
 	if errors.Is(err, worker.ErrCheckoutDirectoryUnusable) {

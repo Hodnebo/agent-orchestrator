@@ -28,3 +28,24 @@ func TestCleanupBudgetCoversItsStepsTimeLimits(t *testing.T) {
 		}
 	}
 }
+
+// A run's queue wait grows with how far its budget exceeds the default, and
+// the deletion deadline grows by that and the extra budget, both capped.
+func TestCleanupQueueWaitAndDeletionExtraScaleWithTheBudget(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		budget, wait, extra time.Duration
+	}{
+		{0, MinCleanupQueueWait, 0},
+		{MinCleanupBudget, MinCleanupQueueWait, 0},
+		{MinCleanupBudget + 50*time.Minute, MinCleanupQueueWait + 50*time.Minute, 100 * time.Minute},
+		{3 * MaxCleanupBudget, MinCleanupQueueWait + MaxCleanupBudget - MinCleanupBudget, 2 * (MaxCleanupBudget - MinCleanupBudget)},
+	} {
+		if got := CleanupQueueWait(tc.budget); got != tc.wait {
+			t.Errorf("CleanupQueueWait(%s) = %s, want %s", tc.budget, got, tc.wait)
+		}
+		if got := CleanupDeletionExtra(tc.budget); got != tc.extra {
+			t.Errorf("CleanupDeletionExtra(%s) = %s, want %s", tc.budget, got, tc.extra)
+		}
+	}
+}

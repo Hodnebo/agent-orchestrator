@@ -111,6 +111,36 @@ type ScriptStepEvent struct {
 	// when it is not known (a worker or Cleanup hook that predates per-step
 	// limits, whose steps had the default).
 	TimeoutMinutes int `json:"timeoutMinutes,omitempty"`
+	// OutputAgeMS, on a running step's live update from the worker, is how
+	// long before the update the step last wrote any byte of output (a
+	// duration, so the worker's clock never matters). The control plane turns
+	// it into OutputAt with its own clock (StampScriptStepOutputAt) and never
+	// keeps it.
+	OutputAgeMS *int64 `json:"outputAgeMs,omitempty"`
+	// OutputAt, on a running step's live update as the control plane keeps
+	// it, is when the step last wrote any byte of output (RFC 3339, UTC), by
+	// the control plane's clock. A step that keeps printing the same line, or
+	// redraws a progress line with \r, writes output without changing its
+	// tail; OutputAt still moves, so a client tells a busy step from a
+	// silent one.
+	OutputAt string `json:"outputAt,omitempty"`
+}
+
+// maxScriptStepOutputAge bounds the output age a live update may report.
+const maxScriptStepOutputAge = 24 * time.Hour
+
+// StampScriptStepOutputAt sets a running step's OutputAt from the output age
+// its worker reported (OutputAgeMS), by receivedAt, the control plane's
+// clock, so a worker whose clock is off never makes a step look silent or
+// busy. Any OutputAt the worker sent is replaced, and OutputAgeMS is dropped.
+func StampScriptStepOutputAt(event ScriptStepEvent, receivedAt time.Time) ScriptStepEvent {
+	age := event.OutputAgeMS
+	event.OutputAgeMS, event.OutputAt = nil, ""
+	if event.Status != ScriptStepRunning || age == nil || *age < 0 {
+		return event
+	}
+	event.OutputAt = scriptTimestamp(receivedAt.Add(-min(time.Duration(*age)*time.Millisecond, maxScriptStepOutputAge)))
+	return event
 }
 
 // finish records a finished step's exit status and duration.
@@ -703,6 +733,8 @@ type liveTail struct {
 	data    bytes.Buffer
 	dropped bool
 	version uint64
+	// written is when any byte was last written (zero before the first).
+	written time.Time
 }
 
 func (t *liveTail) Write(p []byte) (int, error) {
@@ -715,8 +747,16 @@ func (t *liveTail) Write(p []byte) (int, error) {
 	}
 	if len(p) > 0 {
 		t.version++
+		t.written = time.Now()
 	}
 	return len(p), nil
+}
+
+// lastWrite is when any byte was last written (zero before the first).
+func (t *liveTail) lastWrite() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.written
 }
 
 // snapshot returns the kept output, whether its beginning was dropped, and a
@@ -933,12 +973,21 @@ func liveUpdateInterval(elapsed time.Duration) time.Duration {
 	return 2 * time.Second
 }
 
+// liveHeartbeat is how often a running step that keeps writing output sends
+// a live update even when its tail looks the same (the same line again, or a
+// progress line redrawn with \r), so its OutputAt keeps moving and a client
+// never takes it for a silent step.
+const liveHeartbeat = 60 * time.Second
+
 // watchStepOutput sends a live update whenever the step finished another line
-// of output, paced by interval, until the returned stop is called.
+// of output, paced by interval, and at least every heartbeat while it keeps
+// writing any output, until the returned stop is called. Each update carries
+// how long ago the step last wrote a byte.
 func watchStepOutput(
 	tail *liveTail,
 	interval func(elapsed time.Duration) time.Duration,
-	emit func(output string, truncated bool),
+	heartbeat time.Duration,
+	emit func(output string, truncated bool, outputAge time.Duration),
 	redactor scriptRedactor,
 ) (stop func()) {
 	quit, finished := make(chan struct{}), make(chan struct{})
@@ -947,6 +996,7 @@ func watchStepOutput(
 		defer close(finished)
 		var sent uint64
 		lastOutput, lastTruncated := "", false
+		lastEmit := started
 		for {
 			timer := time.NewTimer(interval(time.Since(started)))
 			select {
@@ -959,14 +1009,19 @@ func watchStepOutput(
 			if version == sent {
 				continue
 			}
-			sent = version
 			output, truncated := redactor.liveStepOutput(raw, dropped)
-			if output == "" || (output == lastOutput && truncated == lastTruncated) {
-				// Nothing new is finished: the step is still writing a line.
+			if (output == "" || (output == lastOutput && truncated == lastTruncated)) && time.Since(lastEmit) < heartbeat {
+				// Nothing new is finished (the step is still writing a line,
+				// or wrote the same one again): wait, until the heartbeat says
+				// it is still writing.
 				continue
 			}
-			lastOutput, lastTruncated = output, truncated
-			emit(output, truncated)
+			sent = version
+			if output != "" {
+				lastOutput, lastTruncated = output, truncated
+			}
+			lastEmit = time.Now()
+			emit(output, truncated, max(0, time.Since(tail.lastWrite())))
 		}
 	}()
 	return func() {
@@ -986,6 +1041,7 @@ type setupStepEvents struct {
 	publisher *scriptStepPublisher
 	redactor  scriptRedactor
 	interval  func(time.Duration) time.Duration
+	heartbeat time.Duration
 	runID     string
 	total     int
 
@@ -1020,10 +1076,15 @@ func (r SetupRunner) startStepEvents(ctx context.Context, total int, redactor sc
 	if r.FinalWait > 0 {
 		finalWait = r.FinalWait
 	}
+	heartbeat := liveHeartbeat
+	if r.LiveHeartbeat > 0 {
+		heartbeat = r.LiveHeartbeat
+	}
 	return &setupStepEvents{
 		publisher: newScriptStepPublisher(ctx, r.Publish, time.Second, finalWait),
 		redactor:  redactor,
 		interval:  interval,
+		heartbeat: heartbeat,
 		runID:     uuid.NewString(),
 		total:     total,
 	}
@@ -1046,9 +1107,11 @@ func (s *setupStepEvents) start(step int, command, logPath string, timeout time.
 	s.publisher.update(fitScriptStepEvent(s.current))
 	s.live = &liveTail{limit: scriptLiveTailLimit}
 	running := s.current
-	s.stopWatch = watchStepOutput(s.live, s.interval, func(output string, truncated bool) {
+	s.stopWatch = watchStepOutput(s.live, s.interval, s.heartbeat, func(output string, truncated bool, outputAge time.Duration) {
 		update := running
 		update.Output, update.OutputTruncated = output, truncated
+		age := outputAge.Milliseconds()
+		update.OutputAgeMS = &age
 		s.publisher.update(fitScriptStepEvent(update))
 	}, s.redactor)
 	return s.live

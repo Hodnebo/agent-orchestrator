@@ -71,6 +71,13 @@ export interface CloudCpOffering {
 	 * billed. Absent from older control planes.
 	 */
 	customCoder?: boolean;
+	/**
+	 * A Coder session run as the dedicated ao-worker user checks out in the
+	 * project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Absent
+	 * from older control planes, which is read as off: a working folder then
+	 * applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder?: boolean;
 }
 
 /** GET /me */
@@ -620,7 +627,9 @@ export interface CloudCpSession {
  * A cloud session's startup failure. Known codes: workspace_not_ready,
  * terminal_unavailable, unsupported_architecture, durable_root_unavailable,
  * worker_never_started, bootstrap_failed, workspace_build_failed,
- * workspace_create_failed; treat any other code generically.
+ * workspace_create_failed, working_directory_not_durable (the project's
+ * working folder is outside the Coder durable root); treat any other code
+ * generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;

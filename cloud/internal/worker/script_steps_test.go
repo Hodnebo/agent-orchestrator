@@ -184,6 +184,53 @@ func TestSetupStepEventsLiveUpdates(t *testing.T) {
 	}
 }
 
+// A step that keeps writing output without finishing a new line (a progress
+// line redrawn with \r) still sends live updates at least every heartbeat,
+// each saying how long ago it last wrote a byte, so it never reads as silent.
+func TestSetupStepEventsHeartbeatWhileOutputKeepsArriving(t *testing.T) {
+	t.Parallel()
+	_, events := runSetupWithSteps(t, SetupRunner{UpdateInterval: 10 * time.Millisecond, LiveHeartbeat: 100 * time.Millisecond},
+		[]string{"echo start; i=0; while [ $i -lt 12 ]; do printf 'progress %s\\r' $i; sleep 0.05; i=$((i+1)); done; echo"})
+	heartbeats := 0
+	for _, event := range events {
+		if event.Status != ScriptStepRunning || event.OutputAgeMS == nil {
+			continue
+		}
+		heartbeats++
+		if *event.OutputAgeMS < 0 || *event.OutputAgeMS > 1000 {
+			t.Fatalf("output age = %dms while the step kept writing", *event.OutputAgeMS)
+		}
+		if strings.Contains(event.Output, "progress") {
+			t.Fatalf("an unfinished line was published: %q", event.Output)
+		}
+	}
+	if heartbeats < 2 {
+		t.Fatalf("live updates with an output age = %d, want several while the step kept writing: %+v", heartbeats, events)
+	}
+}
+
+// The control plane stamps OutputAt from the worker's output age with its own
+// clock, never trusting a time the worker sent, and only on a running step.
+func TestStampScriptStepOutputAt(t *testing.T) {
+	t.Parallel()
+	received := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	age := int64(90_000)
+	stamped := StampScriptStepOutputAt(ScriptStepEvent{Status: ScriptStepRunning, OutputAgeMS: &age, OutputAt: "2001-01-01T00:00:00Z"}, received)
+	if stamped.OutputAt != "2026-10-20T11:58:30.000Z" || stamped.OutputAgeMS != nil {
+		t.Fatalf("stamped = %q, age %v", stamped.OutputAt, stamped.OutputAgeMS)
+	}
+	if forged := StampScriptStepOutputAt(ScriptStepEvent{Status: ScriptStepRunning, OutputAt: "2099-01-01T00:00:00Z"}, received); forged.OutputAt != "" {
+		t.Fatalf("a worker's own OutputAt was kept: %q", forged.OutputAt)
+	}
+	if finished := StampScriptStepOutputAt(ScriptStepEvent{Status: SetupSucceeded, OutputAgeMS: &age}, received); finished.OutputAt != "" || finished.OutputAgeMS != nil {
+		t.Fatalf("a finished step got %q", finished.OutputAt)
+	}
+	huge := int64(48 * time.Hour / time.Millisecond)
+	if capped := StampScriptStepOutputAt(ScriptStepEvent{Status: ScriptStepRunning, OutputAgeMS: &huge}, received); capped.OutputAt != "2026-10-19T12:00:00.000Z" {
+		t.Fatalf("capped = %q", capped.OutputAt)
+	}
+}
+
 // Publishing never holds up Setup: a control plane that takes seconds per
 // event leaves the steps' timing alone, live updates coalesce to the newest,
 // and the run waits only briefly for the rest to be sent.

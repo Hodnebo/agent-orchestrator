@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpCoderTemplateParameter } from "../lib/cloud-cp/types";
@@ -71,7 +72,12 @@ export function CoderTemplateOptions({
 	// session adopts the template's checkout (workspace user with reuse or a
 	// working folder). Stay quiet until the connection's mode is known; a
 	// disabled read (no own Coder connection) means the default ao-worker.
-	const orgCoder = useOrgCoderConfig();
+	// The project's org decides the mode, which need not be the signed-in org.
+	const orgCoder = useOrgCoderConfig(true, orgId);
+	// With a project working folder and the ao-worker user, the template's
+	// clone lands where AO checks out, so the session cannot start at all;
+	// only once the control plane checks ao-worker sessions out there.
+	const { coderWorkerWorkingFolder } = useCloudOffering();
 	const modeKnown = orgCoder.data !== undefined || (!orgCoder.isLoading && !orgCoder.isError);
 	const duplicates = modeKnown && !coderReusesTemplateCheckout(orgCoder.data ?? null, projectWorkingDirectory)
 		? duplicateCloneOptions(parameters, overrides, repositoryUrls)
@@ -95,9 +101,11 @@ export function CoderTemplateOptions({
 	}
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
-	const duplicateWarning = (labels: readonly string[]) => t("coder.templateOptions.duplicateClone", {
-		repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels),
-	});
+	const blocksWorkingFolder = coderWorkerWorkingFolder === true && (projectWorkingDirectory ?? "").trim() !== "";
+	const duplicateWarning = (labels: readonly string[]) => t(
+		blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
+		{ repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+	);
 	// Collapsed, the fields (and their warnings) are hidden, so the warning
 	// moves up under the header; expanded, it sits under its field instead.
 	const collapsedDuplicates = !expanded && duplicates ? [...new Set([...duplicates.values()].flat())] : [];

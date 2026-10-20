@@ -400,6 +400,12 @@ func TestCoderCheckoutSiblings(t *testing.T) {
 	if want := []string{"billing", "alice-api"}; !slices.Equal(got, want) {
 		t.Fatalf("siblings = %q, want %q", got, want)
 	}
+	// "repository" (the durable root's own checkout folder) is never
+	// pre-created; the worker clones it only into a folder it can create.
+	reserved := json.RawMessage(`{"repos":[{"url":"https://github.com/acme/repository"},{"url":"https://github.com/acme/billing"}]}`)
+	if got, want := CoderCheckoutSiblings(reserved, "~/alice"), []string{"billing"}; !slices.Equal(got, want) {
+		t.Fatalf("siblings = %q, want %q", got, want)
+	}
 	if got := CoderCheckoutSiblings(json.RawMessage(`{}`), "~/work/alice"); got != nil {
 		t.Fatalf("siblings without additional repositories = %q", got)
 	}
@@ -408,6 +414,33 @@ func TestCoderCheckoutSiblings(t *testing.T) {
 	} {
 		if got := ValidCoderCheckoutSibling(name); got != want {
 			t.Errorf("ValidCoderCheckoutSibling(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A saved working folder is stored canonical (no repeated or trailing
+// slashes), and a folder inside AO's own .ao state is refused, as are . and ..
+// segments.
+func TestProjectWorkingFolderIsNormalizedAndKeptOutOfAOsState(t *testing.T) {
+	t.Parallel()
+	const mainURL = "https://github.com/acme/alice"
+	for saved, want := range map[string]string{
+		"/work/{repo}/":     "/work/{repo}",
+		" ~/work//{repo}/ ": "~/work/{repo}",
+		"$HOME//src/":       "$HOME/src",
+		"~/work/{repo}":     "~/work/{repo}",
+	} {
+		config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`))
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		if got := ProjectWorkingDirectory(config); got != want || !strings.Contains(string(config), `"workingDirectory":"`+want+`"`) {
+			t.Errorf("%q saved as %s, want %q", saved, config, want)
+		}
+	}
+	for _, saved := range []string{"~/.ao/{repo}", "$HOME/.ao/work", "/home/coder/.ao/x", "~/work/../{repo}", "~/./work", "~//"} {
+		if config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`)); err == nil {
+			t.Errorf("%q was accepted as %s", saved, config)
 		}
 	}
 }

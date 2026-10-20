@@ -128,10 +128,15 @@ provider ID, or uploads worker credentials. The workspace name is chosen once,
 when the session is created, and stored on the profile (`workspaceName`,
 `<prefix>-o-<id12>` or `<prefix>-w-<word>-<id12>`, plus a longer
 `workspaceNameRetry`); profiles written before that keep the name computed
-from the prefix and session id. Lookup only ever uses the session's own stored
+from the prefix and session id, and so do new sessions while
+`AO_CLOUD_CODER_READABLE_NAMES` is off ([Coder rollout
+flags](deployment.md#coder-rollout-flags)). Lookup only ever uses the session's own stored
 or computed name. A workspace that already held that name more than five
 minutes before the session chose it is treated as another session's: AO never
-adopts or deletes it. When Coder refuses the create as a name conflict, the
+adopts or deletes it. The workspace's creation time is read on the control
+plane's clock, corrected by how far the Coder server's clock is off (the Date
+header of its answer), so a Coder whose clock runs behind never makes the
+session's own workspace look like another's. When Coder refuses the create as a name conflict, the
 reconciler records the retry name as the session's workspace name (fenced by
 its lease) and provisions again under it; a second conflict fails the create. Configure
 `AO_CLOUD_CODER_OWNER` as the canonical owner name returned by Coder, not an

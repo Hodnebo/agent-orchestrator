@@ -111,7 +111,7 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 	// without an org-default template (the control plane's
 	// coder_template_required). Otherwise the deployment or org default applies,
 	// and non-Coder providers need no template at all.
-	const orgCoder = useOrgCoderConfig();
+	const orgCoder = useOrgCoderConfig(true, project.orgId);
 	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
 	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
 	const templateRequired = templateId === "" && orgCoderConfig != null && orgDefaultTemplateId === "";

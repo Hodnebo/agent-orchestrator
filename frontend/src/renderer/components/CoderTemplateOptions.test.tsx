@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
 	evaluateCoderTemplateParameters: vi.fn(),
 	hasCoder: true,
 	orgCoder: { data: null, isLoading: false, isError: false } as { data: Record<string, unknown> | null | undefined; isLoading: boolean; isError: boolean },
+	orgCoderOrgIds: [] as (string | undefined)[],
+	workerWorkingFolder: undefined as boolean | undefined,
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -25,8 +27,15 @@ vi.mock("../hooks/useCloudCp", () => ({
 		baseUrl: "https://cp.test",
 	}),
 }));
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ hasCoder: mocks.hasCoder }) }));
-vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => mocks.orgCoder }));
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ hasCoder: mocks.hasCoder, coderWorkerWorkingFolder: mocks.workerWorkingFolder }),
+}));
+vi.mock("../hooks/useOrgCoderConfig", () => ({
+	useOrgCoderConfig: (_enabled?: boolean, orgId?: string) => {
+		mocks.orgCoderOrgIds.push(orgId);
+		return mocks.orgCoder;
+	},
+}));
 
 const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "branch", displayName: "Base branch", description: "Checked out on boot.", type: "string", mutable: true, required: false, defaultValue: "main", order: 2 },
@@ -44,10 +53,11 @@ const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "size", type: "string", mutable: true, required: false, defaultValue: "medium" },
 ];
 
-function Harness({ initial = {}, onChange, repositoryUrls }: {
+function Harness({ initial = {}, onChange, repositoryUrls, projectWorkingDirectory }: {
 	initial?: Record<string, string>;
 	onChange: (next: Record<string, string>) => void;
 	repositoryUrls?: string[];
+	projectWorkingDirectory?: string;
 }) {
 	const [overrides, setOverrides] = useState(initial);
 	return (
@@ -55,6 +65,7 @@ function Harness({ initial = {}, onChange, repositoryUrls }: {
 			orgId="org-1"
 			templateId="tpl-1"
 			repositoryUrls={repositoryUrls}
+			projectWorkingDirectory={projectWorkingDirectory}
 			overrides={overrides}
 			onChange={(next) => {
 				setOverrides(next);
@@ -64,12 +75,12 @@ function Harness({ initial = {}, onChange, repositoryUrls }: {
 	);
 }
 
-function renderOptions(initial?: Record<string, string>, repositoryUrls?: string[]) {
+function renderOptions(initial?: Record<string, string>, repositoryUrls?: string[], projectWorkingDirectory?: string) {
 	const onChange = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={client}>
-			<Harness initial={initial} onChange={onChange} repositoryUrls={repositoryUrls} />
+			<Harness initial={initial} onChange={onChange} repositoryUrls={repositoryUrls} projectWorkingDirectory={projectWorkingDirectory} />
 		</QueryClientProvider>,
 	);
 	return { onChange };
@@ -285,6 +296,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		await appI18n.changeLanguage("en");
 		mocks.hasCoder = true;
 		mocks.orgCoder = { data: null, isLoading: false, isError: false };
+		mocks.workerWorkingFolder = undefined;
 		mocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [repos] });
 		mocks.evaluateCoderTemplateParameters.mockReset().mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
 	});
@@ -298,6 +310,37 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		await userEvent.click(screen.getByRole("checkbox", { name: "Alice" }));
 		expect(onChange).toHaveBeenLastCalledWith({});
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("says the session will not start when the project has a working folder and AO runs as ao-worker", async () => {
+		mocks.workerWorkingFolder = true;
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
+		expect(await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).toBeInTheDocument();
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("keeps the two-copies warning while the control plane does not check ao-worker sessions out in the working folder", async () => {
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		for (const flag of [false, undefined]) {
+			mocks.workerWorkingFolder = flag;
+			const { unmount } = render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<Harness initial={{ github_repos: "[\"Alice\"]" }} onChange={vi.fn()} repositoryUrls={projectRepos} projectWorkingDirectory="~/work/{repo}" />
+				</QueryClientProvider>,
+			);
+			expect(await screen.findByText("Your template will also clone Alice, separate from the copy AO works in. Untick to keep one copy.")).toBeInTheDocument();
+			expect(screen.queryByText(/so AO cannot start there/)).not.toBeInTheDocument();
+			unmount();
+		}
+	});
+
+	it("reads the Coder connection of the project's org", async () => {
+		mocks.orgCoderOrgIds = [];
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(mocks.orgCoderOrgIds.length).toBeGreaterThan(0);
+		expect(mocks.orgCoderOrgIds.every((orgId) => orgId === "org-1")).toBe(true);
 	});
 
 	it("warns for the default ao-worker when the org has no Coder connection of its own", async () => {

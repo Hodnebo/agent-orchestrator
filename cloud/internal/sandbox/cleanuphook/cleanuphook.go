@@ -97,6 +97,11 @@ const (
 	// skipSudoRootOnly: the login user may use sudo only as root, and
 	// runuser is not there to reach the worker's account from root.
 	skipSudoRootOnly = "sudo_root_only"
+	// skipNoWorkingFolder: the session never got its working folder (it was
+	// in use, for example by the Coder template), so its worker installed a
+	// hook that runs no Cleanup (worker.WriteSkippedCleanupHook): the folder
+	// is not the session's to clean up.
+	skipNoWorkingFolder = worker.CleanupSkipNoWorkingFolder
 )
 
 // accountPattern is an account name safe to spell as ~NAME in the hook command.
@@ -133,6 +138,8 @@ func SkippedReason(reason string) string {
 		return "AO did not run this Cleanup step: the Cleanup hook in the sandbox is a symbolic link, which AO never runs."
 	case skipSudoRootOnly:
 		return "AO could not run this Cleanup step: the workspace's login user may use sudo only as root, and AO runs Cleanup as the AO worker's user, never as root."
+	case skipNoWorkingFolder:
+		return "Cleanup did not run: this session never got its working folder."
 	default:
 		return "AO could not run this Cleanup step in the sandbox before deleting it."
 	}
@@ -346,6 +353,8 @@ func Command(hook string, budget time.Duration, override string, options Options
 		"  ao_out=$(\"$@\" 2>&1 </dev/null)\n" +
 		"fi\n" +
 		"ao_code=$?\n" +
+		// A hook that runs no Cleanup prints only why (worker.WriteSkippedCleanupHook).
+		"case \"$ao_out\" in " + shellQuote(worker.CleanupHookSkippedPrefix+skipNoWorkingFolder) + ") ao_skip " + skipNoWorkingFolder + " ;; esac\n" +
 		"printf '%s\\n' \"$ao_out\" | tail -c " + strconv.Itoa(OutputLimit) + "\n" +
 		"printf '\\n%s:%s\\n' " + Marker + " \"$ao_code\"\n"
 }
@@ -589,9 +598,13 @@ type Run struct {
 // so a run another replica starts only waits for and reports the first one.
 //
 // At most MaxRuns runs go at once for the provider, and MaxOrgRuns for one
-// organization; the rest wait for a slot, up to QueueWait, and are then
-// reported as not run, so a burst of deletions cannot flood the provider (or
-// one organization take every slot) and a deletion is never held for long.
+// organization; the rest wait for a slot in arrival order, each skipping only
+// the runs ahead of it whose organization is at its share, so one
+// organization's long Cleanups never hold every slot or keep another
+// organization's run waiting behind its own queue. A run waits up to its
+// queue wait (QueueWait scaled by its budget, sandbox.CleanupQueueWait) and is
+// then reported as not run, so a burst of deletions cannot flood the provider
+// and a deletion is never held past its deadline.
 type Tracker struct {
 	runs sync.Map // key -> *Run
 	// skipped records the sandboxes whose Cleanup was reported as not run
@@ -607,20 +620,28 @@ type Tracker struct {
 	mu      sync.Mutex
 	running int
 	byOrg   map[string]int
-	freed   chan struct{} // closed and replaced when a slot frees
+	// waiting are the runs waiting for a slot, in arrival order.
+	waiting []*slotWaiter
+}
+
+// slotWaiter is one run waiting for a slot; granted is closed once it holds one.
+type slotWaiter struct {
+	orgID   string
+	granted chan struct{}
 }
 
 const (
 	// DefaultMaxRuns bounds one provider's concurrent Cleanup runs in a
-	// control-plane process.
-	DefaultMaxRuns = 4
-	// DefaultMaxOrgRuns bounds one organization's.
+	// control-plane process: room for eight organizations at their share.
+	DefaultMaxRuns = 16
+	// DefaultMaxOrgRuns bounds one organization's share of them.
 	DefaultMaxOrgRuns = 2
-	// DefaultQueueWait is how long a run waits for a slot. With a run's own
-	// limit (its Plan.Budget, Margin and a resume) and StaleAfter it keeps a
-	// deletion within the reconciler's deletion deadline (15 minutes, plus
-	// how far the run's budget exceeds Budget).
-	DefaultQueueWait = 2 * time.Minute
+	// DefaultQueueWait is how long a run with no more than Budget waits for a
+	// slot; a longer budget waits that much longer (sandbox.CleanupQueueWait).
+	// With a run's own limit (its Plan.Budget, Margin and a resume) and
+	// StaleAfter it keeps a deletion within the reconciler's deletion deadline
+	// (15 minutes, plus sandbox.CleanupDeletionExtra of the run's budget).
+	DefaultQueueWait = sandbox.MinCleanupQueueWait
 )
 
 // QueueFullReason is what a Cleanup that waited too long for a slot reports
@@ -638,14 +659,14 @@ func (t *Tracker) Lookup(key string) (*Run, bool) {
 
 // Start runs fn in the background as key's run, once a slot is free for the
 // provider and orgID ("" counts only against the provider), unless a run is
-// already recorded for key; it returns the run recorded for key. A run that
-// waits QueueWait without a slot calls skip with QueueFullReason instead.
-// Delete waits for the run up to the queue wait, limit and StaleAfter.
-func (t *Tracker) Start(key, orgID string, limit time.Duration, fn func(), skip func(reason string)) *Run {
-	queueWait := t.QueueWait
-	if queueWait <= 0 {
-		queueWait = DefaultQueueWait
-	}
+// already recorded for key; it returns the run recorded for key. budget is the
+// run's Cleanup budget (Plan.Budget) and limit how long the run may take once
+// it has a slot. A run that waits its queue wait (QueueWait plus how far
+// budget exceeds Budget, see sandbox.CleanupQueueWait) without a slot calls
+// skip with QueueFullReason instead. Delete waits for the run up to the queue
+// wait, limit and StaleAfter.
+func (t *Tracker) Start(key, orgID string, budget, limit time.Duration, fn func(), skip func(reason string)) *Run {
+	queueWait := t.queueWait(budget)
 	run := &Run{done: make(chan struct{}), started: time.Now(), limit: queueWait + limit}
 	if existing, loaded := t.runs.LoadOrStore(key, run); loaded {
 		return existing.(*Run)
@@ -665,8 +686,54 @@ func (t *Tracker) Start(key, orgID string, limit time.Duration, fn func(), skip 
 	return run
 }
 
-// acquire takes a provider slot and one of orgID's, waiting up to wait.
+// queueWait is how long a run with budget waits for a slot: QueueWait (else
+// DefaultQueueWait) plus how far budget exceeds Budget, as
+// sandbox.CleanupQueueWait scales it.
+func (t *Tracker) queueWait(budget time.Duration) time.Duration {
+	base := t.QueueWait
+	if base <= 0 {
+		base = DefaultQueueWait
+	}
+	return base + sandbox.CleanupQueueWait(budget) - sandbox.MinCleanupQueueWait
+}
+
+// acquire takes a provider slot and one of orgID's, waiting up to wait in
+// arrival order (dispatch).
 func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
+	waiter := &slotWaiter{orgID: orgID, granted: make(chan struct{})}
+	t.mu.Lock()
+	t.waiting = append(t.waiting, waiter)
+	t.dispatch()
+	t.mu.Unlock()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-waiter.granted:
+		return true
+	case <-timer.C:
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	select {
+	case <-waiter.granted:
+		// Granted while the timer fired: the run takes its slot.
+		return true
+	default:
+	}
+	for index, queued := range t.waiting {
+		if queued == waiter {
+			t.waiting = append(t.waiting[:index], t.waiting[index+1:]...)
+			break
+		}
+	}
+	return false
+}
+
+// dispatch gives free slots to the waiting runs in arrival order. A run whose
+// organization already holds its share stays waiting without holding up the
+// runs behind it, so one organization never keeps another's runs waiting.
+// The caller holds t.mu.
+func (t *Tracker) dispatch() {
 	maxRuns, maxOrgRuns := t.MaxRuns, t.MaxOrgRuns
 	if maxRuns <= 0 {
 		maxRuns = DefaultMaxRuns
@@ -674,32 +741,23 @@ func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
 	if maxOrgRuns <= 0 {
 		maxOrgRuns = DefaultMaxOrgRuns
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	for {
-		t.mu.Lock()
-		if t.byOrg == nil {
-			t.byOrg = map[string]int{}
-		}
-		if t.freed == nil {
-			t.freed = make(chan struct{})
-		}
-		if t.running < maxRuns && (orgID == "" || t.byOrg[orgID] < maxOrgRuns) {
-			t.running++
-			if orgID != "" {
-				t.byOrg[orgID]++
-			}
-			t.mu.Unlock()
-			return true
-		}
-		freed := t.freed
-		t.mu.Unlock()
-		select {
-		case <-freed:
-		case <-timer.C:
-			return false
-		}
+	if t.byOrg == nil {
+		t.byOrg = map[string]int{}
 	}
+	kept := t.waiting[:0]
+	for _, waiter := range t.waiting {
+		if t.running < maxRuns && (waiter.orgID == "" || t.byOrg[waiter.orgID] < maxOrgRuns) {
+			t.running++
+			if waiter.orgID != "" {
+				t.byOrg[waiter.orgID]++
+			}
+			close(waiter.granted)
+			continue
+		}
+		kept = append(kept, waiter)
+	}
+	clear(t.waiting[len(kept):])
+	t.waiting = kept
 }
 
 func (t *Tracker) release(orgID string) {
@@ -711,10 +769,7 @@ func (t *Tracker) release(orgID string) {
 			delete(t.byOrg, orgID)
 		}
 	}
-	if t.freed != nil {
-		close(t.freed)
-	}
-	t.freed = make(chan struct{})
+	t.dispatch()
 }
 
 // Skipper returns a Start skip function that reports the run as not run

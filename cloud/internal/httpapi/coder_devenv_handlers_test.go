@@ -606,3 +606,61 @@ func TestPutOrgCoderConfigRefusesNonAdminBeforeReadingTheToken(t *testing.T) {
 		t.Fatalf("status = %d, upserted = %d, connection read = %v", rec.Code, store.upserted, store.connectionRead)
 	}
 }
+
+// A project working folder outside the durable root of the organization's
+// Coder connection is refused when it is saved, for a connection that runs
+// the agent as ao-worker: its checkout would not survive a restart. The
+// workspace user keeps any folder (it adopts the template's own checkout).
+func TestUpdateProjectSettingsRefusesAWorkingFolderOutsideTheDurableRoot(t *testing.T) {
+	t.Parallel()
+	connection := func(t *testing.T, durableRoot, workerUser string) []domain.ProviderConnection {
+		t.Helper()
+		config, err := domain.EncodeOrgCoderConfig(domain.OrgCoderConfig{
+			BaseURL: "https://coder.acme.test", Owner: "ao-bot", DurableRoot: durableRoot, WorkerUser: workerUser,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return []domain.ProviderConnection{{ID: "conn-1", Provider: sandbox.ProviderCoder, Label: "default", Config: config}}
+	}
+	for name, tc := range map[string]struct {
+		durableRoot, workerUser, folder string
+		status                          int
+		message                         string
+	}{
+		"home, docker folder":      {"$HOME", "", "/workspace/{repo}", http.StatusUnprocessableEntity, "The working folder must be inside your home folder (~) so the agent's work survives restarts. Choose a folder there, for example ~/work/{repo}."},
+		"home, home folder":        {"$HOME", "", "~/work/{repo}", http.StatusOK, ""},
+		"absolute root, outside":   {"/srv/dev", "", "/srv/other/{repo}", http.StatusUnprocessableEntity, "The working folder must be inside /srv/dev so the agent's work survives restarts. Choose a folder there, for example /srv/dev/work/{repo}."},
+		"absolute root, inside":    {"/srv/dev", "", "/srv/dev/work/{repo}", http.StatusOK, ""},
+		"absolute root, home path": {"/srv/dev", "", "~/work/{repo}", http.StatusOK, ""},
+		"workspace user":           {"$HOME", domain.CoderWorkerUserWorkspace, "/workspace/{repo}", http.StatusOK, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &adminDevEnvStore{}
+			store.connections = connection(t, tc.durableRoot, tc.workerUser)
+			store.project = domain.Project{ID: devEnvProjectID, OrgID: coderCfgOrgID, Config: json.RawMessage(`{}`)}
+			srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
+			router := chi.NewRouter()
+			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", srv.updateProjectSettings)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+				"/orgs/"+coderCfgOrgID+"/projects/"+devEnvProjectID+"/settings",
+				strings.NewReader(`{"config":{"workingDirectory":"`+tc.folder+`"}}`)))
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.message != "" && (!strings.Contains(rec.Body.String(), domain.CoderWorkingFolderNotDurableCode) ||
+				!strings.Contains(rec.Body.String(), tc.message)) {
+				t.Fatalf("body = %s, want %q", rec.Body.String(), tc.message)
+			}
+		})
+	}
+}
+
+// adminDevEnvStore is a devEnvStore whose caller is an organization admin.
+type adminDevEnvStore struct{ devEnvStore }
+
+func (s *adminDevEnvStore) RequireOrgAdmin(context.Context, domain.Principal, string) error {
+	return nil
+}

@@ -217,8 +217,9 @@ func TestDeletionCarriesTheCleanupScope(t *testing.T) {
 }
 
 // A Cleanup whose steps set long time limits holds the deletion longer before
-// the reconciler gives up on it, by how far its budget exceeds the default,
-// and never past the two-hour cap.
+// the reconciler gives up on it: by how far its budget exceeds the default,
+// and as much again for the longer wait for a run slot it gets
+// (sandbox.CleanupQueueWait), never past the two-hour cap of each.
 func TestDeletionDeadlineGrowsWithTheCleanupsTimeLimits(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	record := domain.Sandbox{OrgID: "org-1", SessionID: "session-1"}
@@ -228,10 +229,10 @@ func TestDeletionDeadlineGrowsWithTheCleanupsTimeLimits(t *testing.T) {
 		want      time.Duration
 	}{
 		"no cleanup":       {nil, "", DefaultDeletionDeadline},
-		"one default step": {[]string{"make down"}, "", DefaultDeletionDeadline + 10*time.Second},
-		"a long step":      {[]string{"# ao-timeout: 60m\nmake down"}, "", DefaultDeletionDeadline + 50*time.Minute + 10*time.Second},
-		"installed longer": {[]string{"make down"}, `{"installedCleanup":["# ao-timeout: 90m\nmake down"]}`, DefaultDeletionDeadline + 80*time.Minute + 10*time.Second},
-		"capped":           {[]string{"# ao-timeout: 120m\na", "# ao-timeout: 120m\nb"}, "", DefaultDeletionDeadline + 110*time.Minute},
+		"one default step": {[]string{"make down"}, "", DefaultDeletionDeadline + 2*10*time.Second},
+		"a long step":      {[]string{"# ao-timeout: 60m\nmake down"}, "", DefaultDeletionDeadline + 2*(50*time.Minute+10*time.Second)},
+		"installed longer": {[]string{"make down"}, `{"installedCleanup":["# ao-timeout: 90m\nmake down"]}`, DefaultDeletionDeadline + 2*(80*time.Minute+10*time.Second)},
+		"capped":           {[]string{"# ao-timeout: 120m\na", "# ao-timeout: 120m\nb"}, "", DefaultDeletionDeadline + 2*110*time.Minute},
 	} {
 		record.BootstrapContext = []byte(test.installed)
 		reconciler := New(&cleanupLookupStore{commands: test.current}, lifecycleResolver{}, Options{Logger: logger})

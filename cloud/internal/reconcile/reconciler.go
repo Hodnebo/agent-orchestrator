@@ -916,9 +916,11 @@ func (r *Reconciler) reconcileDeletion(
 // deletionDeadline is how long the reconciler keeps re-requesting a
 // sandbox's deletion: DeletionDeadline, plus how far the project's Cleanup
 // run may exceed the default budget (sandbox.CleanupBudget of its current and
-// its worker's installed commands, at most sandbox.MaxCleanupBudget). A Cleanup
-// whose steps set long time limits still finishes before the deletion is
-// abandoned, and a deletion is never held for more than that bound.
+// its worker's installed commands, at most sandbox.MaxCleanupBudget) and how
+// much longer it may wait for a run slot (sandbox.CleanupDeletionExtra). A
+// Cleanup whose steps set long time limits still gets a slot and finishes
+// before the deletion is abandoned, and a deletion is never held for more than
+// that bound.
 func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox) time.Duration {
 	installed, _ := domain.InstalledCleanupCommands(record.BootstrapContext)
 	var current []string
@@ -927,8 +929,7 @@ func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox
 			current = commands
 		}
 	}
-	extra := sandbox.CleanupBudget(current, installed) - sandbox.MinCleanupBudget
-	return r.options.DeletionDeadline + max(0, extra)
+	return r.options.DeletionDeadline + sandbox.CleanupDeletionExtra(sandbox.CleanupBudget(current, installed))
 }
 
 // cleanupCommandsStore is the optional Store capability that reads a
@@ -1388,6 +1389,15 @@ func (r *Reconciler) bootstrapFailed(
 	if errors.As(err, &startupErr) && startupErr.Code == sandbox.StartupErrorWorkspaceSetupNotReady {
 		r.log.WarnContext(ctx, "workspace ready check timed out",
 			"session_id", record.SessionID, "provider_id", environment.ID, "err", err)
+		return r.terminate(ctx, record, environment, provider, startupErr)
+	}
+	// A project working folder AO cannot use (outside the durable root, or
+	// one the bootstrap could not prepare) fails the same way on every retry,
+	// so park the session with the reason until its working folder changes.
+	if errors.As(err, &startupErr) && (startupErr.Code == sandbox.StartupErrorWorkingDirectoryNotDurable ||
+		startupErr.Code == sandbox.StartupErrorWorkingDirectoryUnusable) {
+		r.log.WarnContext(ctx, "project working folder cannot be used",
+			"session_id", record.SessionID, "provider_id", environment.ID, "code", startupErr.Code, "err", err)
 		return r.terminate(ctx, record, environment, provider, startupErr)
 	}
 	r.recordStartupError(ctx, record, err)

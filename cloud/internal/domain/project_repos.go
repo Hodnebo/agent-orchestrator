@@ -241,7 +241,7 @@ func ValidScriptStepTimeoutMinutes(minutes int) bool {
 // and runs the step (with the default limit).
 const scriptTimeoutMarker = "# ao-timeout: "
 
-var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\n`)
+var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\r?\n`)
 
 // TimedScriptCommand is the stored form of a step with its own time limit:
 // command after a timeout marker line. A step with the default limit (0 or
@@ -523,7 +523,7 @@ func CoderCheckoutSiblings(config json.RawMessage, checkoutDirectory string) []s
 			continue
 		}
 		name := RepoDirName(repo.URL)
-		if !ValidCoderCheckoutSibling(name) || seen[name] {
+		if !ValidCoderCheckoutSibling(name) || seen[name] || reservedCoderCheckoutSiblings[name] {
 			continue
 		}
 		seen[name] = true
@@ -534,6 +534,14 @@ func CoderCheckoutSiblings(config json.RawMessage, checkoutDirectory string) []s
 	}
 	return names
 }
+
+// reservedCoderCheckoutSiblings are folder names the bootstrap never
+// pre-creates beside a working-folder checkout: "repository" is the durable
+// root's own checkout folder (<durable root>/repository), so with a working
+// folder directly in the durable root an empty folder of that name would pass
+// for AO's checkout. The worker still clones such a repository when it can
+// create the folder itself.
+var reservedCoderCheckoutSiblings = map[string]bool{"repository": true}
 
 // ValidCoderCheckoutSibling reports whether name is a folder name a Coder
 // bootstrap may create beside a working-folder checkout: one RepoDirName
@@ -659,8 +667,13 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 		if json.Unmarshal(raw, &directory) != nil {
 			return nil, errors.New("workingDirectory must be a string")
 		}
-		if err := ValidateCoderWorkingDirectory(strings.TrimSpace(directory)); err != nil {
+		normalized := NormalizeCoderWorkingDirectory(directory)
+		if err := ValidateCoderWorkingDirectory(normalized); err != nil {
 			return nil, err
+		}
+		if normalized != directory {
+			values["workingDirectory"], _ = json.Marshal(normalized)
+			changed = true
 		}
 		// A standalone project has no repository to name the folder after; the
 		// worker would ignore such a folder and start in its default one.

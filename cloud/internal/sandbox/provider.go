@@ -151,6 +151,16 @@ const (
 	// StartupErrorWorkspaceCreateFailed means AO could not create the
 	// session's compute at the provider within the startup budget.
 	StartupErrorWorkspaceCreateFailed = "workspace_create_failed"
+	// StartupErrorWorkingDirectoryNotDurable means the project's working
+	// folder is outside the Coder connection's durable root, so the agent's
+	// uncommitted work would not survive a workspace restart. It does not
+	// recover until the project's working folder changes.
+	StartupErrorWorkingDirectoryNotDurable = domain.CoderWorkingFolderNotDurableCode
+	// StartupErrorWorkingDirectoryUnusable means AO could not prepare the
+	// project's working folder in the workspace (the same code a worker
+	// reports, domain.WorkspaceStartupErrorWorkingDirectory). It does not
+	// recover until the folder or the setting changes.
+	StartupErrorWorkingDirectoryUnusable = domain.WorkspaceStartupErrorWorkingDirectory
 )
 
 // StartupError attaches a stable code and a human message to a provider
@@ -224,6 +234,11 @@ type WorkerBootstrap struct {
 	// them empty.
 	CheckoutDirectory string
 	CheckoutSiblings  []string
+	// CheckoutHome (with CheckoutDirectory) is the workspace login user's
+	// home: the bootstrap gives traverse permission only to it and the
+	// folders below it, and creates missing parents only below it or the
+	// durable root.
+	CheckoutHome string
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.
