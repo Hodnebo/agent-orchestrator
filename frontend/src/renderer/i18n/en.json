@@ -2864,6 +2864,8 @@
 	"session.interfaceStartFallbackTitle": "Started in the terminal",
 	"session.interfaceStartFallbackAdapter": "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet.",
 	"session.interfaceStartFallbackUnsupported": "The AO worker in this workspace can't start sessions in Chat. You can switch this session to Chat.",
+	"session.dismissInterfaceNotice": "Dismiss interface switch message",
+	"session.dismissInterfaceNoticeFailed": "Could not dismiss this message. Try again.",
 	"report.subtitle": "Found an issue? Tell us what happened.",
 	"chat.draft.acceptedMessage": "Message was accepted, but its local draft still needs to be cleared.",
 	"chat.draft.steerRestart": "AO can’t determine whether the agent may already have received this guidance before Chat restarted. Retry safely with the same delivery ID, or abandon recovery to edit it. Sending it again after abandonment may duplicate it.",

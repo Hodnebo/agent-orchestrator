@@ -2858,6 +2858,8 @@
 	"session.interfaceStartFallbackTitle": "已在终端中启动",
 	"session.interfaceStartFallbackAdapter": "Claude 的 Chat 需要 Claude ACP 适配器，而此工作区尚未安装。",
 	"session.interfaceStartFallbackUnsupported": "此工作区中的 AO worker 无法在 Chat 中启动会话。你可以将此会话切换到 Chat。",
+	"session.dismissInterfaceNotice": "关闭界面切换消息",
+	"session.dismissInterfaceNoticeFailed": "无法关闭此消息。请重试。",
 	"chat.draft.acceptedMessage": "内容已被接受，但仍需清除本地草稿。",
 	"chat.draft.steerRestart": "AO 无法确定代理是否已收到此内容。请使用相同的投递 ID 安全重试，或放弃恢复后再编辑。放弃后再次发送可能导致重复投递。",
 	"chat.draft.sendRestart": "消息投递尚未确认。请使用相同的投递 ID 重试；确认前草稿将保持锁定。",

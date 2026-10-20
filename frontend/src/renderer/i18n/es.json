@@ -2918,6 +2918,8 @@
 	"session.interfaceStartFallbackTitle": "Iniciado en la terminal",
 	"session.interfaceStartFallbackAdapter": "Chat para Claude necesita el adaptador Claude ACP, que este espacio de trabajo aún no tiene.",
 	"session.interfaceStartFallbackUnsupported": "El worker de AO de este espacio de trabajo no puede iniciar sesiones en Chat. Puedes cambiar esta sesión a Chat.",
+	"session.dismissInterfaceNotice": "Descartar el mensaje del cambio de interfaz",
+	"session.dismissInterfaceNoticeFailed": "No se pudo descartar este mensaje. Inténtalo de nuevo.",
 	"chat.draft.acceptedMessage": "El contenido se aceptó, pero aún hay que borrar su borrador local.",
 	"chat.draft.steerRestart": "AO no puede determinar si el agente ya recibió este contenido. Reintenta con el mismo ID de entrega o abandona la recuperación para editarlo. Volver a enviarlo tras abandonar puede duplicarlo.",
 	"chat.draft.sendRestart": "No se confirmó la entrega del mensaje. Reintenta con el mismo ID de entrega; el borrador seguirá bloqueado hasta que se confirme.",
