@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "Zeitlimit nach {{duration}} überschritten",
 	"scriptRun.limit": ", Limit {{limit}}",
 	"scriptRun.waitingForOutput": "Noch keine Ausgabe",
+	"scriptRun.quiet": "Seit {{minutes}} Min. keine Ausgabe. Der Schritt läuft noch (Limit {{limit}} Min.).",
+	"scriptRun.quietNoLimit": "Seit {{minutes}} Min. keine Ausgabe. Der Schritt läuft noch.",
 	"scriptRun.noOutput": "Keine Ausgabe",
 	"scriptRun.outputHidden": "Die Ausgabe ist nur für Mitglieder der Organisation sichtbar.",
 	"scriptRun.outputLabel": "Ausgabe von Schritt {{step}}",

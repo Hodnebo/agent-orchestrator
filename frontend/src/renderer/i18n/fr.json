@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "Délai dépassé après {{duration}}",
 	"scriptRun.limit": ", limite {{limit}}",
 	"scriptRun.waitingForOutput": "Pas encore de sortie",
+	"scriptRun.quiet": "Aucune sortie depuis {{minutes}} min. L'étape est toujours en cours (limite {{limit}} min).",
+	"scriptRun.quietNoLimit": "Aucune sortie depuis {{minutes}} min. L'étape est toujours en cours.",
 	"scriptRun.noOutput": "Aucune sortie",
 	"scriptRun.outputHidden": "La sortie n'est visible que par les membres de l'organisation.",
 	"scriptRun.outputLabel": "Sortie de l'étape {{step}}",

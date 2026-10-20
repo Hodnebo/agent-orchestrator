@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "{{duration}} 后超时",
 	"scriptRun.limit": "，限制 {{limit}}",
 	"scriptRun.waitingForOutput": "暂无输出",
+	"scriptRun.quiet": "已有 {{minutes}} 分钟没有输出。该步骤仍在运行（限制 {{limit}} 分钟）。",
+	"scriptRun.quietNoLimit": "已有 {{minutes}} 分钟没有输出。该步骤仍在运行。",
 	"scriptRun.noOutput": "无输出",
 	"scriptRun.outputHidden": "输出仅对组织成员可见。",
 	"scriptRun.outputLabel": "第 {{step}} 步的输出",

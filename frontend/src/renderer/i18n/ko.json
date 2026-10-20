@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "{{duration}} 후 시간 초과",
 	"scriptRun.limit": ", 제한 {{limit}}",
 	"scriptRun.waitingForOutput": "아직 출력 없음",
+	"scriptRun.quiet": "{{minutes}}분 동안 출력이 없습니다. 단계는 아직 실행 중입니다(제한 {{limit}}분).",
+	"scriptRun.quietNoLimit": "{{minutes}}분 동안 출력이 없습니다. 단계는 아직 실행 중입니다.",
 	"scriptRun.noOutput": "출력 없음",
 	"scriptRun.outputHidden": "출력은 조직 구성원에게만 표시됩니다.",
 	"scriptRun.outputLabel": "{{step}}단계 출력",

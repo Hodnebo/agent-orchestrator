@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "Tiempo agotado tras {{duration}}",
 	"scriptRun.limit": ", límite {{limit}}",
 	"scriptRun.waitingForOutput": "Todavía no hay salida",
+	"scriptRun.quiet": "Sin salida desde hace {{minutes}} min. El paso sigue en ejecución (límite {{limit}} min).",
+	"scriptRun.quietNoLimit": "Sin salida desde hace {{minutes}} min. El paso sigue en ejecución.",
 	"scriptRun.noOutput": "Sin salida",
 	"scriptRun.outputHidden": "La salida solo es visible para los miembros de la organización.",
 	"scriptRun.outputLabel": "Salida del paso {{step}}",

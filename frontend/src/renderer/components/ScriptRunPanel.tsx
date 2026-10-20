@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Circle, Loader2, X } from "lucide-react";
+import { Check, ChevronRight, Circle, Clock, Loader2, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -145,6 +145,32 @@ function StepNotes({ step }: { step: ScriptRunStep }) {
 	);
 }
 
+/** How long a running step may print nothing before the panel says so. */
+export const QUIET_STEP_MS = 3 * 60_000;
+
+/**
+ * A quiet note under a running step that has printed nothing new for
+ * QUIET_STEP_MS: how long, and its time limit, so a long silent step reads as
+ * still working rather than stuck. It updates with the panel's clock and goes
+ * away once output arrives or the step ends.
+ */
+function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
+	const { t } = useTranslation();
+	const silentMs = elapsedSince(step.outputAt ?? step.startedAt, now);
+	if (silentMs === undefined || silentMs < QUIET_STEP_MS) return null;
+	const minutes = Math.floor(silentMs / 60_000);
+	return (
+		<p className="flex items-center gap-1.5 px-2.5 pb-1.5 text-caption leading-relaxed text-muted-foreground" data-testid="script-step-quiet" role="status">
+			<Clock aria-hidden="true" className="size-3 shrink-0 text-passive" />
+			<span className="min-w-0">
+				{step.timeoutMinutes !== undefined
+					? t("scriptRun.quiet", { minutes, limit: step.timeoutMinutes })
+					: t("scriptRun.quietNoLimit", { minutes })}
+			</span>
+		</p>
+	);
+}
+
 function StepRow({
 	step,
 	run,
@@ -212,6 +238,7 @@ function StepRow({
 					className={cn("size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-step:text-muted-foreground", open && "rotate-90")}
 				/>
 			</button>
+			{running ? <QuietStepNote now={now} step={step} /> : null}
 			{open ? (
 				<div className="flex flex-col gap-1.5 px-2.5 pb-2.5 pt-0.5" id={bodyId}>
 					<StepOutput label={t("scriptRun.outputLabel", { step: step.step })} running={running} step={step} />

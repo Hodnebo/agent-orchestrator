@@ -77,6 +77,12 @@ export interface ScriptRunStep {
 	hint?: string;
 	/** See {@link ScriptStepEventPayload.timeoutMinutes}. */
 	timeoutMinutes?: number;
+	/**
+	 * While the step runs: when its newest event arrived. The worker sends a
+	 * running step's update only when its output changes, so this is when its
+	 * output last changed (or when it started, before any).
+	 */
+	outputAt?: string;
 }
 
 /**
@@ -196,7 +202,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 	const runs = new Map<string, {
 		phase: ScriptPhase;
 		total: number;
-		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload }>;
+		latest: Map<number, { sequence: number; payload: ScriptStepEventPayload; createdAt: string }>;
 		firstSequence: number;
 		lastSequence: number;
 		firstCreatedAt: string;
@@ -216,13 +222,14 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 		run.firstSequence = Math.min(run.firstSequence, event.sequence);
 		run.lastSequence = Math.max(run.lastSequence, event.sequence);
 		const previous = run.latest.get(payload.step);
-		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload });
+		if (!previous || event.sequence >= previous.sequence) run.latest.set(payload.step, { sequence: event.sequence, payload, createdAt: event.createdAt });
 	}
 	const ordered = [...runs.entries()].sort((a, b) => a[1].firstSequence - b[1].firstSequence);
 	return ordered.map(([runId, run], index) => {
 		const steps: ScriptRunStep[] = [];
 		for (let step = 1; step <= run.total; step++) {
-			const payload = run.latest.get(step)?.payload;
+			const latest = run.latest.get(step);
+			const payload = latest?.payload;
 			if (!payload) {
 				steps.push(pendingStep(step));
 				continue;
@@ -247,6 +254,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
 				timeoutMinutes: payload.timeoutMinutes,
+				outputAt: payload.status === "running" ? latest?.createdAt : undefined,
 			});
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;

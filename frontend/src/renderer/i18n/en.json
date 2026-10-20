@@ -62,6 +62,8 @@
 	"scriptRun.timedOutAfter": "Timed out after {{duration}}",
 	"scriptRun.limit": ", limit {{limit}}",
 	"scriptRun.waitingForOutput": "No output yet",
+	"scriptRun.quiet": "No output for {{minutes}} min. The step is still running (limit {{limit}} min).",
+	"scriptRun.quietNoLimit": "No output for {{minutes}} min. The step is still running.",
 	"scriptRun.noOutput": "No output",
 	"scriptRun.outputHidden": "Output is visible to organization members only.",
 	"scriptRun.outputLabel": "Output of step {{step}}",
