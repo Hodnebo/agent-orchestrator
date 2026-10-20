@@ -168,44 +168,72 @@ func TestExpandCheckoutDirectory(t *testing.T) {
 
 // The folder preparation really runs: a missing parent is created for the
 // login user (with group write for the worker), a missing checkout or
-// sibling folder is created for the worker user, and a folder that already
-// exists (the template's own checkout, or a symbolic link) is never chowned
-// or changed. sudo is a stand-in that records ownership changes.
+// sibling folder is created for the worker user (by the worker in a parent
+// it can write, by root and handed over in one it cannot), and a folder that
+// already exists (the template's own checkout, or a symbolic link) is never
+// chowned or changed. sudo is a stand-in that records ownership changes and
+// honours -u: the worker can write only the folders it created, was handed
+// or got group write on, so its mkdir anywhere else fails as it would for
+// real.
 func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh is required")
 	}
-	run := func(t *testing.T, home, directory string, siblings []string) []string {
+	// run returns the recorded changes and the folders the worker can write.
+	run := func(t *testing.T, home, directory string, siblings []string) ([]string, []string) {
 		t.Helper()
-		log := filepath.Join(t.TempDir(), "changes.log")
+		state := t.TempDir()
+		log, writable := shellQuote(filepath.Join(state, "changes.log")), filepath.Join(state, "worker-writable")
+		if err := os.WriteFile(writable, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		script := "set -eu\n" +
 			"sudo() {\n" +
 			"  as=root\n" +
 			"  while [ $# -gt 0 ]; do case \"$1\" in -n|-b) shift ;; -u) as=$2; shift 2 ;; *) break ;; esac; done\n" +
-			"  case \"$1\" in chown|chmod|chgrp) echo \"$*\" >>" + shellQuote(log) + "; return 0 ;; esac\n" +
-			"  if [ \"$1\" = mkdir ]; then echo \"mkdir as $as $2\" >>" + shellQuote(log) + "; fi\n" +
+			"  if [ \"$as\" = ao-worker ]; then\n" +
+			"    case \"$1\" in\n" +
+			"      test) [ \"$2\" != -w ] || grep -qxF \"$3\" " + shellQuote(writable) + "; return ;;\n" +
+			"      mkdir) echo \"mkdir as $as $2\" >>" + log + "\n" +
+			"        grep -qxF \"$(dirname \"$2\")\" " + shellQuote(writable) + " || { echo \"mkdir: $2: Permission denied\" >&2; return 1; }\n" +
+			"        mkdir \"$2\" && echo \"$2\" >>" + shellQuote(writable) + "; return ;;\n" +
+			"    esac\n" +
+			"  fi\n" +
+			"  case \"$1\" in chown|chmod|chgrp) echo \"$*\" >>" + log + "\n" +
+			"    case \"$*\" in 'chmod g+wx '*|'chown -h ao-worker:ao-worker '*) for last; do :; done; echo \"$last\" >>" + shellQuote(writable) + " ;; esac\n" +
+			"    return 0 ;; esac\n" +
+			"  if [ \"$1\" = mkdir ]; then echo \"mkdir as $as $2\" >>" + log + "; fi\n" +
 			"  \"$@\"\n}\n" +
 			checkoutDirectoryScript("ao-worker", directory, siblings, home, home) + "echo __DONE__\n"
 		output, err := exec.Command("sh", "-c", script).CombinedOutput()
 		if err != nil || !strings.Contains(string(output), "__DONE__") {
 			t.Fatalf("script failed: %v\n%s", err, output)
 		}
-		raw, _ := os.ReadFile(log)
-		return strings.Split(strings.TrimSpace(string(raw)), "\n")
+		raw, _ := os.ReadFile(filepath.Join(state, "changes.log"))
+		owned, _ := os.ReadFile(writable)
+		return strings.Split(strings.TrimSpace(string(raw)), "\n"), strings.Split(strings.TrimSpace(string(owned)), "\n")
+	}
+	// workerFolders checks each folder was created and is the worker's.
+	workerFolders := func(t *testing.T, owned []string, dirs ...string) {
+		t.Helper()
+		for _, dir := range dirs {
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				t.Fatalf("%s was not created: %v", dir, err)
+			}
+			if !slices.Contains(owned, dir) {
+				t.Errorf("%s is not the worker user's (worker can write %q)", dir, owned)
+			}
+		}
 	}
 
 	t.Run("fresh workspace", func(t *testing.T) {
 		home := t.TempDir()
 		parent := filepath.Join(home, "work")
-		changes := run(t, home, filepath.Join(parent, "alice"), []string{"billing"})
-		for _, dir := range []string{parent, filepath.Join(parent, "alice"), filepath.Join(parent, "billing")} {
-			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-				t.Fatalf("%s was not created: %v", dir, err)
-			}
-		}
+		changes, owned := run(t, home, filepath.Join(parent, "alice"), []string{"billing"})
+		workerFolders(t, owned, filepath.Join(parent, "alice"), filepath.Join(parent, "billing"))
 		for _, change := range changes {
-			if strings.Contains(change, "chown ao-worker") {
+			if strings.Contains(change, "chown -h ao-worker") {
 				t.Errorf("root chowned a checkout folder instead of the worker creating it: %q", change)
 			}
 		}
@@ -223,7 +251,8 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 	t.Run("deeper parents are the login user's", func(t *testing.T) {
 		home := t.TempDir()
 		parent := filepath.Join(home, "src", "acme")
-		changes := run(t, home, filepath.Join(parent, "alice"), nil)
+		changes, owned := run(t, home, filepath.Join(parent, "alice"), nil)
+		workerFolders(t, owned, filepath.Join(parent, "alice"))
 		owner := fmt.Sprintf("chown -h %d:%d ", os.Getuid(), os.Getgid())
 		for _, want := range []string{owner + filepath.Join(home, "src"), "chmod g+wx " + parent} {
 			if !slices.Contains(changes, want) {
@@ -237,6 +266,37 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 		}
 	})
 
+	// The template already made ~/work (the login user's, 0755), or the
+	// checkout sits directly in the home: the worker cannot write the parent,
+	// so root creates the folders and hands them to the worker.
+	for name, parentOf := range map[string]func(home string) string{
+		"template made the parent": func(home string) string { return filepath.Join(home, "work") },
+		"home is the parent":       func(home string) string { return home },
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			parent := parentOf(home)
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			changes, owned := run(t, home, filepath.Join(parent, "alice-main"), []string{"billing"})
+			workerFolders(t, owned, filepath.Join(parent, "alice-main"), filepath.Join(parent, "billing"))
+			for _, want := range []string{
+				"chown -h ao-worker:ao-worker " + filepath.Join(parent, "alice-main"),
+				"chown -h ao-worker:ao-worker " + filepath.Join(parent, "billing"),
+			} {
+				if !slices.Contains(changes, want) {
+					t.Errorf("changes %q lack %q", changes, want)
+				}
+			}
+			for _, change := range changes {
+				if strings.HasSuffix(change, " "+parent) {
+					t.Errorf("the existing parent was changed: %q", change)
+				}
+			}
+		})
+	}
+
 	t.Run("template already cloned the folder", func(t *testing.T) {
 		home := t.TempDir()
 		parent := filepath.Join(home, "work")
@@ -247,16 +307,14 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 		if err := os.Symlink(occupied, filepath.Join(parent, "billing")); err != nil {
 			t.Fatal(err)
 		}
-		changes := run(t, home, occupied, []string{"billing", "api"})
+		changes, owned := run(t, home, occupied, []string{"billing", "api"})
 		for _, change := range changes {
 			if strings.Contains(change, occupied) || strings.Contains(change, filepath.Join(parent, "billing")) ||
 				strings.HasSuffix(change, " "+parent) {
 				t.Errorf("an existing folder was changed: %q", change)
 			}
 		}
-		if !slices.Contains(changes, "mkdir as ao-worker "+filepath.Join(parent, "api")) {
-			t.Errorf("the missing sibling was not prepared: %q", changes)
-		}
+		workerFolders(t, owned, filepath.Join(parent, "api"))
 	})
 }
 

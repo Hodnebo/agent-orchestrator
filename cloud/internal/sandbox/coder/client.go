@@ -2037,12 +2037,19 @@ func checkoutDirectoryScript(workerUser, directory string, siblings []string, ho
 				" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+dir) + "\n")
 		}
 	}
-	// The worker user creates its own checkout folders in the parent it can
-	// write: root never mkdirs then chowns a path an agent could swap for a
-	// symbolic link in between.
+	// The worker user creates its own checkout folders in a parent it can
+	// write (one this script created): root never mkdirs then chowns a path
+	// an agent could swap for a symbolic link in between. A parent that
+	// already existed (the template's ~/work, or the home itself) is not the
+	// worker's to write, so root creates the folder there and hands it over;
+	// the agent cannot write that parent, so it cannot swap the entry.
 	script.WriteString("ao_checkout_folder() {\n" +
 		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
-		"  sudo -n -u " + user + " mkdir \"$1\"\n}\n")
+		"  if sudo -n -u " + user + " test -w \"$checkout_parent\" && sudo -n -u " + user + " test -x \"$checkout_parent\"; then\n" +
+		"    sudo -n -u " + user + " mkdir \"$1\"\n" +
+		"  else\n" +
+		"    sudo -n mkdir \"$1\" && sudo -n chown -h " + shellQuote(workerUser+":"+workerUser) + " \"$1\"\n" +
+		"  fi\n}\n")
 	script.WriteString("ao_checkout_folder " + shellQuote(directory) + " || true\n")
 	for _, name := range siblings {
 		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
