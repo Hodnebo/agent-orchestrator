@@ -55,14 +55,25 @@ function allowedApprovalModes(harness: string, ceiling?: "read-only" | "standard
 	return ["default", "accept-edits", "auto", "bypass-permissions"];
 }
 
-// The approval mode a turn starts with when the user hasn't picked one: the
-// session's own mode, as the terminal runs it (trusted skips prompts, standard
-// accepts edits), so a Chat session doesn't ask about every command.
-function defaultApprovalMode(modes: ApprovalMode[], ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode | undefined {
-	const preferred: ApprovalMode | undefined = ceiling === "trusted" ? "bypass-permissions" : ceiling === "standard" ? "accept-edits" : undefined;
+// The approval mode the composer shows when the user hasn't picked one: what
+// the worker runs a turn without one with, from the session's mode (trusted
+// skips prompts; standard accepts edits for Claude and auto-reviews for
+// Codex). It is only shown: such a turn is sent without an approval mode, so
+// the worker can step down when the adapter does not offer this one.
+function defaultApprovalMode(harness: string, modes: ApprovalMode[], ceiling?: "read-only" | "standard" | "trusted"): ApprovalMode | undefined {
+	const preferred: ApprovalMode | undefined = ceiling === "trusted"
+		? "bypass-permissions"
+		: ceiling === "standard" ? (harness === "codex" ? "auto" : "accept-edits") : undefined;
 	return preferred && modes.includes(preferred) ? preferred : modes[0];
 }
 
+function savedApprovalMode(value: unknown): ApprovalMode | undefined {
+	return value === "default" || value === "accept-edits" || value === "auto" || value === "bypass-permissions" ? value : undefined;
+}
+
+// A saved approval mode counts only with approvalModeChosen: older builds
+// also saved the shown default this way, and sending it as the user's pick
+// overrode the session's mode (a trusted Chat asked before every command).
 export function readCloudTurnSettings(key: string): CloudTurnSettings {
 	try {
 		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
@@ -71,10 +82,27 @@ export function readCloudTurnSettings(key: string): CloudTurnSettings {
 			executionMode: saved.executionMode === "plan" || saved.executionMode === "agent" ? saved.executionMode : undefined,
 			model: typeof saved.model === "string" ? saved.model : undefined,
 			reasoningEffort: typeof saved.reasoningEffort === "string" ? saved.reasoningEffort : undefined,
-			approvalMode: saved.approvalMode === "default" || saved.approvalMode === "accept-edits" || saved.approvalMode === "auto" || saved.approvalMode === "bypass-permissions" ? saved.approvalMode : undefined,
+			approvalMode: saved.approvalModeChosen === true ? savedApprovalMode(saved.approvalMode) : undefined,
 		};
 	} catch {
 		return {};
+	}
+}
+
+function writeCloudTurnSettings(key: string, settings: CloudTurnSettings) {
+	const { approvalMode, ...rest } = settings;
+	localStorage.setItem(key, JSON.stringify(approvalMode ? { ...rest, approvalMode, approvalModeChosen: true } : rest));
+}
+
+// The project's remembered approval mode. Only "Remember for this project"
+// ever wrote this key, so a value saved before approvalModeChosen existed is
+// still the user's pick.
+function readRememberedApprovalMode(key: string): ApprovalMode | undefined {
+	try {
+		const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+		return saved && typeof saved === "object" ? savedApprovalMode(saved.approvalMode) : undefined;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -465,11 +493,13 @@ export function CloudSessionChatSurface({
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
+	// settings.approvalMode is only the user's pick; the composer shows this
+	// default when there is none.
+	const shownDefaultApprovalMode = defaultApprovalMode(session.provider, approvalModes, cloud?.permissionMode);
 	const readSettings = () => {
 		const saved = readCloudTurnSettings(settingsKey);
-		const remembered = readCloudTurnSettings(projectKey).approvalMode;
-		const selectedMode = saved.approvalMode ?? remembered;
-		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : defaultApprovalMode(approvalModes, cloud?.permissionMode) };
+		const selectedMode = saved.approvalMode ?? readRememberedApprovalMode(projectKey);
+		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : undefined };
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
 	const settings = selected.key === settingsKey ? selected.settings : readSettings();
@@ -482,7 +512,7 @@ export function CloudSessionChatSurface({
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
 		try {
-			localStorage.setItem(settingsKey, JSON.stringify(next));
+			writeCloudTurnSettings(settingsKey, next);
 		} catch {
 			// The choice still applies for this mounted session when storage is unavailable.
 		}
@@ -534,7 +564,9 @@ export function CloudSessionChatSurface({
 		};
 		settingsRef.current = { key: settingsKey, settings: next };
 		setSelected({ key: settingsKey, settings: next });
-		try { localStorage.setItem(settingsKey, JSON.stringify(next)); } catch { /* keep the mounted choice */ }
+		// The native model and effort are saved; the approval mode stays the one
+		// the user picked in this session, if any.
+		try { writeCloudTurnSettings(settingsKey, { ...next, approvalMode: readCloudTurnSettings(settingsKey).approvalMode }); } catch { /* keep the mounted choice */ }
 	}, [modelsQuery.dataUpdatedAt, settingsKey]);
 	const eventsQuery = useQuery({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
@@ -552,8 +584,10 @@ export function CloudSessionChatSurface({
 		mutationFn: async ({ text, clientMessageId }: { text: string; clientMessageId?: string }) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			// Without the user's pick the turn carries no approval mode: the
+			// worker derives it from the session's mode.
 			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
-				? selectedSettings.approvalMode : defaultApprovalMode(approvalModes, cloud.permissionMode);
+				? selectedSettings.approvalMode : undefined;
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
@@ -566,9 +600,10 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
+	const shownApprovalMode = settings.approvalMode ?? shownDefaultApprovalMode;
 	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings,
-	}), [eventsQuery.data, session, settings]);
+		...toSnapshot(session, eventsQuery.data ?? []), settings: { ...settings, approvalMode: shownApprovalMode },
+	}), [eventsQuery.data, session, settings, shownApprovalMode]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -649,11 +684,18 @@ export function CloudSessionChatSurface({
 					updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
 				}
 			} : undefined}
-			onChooseSettings={(next) => updateSettings({ ...settingsRef.current.settings, ...next })}
+			onChooseSettings={(next) => {
+				const current = settingsRef.current.settings;
+				// The settings bar sends the shown settings back with every change,
+				// so the shown default stays unpicked until the user picks a mode.
+				const approvalMode = current.approvalMode === undefined && next.approvalMode === shownApprovalMode
+					? undefined : next.approvalMode ?? current.approvalMode;
+				updateSettings({ ...current, ...next, approvalMode });
+			}}
 			showApprovalMode={approvalModes.length > 0}
 			approvalModes={approvalModes}
 			onRememberPermissions={approvalModes.length > 0 ? (mode) => {
-				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode })); } catch { /* keep this session's choice */ }
+				try { localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode, approvalModeChosen: true })); } catch { /* keep this session's choice */ }
 				updateSettings({ ...settingsRef.current.settings, approvalMode: mode });
 			} : undefined}
 			onDecide={(requestId, decisionId) => decide.mutate({ requestId, decisionId })}
