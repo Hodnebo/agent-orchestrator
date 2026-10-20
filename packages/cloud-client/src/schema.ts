@@ -2603,6 +2603,8 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description Interface the session starts in. Optional; empty, or a harness without a Chat controller, starts in the terminal (tui). */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;

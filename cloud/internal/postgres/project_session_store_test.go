@@ -171,6 +171,42 @@ func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 	}
 }
 
+// A Chat session launches in Chat and queues its opening prompt as a turn for
+// the Chat controller; a Terminal session gets the prompt on the agent's
+// command line, so it queues no turn.
+func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		requested domain.SessionInterface
+		want      domain.SessionInterface
+		turns     int
+	}{
+		{domain.SessionInterfaceChat, domain.SessionInterfaceChat, 1},
+		{"", domain.SessionInterfaceTUI, 0},
+	} {
+		session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+			"create-interface-"+uuid.NewString(), 10, domain.CreateSession{
+				ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Interface test",
+				Prompt: "hello", Provider: "docker", Interface: tc.requested,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var turns int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_turns WHERE session_id = $1 AND state = 'queued'`, session.ID).Scan(&turns); err != nil {
+			t.Fatal(err)
+		}
+		if launch.Interface != tc.want || turns != tc.turns {
+			t.Fatalf("requested %q: launch interface = %q, queued turns = %d; want %q, %d", tc.requested, launch.Interface, turns, tc.want, tc.turns)
+		}
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

@@ -373,6 +373,8 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/** Interface the session starts in. Omitted, or a harness without Chat, starts in the terminal. */
+	interfaceMode?: CloudCpInterfaceMode;
 }
 
 export interface CloudCpSessionRepo {

@@ -828,9 +828,16 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
-		); err != nil {
+		settings := domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort}
+		var err error
+		// A Terminal session gets the opening prompt on the agent's command line;
+		// a Chat session's controller runs queued turns, so it is queued as one.
+		if input.Interface == domain.SessionInterfaceChat {
+			_, err = appendUserMessage(ctx, tx, orgID, session.ID, "", input.Prompt, "", nil, settings)
+		} else {
+			_, err = appendUserMessageEvent(ctx, tx, orgID, session.ID, input.Prompt, settings)
+		}
+		if err != nil {
 			return domain.Session{}, err
 		}
 	}

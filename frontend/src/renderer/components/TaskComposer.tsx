@@ -194,6 +194,7 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
+					...(input.mode ? { interfaceMode: input.mode } : {}),
 				});
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
@@ -666,7 +667,9 @@ export function TaskComposer({
 				model: requestedModel,
 				// Only explicit Codex picks set this; agent changes reset it, and TUI retries preserve it.
 				effort: requestedEffort,
-				mode: interfaceMode,
+				// The local daemon applies the default session mode itself; the control
+				// plane has none, so a cloud task carries it.
+				mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 				approvalMode,
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,

@@ -4836,6 +4836,11 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in. Optional; empty, or a harness
+            without a Chat controller, starts in the terminal (tui).
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false
