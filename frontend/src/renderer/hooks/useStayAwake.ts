@@ -135,9 +135,9 @@ export function useStayAwake(enabled = true) {
 					for (const result of results) if (result.status === "rejected") throw result.reason;
 					await start();
 				} else if (desktopLid) {
-					// End only lid sessions, starting idle wake first so the Mac never
-					// sleeps in between. Timed and session-scoped owners keep running.
-					if (!sessions.some((s) => !s.lidClosed)) await start();
+					// Establish persistent AO idle wake before ending lid sessions.
+					// Temporary owners cannot preserve the Keep awake setting on their own.
+					if (!sessions.some((s) => !s.lidClosed && s.scope === "ao" && s.mode === "indefinite")) await start();
 					const endLid = async () => {
 						for (const s of sessions) if (s.lidClosed) await awake.actAsync({ kind: "end", id: s.id });
 					};

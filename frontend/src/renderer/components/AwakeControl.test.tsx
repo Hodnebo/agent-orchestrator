@@ -355,19 +355,45 @@ describe("shared Stay Awake controls", () => {
 		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
 		expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
 	});
-	it("turning closed-lid off ends only lid sessions and keeps other owners", async () => {
+	it.each([
+		{ scope: "ao" as const, mode: "duration" as const },
+		{ scope: "session" as const, mode: "indefinite" as const, sessionId: "work" },
+	])("preserves indefinite AO wake when disabling lid wake alongside a $scope/$mode owner", async (owner) => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
-		state.sessions = [awakeSession({ id: "lid", lidClosed: true }), awakeSession({ id: "timer", mode: "duration" })];
+		state.sessions = [awakeSession({ id: "lid", lidClosed: true }), awakeSession({ id: "temporary", ...owner })];
 		state.active = true;
 		state.lidActive = true;
 		await show();
 		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
 		await waitFor(() => expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false"));
 		expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/stop");
-		expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/sessions", expect.anything());
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: false }) });
+		const startIndex = test.post.mock.calls.findIndex(([path]) => path === "/api/v1/awake/sessions");
+		const endIndex = test.post.mock.calls.findIndex(([path]) => path === "/api/v1/awake/sessions/{awakeId}/end");
+		expect(startIndex).toBeLessThan(endIndex);
 		expect(state.paused).toBe(false);
 		expect(state.sessions.find((s) => s.id === "lid")?.endedAt).toBe("now");
-		expect(state.sessions.find((s) => s.id === "timer")?.endedAt).toBeUndefined();
+		expect(state.sessions.find((s) => s.id === "temporary")?.endedAt).toBeUndefined();
+		// The agent finishes or the timer expires after the lid transition.
+		await act(async () => {
+			await test.post("/api/v1/awake/sessions/{awakeId}/end", { params: { path: { awakeId: "temporary" } } });
+			client.setQueryData(awakeQueryKey, snapshot());
+		});
+		expect(state.active).toBe(true);
+		expect(state.sessions.filter((s) => !s.endedAt)).toEqual([expect.objectContaining({ id: "new", scope: "ao", mode: "indefinite", lidClosed: false })]);
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+	});
+	it("reuses an existing indefinite AO idle owner when disabling lid wake", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		state.sessions = [awakeSession({ id: "lid", lidClosed: true }), awakeSession({ id: "idle" })];
+		state.active = true;
+		state.lidActive = true;
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false"));
+		expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/sessions", expect.anything());
+		expect(state.sessions.filter((s) => !s.endedAt)).toEqual([expect.objectContaining({ id: "idle" })]);
+		expect(state.active).toBe(true);
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 	});
 	it("replaces a sidebar lid session with idle wake when closed-lid is turned off", async () => {
