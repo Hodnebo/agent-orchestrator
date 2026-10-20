@@ -838,12 +838,12 @@
 	"mobile.keepAwake.help": "離席中もスマートフォンから接続できます。",
 	"mobile.keepAwake.laptopNote": "MacBook は、電源と外部ディスプレイに接続していない限り、蓋を閉じるとスリープします。",
 	"mobile.keepAwake.lidLabel": "ふたを閉じてもスリープさせない",
-	"mobile.keepAwake.lidHelp": "モバイルアクセスがオンの間は、電話が切断されても動作します。バッテリー消費が増えるため、Mac は通気性のよい場所に置いてください。バッテリー残量が 10% 未満、または温度が危険な状態になると停止します。",
+	"mobile.keepAwake.lidHelp": "ふたを閉じた状態でもこのMacのスリープを防ぎます。バッテリー消費が増えるため、Macは通気性のよい場所に置いてください。バッテリー残量が{{percent}}%未満、または温度が危険な状態になると停止します。",
 	"mobile.keepAwake.lidActive": "ふたを閉じた状態のスリープ防止が準備できました。",
-	"mobile.keepAwake.lidIdle": "モバイルアクセスがオンになると開始します。",
+	"mobile.keepAwake.lidIdle": "ふたを閉じた状態のスリープ防止が開始されるのを待っています。",
 	"mobile.keepAwake.lidReason.starting": "ふたを閉じた状態のスリープ防止を準備中…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS または別のツールがふたのスリープを管理しています。AO は変更しません。",
-	"mobile.keepAwake.lidReason.low_battery": "残量が 10% 未満になったため停止しました。充電後、この設定をオフにしてからオンにしてください。",
+	"mobile.keepAwake.lidReason.low_battery": "残量が {{percent}}% 未満になったため停止しました。充電後、この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.critical_heat": "Mac の冷却が必要なため停止しました。冷却後、この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.battery_unknown": "バッテリー状態を読み取れないため停止しました。この設定をオフにしてからオンにしてください。",
 	"mobile.keepAwake.lidReason.recovery_failed": "通常のふたのスリープを復元できませんでした。ふたを開き、AO を再起動してください。",
@@ -3210,5 +3210,10 @@
 	"settings.agentAccounts.stopAndMove": "停止して移動",
 	"settings.agentAccounts.switching": "{{email}} に切り替え中…",
 	"settings.agentAccounts.switchingAccount": "アカウントを切り替え中",
-	"settings.agentAccounts.switchFailed": "切り替えに失敗しました。エージェントは以前のアカウントのままです。"
+	"settings.agentAccounts.switchFailed": "切り替えに失敗しました。エージェントは以前のアカウントのままです。",
+	"awake.closedLidOffTooltip": "クリックすると、ふたを閉じた状態でもこのMacをスリープさせません。バッテリー消費が増えるため、Macは通気性のよい場所に置いてください。バッテリー残量が{{percent}}%未満、または温度が危険な状態になると停止します。",
+	"awake.closedLidActiveTooltip": "ふたを閉じた状態でもこのMacのスリープを防いでいます。クリックするとオフになります。",
+	"awake.idleOnlyOffTooltip": "クリックすると、操作していないときのスリープを防ぎます。このMacではふたを閉じた状態のスリープ防止は利用できません。",
+	"awake.lidInactiveTooltip": "このMacは起動していますが、ふたを閉じた状態のスリープ防止は有効ではありません。クリックしてオフにしてから、もう一度お試しください。",
+	"awake.lidInactiveReasonTooltip": "このMacは起動していますが、ふたを閉じた状態のスリープ防止は有効ではありません。{{reason}} クリックしてオフにします。"
 }

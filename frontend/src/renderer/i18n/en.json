@@ -835,12 +835,12 @@
 	"mobile.keepAwake.help": "Stay reachable from your phone while you're away.",
 	"mobile.keepAwake.laptopNote": "Closing the lid still puts a MacBook to sleep unless it's plugged in with an external display.",
 	"mobile.keepAwake.lidLabel": "Keep awake with lid closed",
-	"mobile.keepAwake.lidHelp": "Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
+	"mobile.keepAwake.lidHelp": "Keeps this Mac awake with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.",
 	"mobile.keepAwake.lidActive": "Closed-lid keep awake is armed.",
-	"mobile.keepAwake.lidIdle": "Starts when mobile access is on.",
+	"mobile.keepAwake.lidIdle": "Waiting for closed-lid wake to start.",
 	"mobile.keepAwake.lidReason.starting": "Starting closed-lid keep awake…",
 	"mobile.keepAwake.lidReason.system_managed": "macOS or another utility already manages lid sleep. AO is leaving that control unchanged.",
-	"mobile.keepAwake.lidReason.low_battery": "Stopped below 10% battery. Charge your Mac, then turn this option off and on to restart.",
+	"mobile.keepAwake.lidReason.low_battery": "Stopped below {{percent}}% battery. Charge your Mac, then turn this option off and on to restart.",
 	"mobile.keepAwake.lidReason.critical_heat": "Stopped because the Mac needs to cool down. After it cools, turn this option off and on to restart.",
 	"mobile.keepAwake.lidReason.battery_unknown": "Stopped because battery state could not be read. Turn this option off and on to retry.",
 	"mobile.keepAwake.lidReason.recovery_failed": "AO could not restore normal lid sleep. Open the lid and restart AO to retry recovery.",
@@ -3191,5 +3191,10 @@
 	"settings.agentAccounts.stopAndMove": "Stop and move",
 	"settings.agentAccounts.switching": "Switching to {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Switching account",
-	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account."
+	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account.",
+	"awake.closedLidOffTooltip": "Click to keep this Mac awake, including with the lid closed. Uses more battery; keep the Mac on a ventilated surface. Stops below {{percent}}% battery or at critical heat.",
+	"awake.closedLidActiveTooltip": "This Mac is being kept awake, including with the lid closed. Click to turn off.",
+	"awake.idleOnlyOffTooltip": "Click to prevent idle sleep. Closed-lid wake is unavailable on this Mac.",
+	"awake.lidInactiveTooltip": "This Mac is awake, but closed-lid wake is not active. Click to turn off and retry.",
+	"awake.lidInactiveReasonTooltip": "This Mac is awake, but closed-lid wake is not active. {{reason}} Click to turn off."
 }

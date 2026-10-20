@@ -2,10 +2,16 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 )
 
 // fakeLAN is a minimal httpd.LANController fake for exercising
@@ -47,7 +53,7 @@ func TestRestoreEnabledStartsListener(t *testing.T) {
 	}
 	lan := &fakeLAN{}
 	bs := &controllers.BridgeService{LAN: lan}
-	if err := restoreMobileOnBoot(path, bs); err != nil {
+	if err := restoreMobileOnBoot(context.Background(), path, bs, nil); err != nil {
 		t.Fatalf("restoreMobileOnBoot: %v", err)
 	}
 	if !lan.started {
@@ -71,7 +77,7 @@ func TestRestoreDisabledDoesNotStart(t *testing.T) {
 	}
 	lan := &fakeLAN{}
 	bs := &controllers.BridgeService{LAN: lan}
-	if err := restoreMobileOnBoot(path, bs); err != nil {
+	if err := restoreMobileOnBoot(context.Background(), path, bs, nil); err != nil {
 		t.Fatalf("restoreMobileOnBoot: %v", err)
 	}
 	if lan.started {
@@ -112,10 +118,199 @@ func TestRestoreAppliesServeToStartReturnedPort(t *testing.T) {
 			return nil
 		},
 	}
-	if err := restoreMobileOnBoot(path, bs); err != nil {
+	if err := restoreMobileOnBoot(context.Background(), path, bs, nil); err != nil {
 		t.Fatalf("restoreMobileOnBoot: %v", err)
 	}
 	if appliedPort != 54014 {
 		t.Fatalf("expected ApplyServe called with Start's returned port 54014, got %d (state.LastPort was 3011)", appliedPort)
+	}
+}
+
+// Unused AwakeService methods remain unimplemented: migration must not resume
+// safety pauses or change settings/rules while transferring the legacy opt-in.
+type migrationAwake struct {
+	controllers.AwakeService
+	state    domain.AwakeState
+	requests []domain.StartAwakeRequest
+	start    func(domain.StartAwakeRequest) error
+}
+
+func (a *migrationAwake) Status() domain.AwakeState { return a.state }
+func (a *migrationAwake) Start(_ context.Context, request domain.StartAwakeRequest) error {
+	a.requests = append(a.requests, request)
+	if a.start != nil {
+		return a.start(request)
+	}
+	a.state.Active = true
+	return nil
+}
+
+type legacyWakeProbe struct{ starts int }
+
+func (k *legacyWakeProbe) Start() error                  { k.starts++; return nil }
+func (*legacyWakeProbe) Stop()                           {}
+func (*legacyWakeProbe) Active() bool                    { return false }
+func (*legacyWakeProbe) HasBattery() bool                { return true }
+func (*legacyWakeProbe) ConfigureLid(bool, bool) error   { return nil }
+func (*legacyWakeProbe) LidStatus() (bool, bool, string) { return true, false, "" }
+
+func TestRestoreMigratesMobileWakeOnceBeforeRestoringBridge(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, lid := range []bool{false, true} {
+			t.Run(fmt.Sprintf("bridge=%t/lid=%t", enabled, lid), func(t *testing.T) {
+				path := mobilebridge.Path(t.TempDir())
+				before := mobilebridge.State{Enabled: enabled, Password: "secret12", LastPort: 3011, KeepAwake: true, KeepAwakeLid: lid}
+				if err := mobilebridge.Save(path, before); err != nil {
+					t.Fatal(err)
+				}
+				lan := &fakeLAN{}
+				legacy := &legacyWakeProbe{}
+				bs := &controllers.BridgeService{LAN: lan, ConfigPath: path, KeepAwake: legacy}
+				awake := &migrationAwake{state: domain.AwakeState{Settings: domain.AwakeSettings{StopBatteryPercent: 25}}}
+				awake.start = func(request domain.StartAwakeRequest) error {
+					saved, err := mobilebridge.Load(path)
+					if err != nil {
+						return err
+					}
+					if !saved.KeepAwake || lan.started {
+						t.Fatal("legacy preference retired or listener restored before desktop start")
+					}
+					if request.Scope != "ao" || request.Mode != "indefinite" || request.LidClosed != lid {
+						t.Fatalf("changed the saved intent: %+v", request)
+					}
+					awake.state.Active = true
+					return nil
+				}
+				if err := restoreMobileOnBoot(context.Background(), path, bs, awake); err != nil {
+					t.Fatal(err)
+				}
+				saved, err := mobilebridge.Load(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if saved.KeepAwake || saved.KeepAwakeLid {
+					t.Fatal("legacy ownership remains persisted")
+				}
+				if saved.Enabled != enabled || saved.Password != before.Password || saved.LastPort != before.LastPort {
+					t.Fatalf("changed pairing settings: %+v", saved)
+				}
+				if lan.started != enabled || legacy.starts != 0 || !awake.state.Active {
+					t.Fatal("legacy lease restarted or desktop intent was not transferred")
+				}
+				if awake.state.Settings.StopBatteryPercent != 25 {
+					t.Fatal("changed configured safety cutoff")
+				}
+				if err := restoreMobileOnBoot(context.Background(), path, bs, awake); err != nil {
+					t.Fatal(err)
+				}
+				if len(awake.requests) != 1 || legacy.starts != 0 {
+					t.Fatal("migration repeated or legacy hold restarted")
+				}
+			})
+		}
+	}
+}
+
+func TestRestoreMigrationDoesNotRearmSafetyPause(t *testing.T) {
+	path := mobilebridge.Path(t.TempDir())
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", KeepAwake: true, KeepAwakeLid: true}); err != nil {
+		t.Fatal(err)
+	}
+	lan := &fakeLAN{}
+	legacy := &legacyWakeProbe{}
+	awake := &migrationAwake{state: domain.AwakeState{Paused: true, Reason: "critical_heat"}}
+	if err := restoreMobileOnBoot(context.Background(), path, &controllers.BridgeService{LAN: lan, ConfigPath: path, KeepAwake: legacy}, awake); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(awake.requests) != 0 || !awake.state.Paused || saved.KeepAwake || saved.KeepAwakeLid || legacy.starts != 0 || !lan.started {
+		t.Fatal("migration rearmed wake or failed to retire the legacy hold")
+	}
+}
+
+func TestRestoreMigrationFailureCannotRestartLegacyWake(t *testing.T) {
+	for _, reason := range []string{"critical_heat", "low_battery", "setup failed", "unavailable"} {
+		t.Run(reason, func(t *testing.T) {
+			path := mobilebridge.Path(t.TempDir())
+			if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", KeepAwake: true}); err != nil {
+				t.Fatal(err)
+			}
+			lan := &fakeLAN{}
+			legacy := &legacyWakeProbe{}
+			var awake controllers.AwakeService
+			if reason != "unavailable" {
+				awake = &migrationAwake{start: func(domain.StartAwakeRequest) error { return errors.New(reason) }}
+			}
+			err := restoreMobileOnBoot(context.Background(), path, &controllers.BridgeService{LAN: lan, ConfigPath: path, KeepAwake: legacy}, awake)
+			if err == nil || !strings.Contains(err.Error(), reason) {
+				t.Fatalf("migration failure not reported: %v", err)
+			}
+			saved, loadErr := mobilebridge.Load(path)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if saved.KeepAwake || saved.KeepAwakeLid || legacy.starts != 0 || !lan.started {
+				t.Fatal("failed migration restored independent wake or disabled mobile access")
+			}
+		})
+	}
+}
+
+func TestRestoreMigrationFallsBackForOldLidHelper(t *testing.T) {
+	path := mobilebridge.Path(t.TempDir())
+	if err := mobilebridge.Save(path, mobilebridge.State{KeepAwake: true, KeepAwakeLid: true}); err != nil {
+		t.Fatal(err)
+	}
+	awake := &migrationAwake{start: func(request domain.StartAwakeRequest) error {
+		if request.LidClosed {
+			return fmt.Errorf("registered helper: %w", awakesvc.ErrLidHelperUpgrade)
+		}
+		return nil
+	}}
+	if err := restoreMobileOnBoot(context.Background(), path, &controllers.BridgeService{ConfigPath: path, LAN: &fakeLAN{}}, awake); err != nil {
+		t.Fatal(err)
+	}
+	if len(awake.requests) != 2 || !awake.requests[0].LidClosed || awake.requests[1].LidClosed {
+		t.Fatalf("idle fallback was not used: %+v", awake.requests)
+	}
+}
+
+func TestRestoreRetiresDisabledLidPreferenceWithoutStartingWake(t *testing.T) {
+	path := mobilebridge.Path(t.TempDir())
+	if err := mobilebridge.Save(path, mobilebridge.State{KeepAwakeLid: true}); err != nil {
+		t.Fatal(err)
+	}
+	awake := &migrationAwake{}
+	if err := restoreMobileOnBoot(context.Background(), path, &controllers.BridgeService{}, awake); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := mobilebridge.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(awake.requests) != 0 || saved.KeepAwakeLid {
+		t.Fatal("an off preference started wake or was not retired")
+	}
+}
+
+func TestRestoreDoesNotStartBridgeIfLegacyRetirementCannotBeSaved(t *testing.T) {
+	path := mobilebridge.Path(t.TempDir())
+	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", KeepAwake: true}); err != nil {
+		t.Fatal(err)
+	}
+	awake := &migrationAwake{start: func(domain.StartAwakeRequest) error {
+		// Make atomic replacement fail after the initial successful load.
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Mkdir(path, 0700)
+	}}
+	lan := &fakeLAN{}
+	err := restoreMobileOnBoot(context.Background(), path, &controllers.BridgeService{LAN: lan}, awake)
+	if err == nil || !strings.Contains(err.Error(), "retire legacy mobile wake") || lan.started {
+		t.Fatalf("bridge restored after failed retirement: %v", err)
 	}
 }
