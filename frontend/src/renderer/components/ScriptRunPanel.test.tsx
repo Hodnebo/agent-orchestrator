@@ -264,3 +264,24 @@ describe("ScriptRunPanel", () => {
 		expect(screen.queryByLabelText(/Elapsed/)).toBeNull();
 	});
 });
+
+describe("ScriptRunPanel step time limit", () => {
+	it("shows the running step's limit beside its time, and only while it runs", () => {
+		const run = runOf(
+			{ step: 1, status: "succeeded", command: "npm ci", exitCode: 0, startedAt: "2026-10-18T10:00:00Z", durationMs: 4000, output: "", timeoutMinutes: 10 },
+			{ step: 2, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:04Z", output: "", timeoutMinutes: 45 },
+		);
+		render(<ScriptRunPanel run={run} />);
+		const [first, second] = steps();
+		expect(within(second).getByText("/ 45:00", { exact: false })).toBeInTheDocument();
+		expect(within(second).getByText(", limit 45:00")).toHaveClass("sr-only");
+		expect(within(first).queryByText(/\/ 10:00/)).toBeNull();
+	});
+
+	it("shows no limit for a step from a worker that does not report one", () => {
+		const run = runOf({ step: 1, status: "running", command: "make seed", startedAt: "2026-10-18T10:00:04Z", output: "" });
+		render(<ScriptRunPanel run={run} />);
+		expect(within(steps()[0]).queryByText(/limit/)).toBeNull();
+		expect(within(steps()[0]).getByText("0:08")).toBeInTheDocument();
+	});
+});

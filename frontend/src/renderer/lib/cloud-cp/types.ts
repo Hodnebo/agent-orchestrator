@@ -248,7 +248,7 @@ export interface CloudCpProjectRepo {
  * repoScriptCommand). The control plane also accepts {command, repository} and
  * stores it in the wrapped form.
  */
-export type CloudCpProjectScriptStep = string | { command: string; repository?: string };
+export type CloudCpProjectScriptStep = string | { command: string; repository?: string; timeoutMinutes?: number };
 
 /** Where a project's coding agent starts: its main repository, or the folder holding every repository. */
 export type CloudCpAgentStartsIn = "repository" | "parent";

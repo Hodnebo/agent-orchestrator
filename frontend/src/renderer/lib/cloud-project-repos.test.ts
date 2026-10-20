@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	parseLocalScriptStep,
+	parseTimedScriptCommand,
+	scriptStepTimeoutMinutes,
+	serializeLocalScriptStep,
+	timedScriptCommand,
 	additionalReposProblem,
 	isStandaloneCloudProject,
 	parseRepoScriptCommand,
@@ -54,6 +59,31 @@ describe("cloud project repositories", () => {
 		expect(parseRepoScriptCommand(repoScriptCommand("11x", "a\n\nb)\n"))).toEqual({ folder: "11x", command: "a\n\nb)\n" });
 		expect(parseScriptSteps([repoScriptCommand("alice", "ls")], main)).toEqual([{ command: "ls", folder: "" }]);
 		expect(scriptStepFolders({ postCreate: [wrapped], preRemove: ["ls"] }, main)).toEqual(new Set(["11x"]));
+	});
+
+	it("round-trips each step's own time limit as its first line, outside a repository wrapper", () => {
+		const timed = "# ao-timeout: 45m\n(\ncd -- '../11x' || exit 1\nmake up\n)";
+		const steps = parseScriptSteps(["# ao-timeout: 10m\nnpm ci", timed, { command: "make db", timeoutMinutes: 90 }, "# a comment\nls"], main);
+		expect(steps).toEqual([
+			{ command: "npm ci", folder: "" },
+			{ command: "make up", folder: "11x", timeout: "45" },
+			{ command: "make db", folder: "", timeout: "90" },
+			{ command: "# a comment\nls", folder: "" },
+		]);
+		// The default limit is stored as the plain command.
+		expect(serializeScriptSteps(steps ?? [])).toEqual(["npm ci", timed, "# ao-timeout: 90m\nmake db", "# a comment\nls"]);
+		expect(timedScriptCommand(10, "x")).toBe("x");
+		expect(parseTimedScriptCommand("# ao-timeout: 5m\nx")).toEqual({ minutes: 5, command: "x" });
+		expect(parseLocalScriptStep("# ao-timeout: 3m\nnpm ci")).toEqual({ command: "npm ci", folder: "", timeout: "3" });
+		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "3" })).toBe("# ao-timeout: 3m\nnpm ci");
+		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "" })).toBe("npm ci");
+	});
+
+	it("accepts a time limit of 1 to 120 whole minutes", () => {
+		expect(scriptStepTimeoutMinutes("")).toBeUndefined();
+		expect(scriptStepTimeoutMinutes(" 1 ")).toBe(1);
+		expect(scriptStepTimeoutMinutes("120")).toBe(120);
+		for (const bad of ["0", "121", "1.5", "-3", "ten"]) expect(scriptStepTimeoutMinutes(bad)).toBeNull();
 	});
 
 	it("rejects working folders the control plane rejects", () => {

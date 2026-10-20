@@ -179,7 +179,16 @@ function StepRow({
 				</span>
 			) : null}
 			{durationMs !== undefined && reached ? (
-				<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">{formatScriptDuration(durationMs)}</span>
+				<span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
+					{formatScriptDuration(durationMs)}
+					{running && step.timeoutMinutes !== undefined ? (
+						// The running step's limit, quieter than its time so far.
+						<span className="text-passive">
+							<span aria-hidden="true">{" / " + formatScriptDuration(step.timeoutMinutes * 60_000)}</span>
+							<span className="sr-only">{t("scriptRun.limit", { limit: formatScriptDuration(step.timeoutMinutes * 60_000) })}</span>
+						</span>
+					) : null}
+				</span>
 			) : status === "skipped" ? (
 				<span aria-hidden="true" className="shrink-0 text-caption text-passive">{statusLabel}</span>
 			) : null}

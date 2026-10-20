@@ -53,6 +53,8 @@ export interface ScriptStepEventPayload {
 	groups?: string[];
 	dir?: string;
 	hint?: string;
+	/** The step's time limit in minutes (1 to 120); absent when not known (an older worker or Cleanup hook). */
+	timeoutMinutes?: number;
 }
 
 /** A step slot. `pending` is a step the run has not reached (no event yet). */
@@ -73,6 +75,8 @@ export interface ScriptRunStep {
 	groups?: string[];
 	dir?: string;
 	hint?: string;
+	/** See {@link ScriptStepEventPayload.timeoutMinutes}. */
+	timeoutMinutes?: number;
 }
 
 /**
@@ -156,7 +160,14 @@ export function parseScriptStepPayload(payload: unknown): ScriptStepEventPayload
 		groups: groups && groups.length > 0 ? groups : undefined,
 		dir: nonEmpty(value.dir),
 		hint: nonEmpty(value.hint),
+		timeoutMinutes: timeoutMinutes(value.timeoutMinutes),
 	};
+}
+
+/** A step's time limit as the control plane bounds it (1 to 120 minutes), else undefined. */
+function timeoutMinutes(value: unknown): number | undefined {
+	const minutes = integer(value);
+	return minutes !== undefined && minutes >= 1 && minutes <= 120 ? minutes : undefined;
 }
 
 /** True for a step that has ended (any outcome but running or not started). */
@@ -235,6 +246,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 				groups: failed && !payload.outputHidden ? payload.groups : undefined,
 				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
+				timeoutMinutes: payload.timeoutMinutes,
 			});
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;
