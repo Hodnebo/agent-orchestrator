@@ -1,0 +1,203 @@
+// Pages an agent publishes with `ao render` / html_render. The daemon records
+// each as a `system` activity whose detail is `{ event: "render", render }`, and
+// serves the page, images inlined, from the session's render route.
+// Mirrors frontend/src/renderer/lib/render-frame.ts.
+import type { Theme } from "../theme";
+import type { ActivityDetail } from "./types";
+
+export type RenderRef = { id: string; title: string; height: number; path: string; heights?: Array<[number, number]> };
+
+export const RENDER_MIN_HEIGHT = 80;
+export const RENDER_MAX_HEIGHT = 2000;
+const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
+const MAX_MEASURED_WIDTHS = 16;
+
+export function clampRenderHeight(height: number): number {
+	return Math.min(RENDER_MAX_HEIGHT, Math.max(RENDER_MIN_HEIGHT, Math.round(height)));
+}
+
+/** The page a `render` activity points at, or undefined for anything malformed. */
+export function readRenderRef(detail: ActivityDetail | undefined): RenderRef | undefined {
+	const render = detail?.event === "render" ? detail.render as Record<string, unknown> | undefined : undefined;
+	if (
+		!render ||
+		typeof render.id !== "string" ||
+		typeof render.title !== "string" ||
+		typeof render.height !== "number" ||
+		!Number.isFinite(render.height) ||
+		typeof render.path !== "string" ||
+		!RENDER_PATH.test(render.path)
+	) {
+		return undefined;
+	}
+	const ref: RenderRef = { id: render.id, title: render.title, height: clampRenderHeight(render.height), path: render.path };
+	// A malformed measurement costs only the measured first height, not the page.
+	if (isMeasuredHeights(render.heights)) ref.heights = render.heights;
+	return ref;
+}
+
+const isPositiveInteger = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;
+
+/** 1-16 `[width, height]` pairs of positive integers, in increasing width. */
+function isMeasuredHeights(heights: unknown): heights is Array<[number, number]> {
+	return (
+		Array.isArray(heights) &&
+		heights.length > 0 &&
+		heights.length <= MAX_MEASURED_WIDTHS &&
+		heights.every(
+			(pair, index) =>
+				Array.isArray(pair) &&
+				pair.length === 2 &&
+				isPositiveInteger(pair[0]) &&
+				isPositiveInteger(pair[1]) &&
+				(index === 0 || pair[0] > heights[index - 1][0]),
+		)
+	);
+}
+
+/**
+ * The page's height at a frame width: the taller of the heights at the nearest
+ * measured widths on each side, since a breakpoint between them can make the
+ * page as tall as either.
+ */
+export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
+	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
+	const high = above === -1 ? heights.length - 1 : above;
+	const low = heights[high][0] === width ? high : Math.max(0, high - 1);
+	return Math.max(heights[low][1], heights[high][1]);
+}
+
+/** The height a frame opens at before the page reports its own. */
+export function initialRenderHeight(render: RenderRef, width: number | undefined): number {
+	return clampRenderHeight(render.heights && width ? measuredRenderHeight(render.heights, width) : render.height);
+}
+
+export type RenderTheme = { appearance: "light" | "dark"; variables: Record<string, string> };
+
+// Fixed categorical series for agent pages only, as desktop hands them.
+const CHART_SERIES = {
+	dark: ["#2dd4bf", "#fbbf24", "#c084fc", "#fb7185", "#a3e635"],
+	light: ["#0d9488", "#d97706", "#9333ea", "#e11d48", "#65a30d"],
+} as const;
+
+/** The agent-facing variables (documented in commands/render.md) from the app theme. */
+export function renderTheme(t: Theme, appearance: "light" | "dark"): RenderTheme {
+	const variables: Record<string, string> = {
+		"--background": t.bgBase,
+		"--foreground": t.textPrimary,
+		"--muted": t.bgSubtle,
+		"--muted-foreground": t.textTertiary,
+		"--card": t.bgSurface,
+		"--card-foreground": t.textPrimary,
+		"--popover": t.bgElevated,
+		"--border": t.borderSubtle,
+		"--border-strong": t.borderStrong,
+		"--primary": t.accent,
+		"--primary-foreground": t.onAccent,
+		"--accent": t.accent,
+		"--accent-foreground": t.onAccent,
+		"--success": t.green,
+		"--warning": t.orange,
+		"--destructive": t.red,
+		"--code": t.blue,
+		"--link": t.highlight,
+		"--chart-1": t.blue,
+		// The theme replaces the page's defaults wholesale, so these must be
+		// present too. The app's Geist is not loaded inside the page.
+		"--font-sans": "-apple-system, system-ui, sans-serif",
+		"--font-mono": "ui-monospace, Menlo, monospace",
+		"--radius": "0.5rem",
+	};
+	CHART_SERIES[appearance].forEach((color, index) => {
+		variables[`--chart-${index + 2}`] = color;
+	});
+	return { appearance, variables };
+}
+
+/** Where the page shows: inline in the thread, or expanded to the whole screen. */
+export type RenderDisplayMode = "inline" | "fullscreen";
+
+/**
+ * The fragment the page's bootstrap reads its theme from before first paint.
+ * Fullscreen centers a width-capped top-level block and shows the scrollbar.
+ */
+export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode = "inline"): string {
+	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, wrapContent: false }))}`;
+}
+
+/**
+ * A live theme change, posted inside the page. The bootstrap accepts messages
+ * whose source is its parent; a top-level page is its own parent.
+ */
+export function renderThemeScript(theme: RenderTheme): string {
+	const message = { jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { theme: theme.appearance, styles: { variables: theme.variables } } };
+	return `window.postMessage(${JSON.stringify(message)}, "*"); true;`;
+}
+
+/**
+ * The bootstrap only reports its height and hands off links when framed; in a
+ * WebView the page is top level, so this does both over the native bridge.
+ * Only trusted taps open a link, so a page cannot open one on its own.
+ */
+export const RENDER_BRIDGE_SCRIPT = `(function () {
+  var bridge = window.ReactNativeWebView;
+  if (!bridge || window.__aoRenderBridge) return;
+  window.__aoRenderBridge = true;
+  var last;
+  function report() {
+    var r = document.documentElement;
+    var h = Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
+    if (!h || h === last) return;
+    last = h;
+    bridge.postMessage(JSON.stringify({ type: "height", height: h }));
+  }
+  if (window.ResizeObserver) {
+    var observer = new ResizeObserver(report);
+    observer.observe(document.documentElement);
+    if (document.body) observer.observe(document.body);
+  }
+  window.addEventListener("load", report);
+  report();
+  document.addEventListener("click", function (e) {
+    if (!e.isTrusted) return;
+    var link = e.composedPath().find(function (n) { return n && n.matches && n.matches("a[href]"); });
+    if (!link) return;
+    var url;
+    try { url = new URL(link.getAttribute("href"), document.baseURI); } catch (x) { return; }
+    if (url.href.split("#")[0] === location.href.split("#")[0]) return;
+    e.preventDefault();
+    if (/^https?:$/.test(url.protocol)) bridge.postMessage(JSON.stringify({ type: "link", url: url.href }));
+  }, true);
+})(); true;`;
+
+/**
+ * The expanded view always zooms: a page that wrote its own viewport with
+ * user-scalable=no or maximum-scale=1 would otherwise refuse the pinch.
+ */
+export const RENDER_ZOOM_SCRIPT = `(function () {
+  var meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) { meta = document.createElement("meta"); meta.name = "viewport"; (document.head || document.documentElement).appendChild(meta); }
+  meta.content = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes";
+})(); true;`;
+
+export type RenderBridgeMessage = { type: "height"; height: number } | { type: "link"; url: string };
+
+/** A message from RENDER_BRIDGE_SCRIPT, or undefined for anything else the page posts. */
+export function readRenderBridgeMessage(data: string): RenderBridgeMessage | undefined {
+	let message: unknown;
+	try {
+		message = JSON.parse(data);
+	} catch {
+		return undefined;
+	}
+	if (typeof message !== "object" || message === null) return undefined;
+	const { type, height, url } = message as Record<string, unknown>;
+	if (type === "height" && typeof height === "number" && Number.isFinite(height) && height > 0) return { type, height };
+	if (type === "link" && typeof url === "string" && /^https?:\/\//i.test(url)) return { type, url };
+	return undefined;
+}
+
+/** Whether a navigation is the page itself loading; anything else stays out of the frame. */
+export function isRenderPageLoad(url: string, pageUrl: string): boolean {
+	return url.split("#")[0] === pageUrl.split("#")[0];
+}
