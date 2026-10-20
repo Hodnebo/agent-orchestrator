@@ -117,3 +117,16 @@ it("gives local steps the same time limit field, with no limit by default for Cl
 		postCreate: ["# ao-timeout: 30m\nnpm ci"], preRemove: ["# ao-timeout: 5m\ndocker compose down"],
 	});
 });
+
+it("shows the next step's time limit tooltip at once when moving from one field to the next", async () => {
+	const user = userEvent.setup();
+	renderScripts();
+	const first = await screen.findByLabelText("Time limit for step 1, in minutes");
+	const second = screen.getByLabelText("Time limit for step 2, in minutes");
+	await user.hover(first);
+	await waitFor(() => expect(first).toHaveAttribute("data-state", "delayed-open"));
+	await user.unhover(first);
+	await user.hover(second);
+	// The fields share one tooltip provider, which skips the open delay.
+	expect(second).toHaveAttribute("data-state", "instant-open");
+});

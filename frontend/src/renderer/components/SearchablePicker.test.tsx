@@ -177,3 +177,24 @@ it("does not open on mount while disabled", () => {
 	render(<SearchablePicker ariaLabel="Repository" placeholder="Select" searchPlaceholder="Search" value="" onChange={() => undefined} options={[]} defaultOpen disabled />);
 	expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 });
+
+it("says the list is loading from a status already in the page when it opens", async () => {
+	const user = userEvent.setup();
+	render(<SearchablePicker
+		ariaLabel="Repository"
+		placeholder="Select a repository"
+		searchPlaceholder="Search repositories"
+		value=""
+		onChange={vi.fn()}
+		options={[]}
+		loading
+		loadingText="Loading repositories..."
+	/>);
+	const status = screen.getByRole("status");
+	expect(status).toBeEmptyDOMElement();
+	await user.click(screen.getByRole("combobox", { name: "Repository" }));
+	expect(screen.getByRole("status")).toBe(status);
+	expect(status).toHaveTextContent("Loading repositories...");
+	// The visible line inside the list is not a second live region.
+	expect(screen.getByRole("listbox", { name: "Repository" }).querySelector("[role=status]")).toBeNull();
+});

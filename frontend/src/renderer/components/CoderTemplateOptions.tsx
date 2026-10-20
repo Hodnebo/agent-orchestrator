@@ -16,6 +16,7 @@ import {
 } from "../lib/coder-template-parameters";
 import { onboardingFieldErrorClass, onboardingFieldHintClass } from "../lib/onboarding-ui";
 import { cn } from "../lib/utils";
+import { LiveStatus } from "./LiveStatus";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -103,19 +104,21 @@ export function CoderTemplateOptions({
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
 	const blocksWorkingFolder = coderWorkerWorkingFolder === true && (projectWorkingDirectory ?? "").trim() !== "";
-	const duplicateWarning = (labels: readonly string[], id: string) => (
-		<TemplateOptionWarning id={id} startFails={blocksWorkingFolder}>
-			{t(
-				blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
-				{ count: labels.length, repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
-			)}
-		</TemplateOptionWarning>
+	const duplicateMessage = (labels: readonly string[]) => t(
+		blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
+		{ count: labels.length, repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
 	);
+	const duplicateWarning = (labels: readonly string[], id: string) => (
+		<TemplateOptionWarning id={id} startFails={blocksWorkingFolder}>{duplicateMessage(labels)}</TemplateOptionWarning>
+	);
+	const duplicateLabels = duplicates ? [...new Set([...duplicates.values()].flat())] : [];
 	// Collapsed, the fields (and their warnings) are hidden, so the warning
 	// moves up under the header; expanded, it sits under its field instead.
-	const collapsedDuplicates = !expanded && duplicates ? [...new Set([...duplicates.values()].flat())] : [];
+	const collapsedDuplicates = expanded ? [] : duplicateLabels;
 	return (
 		<section className="flex flex-col gap-3 text-sm" aria-label={t("coder.templateOptions.title")} data-testid="coder-template-options">
+			{/* Said when a warning appears, wherever it is shown. */}
+			<LiveStatus text={duplicateLabels.length > 0 ? duplicateMessage(duplicateLabels) : ""} />
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
 			<div className="flex flex-col gap-1">
 				{collapsible ? (
@@ -175,10 +178,10 @@ function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefi
  * only one that means the session will fail to start keeps the warning color.
  */
 function TemplateOptionWarning({ id, startFails, children }: { id: string; startFails: boolean; children: ReactNode }) {
-	// A polite status, and the field's description, so a screen reader hears it
-	// when it appears and again on reaching the option.
+	// The field's description, so a screen reader hears it on reaching the
+	// option; the section's live status says it when it appears.
 	return (
-		<p id={id} role="status" className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
+		<p id={id} className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
 			<TriangleAlert aria-hidden="true" className="mt-1 size-3 shrink-0 text-warning" />
 			<span className="min-w-0">{children}</span>
 		</p>

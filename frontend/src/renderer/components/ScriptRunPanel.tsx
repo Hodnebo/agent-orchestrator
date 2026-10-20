@@ -200,15 +200,29 @@ function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
 /**
  * Quiet notes already announced, by run, step and last output. A session can
  * show the same run in up to three panels at once (chat, inspector, startup
- * card); only the first to see a step go quiet announces it.
+ * card); only the first to see a step go quiet announces it. Only the latest
+ * QUIET_ANNOUNCEMENTS_KEPT are remembered, oldest forgotten first: a note
+ * lasts only while its step stays quiet after the same output.
  */
 const announcedQuietSteps = new Set<string>();
+const QUIET_ANNOUNCEMENTS_KEPT = 200;
+
+/** Claims a quiet note's announcement; false when a panel already made it. */
+export function claimQuietStepAnnouncement(key: string): boolean {
+	if (announcedQuietSteps.has(key)) return false;
+	announcedQuietSteps.add(key);
+	if (announcedQuietSteps.size > QUIET_ANNOUNCEMENTS_KEPT) {
+		const oldest = announcedQuietSteps.values().next().value;
+		if (oldest !== undefined) announcedQuietSteps.delete(oldest);
+	}
+	return true;
+}
 
 /**
  * The quiet note to announce, said once when a step's note appears: the
  * message stays as first worded while the note's minute count moves on, so the
- * live region does not speak again each minute. Cleared once the step writes
- * output or ends.
+ * live region does not speak again each minute. The message clears once the
+ * note goes (the step writes output or ends, or the panel hides the run).
  */
 function useQuietStepAnnouncement(run: ScriptRun, now: number, shown: boolean): string {
 	const { t } = useTranslation();
@@ -224,8 +238,7 @@ function useQuietStepAnnouncement(run: ScriptRun, now: number, shown: boolean): 
 			setMessage("");
 			return;
 		}
-		if (announcedQuietSteps.has(key)) return;
-		announcedQuietSteps.add(key);
+		if (!claimQuietStepAnnouncement(key)) return;
 		setMessage(latestText.current);
 	}, [key]);
 	return message;

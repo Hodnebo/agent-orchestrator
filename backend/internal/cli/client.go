@@ -16,15 +16,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-// commandTimeout bounds a mutating daemon call. Spawns do real work (git
-// worktree add, tmux launch, hook install), so it is generous compared to the
-// status probe timeout.
+// commandTimeout bounds a mutating daemon call. Calls do real work (tmux
+// launch, hook install), so it is generous compared to the status probe
+// timeout. A spawn or a restore runs the project's Setup and has no client
+// timeout (postSetupJSON).
 const commandTimeout = 2 * time.Minute
-
-// spawnCommandTimeout bounds `ao spawn`. The daemon runs the project's Setup
-// inside the spawn and bounds it by the Setup steps' own time limits, so the
-// CLI must not give up first: hanging up cancels the spawn and its Setup.
-const spawnCommandTimeout = 9 * time.Hour
 
 // maxDrainedBodyBytes bounds how much of an unused response body the CLI
 // discards for keep-alive reuse without an unbounded read.
@@ -113,9 +109,13 @@ func (c *commandContext) postJSON(ctx context.Context, path string, body, out an
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
 }
 
-// postSpawnJSON is postJSON for a session spawn, under spawnCommandTimeout.
-func (c *commandContext) postSpawnJSON(ctx context.Context, body, out any) error {
-	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions", body, out, nil, spawnCommandTimeout)
+// postSetupJSON is postJSON for a call that runs the project's Setup (a spawn,
+// a restore) with no client timeout. The daemon bounds the call by the Setup
+// steps' own time limits, and any client limit would be a ceiling under them:
+// hanging up cancels the call and its Setup. Interrupting the command closes
+// the connection, which cancels it on the daemon.
+func (c *commandContext) postSetupJSON(ctx context.Context, path string, body, out any) error {
+	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/"+path, body, out, nil, 0)
 }
 
 // patchJSON sends body as JSON to PATCH /api/v1/<path> on the running daemon

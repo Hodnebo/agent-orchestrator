@@ -291,6 +291,8 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	};
 	const projectRepos = ["https://github.com/11x-ai/alice", "https://github.com/11x-ai/carol"];
 	const warning = /Your template also clones .*\. Untick to keep one copy\./;
+	// The visible warning, not its live announcement.
+	const shown = { ignore: "script, style, [role=status]" };
 
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
@@ -304,7 +306,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	it("warns when a ticked option names a project repository and AO clones as ao-worker", async () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		const { onChange } = renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
-		const notice = await screen.findByText("Your template also clones Alice. Untick to keep one copy.");
+		const notice = await screen.findByText("Your template also clones Alice. Untick to keep one copy.", shown);
 		// A heads-up, not an error: nothing blocks saving, and it reads as muted
 		// helper text behind a warning icon rather than in the error color.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -321,7 +323,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
 		// This one means the session will fail to start, so it keeps the warning color.
-		expect((await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).parentElement).toHaveClass("text-warning");
+		expect((await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.", shown)).parentElement).toHaveClass("text-warning");
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 
@@ -334,7 +336,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 					<Harness initial={{ github_repos: "[\"Alice\"]" }} onChange={vi.fn()} repositoryUrls={projectRepos} projectWorkingDirectory="~/work/{repo}" />
 				</QueryClientProvider>,
 			);
-			expect(await screen.findByText("Your template also clones Alice. Untick to keep one copy.")).toBeInTheDocument();
+			expect(await screen.findByText("Your template also clones Alice. Untick to keep one copy.", shown)).toBeInTheDocument();
 			expect(screen.queryByText(/so AO cannot start there/)).not.toBeInTheDocument();
 			unmount();
 		}
@@ -350,7 +352,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 
 	it("warns for the default ao-worker when the org has no Coder connection of its own", async () => {
 		renderOptions({ github_repos: "[\"Alice\"]" }, ["https://github.com/11x-ai/Alice.git"]);
-		expect(await screen.findByText(warning)).toBeInTheDocument();
+		expect(await screen.findByText(warning, shown)).toBeInTheDocument();
 	});
 
 	it("stays hidden while the option is unticked", async () => {
@@ -381,10 +383,10 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		// Not opened for it: the warning sits under the header instead.
 		expect(header).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByRole("group", { name: "Github Repositories" })).not.toBeInTheDocument();
-		expect(screen.getAllByText(warning)).toHaveLength(1);
+		expect(screen.getAllByText(warning, shown)).toHaveLength(1);
 		await user.click(header);
 		const group = screen.getByRole("group", { name: "Github Repositories" });
-		expect(screen.getAllByText(warning)).toHaveLength(1);
+		expect(screen.getAllByText(warning, shown)).toHaveLength(1);
 		// Now under the field, right after its checkboxes.
 		expect(group.nextElementSibling).toHaveTextContent(warning);
 	});
@@ -398,6 +400,15 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		);
 	});
 
+	it("announces a warning that appears once the options are shown, from a status already in the page", async () => {
+		renderOptions({}, projectRepos);
+		const status = await screen.findByRole("status");
+		expect(status).toBeEmptyDOMElement();
+		await userEvent.click(await screen.findByRole("checkbox", { name: "Alice" }));
+		expect(screen.getByRole("status")).toBe(status);
+		expect(status).toHaveTextContent("Your template also clones Alice. Untick to keep one copy.");
+	});
+
 	it("describes the collapsed header with the warning it shows", async () => {
 		const extra = (name: string): CloudCpCoderTemplateParameter => ({ name, displayName: name, type: "string", mutable: true, required: false, defaultValue: "", order: 2 });
 		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: [repos, extra("a"), extra("b"), extra("c"), extra("d")] });
@@ -409,7 +420,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	it("speaks of several repositories in the plural", async () => {
 		const bothRepos = [...projectRepos, "https://github.com/11x-ai/bob-svc"];
 		renderOptions({ github_repos: "[\"Alice\",\"bob-svc\"]" }, bothRepos);
-		expect(await screen.findByText("Your template also clones Alice and Bob. Untick them to keep one copy of each.")).toBeInTheDocument();
+		expect(await screen.findByText("Your template also clones Alice and Bob. Untick them to keep one copy of each.", shown)).toBeInTheDocument();
 	});
 
 	it("speaks of several repositories in the plural when the session cannot start", async () => {
@@ -417,7 +428,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		const bothRepos = [...projectRepos, "https://github.com/11x-ai/bob-svc"];
 		renderOptions({ github_repos: "[\"Alice\",\"bob-svc\"]" }, bothRepos, "~/work/{repo}");
-		expect(await screen.findByText("Your template also clones Alice and Bob into the working folder, so AO cannot start there. Untick them.")).toBeInTheDocument();
+		expect(await screen.findByText("Your template also clones Alice and Bob into the working folder, so AO cannot start there. Untick them.", shown)).toBeInTheDocument();
 	});
 
 	it("stays hidden until the connection's mode is known", async () => {

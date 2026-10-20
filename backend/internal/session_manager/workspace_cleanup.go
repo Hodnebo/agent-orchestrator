@@ -76,6 +76,20 @@ func (m *Manager) runReplacementPreRemove(id domain.SessionID, projectID domain.
 // replacementCleanupBudget bounds cleanup commands during orchestrator replacement.
 var replacementCleanupBudget = killTeardownBudget
 
+// ReplacementCleanupBudget is how long retiring one of the project's
+// orchestrators for a replacement may spend in its Cleanup steps.
+func ReplacementCleanupBudget(project domain.ProjectRecord) time.Duration {
+	if project.Kind.WithDefault() == domain.ProjectKindScratch {
+		return 0
+	}
+	for _, step := range project.Config.PreRemove {
+		if command, _ := scriptStepTimeout(step, 0); strings.TrimSpace(command) != "" {
+			return replacementCleanupBudget
+		}
+	}
+	return 0
+}
+
 func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
 	if workspacePath == "" {
 		return nil
@@ -168,7 +182,18 @@ func runWorkspaceStep(ctx context.Context, workspacePath, command string, env ma
 	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
 		return nil
 	}
+	if exitedCleanlyAtCancel(ctx, cmd.ProcessState, err) {
+		return nil
+	}
 	return err
+}
+
+// exitedCleanlyAtCancel reports a step whose shell exited 0 but whose context
+// ended before Wait collected it. The tree kill then finds the group gone (or
+// the shell a zombie) and reports no error, so Wait returns the context's
+// error for a run that had finished.
+func exitedCleanlyAtCancel(ctx context.Context, state *os.ProcessState, err error) bool {
+	return err != nil && state != nil && state.Success() && ctx.Err() != nil && errors.Is(err, ctx.Err())
 }
 
 // cleanupOutput holds the last 4 KiB of output from a cleanup step.

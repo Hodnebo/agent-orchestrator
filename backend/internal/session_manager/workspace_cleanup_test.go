@@ -394,3 +394,53 @@ func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
 		t.Fatalf("a step that succeeded at its deadline must not fail: %v", err)
 	}
 }
+
+// A shell that exits 0 just as its step's context ends can still have Wait
+// report the context's error: the tree kill finds the group gone and reports
+// no error. That race cannot be forced with a real shell, so this pins the
+// rule runWorkspaceStep applies to the real process states it gets.
+func TestWorkspaceStepExitingCleanlyAtCancelSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell exit status")
+	}
+	state := func(command string) *os.ProcessState {
+		cmd := exec.Command("sh", "-c", command)
+		_ = cmd.Run()
+		return cmd.ProcessState
+	}
+	succeeded, failed := state("exit 0"), state("exit 3")
+	expired, cancel := context.WithTimeout(context.Background(), -time.Second)
+	defer cancel()
+	cancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	for _, tc := range []struct {
+		name  string
+		ctx   context.Context
+		state *os.ProcessState
+		err   error
+		want  bool
+	}{
+		{"exited 0 at its deadline", expired, succeeded, context.DeadlineExceeded, true},
+		{"exited 0 at daemon shutdown", cancelled, succeeded, context.Canceled, true},
+		{"exited 3 at its deadline", expired, failed, context.DeadlineExceeded, false},
+		{"never collected", expired, nil, context.DeadlineExceeded, false},
+		{"another error", expired, succeeded, exec.ErrWaitDelay, false},
+		{"context still live", context.Background(), succeeded, context.DeadlineExceeded, false},
+	} {
+		if got := exitedCleanlyAtCancel(tc.ctx, tc.state, tc.err); got != tc.want {
+			t.Errorf("%s: exitedCleanlyAtCancel = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A step its deadline really stops still fails.
+func TestWorkspaceStepStoppedAtItsDeadlineFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := runWorkspaceStep(ctx, t.TempDir(), "sleep 5", nil, io.Discard); err == nil {
+		t.Fatal("a step stopped at its deadline succeeded")
+	}
+}

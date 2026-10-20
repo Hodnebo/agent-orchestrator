@@ -30,3 +30,15 @@ it("keeps an error that fits out of the tab order and without a tooltip", () => 
 	act(() => alert.focus());
 	expect(screen.queryByRole("tooltip")).toBeNull();
 });
+
+it("keeps the tooltip controlled when the error starts or stops being clamped", () => {
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	let cut = false;
+	vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => (cut ? 48 : 32));
+	vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(32);
+	const view = render(<form><SettingsSaveFooter dirty disabled={false} error="Save failed." /></form>);
+	cut = true;
+	view.rerender(<form><SettingsSaveFooter dirty disabled={false} error={longError} /></form>);
+	expect(screen.getByRole("alert")).toHaveAttribute("tabindex", "0");
+	expect(warn.mock.calls.flat().join(" ")).not.toMatch(/changing from (controlled|uncontrolled)/);
+});

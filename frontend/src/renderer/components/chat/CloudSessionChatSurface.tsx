@@ -606,7 +606,10 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
-	const shownApprovalMode = settings.approvalMode ?? shownDefaultApprovalMode;
+	// A pick the session no longer allows (its mode dropped while Chat was
+	// open) is neither sent nor shown.
+	const shownApprovalMode = settings.approvalMode && approvalModes.includes(settings.approvalMode)
+		? settings.approvalMode : shownDefaultApprovalMode;
 	const snapshot = useMemo(() => ({
 		...toSnapshot(session, eventsQuery.data ?? []), settings: { ...settings, approvalMode: shownApprovalMode },
 	}), [eventsQuery.data, session, settings, shownApprovalMode]);
@@ -690,12 +693,12 @@ export function CloudSessionChatSurface({
 					updateSettings({ ...settingsRef.current.settings, executionMode: choice.value === "plan" ? "plan" : "agent" });
 				}
 			} : undefined}
-			onChooseSettings={(next) => {
+			onChooseSettings={(next, picked) => {
 				const current = settingsRef.current.settings;
 				// The settings bar sends the shown settings back with every change,
-				// so the shown default stays unpicked until the user picks a mode.
-				const approvalMode = current.approvalMode === undefined && next.approvalMode === shownApprovalMode
-					? undefined : next.approvalMode ?? current.approvalMode;
+				// so only a pick from the approval menu changes the approval mode,
+				// even when it is the shown default.
+				const approvalMode = picked === "approvalMode" ? next.approvalMode : current.approvalMode;
 				updateSettings({ ...current, ...next, approvalMode });
 			}}
 			showApprovalMode={approvalModes.length > 0}
