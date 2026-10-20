@@ -181,6 +181,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}, [openSession, hostId]);
 	const openSessionArtifacts = useCallback((session: WorkspaceSession) => {
 		const uiKey = sessionUiKey(session.id, hostId);
+		useUiStore.getState().initializeInspectorSession(uiKey, Boolean(session.previewUrl), true);
 		useUiStore.getState().setInspectorView(uiKey, "artifacts");
 		useUiStore.getState().setInspectorOpen(uiKey, true);
 		openSession(session);

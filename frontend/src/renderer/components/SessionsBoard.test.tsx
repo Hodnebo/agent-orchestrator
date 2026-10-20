@@ -1651,7 +1651,7 @@ describe("SessionsBoard", () => {
 
 describe("SessionsBoard artifacts", () => {
 	beforeEach(() => {
-		useUiStore.setState({ workspaceFileOpenRequest: null });
+		useUiStore.setState({ inspectorSessions: {}, workspaceFileOpenRequest: null });
 	});
 
 	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
@@ -1733,8 +1733,10 @@ describe("SessionsBoard artifacts", () => {
 
 		if (count > 10) {
 			await userEvent.click(within(list).getByRole("button", { name: "Open in inspector" }));
+			// SessionView initializes the inspector when navigation mounts a session.
+			useUiStore.getState().initializeInspectorSession("s-art", false, true);
 			expect(useUiStore.getState().inspectorSessions["s-art"]).toMatchObject({
-				isOpen: true, view: "artifacts",
+				initialized: true, isOpen: true, view: "artifacts",
 			});
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 			expect(navigateMock).toHaveBeenCalledTimes(1);
