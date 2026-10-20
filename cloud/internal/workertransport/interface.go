@@ -235,6 +235,9 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 		// start it when MarkWorkspaceReady releases the workspace.
 		s.AgentTerminalID = terminal.TerminalID
 		s.agentStarting = true
+		// An earlier switch away (stopInterface) refused input to the closing
+		// terminal; this one is reserved and takes input again.
+		s.tuiHandoffClosing = false
 		s.pendingTUIStart = &pendingTUIStart{input: input, terminal: terminal}
 		s.mu.Unlock()
 		// After s.mu: the interface lock is taken first everywhere else. The

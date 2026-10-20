@@ -303,3 +303,39 @@ func TestStartStartupAgentResultDoesNotRaceTheLoopWhenItsContextEnds(t *testing.
 	<-result
 	<-loopDone
 }
+
+// A second switch to the terminal during Setup (terminal -> Chat -> terminal,
+// or Chat -> terminal -> Chat -> terminal) reserves the agent terminal again:
+// its input is kept for the agent, not refused as a terminal still switching.
+func TestSecondSwitchToTerminalDuringSetupTakesTerminalInput(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		initial  string
+		switches []string
+	}{
+		{"terminal, Chat, terminal", InterfaceTUI, []string{InterfaceChat, InterfaceTUI}},
+		{"Chat, terminal, Chat, terminal", InterfaceChat, []string{InterfaceTUI, InterfaceChat, InterfaceTUI}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newSetupSwitchHarness(t, test.initial)
+			for _, target := range test.switches {
+				err := h.supervisor.runOnLoop(context.Background(), func(ctx context.Context) error {
+					if err := h.supervisor.stopInterface(ctx, "interrupt"); err != nil {
+						return err
+					}
+					return h.supervisor.startInterface(ctx, interfacePayload{TargetInterface: target})
+				})
+				if err != nil {
+					t.Fatalf("switch to %s: %v", target, err)
+				}
+			}
+			if err := h.supervisor.writeTerminal(worker.TerminalCommand{
+				TerminalID: "00000000-0000-0000-0000-000000000061", Data: []byte("early"),
+			}); err != nil {
+				t.Fatalf("input to the reserved terminal: %v", err)
+			}
+			h.supervisor.MarkWorkspaceReady()
+			h.waitForAgentStarts(t, 1)
+		})
+	}
+}
