@@ -5933,6 +5933,10 @@ export interface components {
             method: string;
             ok: boolean;
             prNumber: number;
+            /** @enum {string} */
+            state: "merged";
+            /** Format: date-time */
+            stateChangedAt: string;
         };
         MobileDeviceResponse: {
             /** Format: date-time */

@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -47,7 +49,7 @@ import {
 	type PairingEndpoint,
 } from "../../lib/pairing-payload";
 
-export const mobileStatusQueryKey = ["mobile-status"] as const;
+export { mobileStatusQueryKey };
 
 // One scan gives the mobile app every value required to connect. Keep the
 // secure key absent for plaintext payloads so older mobile builds can decode
@@ -419,30 +421,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	const setKeepAwake = useMutation({
-		mutationFn: async (keepAwake: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		// Flip the cached status up front so the switch never falls back to the
-		// old value between the POST finishing and the refetch landing.
-		onMutate: async (keepAwake) => {
-			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
-			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous?.keepAwake) {
-				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
-					...previous,
-					keepAwake: { ...previous.keepAwake, enabled: keepAwake, lidClosed: false, lidActive: false },
-				});
-			}
-			return { previous };
-		},
-		onError: (_error, _keepAwake, context) => {
-			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
-		},
-		onSettled: invalidate,
-	});
+	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	const stayAwake = useStayAwake(active);
+
 
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
@@ -506,16 +487,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
-	const setLidAwake = useMutation({
-		mutationFn: async (lidClosed: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
-				body: { enabled: lidClosed || (status?.keepAwake?.enabled ?? false), lidClosed },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSettled: invalidate,
-	});
 
 	const busy =
 		enable.isPending ||
@@ -523,9 +494,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending ||
 		setBrowserRemoteAccess.isPending ||
-		setLidAwake.isPending;
+		stayAwake.busy;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -533,9 +503,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
-		setKeepAwake.reset();
 		setBrowserRemoteAccess.reset();
-		setLidAwake.reset();
 	};
 
 	const copyPassword = async () => {
@@ -571,9 +539,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
-		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
-		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
+		stayAwake.error ||
 		null;
 
 	const turnOff = () => {
@@ -818,15 +785,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={status.keepAwake}
-					disabled={busy}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						setKeepAwake.mutate(next);
+						stayAwake.set(next, true);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
-						setLidAwake.mutate(next);
+						stayAwake.setLid(next);
 					}}
 				/>
 			)}

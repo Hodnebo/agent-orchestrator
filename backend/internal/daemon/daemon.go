@@ -892,7 +892,10 @@ func Run() error {
 			Reader:       prReader,
 			Resolver:     prReader,
 			Writer:       store,
+			MergeWriter:  store,
 			ThreadWriter: store,
+			Lifecycle:    lcStack.LCM,
+			Logger:       log,
 		})
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
