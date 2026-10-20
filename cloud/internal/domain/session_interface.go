@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacehandoff"
@@ -33,6 +34,30 @@ func (i SessionInterface) Valid() bool {
 func (i SessionInterface) Normalized() SessionInterface {
 	if i.Valid() {
 		return i
+	}
+	return SessionInterfaceTUI
+}
+
+// chatStartHarnesses are the harnesses a new cloud session may start in Chat.
+// Every other harness starts in the terminal TUI and may still switch to Chat
+// later where interface handoff supports it (cursor). Adding a harness here is
+// the whole change: session create and orchestrator spawn resolve through
+// StartInterface, and the desktop sends the user's default unfiltered.
+var chatStartHarnesses = []string{"claude-code", "codex"}
+
+// HarnessStartsInChat reports whether a new session of harness may start in
+// Chat.
+func HarnessStartsInChat(harness string) bool {
+	return slices.Contains(chatStartHarnesses, harness)
+}
+
+// StartInterface is the interface a new session of harness starts in when
+// requested is asked for: Chat only for a harness that may start in Chat,
+// otherwise the TUI. An unsupported request falls back silently, like the
+// local daemon's default session interface.
+func StartInterface(requested SessionInterface, harness string) SessionInterface {
+	if requested == SessionInterfaceChat && HarnessStartsInChat(harness) {
+		return SessionInterfaceChat
 	}
 	return SessionInterfaceTUI
 }

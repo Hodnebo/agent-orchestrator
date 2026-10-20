@@ -120,14 +120,15 @@ func (s *Store) CreateOrchestratorChild(
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectID string
 		var createdByUserID *string
+		var parentInterface domain.SessionInterface
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id, created_by_user_id::text
+			`SELECT project_id, created_by_user_id::text, interface
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2
 			  AND kind = 'orchestrator' AND is_terminated = false`,
 			orgID, orchestratorSessionID,
-		).Scan(&projectID, &createdByUserID)
+		).Scan(&projectID, &createdByUserID, &parentInterface)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
@@ -136,6 +137,12 @@ func (s *Store) CreateOrchestratorChild(
 		}
 		input.ProjectID = projectID
 		input.Kind = "worker"
+		// A spawned worker starts in its orchestrator's interface, so a Chat
+		// orchestrator's workers are Chat sessions too (where their harness
+		// can start in Chat).
+		if input.Interface == "" {
+			input.Interface = domain.StartInterface(parentInterface, input.Harness)
+		}
 		creator := ""
 		if createdByUserID != nil {
 			creator = *createdByUserID

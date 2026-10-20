@@ -491,6 +491,21 @@ func appendUserMessage(
 	return event, nil
 }
 
+// queueInitialChatTurnTx queues a new Chat session's prompt (its first
+// chat.user_message event) as the session's first turn, as a message sent to
+// an idle Chat session is. No worker exists yet, so nobody is woken.
+func queueInitialChatTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, event domain.ClientEvent) error {
+	var turnID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO ao_turns (org_id, session_id, user_message_sequence)
+		VALUES ($1, $2, $3) RETURNING id`,
+		orgID, sessionID, event.Sequence,
+	).Scan(&turnID); err != nil {
+		return normalizeConstraintError(err)
+	}
+	return attachTurnID(ctx, tx, orgID, sessionID, event.Sequence, turnID, &event)
+}
+
 func attachTurnID(ctx context.Context, tx pgx.Tx, orgID, sessionID string, sequence int64, turnID string, event *domain.ClientEvent) error {
 	var payload map[string]any
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {

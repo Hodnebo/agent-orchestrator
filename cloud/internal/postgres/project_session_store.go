@@ -742,6 +742,9 @@ func createSessionTx(
 		return domain.Session{}, ErrInvalid
 	}
 	input.Harness, input.Model = harness, agentConfig.Model
+	// The project may supply the harness; Chat holds only for one that can
+	// start in it.
+	input.Interface = domain.StartInterface(input.Interface, input.Harness)
 	agentConfigJSON, err := json.Marshal(agentConfig)
 	if err != nil {
 		return domain.Session{}, err
@@ -832,10 +835,19 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
+		event, err := appendUserMessageEvent(
 			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
-		); err != nil {
+		)
+		if err != nil {
 			return domain.Session{}, err
+		}
+		// A TUI agent gets the prompt on its command line. The Chat controller
+		// takes work only from the turn queue, so a session that starts in Chat
+		// queues its prompt as the first turn.
+		if session.Interface == domain.SessionInterfaceChat {
+			if err := queueInitialChatTurnTx(ctx, tx, orgID, session.ID, event); err != nil {
+				return domain.Session{}, err
+			}
 		}
 	}
 
