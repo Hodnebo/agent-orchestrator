@@ -29,8 +29,8 @@ const SweepInterval = 15 * time.Second
 // user's gh login for reading. The deny list names what must never happen:
 // publishing or changing anything on GitHub (Litmus posts the one comment
 // itself, after approval when the project asks for it), and any ao command that
-// reaches other sessions, the daemon or the desktop app, and Read of a run's comment.md or verdict.md (an earlier
-// run's verdict is not evidence for this one). Deny beats allow. It
+// reaches other sessions, the daemon or the desktop app, and Read of a run's comment.md,
+// verdict.md or verdict.json (an earlier run's verdict is not evidence for this one). Deny beats allow. It
 // stops mistakes, not a determined agent: a prefix rule does not match the same
 // command inside `sh -c`. GuardEnv adds a git-level push block for the common
 // remotes. A Codex tester gets no deny list (Codex has no per-command rules in AO's launch): it runs unattended and is
@@ -48,7 +48,7 @@ var (
 		"Bash(ao review:*)", "Bash(ao project:*)", "Bash(ao orchestrator:*)", "Bash(ao automation:*)", "Bash(ao cue:*)",
 		"Bash(ao stop:*)", "Bash(ao start:*)", "Bash(ao import:*)", "Bash(ao remote-host:*)", "Bash(ao browser:*)",
 		"Bash(ao preview:*)", "Bash(ao render:*)", "Bash(ao dev:*)",
-		"Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)"}
+		"Read(**/litmus/runs/run_*/comment.md)", "Read(**/litmus/runs/run_*/verdict.md)", "Read(**/litmus/runs/run_*/verdict.json)"}
 )
 
 // TesterModel and TesterEffort are what a tester runs on when the project's worker settings name no model or effort.
