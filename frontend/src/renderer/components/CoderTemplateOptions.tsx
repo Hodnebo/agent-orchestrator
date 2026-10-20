@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -102,9 +102,13 @@ export function CoderTemplateOptions({
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
 	const blocksWorkingFolder = coderWorkerWorkingFolder === true && (projectWorkingDirectory ?? "").trim() !== "";
-	const duplicateWarning = (labels: readonly string[]) => t(
-		blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
-		{ repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+	const duplicateWarning = (labels: readonly string[]) => (
+		<TemplateOptionWarning startFails={blocksWorkingFolder}>
+			{t(
+				blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
+				{ repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+			)}
+		</TemplateOptionWarning>
 	);
 	// Collapsed, the fields (and their warnings) are hidden, so the warning
 	// moves up under the header; expanded, it sits under its field instead.
@@ -129,7 +133,7 @@ export function CoderTemplateOptions({
 					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
 				)}
 				{collapsedDuplicates.length > 0 ? (
-					<p className={cn(onboardingFieldHintClass, "text-warning")}>{duplicateWarning(collapsedDuplicates)}</p>
+					duplicateWarning(collapsedDuplicates)
 				) : null}
 				<p className={onboardingFieldHintClass}>{t("coder.templateOptions.subtitle")}</p>
 			</div>
@@ -161,6 +165,20 @@ function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefi
 	return parameter.diagnostics?.find((diagnostic) => diagnostic.severity === "error")?.summary?.trim() || undefined;
 }
 
+/**
+ * A heads-up under a template option. It does not block saving, so it reads as
+ * muted helper text behind a warning icon rather than as a red field error;
+ * only one that means the session will fail to start keeps the warning color.
+ */
+function TemplateOptionWarning({ startFails, children }: { startFails: boolean; children: ReactNode }) {
+	return (
+		<p className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
+			<TriangleAlert aria-hidden="true" className="mt-1 size-3 shrink-0 text-warning" />
+			<span className="min-w-0">{children}</span>
+		</p>
+	);
+}
+
 function TemplateParameterField({
 	parameter,
 	value,
@@ -175,7 +193,7 @@ function TemplateParameterField({
 	/** Coder's error about the current value, shown under the field. */
 	problem?: string;
 	/** A heads-up about the current value that does not block saving. */
-	warning?: string;
+	warning?: ReactNode;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -294,7 +312,7 @@ function TemplateParameterField({
 			{heading}
 			{hint}
 			{control}
-			{warning ? <p className={cn(onboardingFieldHintClass, "text-warning")}>{warning}</p> : null}
+			{warning ?? null}
 			{problemText}
 		</div>
 	);

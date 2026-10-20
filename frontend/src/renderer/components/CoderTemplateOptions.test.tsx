@@ -290,7 +290,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		options: [{ name: "Alice", value: "Alice" }, { name: "Bob", value: "bob-svc" }],
 	};
 	const projectRepos = ["https://github.com/11x-ai/alice", "https://github.com/11x-ai/carol"];
-	const warning = /Your template will also clone .*, separate from the copy AO works in\. Untick to keep one copy\./;
+	const warning = /Your template also clones .*\. Untick to keep one copy\./;
 
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
@@ -304,9 +304,13 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	it("warns when a ticked option names a project repository and AO clones as ao-worker", async () => {
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		const { onChange } = renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
-		expect(await screen.findByText("Your template will also clone Alice, separate from the copy AO works in. Untick to keep one copy.")).toBeInTheDocument();
-		// A heads-up, not an error: nothing blocks saving.
+		const notice = await screen.findByText("Your template also clones Alice. Untick to keep one copy.");
+		// A heads-up, not an error: nothing blocks saving, and it reads as muted
+		// helper text behind a warning icon rather than in the error color.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(notice.parentElement).toHaveClass("text-muted-foreground");
+		expect(notice.parentElement).not.toHaveClass("text-warning");
+		expect(notice.parentElement?.querySelector("svg.text-warning")).not.toBeNull();
 		await userEvent.click(screen.getByRole("checkbox", { name: "Alice" }));
 		expect(onChange).toHaveBeenLastCalledWith({});
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
@@ -316,7 +320,8 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		mocks.workerWorkingFolder = true;
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
-		expect(await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).toBeInTheDocument();
+		// This one means the session will fail to start, so it keeps the warning color.
+		expect((await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).parentElement).toHaveClass("text-warning");
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 
@@ -329,7 +334,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 					<Harness initial={{ github_repos: "[\"Alice\"]" }} onChange={vi.fn()} repositoryUrls={projectRepos} projectWorkingDirectory="~/work/{repo}" />
 				</QueryClientProvider>,
 			);
-			expect(await screen.findByText("Your template will also clone Alice, separate from the copy AO works in. Untick to keep one copy.")).toBeInTheDocument();
+			expect(await screen.findByText("Your template also clones Alice. Untick to keep one copy.")).toBeInTheDocument();
 			expect(screen.queryByText(/so AO cannot start there/)).not.toBeInTheDocument();
 			unmount();
 		}

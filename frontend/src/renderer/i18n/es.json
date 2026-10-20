@@ -3003,7 +3003,7 @@
 	"coder.templateOptions.title": "Opciones de la plantilla",
 	"coder.templateOptions.titleCount": "Opciones de la plantilla ({{total}})",
 	"coder.templateOptions.subtitle": "Las opciones propias de tu plantilla de Coder. AO hace el checkout de los repositorios de este proyecto por su cuenta.",
-	"coder.templateOptions.duplicateClone": "Tu plantilla también clonará {{repos}}, aparte de la copia en la que trabaja AO. Desmárcalo para tener una sola copia.",
+	"coder.templateOptions.duplicateClone": "Tu plantilla también clona {{repos}}. Desmarca para una sola copia.",
 	"coder.templateOptions.duplicateCloneWorkingFolder": "Tu plantilla también clona {{repos}} en la carpeta de trabajo, así que AO no puede iniciarse allí. Desmárcalo.",
 	"coder.templateOptions.required": "Obligatorio",
 	"coder.templateOptions.loadFailed": "No se pudieron cargar las opciones de esta plantilla.",
