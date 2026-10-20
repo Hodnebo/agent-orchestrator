@@ -115,7 +115,7 @@ export function CloudSessionStartupError({
 		&& !(retryRun && (retryRun.status === "failed" || retryRun.status === "unknown" || retryRun.status === "interrupted"))
 		&& !retryStalled;
 	// Ends a retry still waiting for a waking worker when the card goes away.
-	const retryAbort = useRef<AbortController>();
+	const retryAbort = useRef<AbortController | undefined>(undefined);
 	useEffect(() => () => retryAbort.current?.abort(), []);
 	const retry = useMutation({
 		mutationFn: async (): Promise<number> => {
