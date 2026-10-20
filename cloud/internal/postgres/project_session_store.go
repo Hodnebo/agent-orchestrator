@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -1146,6 +1147,33 @@ const sessionSelect = `
 				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
 					AND turn.state IN ('queued', 'claimed', 'running')
 			) THEN 'active'
+			-- The project's Setup is running: the agent has not started, but the
+			-- session is busy, not idle (the worker already reports it busy, which
+			-- holds off idle pause; this is only what the session reads as). Setup
+			-- runs before the agent, so while it runs its step events are the
+			-- session's newest, and only the newest few are read. A step's running
+			-- updates are deleted once its final event lands, so a running step
+			-- event newer than the run's summary (workspace.setup) and the agent's
+			-- start (agent.ready) is a step still in progress; one whose worker is
+			-- gone is not.
+			WHEN EXISTS (
+				SELECT 1 FROM ao_worker_connections live
+				WHERE live.session_id = session.id AND live.disconnected_at IS NULL
+			) AND COALESCE((
+				SELECT recent.type = '` + worker.ScriptStepEventType + `'
+					AND recent.payload->>'phase' = '` + worker.ScriptPhaseSetup + `'
+					AND recent.payload->>'status' = '` + worker.ScriptStepRunning + `'
+				FROM (
+					SELECT newest.sequence, newest.type, newest.payload
+					FROM ao_events newest
+					WHERE newest.org_id = session.org_id AND newest.session_id = session.id
+					ORDER BY newest.sequence DESC
+					LIMIT 20
+				) recent
+				WHERE recent.type IN ('` + worker.ScriptStepEventType + `', '` + worker.SetupEventType + `', 'agent.ready')
+				ORDER BY recent.sequence DESC
+				LIMIT 1
+			), false) THEN 'active'
 			ELSE session.activity_state
 		END AS activity_state,
 		session.is_terminated,
