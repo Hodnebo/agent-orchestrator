@@ -23,6 +23,15 @@ type timeoutProbeSessionService struct {
 	uploadBudget  chan time.Duration
 	sendBudget    chan time.Duration
 	previewBudget chan time.Duration
+	spawnBudget   chan [2]time.Duration
+}
+
+// Spawn reports the request deadline it saw and the budget the spawn will
+// narrow it to.
+func (s *timeoutProbeSessionService) Spawn(ctx context.Context, _ ports.SpawnConfig) (domain.Session, int, int, error) {
+	budget, _ := ports.SpawnRequestBudget(ctx)
+	s.spawnBudget <- [2]time.Duration{remainingRequestBudget(ctx), budget}
+	return domain.Session{}, 0, 0, errors.New("probe only")
 }
 
 func (s *timeoutProbeSessionService) GetRecord(ctx context.Context, _ domain.SessionID) (domain.SessionRecord, error) {
@@ -222,5 +231,35 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
+	}
+}
+
+// A spawn runs the project's Setup inside the request; a Setup step longer than
+// one REST request used to die at the flat deadline ("signal: killed").
+func TestSpawnRouteLeavesSetupToTheSpawnBudget(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	svc := &timeoutProbeSessionService{spawnBudget: make(chan [2]time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: configuredTimeout},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", bytes.NewBufferString(`{"projectId":"p1","kind":"worker","harness":"claude-code"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	var got [2]time.Duration
+	select {
+	case got = <-svc.spawnBudget:
+	case <-time.After(time.Second):
+		t.Fatalf("the route never reached Spawn: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if got[0] < spawnSetupCeiling || got[0] > spawnSetupCeiling+configuredTimeout {
+		t.Fatalf("spawn request deadline = %s, want the outer Setup ceiling", got[0])
+	}
+	if got[1] != configuredTimeout {
+		t.Fatalf("spawn budget = %s, want the ordinary %s", got[1], configuredTimeout)
 	}
 }

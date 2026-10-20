@@ -217,6 +217,11 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
+// spawnSetupCeiling is the most a spawn request may spend on its project's Setup
+// beyond the ordinary budget; the spawn itself stops at the sum of its Setup
+// steps' time limits, so this only bounds a request that never reaches it.
+const spawnSetupCeiling = 8 * time.Hour
+
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
@@ -236,6 +241,18 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A spawn runs the project's Setup inside the request, and a Setup
+					// step may take far longer than one REST request: the spawn narrows
+					// this outer ceiling to its budget plus its Setup step limits.
+					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions" {
+						budget := timeout
+						if attachmentUploadRoute(req) {
+							budget = max(timeout, 10*time.Minute)
+						}
+						spawn := middleware.Timeout(budget + spawnSetupCeiling)(next)
+						spawn.ServeHTTP(w, req.WithContext(ports.WithSpawnRequestBudget(req.Context(), budget)))
+						return
+					}
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
 						return

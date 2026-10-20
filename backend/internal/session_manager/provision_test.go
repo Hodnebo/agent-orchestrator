@@ -791,3 +791,31 @@ func TestPostCreateBudgetCoversTheSetupSteps(t *testing.T) {
 		t.Fatalf("setup budget = %s", got)
 	}
 }
+
+type deadlineProbeWorkspace struct {
+	ports.Workspace
+	budget time.Duration
+}
+
+func (w *deadlineProbeWorkspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		w.budget = time.Until(deadline)
+	}
+	return w.Workspace.Create(ctx, cfg)
+}
+
+// A REST spawn is not cut at the request's flat deadline: it runs under its
+// budget plus its project's Setup step limits.
+func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
+	m, st, _, _ := newManager()
+	probe := &deadlineProbeWorkspace{Workspace: m.workspace}
+	m.workspace = probe
+	project := st.projects["mer"]
+	project.Config.PostCreate = []string{"# ao-timeout: 90m\nmake", "npm ci"}
+	st.projects["mer"] = project
+	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute)
+	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+	if want := 101 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
+		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 10m)", probe.budget, want)
+	}
+}
