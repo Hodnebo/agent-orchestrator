@@ -187,8 +187,8 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})
 	noSkip := func(reason string) { t.Errorf("skipped: %s", reason) }
-	run := tracker.Start("vm-1", "org-1", 0, time.Minute, func() { calls.Add(1); <-release }, noSkip)
-	if again := tracker.Start("vm-1", "org-1", 0, time.Minute, func() { calls.Add(1) }, noSkip); again != run {
+	run := tracker.Start(context.Background(), "vm-1", "org-1", 0, time.Minute, func() { calls.Add(1); <-release }, noSkip)
+	if again := tracker.Start(context.Background(), "vm-1", "org-1", 0, time.Minute, func() { calls.Add(1) }, noSkip); again != run {
 		t.Fatal("a second Start for the key started another run")
 	}
 	if run.Await(context.Background(), 20*time.Millisecond) {
@@ -204,7 +204,7 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 
 	wedged := make(chan struct{})
 	defer close(wedged)
-	stale := tracker.Start("vm-2", "org-1", 0, -time.Hour, func() { <-wedged }, noSkip)
+	stale := tracker.Start(context.Background(), "vm-2", "org-1", 0, -time.Hour, func() { <-wedged }, noSkip)
 	if !stale.Await(context.Background(), 10*time.Millisecond) {
 		t.Fatal("a run past its limit still holds the deletion")
 	}
@@ -357,7 +357,7 @@ func TestTrackerBoundsConcurrentRuns(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan string, 10)
 	start := func(key, org string) *Run {
-		return tracker.Start(key, org, 0, time.Minute, func() {
+		return tracker.Start(context.Background(), key, org, 0, time.Minute, func() {
 			mu.Lock()
 			running[org]++
 			total := 0
@@ -408,10 +408,10 @@ func TestTrackerBoundsConcurrentRuns(t *testing.T) {
 	hold := make(chan struct{})
 	defer close(hold)
 	holding := make(chan struct{})
-	full.Start("x1", "", 0, time.Minute, func() { close(holding); <-hold }, func(string) {})
+	full.Start(context.Background(), "x1", "", 0, time.Minute, func() { close(holding); <-hold }, func(string) {})
 	<-holding
 	skipped := make(chan string, 1)
-	queued := full.Start("x2", "", 0, time.Minute, func() { t.Error("x2 ran without a slot") }, func(reason string) { skipped <- reason })
+	queued := full.Start(context.Background(), "x2", "", 0, time.Minute, func() { t.Error("x2 ran without a slot") }, func(reason string) { skipped <- reason })
 	select {
 	case reason := <-skipped:
 		if reason != QueueFullReason || !queued.Await(context.Background(), time.Second) {
@@ -419,6 +419,100 @@ func TestTrackerBoundsConcurrentRuns(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a run that waited past QueueWait was not skipped")
+	}
+}
+
+// A run waiting behind its organization's own runs waits as long as they may
+// still take, not just its own queue wait, and tells the deletion how much
+// longer that is (sandbox.ReportCleanupQueueHold); one that still gets no
+// slot says its organization's share was what it waited for.
+func TestTrackerWaitsForTheOrganizationsRunsAhead(t *testing.T) {
+	t.Parallel()
+	tracker := Tracker{MaxRuns: 16, MaxOrgRuns: 2, QueueWait: 50 * time.Millisecond}
+	release := make(chan struct{})
+	holding := make(chan struct{}, 2)
+	noSkip := func(reason string) { t.Errorf("skipped: %s", reason) }
+	for _, key := range []string{"a1", "a2"} {
+		tracker.Start(context.Background(), key, "a", 0, 60*time.Minute, func() { holding <- struct{}{}; <-release }, noSkip)
+	}
+	for range 2 {
+		select {
+		case <-holding:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the organization's first runs did not start")
+		}
+	}
+	holdOf := func(key string, limit time.Duration, fn func(), skip func(string)) (*Run, time.Duration) {
+		var hold time.Duration
+		ctx := sandbox.WithCleanupQueueHold(context.Background(), func(d time.Duration) { hold = d })
+		return tracker.Start(ctx, key, "a", 0, limit, fn, skip), hold
+	}
+	ran := make(chan string, 2)
+	third, hold := holdOf("a3", 30*time.Minute, func() { ran <- "a3" }, noSkip)
+	near := func(got, want time.Duration) bool { return got <= want && got > want-time.Minute }
+	if !near(hold, 60*time.Minute) {
+		t.Fatalf("a3 hold = %s, want the 60 minutes its organization's runs may still take", hold)
+	}
+	// a3 takes the first slot to free and a4 the second; each later run waits
+	// for the slot that frees first after the runs ahead of it, at most
+	// sandbox.MaxCleanupBudget.
+	for _, next := range []struct {
+		key         string
+		limit, hold time.Duration
+	}{
+		{"a4", 10 * time.Minute, 60 * time.Minute},
+		{"a5", 120 * time.Minute, 70 * time.Minute},
+		{"a6", 120 * time.Minute, 90 * time.Minute},
+		{"a7", 10 * time.Minute, sandbox.MaxCleanupBudget},
+	} {
+		fn := func() {}
+		if next.key == "a4" {
+			fn = func() { ran <- "a4" }
+		}
+		if _, hold = holdOf(next.key, next.limit, fn, func(string) {}); !near(hold, next.hold) {
+			t.Fatalf("%s hold = %s, want %s", next.key, hold, next.hold)
+		}
+	}
+	// Another organization's run never waits for this one's.
+	if _, other := (func() (*Run, time.Duration) {
+		var got time.Duration
+		ctx := sandbox.WithCleanupQueueHold(context.Background(), func(d time.Duration) { got = d })
+		return tracker.Start(ctx, "b1", "b", 0, time.Minute, func() {}, noSkip), got
+	})(); other != 0 {
+		t.Fatalf("b1 hold = %s, want none", other)
+	}
+	// Past its own 50ms queue wait, a3 is still waiting and still holds its Delete.
+	if third.Await(context.Background(), 200*time.Millisecond) {
+		t.Fatal("a run waiting behind its organization's runs was skipped after its own queue wait")
+	}
+	close(release)
+	for _, want := range []string{"a3", "a4"} {
+		select {
+		case <-ran:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s never ran once a slot freed", want)
+		}
+	}
+
+	// A run whose organization still holds its share when it gives up says so.
+	short := Tracker{MaxRuns: 16, MaxOrgRuns: 2, QueueWait: 50 * time.Millisecond}
+	hold2 := make(chan struct{})
+	defer close(hold2)
+	started := make(chan struct{}, 2)
+	for _, key := range []string{"c1", "c2"} {
+		short.Start(context.Background(), key, "c", 0, time.Millisecond, func() { started <- struct{}{}; <-hold2 }, func(string) {})
+	}
+	<-started
+	<-started
+	skipped := make(chan string, 1)
+	short.Start(context.Background(), "c3", "c", 0, time.Minute, func() { t.Error("c3 ran without a slot") }, func(reason string) { skipped <- reason })
+	select {
+	case reason := <-skipped:
+		if reason != OrgQueueFullReason(2) || reason != "This organization already has 2 Cleanups running, so this Cleanup step did not run before the sandbox was deleted." {
+			t.Fatalf("skip reason %q", reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a run that waited past its queue wait was not skipped")
 	}
 }
 

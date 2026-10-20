@@ -268,3 +268,67 @@ func TestDeletionDeadlineGrowsWithTheCleanupsTimeLimits(t *testing.T) {
 		t.Fatalf("deletes = %v, want one that skips Cleanup", provider.deletes)
 	}
 }
+
+// queueHoldProvider's Delete reports that the deletion's Cleanup waits hold
+// behind its organization's runs.
+type queueHoldProvider struct {
+	deadlineDeleteProvider
+	hold time.Duration
+}
+
+func (p *queueHoldProvider) Delete(ctx context.Context, id sandbox.ID) error {
+	if !sandbox.CleanupSkipped(ctx) {
+		sandbox.ReportCleanupQueueHold(ctx, p.hold)
+	}
+	return p.deadlineDeleteProvider.Delete(ctx, id)
+}
+
+// A Cleanup queued behind its organization's long Cleanups holds the deletion
+// as much longer as the provider said it may wait, so it is not deleted
+// without its Cleanup while it still waits within that time; the hold is at
+// most sandbox.MaxCleanupBudget and ends with the deletion.
+func TestDeletionDeadlineGrowsWhileTheCleanupWaitsForItsOrganization(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	requested := time.Now()
+	record := domain.Sandbox{
+		OrgID: "org-1", SessionID: "session-1", Provider: "coder",
+		ProviderEnvironmentID: "workspace-1", DeletionRequestedAt: &requested,
+	}
+	provider := &queueHoldProvider{hold: 100 * time.Minute, deadlineDeleteProvider: deadlineDeleteProvider{lifecycleProvider: lifecycleProvider{
+		environment: sandbox.Environment{ID: "workspace-1", State: sandbox.StateRunning},
+	}}}
+	reconciler := New(&cleanupLookupStore{commands: []string{"make down"}}, lifecycleResolver{provider: provider}, Options{Logger: logger})
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	base := DefaultDeletionDeadline + 2*10*time.Second
+	if got := reconciler.deletionDeadline(context.Background(), record); got != base+100*time.Minute {
+		t.Fatalf("deadline = %s, want %s", got, base+100*time.Minute)
+	}
+	// An hour in, past the deadline the run's own budget gives, Delete still
+	// runs Cleanup.
+	waited := time.Now().Add(-time.Hour)
+	record.DeletionRequestedAt = &waited
+	provider.deletes = nil
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.deletes) != 1 || provider.deletes[0] {
+		t.Fatalf("deletes = %v, want one with Cleanup while it waits for its organization", provider.deletes)
+	}
+	provider.hold = 10 * time.Hour
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	if got := reconciler.deletionDeadline(context.Background(), record); got != base+sandbox.MaxCleanupBudget {
+		t.Fatalf("deadline = %s, want the hold capped at %s", got, sandbox.MaxCleanupBudget)
+	}
+	// Once the sandbox is gone the hold is forgotten.
+	provider.environment.State = sandbox.StateDeleted
+	if err := reconciler.reconcileDeletion(context.Background(), record, provider); err != nil {
+		t.Fatal(err)
+	}
+	if got := reconciler.deletionDeadline(context.Background(), record); got != base {
+		t.Fatalf("deadline after deletion = %s, want %s", got, base)
+	}
+}

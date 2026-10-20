@@ -148,3 +148,22 @@ func CleanupResumeRefused(ctx context.Context) (string, bool) {
 	reason, ok := ctx.Value(cleanupNoResumeKey{}).(string)
 	return reason, ok
 }
+
+type cleanupQueueHoldKey struct{}
+
+// WithCleanupQueueHold gives Provider.Delete a function to report how much
+// longer than its own queue wait (CleanupQueueWait) the deletion's Cleanup
+// run may wait for a slot, because the organization's runs ahead of it may
+// take that long. The reconciler adds it to the deletion's deadline, so a run
+// still waiting within its queue wait is not deleted without its Cleanup.
+func WithCleanupQueueHold(ctx context.Context, hold func(time.Duration)) context.Context {
+	return context.WithValue(ctx, cleanupQueueHoldKey{}, hold)
+}
+
+// ReportCleanupQueueHold reports hold to the function WithCleanupQueueHold
+// gave, if any.
+func ReportCleanupQueueHold(ctx context.Context, hold time.Duration) {
+	if report, ok := ctx.Value(cleanupQueueHoldKey{}).(func(time.Duration)); ok && report != nil {
+		report(hold)
+	}
+}

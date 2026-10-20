@@ -187,6 +187,10 @@ type Reconciler struct {
 	wake chan struct{}
 	// activity receives support-trail events; nil records nothing.
 	activity ActivityRecorder
+	// cleanupHolds is how much longer each deletion's Cleanup may wait for a
+	// run slot behind its organization's runs, as this process's provider
+	// reported it (sandbox.WithCleanupQueueHold): org/session -> duration.
+	cleanupHolds sync.Map
 }
 
 func sha256HexOf(data []byte) string {
@@ -838,10 +842,12 @@ func (r *Reconciler) reconcileDeletion(
 	environment, err := provider.Get(ctx, sandbox.ID(record.ProviderEnvironmentID))
 	switch {
 	case errors.Is(err, sandbox.ErrNotFound):
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	case err != nil:
 		return r.fail(ctx, record, err)
 	case environment.State == sandbox.StateDeleted:
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	}
 
@@ -875,6 +881,7 @@ func (r *Reconciler) reconcileDeletion(
 					"session_id", record.SessionID, "provider_id", record.ProviderEnvironmentID, "err", err)
 			}
 		}
+		r.cleanupHolds.Delete(cleanupHoldKey(record))
 		return r.store.CompleteSandboxDeletion(ctx, r.owner, record.OrgID, record.SessionID)
 	}
 
@@ -917,10 +924,13 @@ func (r *Reconciler) reconcileDeletion(
 // sandbox's deletion: DeletionDeadline, plus how far the project's Cleanup
 // run may exceed the default budget (sandbox.CleanupBudget of its current and
 // its worker's installed commands, at most sandbox.MaxCleanupBudget) and how
-// much longer it may wait for a run slot (sandbox.CleanupDeletionExtra). A
-// Cleanup whose steps set long time limits still gets a slot and finishes
-// before the deletion is abandoned, and a deletion is never held for more than
-// that bound.
+// much longer it may wait for a run slot (sandbox.CleanupDeletionExtra), plus
+// how long its organization's Cleanups ahead of it may still take, as the
+// provider reported when it queued the run (sandbox.WithCleanupQueueHold, at
+// most sandbox.MaxCleanupBudget). A Cleanup whose steps set long time limits,
+// or that waits behind its organization's long ones, still gets a slot and
+// finishes before the deletion is abandoned, and a deletion is never held for
+// more than that bound.
 func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox) time.Duration {
 	installed, _ := domain.InstalledCleanupCommands(record.BootstrapContext)
 	var current []string
@@ -929,7 +939,15 @@ func (r *Reconciler) deletionDeadline(ctx context.Context, record domain.Sandbox
 			current = commands
 		}
 	}
-	return r.options.DeletionDeadline + sandbox.CleanupDeletionExtra(sandbox.CleanupBudget(current, installed))
+	var hold time.Duration
+	if held, ok := r.cleanupHolds.Load(cleanupHoldKey(record)); ok {
+		hold = held.(time.Duration)
+	}
+	return r.options.DeletionDeadline + sandbox.CleanupDeletionExtra(sandbox.CleanupBudget(current, installed)) + hold
+}
+
+func cleanupHoldKey(record domain.Sandbox) string {
+	return record.OrgID + "/" + record.SessionID
 }
 
 // cleanupCommandsStore is the optional Store capability that reads a
@@ -973,11 +991,15 @@ type cleanupResumeStore interface {
 const CleanupResumeRefusedReason = "The sandbox was paused because the organization is over its plan, so it was not resumed to run this Cleanup step before it was deleted."
 
 // withCleanupScope names the sandbox's organization to Provider.Delete, so
-// its Cleanup runs count against the organization's share, and keeps a paused
+// its Cleanup runs count against the organization's share (and how long its
+// run may wait behind them extends the deletion deadline), and keeps a paused
 // sandbox paused (sandbox.WithoutCleanupResume) when the organization is over
 // its plan. A plan check that fails is logged and the sandbox may resume.
 func (r *Reconciler) withCleanupScope(ctx context.Context, record domain.Sandbox) context.Context {
 	ctx = sandbox.WithCleanupOrg(ctx, record.OrgID)
+	ctx = sandbox.WithCleanupQueueHold(ctx, func(hold time.Duration) {
+		r.cleanupHolds.Store(cleanupHoldKey(record), min(max(hold, 0), sandbox.MaxCleanupBudget))
+	})
 	plan, ok := r.store.(cleanupResumeStore)
 	if !ok {
 		return ctx

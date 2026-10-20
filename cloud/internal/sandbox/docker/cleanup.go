@@ -64,7 +64,7 @@ func (c *Client) cleanupFinished(ctx context.Context, view containerView) bool {
 	// observer and session event recorder.
 	runCtx := context.WithoutCancel(ctx)
 	attrs := map[string]string{"provider_id": key}
-	run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), wait, wait+cleanuphook.Margin, func() {
+	run := cleanupRuns.Start(ctx, key, sandbox.CleanupOrg(ctx), wait, wait+cleanuphook.Margin, func() {
 		slog.InfoContext(ctx, "docker: running project cleanup before deleting the worker",
 			"provider_id", key, "budget", wait)
 		c.runCleanup(runCtx, sandbox.ID(key), wait, plan, attrs)

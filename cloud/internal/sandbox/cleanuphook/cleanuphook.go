@@ -604,9 +604,10 @@ type Run struct {
 // the runs ahead of it whose organization is at its share, so one
 // organization's long Cleanups never hold every slot or keep another
 // organization's run waiting behind its own queue. A run waits up to its
-// queue wait (QueueWait scaled by its budget, sandbox.CleanupQueueWait) and is
-// then reported as not run, so a burst of deletions cannot flood the provider
-// and a deletion is never held past its deadline.
+// queue wait (QueueWait scaled by its budget, sandbox.CleanupQueueWait, plus
+// how long its organization's runs ahead of it may still take) and is then
+// reported as not run, so a burst of deletions cannot flood the provider and
+// a deletion is never held past its deadline.
 type Tracker struct {
 	runs sync.Map // key -> *Run
 	// skipped records the sandboxes whose Cleanup was reported as not run
@@ -622,14 +623,19 @@ type Tracker struct {
 	mu      sync.Mutex
 	running int
 	byOrg   map[string]int
+	// holding are the runs holding a slot.
+	holding map[*slotWaiter]struct{}
 	// waiting are the runs waiting for a slot, in arrival order.
 	waiting []*slotWaiter
 }
 
-// slotWaiter is one run waiting for a slot; granted is closed once it holds one.
+// slotWaiter is one run waiting for a slot; granted is closed once it holds
+// one, and ends is then when its limit runs out.
 type slotWaiter struct {
 	orgID   string
+	limit   time.Duration
 	granted chan struct{}
+	ends    time.Time
 }
 
 const (
@@ -639,16 +645,26 @@ const (
 	// DefaultMaxOrgRuns bounds one organization's share of them.
 	DefaultMaxOrgRuns = 2
 	// DefaultQueueWait is how long a run with no more than Budget waits for a
-	// slot; a longer budget waits that much longer (sandbox.CleanupQueueWait).
-	// With a run's own limit (its Plan.Budget, Margin and a resume) and
-	// StaleAfter it keeps a deletion within the reconciler's deletion deadline
-	// (15 minutes, plus sandbox.CleanupDeletionExtra of the run's budget).
+	// slot; a longer budget waits that much longer (sandbox.CleanupQueueWait),
+	// and a run behind its organization's own runs waits as long as they may
+	// still take (at most sandbox.MaxCleanupBudget more). With a run's own
+	// limit (its Plan.Budget, Margin and a resume) and StaleAfter it keeps a
+	// deletion within the reconciler's deletion deadline (15 minutes, plus
+	// sandbox.CleanupDeletionExtra of the run's budget, plus the wait for its
+	// organization's runs, sandbox.ReportCleanupQueueHold).
 	DefaultQueueWait = sandbox.MinCleanupQueueWait
 )
 
 // QueueFullReason is what a Cleanup that waited too long for a slot reports
 // on each of its steps.
 const QueueFullReason = "AO was running too many Cleanups at once, so this Cleanup step did not run before the sandbox was deleted."
+
+// OrgQueueFullReason is what a Cleanup that waited too long for one of its
+// organization's maxOrgRuns slots reports on each of its steps.
+func OrgQueueFullReason(maxOrgRuns int) string {
+	return "This organization already has " + strconv.Itoa(maxOrgRuns) +
+		" Cleanups running, so this Cleanup step did not run before the sandbox was deleted."
+}
 
 // Lookup returns the run recorded for key.
 func (t *Tracker) Lookup(key string) (*Run, bool) {
@@ -664,25 +680,38 @@ func (t *Tracker) Lookup(key string) (*Run, bool) {
 // already recorded for key; it returns the run recorded for key. budget is the
 // run's Cleanup budget (Plan.Budget) and limit how long the run may take once
 // it has a slot. A run that waits its queue wait (QueueWait plus how far
-// budget exceeds Budget, see sandbox.CleanupQueueWait) without a slot calls
-// skip with QueueFullReason instead. Delete waits for the run up to the queue
-// wait, limit and StaleAfter.
-func (t *Tracker) Start(key, orgID string, budget, limit time.Duration, fn func(), skip func(reason string)) *Run {
-	queueWait := t.queueWait(budget)
+// budget exceeds Budget, see sandbox.CleanupQueueWait, plus how long orgID's
+// runs ahead of it may still take, reported to ctx's
+// sandbox.ReportCleanupQueueHold) without a slot calls skip with
+// QueueFullReason, or OrgQueueFullReason when orgID's share was what it
+// waited for, instead. Delete waits for the run up to the queue wait, limit
+// and StaleAfter.
+func (t *Tracker) Start(ctx context.Context, key, orgID string, budget, limit time.Duration, fn func(), skip func(reason string)) *Run {
+	t.prune()
+	waiter := &slotWaiter{orgID: orgID, limit: limit, granted: make(chan struct{})}
+	t.mu.Lock()
+	hold := t.orgHold(orgID)
+	queueWait := t.queueWait(budget) + hold
 	run := &Run{done: make(chan struct{}), started: time.Now(), limit: queueWait + limit}
 	if existing, loaded := t.runs.LoadOrStore(key, run); loaded {
+		t.mu.Unlock()
 		return existing.(*Run)
 	}
-	t.prune()
+	t.waiting = append(t.waiting, waiter)
+	t.dispatch()
+	t.mu.Unlock()
+	if hold > 0 {
+		sandbox.ReportCleanupQueueHold(ctx, hold)
+	}
 	go func() {
 		defer close(run.done)
-		if !t.acquire(orgID, queueWait) {
+		if reason, ok := t.acquire(waiter, queueWait); !ok {
 			slog.Warn("project cleanup waited too long for a slot; deleting the sandbox without it",
-				"key", key, "org_id", orgID, "queue_wait", queueWait)
-			skip(QueueFullReason)
+				"key", key, "org_id", orgID, "queue_wait", queueWait, "reason", reason)
+			skip(reason)
 			return
 		}
-		defer t.release(orgID)
+		defer t.release(waiter)
 		fn()
 	}()
 	return run
@@ -699,19 +728,64 @@ func (t *Tracker) queueWait(budget time.Duration) time.Duration {
 	return base + sandbox.CleanupQueueWait(budget) - sandbox.MinCleanupQueueWait
 }
 
-// acquire takes a provider slot and one of orgID's, waiting up to wait in
-// arrival order (dispatch).
-func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
-	waiter := &slotWaiter{orgID: orgID, granted: make(chan struct{})}
-	t.mu.Lock()
-	t.waiting = append(t.waiting, waiter)
-	t.dispatch()
-	t.mu.Unlock()
+// limits are the provider's and one organization's slot counts.
+func (t *Tracker) limits() (maxRuns, maxOrgRuns int) {
+	maxRuns, maxOrgRuns = t.MaxRuns, t.MaxOrgRuns
+	if maxRuns <= 0 {
+		maxRuns = DefaultMaxRuns
+	}
+	if maxOrgRuns <= 0 {
+		maxOrgRuns = DefaultMaxOrgRuns
+	}
+	return maxRuns, maxOrgRuns
+}
+
+// orgHold is how long a run of orgID that arrives now may wait for one of
+// the organization's slots: the earliest a slot frees if each of its runs,
+// holding one or waiting ahead in arrival order, takes its whole limit; at
+// most sandbox.MaxCleanupBudget. The caller holds t.mu.
+func (t *Tracker) orgHold(orgID string) time.Duration {
+	if orgID == "" {
+		return 0
+	}
+	_, maxOrgRuns := t.limits()
+	now := time.Now()
+	// frees[i] is how long from now the organization's slot i stays taken.
+	frees := make([]time.Duration, 0, maxOrgRuns)
+	for held := range t.holding {
+		if held.orgID == orgID && len(frees) < maxOrgRuns {
+			frees = append(frees, max(0, held.ends.Sub(now)))
+		}
+	}
+	for len(frees) < maxOrgRuns {
+		frees = append(frees, 0)
+	}
+	soonest := func() int {
+		index := 0
+		for slot, free := range frees {
+			if free < frees[index] {
+				index = slot
+			}
+		}
+		return index
+	}
+	for _, queued := range t.waiting {
+		if queued.orgID == orgID {
+			frees[soonest()] += max(0, queued.limit)
+		}
+	}
+	return min(frees[soonest()], sandbox.MaxCleanupBudget)
+}
+
+// acquire waits up to wait for waiter's slot (dispatch). Without one it
+// reports why: QueueFullReason, or OrgQueueFullReason when the organization
+// still holds its share.
+func (t *Tracker) acquire(waiter *slotWaiter, wait time.Duration) (string, bool) {
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-waiter.granted:
-		return true
+		return "", true
 	case <-timer.C:
 	}
 	t.mu.Lock()
@@ -719,7 +793,7 @@ func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
 	select {
 	case <-waiter.granted:
 		// Granted while the timer fired: the run takes its slot.
-		return true
+		return "", true
 	default:
 	}
 	for index, queued := range t.waiting {
@@ -728,7 +802,10 @@ func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
 			break
 		}
 	}
-	return false
+	if _, maxOrgRuns := t.limits(); waiter.orgID != "" && t.byOrg[waiter.orgID] >= maxOrgRuns {
+		return OrgQueueFullReason(maxOrgRuns), false
+	}
+	return QueueFullReason, false
 }
 
 // dispatch gives free slots to the waiting runs in arrival order. A run whose
@@ -736,15 +813,12 @@ func (t *Tracker) acquire(orgID string, wait time.Duration) bool {
 // runs behind it, so one organization never keeps another's runs waiting.
 // The caller holds t.mu.
 func (t *Tracker) dispatch() {
-	maxRuns, maxOrgRuns := t.MaxRuns, t.MaxOrgRuns
-	if maxRuns <= 0 {
-		maxRuns = DefaultMaxRuns
-	}
-	if maxOrgRuns <= 0 {
-		maxOrgRuns = DefaultMaxOrgRuns
-	}
+	maxRuns, maxOrgRuns := t.limits()
 	if t.byOrg == nil {
 		t.byOrg = map[string]int{}
+	}
+	if t.holding == nil {
+		t.holding = map[*slotWaiter]struct{}{}
 	}
 	kept := t.waiting[:0]
 	for _, waiter := range t.waiting {
@@ -753,6 +827,8 @@ func (t *Tracker) dispatch() {
 			if waiter.orgID != "" {
 				t.byOrg[waiter.orgID]++
 			}
+			waiter.ends = time.Now().Add(waiter.limit)
+			t.holding[waiter] = struct{}{}
 			close(waiter.granted)
 			continue
 		}
@@ -762,11 +838,12 @@ func (t *Tracker) dispatch() {
 	t.waiting = kept
 }
 
-func (t *Tracker) release(orgID string) {
+func (t *Tracker) release(waiter *slotWaiter) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.running--
-	if orgID != "" {
+	delete(t.holding, waiter)
+	if orgID := waiter.orgID; orgID != "" {
 		if t.byOrg[orgID]--; t.byOrg[orgID] <= 0 {
 			delete(t.byOrg, orgID)
 		}
