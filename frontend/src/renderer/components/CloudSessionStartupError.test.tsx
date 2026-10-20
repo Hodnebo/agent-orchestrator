@@ -162,7 +162,7 @@ describe("CloudSessionStartupError", () => {
 	});
 
 	it("names a working folder the template already created", () => {
-		const message = "~/work/alice already exists (created by your Coder template). Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.";
+		const message = "~/work/alice already exists (created by your Coder template). Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. Start a new session after changing it.";
 		mount({ phase: "failed", code: "working_directory_occupied", message });
 		expect(screen.getByRole("heading", { name: "The working folder is already in use" })).toBeInTheDocument();
 		expect(screen.getByText(message)).toBeInTheDocument();

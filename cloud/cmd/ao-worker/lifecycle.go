@@ -272,7 +272,8 @@ func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
 			Status: worker.WorkspaceStartupFailed,
 			Code:   domain.WorkspaceStartupErrorWorkingDirectoryOccupied,
 			Message: folder + " already exists (created by your Coder template). " +
-				"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.",
+				"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+				"Start a new session after changing it.",
 		}
 	}
 	if errors.Is(err, worker.ErrCheckoutDirectoryUnusable) {

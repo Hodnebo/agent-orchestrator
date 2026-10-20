@@ -84,7 +84,7 @@ describe("cloudStartupProblem", () => {
 	it("reports a working folder the template already created even though the worker is connected", () => {
 		const occupied = {
 			code: "working_directory_occupied",
-			message: "~/work/alice already exists (created by your Coder template). Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.",
+			message: "~/work/alice already exists (created by your Coder template). Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. Start a new session after changing it.",
 			at: "2026-10-20T10:00:00Z",
 		};
 		expect(cloudStartupProblem(withRuntime("running", { startupError: occupied }, true))).toEqual({

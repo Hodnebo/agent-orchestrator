@@ -20,7 +20,8 @@ import (
 func TestWorkingFolderCheckoutFailuresHaveTheirOwnStartupErrors(t *testing.T) {
 	occupied := checkoutStartupFailure(fmt.Errorf("%w: ~/work/alice", worker.ErrWorkingDirectoryOccupied))
 	want := "~/work/alice already exists (created by your Coder template). " +
-		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it."
+		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+		"Start a new session after changing it."
 	if occupied.Code != domain.WorkspaceStartupErrorWorkingDirectoryOccupied || occupied.Status != worker.WorkspaceStartupFailed ||
 		occupied.Message != want {
 		t.Fatalf("occupied failure = %+v", occupied)
