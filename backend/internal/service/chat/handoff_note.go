@@ -153,6 +153,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 		OriginalTask:  record.Metadata.Prompt,
 		Turns:         turns,
 		Terminal:      domain.NormalizeSessionMode(record.Mode) == domain.SessionModeTUI,
+		HistoryFiles:  s.handoffHistoryFiles(record, turns),
 	}, nil
 }
 

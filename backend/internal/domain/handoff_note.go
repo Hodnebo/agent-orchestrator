@@ -28,6 +28,7 @@ const (
 	handoffOriginalTaskCap  = 2_000
 	handoffChangedFileLimit = 50
 	handoffChangedFileCap   = 160
+	handoffHistoryPathCap   = 400
 
 	// A note delivered as a launch argument must also fit the operating
 	// system's per-argument limit, which is counted in bytes.
@@ -70,6 +71,19 @@ type HandoffNoteInput struct {
 	ChangedFiles  []string
 	Turns         []HandoffTurn
 	Terminal      bool
+	// HistoryFiles point at the agent's own record for an agent whose answers
+	// AO did not record, because it reports no turns through hooks.
+	HistoryFiles []HandoffHistoryFile
+}
+
+// HandoffHistoryFile is one agent's own record of this session and how to read it.
+type HandoffHistoryFile struct {
+	Harness AgentHarness
+	Path    string
+	// Read says how to find the messages in the file.
+	Read string
+	// RequestsOnly marks an agent whose requests AO recorded but not its answers.
+	RequestsOnly bool
 }
 
 // handoffNoteMaxChars is the note's length cap on this system. On Windows a
@@ -169,6 +183,18 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 		latest := recent[len(recent)-1]
 		user, agent := budgetHandoffTurn(latest, handoffLatestTurnBudget, handoffLatestUserCap, false)
 		fmt.Fprintf(&b, "\n## Latest turn\nUser:\n%s\n%s:\n%s\n", user, handoffAssistantLabel(latest), agent)
+	}
+
+	if len(in.HistoryFiles) > 0 {
+		b.WriteString("\n## Earlier agents' own history\n")
+		b.WriteString("AO did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
+		for _, file := range in.HistoryFiles {
+			note := ""
+			if file.RequestsOnly {
+				note = " The requests are above; this file also has the answers."
+			}
+			fmt.Fprintf(&b, "- %s: `%s`. %s%s\n", handoffHarnessLabel(file.Harness), quoteHandoffText(file.Path, handoffHistoryPathCap, handoffLineClipMarker), file.Read, note)
+		}
 	}
 
 	// The full record is one command away. The note says so even when nothing
