@@ -152,6 +152,17 @@ type CoderSessionProfile struct {
 	DurableRoot string            `json:"durableRoot"`
 	// WorkspaceNamePrefix replaces the default "ao" workspace name prefix.
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
+	// WorkspaceName is the Coder workspace name AO chose when the session was
+	// created (see domain.CoderWorkspaceName and StampCoderWorkspaceName). It
+	// is fixed for the session's lifetime: create, lookup, identity checks and
+	// the workspace link all use it. Empty on rows written before the field
+	// existed, whose workspaces keep the name computed from the prefix and
+	// session id.
+	WorkspaceName string `json:"workspaceName,omitempty"`
+	// WorkspaceNameIssuedAt is when WorkspaceName was chosen. A workspace that
+	// already carried the name well before then belongs to another session (an
+	// id collision) and is never adopted. Nil on older rows.
+	WorkspaceNameIssuedAt *time.Time `json:"workspaceNameIssuedAt,omitempty"`
 	// RequireMountedDurableRoot is nil on rows written before the field
 	// existed; RequiresMountedDurableRoot supplies the historical default.
 	RequireMountedDurableRoot *bool `json:"requireMountedDurableRoot,omitempty"`
@@ -219,8 +230,9 @@ type CoderSessionOptions struct {
 	TemplateID    string
 	Size          string
 	StartupScript string
-	// WorkspaceNamePrefix names the session's workspace <prefix>-<id> instead
-	// of the default ao-<id>. It applies with or without a picked template.
+	// WorkspaceNamePrefix starts the session's workspace name instead of the
+	// default "ao" (see domain.CoderWorkspaceName). It applies with or without
+	// a picked template.
 	WorkspaceNamePrefix string
 	// Parameters are the project's values for the picked template's rich
 	// parameters. Like Size and StartupScript they apply only with a picked
@@ -262,7 +274,7 @@ type CoderDeploymentOverride struct {
 	ProtectSecretFiles bool
 	// DefaultWorkspaceNamePrefix names the session's workspace when the
 	// project sets no prefix of its own, so a bring-your-own Coder shows
-	// <project>-<id> rather than ao-<hash>. Must pass
+	// <project>-w-<word>-<id> rather than ao-w-<word>-<id>. Must pass
 	// domain.ValidateCoderWorkspaceNamePrefix; see
 	// domain.CoderWorkspaceNamePrefixFor.
 	DefaultWorkspaceNamePrefix string
@@ -391,6 +403,12 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	if err := domain.ValidateCoderWorkspaceNamePrefix(profile.WorkspaceNamePrefix); err != nil {
 		return CoderSessionProfile{}, err
 	}
+	profile.WorkspaceName = strings.TrimSpace(profile.WorkspaceName)
+	if profile.WorkspaceName != "" {
+		if err := domain.ValidateCoderWorkspaceName(profile.WorkspaceName); err != nil {
+			return CoderSessionProfile{}, err
+		}
+	}
 	if profile.StartupTimeoutSeconds < 0 {
 		return CoderSessionProfile{}, errors.New("Coder session startup timeout must not be negative")
 	}
@@ -414,6 +432,55 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 		return CoderSessionProfile{}, err
 	}
 	return profile, nil
+}
+
+// StampCoderWorkspaceName records, on a Coder session's resource profile, the
+// workspace name AO will create for it (domain.CoderWorkspaceName from the
+// profile's prefix, the session kind, its display name at creation and its
+// id) and when the name was chosen. It runs once, when the sandbox row is
+// written, because the session id is only known then. A profile without a
+// Coder section, or one that already names its workspace, is returned
+// unchanged. Every other field keeps its value exactly.
+func StampCoderWorkspaceName(raw json.RawMessage, kind, displayName, sessionID string, issuedAt time.Time) (json.RawMessage, error) {
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		return nil, fmt.Errorf("decode Coder session resource profile: %w", err)
+	}
+	section, ok := resource["coder"]
+	if !ok || string(section) == "null" {
+		return raw, nil
+	}
+	var coder map[string]json.RawMessage
+	if err := json.Unmarshal(section, &coder); err != nil {
+		return nil, fmt.Errorf("decode Coder session profile: %w", err)
+	}
+	var existing, prefix string
+	if value, ok := coder["workspaceName"]; ok {
+		if err := json.Unmarshal(value, &existing); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name: %w", err)
+		}
+	}
+	if strings.TrimSpace(existing) != "" {
+		return raw, nil
+	}
+	if value, ok := coder["workspaceNamePrefix"]; ok {
+		if err := json.Unmarshal(value, &prefix); err != nil {
+			return nil, fmt.Errorf("decode Coder workspace name prefix: %w", err)
+		}
+	}
+	name, err := json.Marshal(domain.CoderWorkspaceName(prefix, kind, displayName, sessionID))
+	if err != nil {
+		return nil, err
+	}
+	issued, err := json.Marshal(issuedAt.UTC())
+	if err != nil {
+		return nil, err
+	}
+	coder["workspaceName"], coder["workspaceNameIssuedAt"] = name, issued
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return nil, err
+	}
+	return json.Marshal(resource)
 }
 
 func normalizedCoderBaseURL(value string) (string, error) {

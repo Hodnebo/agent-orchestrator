@@ -133,12 +133,15 @@ type Session struct {
 }
 
 // CoderWorkspaceRef is the non-secret identity of one session's Coder
-// workspace: the deployment origin, the owning Coder user and the project's
-// workspace name prefix (empty for the default ao-<id> name).
+// workspace: the deployment origin, the owning Coder user, the project's
+// workspace name prefix (empty for the default ao-<id> name) and the
+// workspace name AO stored when it created the session (empty for sessions
+// created before names were stored, whose name is computed from the prefix).
 type CoderWorkspaceRef struct {
 	BaseURL    string
 	Owner      string
 	NamePrefix string
+	Name       string
 }
 
 // Status derives the session's display status from runtime and pull request facts.
@@ -219,8 +222,9 @@ type ProjectCoderConfig struct {
 	Size          string    `json:"size,omitempty"`
 	StartupScript string    `json:"startupScript,omitempty"`
 	ExtraRepos    []RepoRef `json:"extraRepos,omitempty"`
-	// WorkspaceNamePrefix names new Coder workspaces <prefix>-<short session
-	// id>. Empty keeps the default ao-<id>.
+	// WorkspaceNamePrefix starts new Coder workspace names
+	// (<prefix>-o-<id> or <prefix>-w-<word>-<id>, see CoderWorkspaceName).
+	// Empty uses "ao".
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
 	// Parameters are the project's values for the chosen template's
 	// coder_parameter inputs, keyed by parameter name. Values are strings as

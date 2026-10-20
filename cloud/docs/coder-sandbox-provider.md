@@ -123,8 +123,15 @@ are stamped into each session's provider plan. Reconciliation binds the current
 deployment-scoped Coder connection credential to that stored profile, so a
 later configuration change does not move or recreate existing sessions with
 new defaults. Coder workspace responses must match the planned owner,
-deterministic workspace name, and template ID before AO adopts the workspace,
-accepts a provider ID, or uploads worker credentials. Configure
+workspace name, and template ID before AO adopts the workspace, accepts a
+provider ID, or uploads worker credentials. The workspace name is chosen once,
+when the session is created, and stored on the profile (`workspaceName`,
+`<prefix>-o-<id8>` or `<prefix>-w-<word>-<id8>`); profiles written before that
+keep the name computed from the prefix and session id. Because the readable
+name carries only 8 characters of the session id, a workspace that already
+held the name more than five minutes before the session chose it is treated
+as another session's: AO never adopts or deletes it, and the create fails on
+Coder's name conflict instead. Configure
 `AO_CLOUD_CODER_OWNER` as the canonical owner name returned by Coder, not an
 alias such as `me`.
 

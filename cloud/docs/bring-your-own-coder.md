@@ -19,13 +19,21 @@ local project has: open the project's settings and choose **Scripts**.
   session each get their own workspace, created from the template chosen for
   the project. Concurrent sessions never share a workspace, a checkout or a
   shell.
-- **Workspace names.** A session's workspace is named `<prefix>-<id>`, where
-  `<id>` is the start of the session id. For a bring-your-own Coder the prefix
-  defaults to the project name, lowercased and shortened to fit Coder's
-  naming rules; set **Workspace name prefix** in the project's
-  settings (or when creating the project) to choose another. The session's top
-  bar shows the workspace name with a link that opens it in Coder, for as long
-  as the session exists.
+- **Workspace names.** An orchestrator's workspace is named
+  `<prefix>-o-<id>` and a worker's `<prefix>-w-<word>-<id>`, where `<id>` is
+  the first 8 characters of the session id and `<word>` is the first word of
+  the chat's name when the session was created (lowercase letters and digits,
+  at most 10 characters, left out when the name has none). For a
+  bring-your-own Coder the prefix defaults to the project name, lowercased
+  and shortened to fit Coder's naming rules; set **Workspace name prefix** in
+  the project's settings (or when creating the project) to choose another.
+  When everything does not fit Coder's 32 characters, the word and then the
+  prefix are shortened; the `-o-`/`-w-` marker and the id are always kept. AO
+  records the name when it creates the session and never changes it:
+  renaming the chat does not rename the workspace. Sessions created before
+  this scheme keep their original `<prefix>-<id>` (or `ao-<id>`) workspace
+  names. The session's top bar shows the workspace name with a link that
+  opens it in Coder, for as long as the session exists.
 - **Durable root.** AO keeps its own state under the workspace user's home
   (`$HOME/.ao`): the worker, its logs, and the agent's configuration and
   conversations. Without a working directory (below), the session's checkout
