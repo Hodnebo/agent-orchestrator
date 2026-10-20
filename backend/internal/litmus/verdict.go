@@ -302,6 +302,8 @@ func (s *Service) SubmitBlocked(ctx context.Context, sessionID, reason string) (
 // posting stops at awaiting-approval instead, with comment.md written and nothing published or posted. skipBase is
 // the reason the tester gave for not running the base, and lands in Limits.
 func (s *Service) closeRun(ctx context.Context, run Run, checks []Check, summary, blocked, skipBase string) (Verdict, error) {
+	// Close-out can outlive the CLI request; encoding and publishing keep their own timeouts.
+	ctx = context.WithoutCancel(ctx)
 	runDir := filepath.Join(s.store.root, run.ID)
 	run = s.stopRecording(ctx, run) // while the engines are still alive; returns the run with its recording state
 	videos := s.finishVideo(ctx, runDir, run)

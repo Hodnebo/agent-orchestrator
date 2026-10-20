@@ -28,7 +28,10 @@ type evGit struct {
 	added    []string
 }
 
-func (g *evGit) Run(_ context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+func (g *evGit) Run(ctx context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if filepath.Base(name) == "ffprobe" {
 		return []byte("120\n"), nil
 	}
@@ -334,6 +337,66 @@ func TestSubmitPublishesEvidenceAndEmbedsIt(t *testing.T) {
 			}
 			if log, _ := os.ReadFile(filepath.Join(runDir, "comment.log")); !strings.Contains(string(log), "evidence published at "+fakeSHA) {
 				t.Fatalf("comment.log = %q", log)
+			}
+		})
+	}
+}
+
+// cancelRequestMedia simulates a client disconnect during the first encode.
+type cancelRequestMedia struct {
+	Media
+	cancel context.CancelFunc
+}
+
+func (m cancelRequestMedia) Run(ctx context.Context, args ...string) error {
+	m.cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return m.Media.Run(ctx, args...)
+}
+
+func TestSubmitPublishesAfterClientDisconnectsDuringEncode(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("blocked=%t", blocked), func(t *testing.T) {
+			svc, g, gh, runDir := evSubmit(t, EvidencePost, "false")
+			evidenceBug(t, svc)
+			_, err := svc.update("run_s1", func(run *Run) {
+				run.Legs[0].RecordStartedAt = svc.clock()
+				run.Legs[0].RecordStoppedAt = svc.clock().Add(time.Minute)
+			})
+			is(t, "")(nil, err)
+			path := recordingPath(runDir, "head")
+			is(t, "")(nil, os.MkdirAll(filepath.Dir(path), 0o750))
+			is(t, "")(nil, os.WriteFile(path, []byte("mp4"), 0o600))
+
+			request, cancel := context.WithCancel(ctx)
+			defer cancel()
+			media := &sizedMedia{}
+			svc.media = cancelRequestMedia{Media: media, cancel: cancel}
+			reported := false
+			svc.WithReporter(func(ctx context.Context, _, _ string) error {
+				reported = true
+				if err := ctx.Err(); err != nil {
+					t.Errorf("done report was cancelled: %v", err)
+				}
+				return ctx.Err()
+			})
+			var v Verdict
+			if blocked {
+				v, err = svc.SubmitBlocked(request, "s1", "remaining checks could not run")
+			} else {
+				v, err = svc.Submit(request, "s1", "", "")
+			}
+			if request.Err() != context.Canceled || len(media.calls) == 0 {
+				t.Fatal("the client did not disconnect during a successful encode")
+			}
+			run, loadErr := svc.store.Get("run_s1")
+			if err != nil || loadErr != nil || v.Overall != CheckFail || v.CommentState != "posted" || run.State != RunSubmitted || run.CommentState != "posted" || run.EvidenceCommit != fakeSHA {
+				t.Fatalf("verdict %+v run %+v submit err %v load err %v", v, run, err, loadErr)
+			}
+			if v.EvidenceState != "published" || gh.uploads != 1 || !gh.has("api --method POST repos/o/r/issues/7/comments") || !slices.Contains(g.added, "bug-1.png") || !reported {
+				t.Fatalf("close-out incomplete: verdict %+v uploads %d gh %q staged %q reported %t", v, gh.uploads, gh.calls, g.added, reported)
 			}
 		})
 	}
