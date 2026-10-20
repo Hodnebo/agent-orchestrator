@@ -43,7 +43,7 @@ import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { iconSize, press, space, type } from "../tokens";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
-import { archiveSessionMessage } from "../worker-action-model";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
@@ -1260,9 +1260,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			return;
 		}
 		haptics.warning();
-		Alert.alert(shellOnly ? "Close shell?" : "Archive session?", shellOnly ? "This stops the worktree shell." : archiveSessionMessage(id), [
-			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Archive session", style: "destructive", onPress: doKill },
+		Alert.alert(shellOnly ? "Close shell?" : ARCHIVE_SESSION_CONFIRM.title, shellOnly ? "This stops the worktree shell." : ARCHIVE_SESSION_CONFIRM.message, [
+			{ text: shellOnly ? "Cancel" : ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+			{ text: shellOnly ? "Close" : ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: doKill },
 		]);
 	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
 
