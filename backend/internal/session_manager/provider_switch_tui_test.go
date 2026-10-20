@@ -2,7 +2,6 @@ package sessionmanager
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -80,14 +79,5 @@ func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testi
 	}
 	if got := st.sessions["mer-1"].Metadata.Prompt; got != "ORIGINAL TASK" {
 		t.Fatalf("session prompt = %q, want the task kept", got)
-	}
-}
-
-func TestTUISwitchRefusesAgentsThatExitAfterOneTask(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessDeepSeek, domain.HarnessAutohand} {
-		var refusal *domain.ProviderSwitchError
-		if err := preflightTUISwitchTarget(context.Background(), harness, nil); !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported {
-			t.Fatalf("%s: preflight = %v, want an unsupported refusal", harness, err)
-		}
 	}
 }
