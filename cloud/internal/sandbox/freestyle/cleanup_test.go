@@ -343,6 +343,36 @@ func TestDeleteKeepsAVMPausedForBillingPaused(t *testing.T) {
 	}
 }
 
+// The not-run report of a paused VM over its plan takes no Cleanup slot: even
+// while its organization's share is taken by long runs, the VM is deleted in
+// the same Delete and no queue hold is added to its deletion deadline.
+func TestDeleteOfAVMPausedForBillingDoesNotQueueBehindItsOrganization(t *testing.T) {
+	t.Parallel()
+	orgID := fmt.Sprintf("org-hold-%d", vmSequence.Add(1))
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	for index := range cleanuphook.DefaultMaxOrgRuns {
+		cleanupRuns.Start(context.Background(), fmt.Sprintf("%s-run-%d", orgID, index), orgID, time.Hour, time.Hour,
+			func() { <-release }, func(string) {})
+	}
+	const reason = "The organization is over its plan."
+	api, client, id := cleanupVM(t, "paused")
+	recorder := &cleanuphooktest.Recorder{}
+	var held time.Duration
+	ctx := sandbox.WithCleanupQueueHold(sandbox.WithCleanupOrg(recorder.Context(sandbox.WithoutCleanupResume(
+		sandbox.WithCleanupCommands(context.Background(), []string{"make down"}), reason)), orgID),
+		func(hold time.Duration) { held += hold })
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if api.exists(id) || held != 0 {
+		t.Fatalf("calls = %v, queue hold %s; want the VM deleted at once without a hold", api.calls(), held)
+	}
+	if events := recorder.Events(t); len(events) != 1 || events[0].Status != worker.ScriptStepSkipped || events[0].Hint != reason {
+		t.Fatalf("events = %+v", events)
+	}
+}
+
 // Freestyle answers an exec-await inline for at most 300000 ms. The full
 // Cleanup budget goes as a backgrounded request, polled until the exec's own
 // response arrives; every exec stays within the inline cap otherwise.

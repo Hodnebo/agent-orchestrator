@@ -106,10 +106,12 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	skip := cleanuphook.Skipper(runCtx, attrs, plan.Steps)
 	if reason, refused := sandbox.CleanupResumeRefused(ctx); resume && refused {
 		// The organization is over its plan: its paused VM stays paused, and
-		// the Cleanup is reported as not run, once.
+		// the Cleanup is reported as not run, once. Nothing runs, so the
+		// report takes no slot and never waits behind the organization's
+		// own runs.
 		attrs["resumed"] = "false"
-		run := cleanupRuns.Start(ctx, key, sandbox.CleanupOrg(ctx), 0, 0, func() { skip(reason) }, skip)
-		return run.Await(ctx, c.cleanupInline, "provider_id", key)
+		cleanupRuns.SkipOnce(runCtx, key, attrs, plan.Steps, reason)
+		return true
 	}
 	wait := c.cleanupWait
 	if wait <= 0 {
