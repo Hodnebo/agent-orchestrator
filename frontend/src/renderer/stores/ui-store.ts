@@ -159,6 +159,7 @@ export type UiState = {
 	// bumps on every request so a repeat press (even for the same project) still
 	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
 	// still lives in the URL — this is a one-shot action, not persisted state.
+	newTaskDialogHasContent: boolean;
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number; initialPrompt?: string; displayName?: string } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
@@ -357,6 +358,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	newTaskDialogHasContent: false,
 	workspaceFileOpenRequest: null,
 	createProjectNonce: 0,
 	folderDropRequest: null,

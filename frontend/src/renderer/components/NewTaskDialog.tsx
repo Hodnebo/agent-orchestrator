@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueries } from "@tanstack/react-query";
 import { StickyNote } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -63,10 +63,12 @@ type NewTaskDialogProps = {
 	onProjectChange?: (projectId: string) => void;
 	onCreated: (sessionId: string) => void;
 	onOpenChange: (open: boolean) => void;
+	onContentChange?: (hasContent: boolean) => void;
 };
 
-export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayName, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
+export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayName, onProjectChange, onCreated, onOpenChange, onContentChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
+	const [draftPrompt, setDraftPrompt] = useState(initialPrompt ?? "");
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const localWorkspaces = useWorkspaceQuery({ subscribed: open }).data ?? [];
@@ -181,7 +183,9 @@ export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayN
 						{t(selectedProjectId === STANDALONE_WORKSPACE_ID ? "newTask.standaloneDescription" : "newTask.description")}
 					</Dialog.Description>
 					<TaskComposer
-						initialPrompt={initialPrompt}
+						onContentChange={onContentChange}
+						initialPrompt={draftPrompt}
+						onPromptChange={setDraftPrompt}
 						displayName={displayName}
 						projectId={selectedProjectId}
 						hostId={hostId}

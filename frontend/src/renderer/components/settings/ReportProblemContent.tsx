@@ -27,18 +27,20 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 		try {
 			if (daemonStatus.state !== "ready") {
 				const result = await aoBridge.triage.launch();
-				if (!result.ok) setError(result.error);
+				if (!result.ok) setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : ""));
 				return;
 			}
+			if (useUiStore.getState().newTaskDialogHasContent) { setError(t("report.composerBusy")); return; }
 			const result = await aoBridge.triage.prepare();
-			if (!result.ok) { setError(result.error); return; }
+			if (!result.ok) { setError(t(result.error) + (result.command ? `\n${t("report.runCommand")}\n${result.command}` : "")); return; }
 			const ui = useUiStore.getState();
+			if (ui.newTaskDialogHasContent) { setError(t("report.composerBusy")); return; }
 			ui.closeSettings();
 			ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, {
 				initialPrompt: result.prompt, displayName: t("report.action"),
 			});
-		} catch (error) {
-			setError(error instanceof Error ? error.message : t("report.failed"));
+		} catch {
+			setError(t("report.failed"));
 		} finally { setOpening(false); }
 	};
 	return (

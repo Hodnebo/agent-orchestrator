@@ -554,7 +554,9 @@ describe("TaskComposer", () => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.post.mockResolvedValueOnce({ data: { session: { id: "report-session" } } });
 		const onCreated = vi.fn();
-		render(<Wrap><TaskComposer projectId="__standalone__" initialPrompt="Read /home/me/.ao/triage/context.md" displayName="Report a problem" onCreated={onCreated} /></Wrap>);
+		const onContentChange = vi.fn();
+		render(<Wrap><TaskComposer projectId="__standalone__" initialPrompt="Read /home/me/.ao/triage/context.md" displayName="Report a problem" onCreated={onCreated} onContentChange={onContentChange} /></Wrap>);
+		expect(onContentChange).toHaveBeenLastCalledWith(true);
 		expect(task()).toHaveValue("Read /home/me/.ao/triage/context.md");
 		await waitForTaskReady();
 		fireEvent.click(startTask());

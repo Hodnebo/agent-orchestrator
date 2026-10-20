@@ -118,6 +118,8 @@ export type TaskComposerProps = {
 	hostId?: string;
 	onCreated: (sessionId: string) => void;
 	onDirtyChange?: (dirty: boolean) => void;
+	onContentChange?: (hasContent: boolean) => void;
+	onPromptChange?: (prompt: string) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
 	createLabel?: string;
@@ -130,6 +132,8 @@ export function TaskComposer({
 	hostId,
 	onCreated,
 	onDirtyChange,
+	onContentChange,
+	onPromptChange,
 	onSubmittingChange,
 	autoFocusTitle,
 	createLabel,
@@ -144,7 +148,7 @@ export function TaskComposer({
 	const queryClient = useQueryClient();
 	const remoteConnections = useConnectedHosts();
 	const hostConnected = !hostId || remoteConnections.includes(hostId);
-	const [isPromptDirty, setIsPromptDirty] = useState(false);
+	const [isPromptDirty, setIsPromptDirty] = useState(!!initialPrompt?.trim());
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
@@ -630,7 +634,10 @@ export function TaskComposer({
 	const handlePromptChange = useCallback((value: string) => {
 		const nextDirty = value.trim() !== "";
 		setIsPromptDirty((wasDirty) => (wasDirty === nextDirty ? wasDirty : nextDirty));
-	}, []);
+		onPromptChange?.(value);
+	}, [onPromptChange]);
+	const hasContent = isPromptDirty || attachments.length > 0;
+	useEffect(() => { onContentChange?.(hasContent); }, [hasContent, onContentChange]);
 	useEffect(() => {
 		onDirtyChange?.(isDirty);
 	}, [isDirty, onDirtyChange]);
