@@ -354,3 +354,64 @@ func TestTerminatedHandoffEndsWithItsHeldPromptsNotSent(t *testing.T) {
 		t.Fatalf("turn %s/%q, aborted events %d, queued %d, undelivered %d, phase %s", state, message, aborted, queued, undelivered, phase)
 	}
 }
+
+// Completing a handoff delivers every prompt it held as a queued turn. Two
+// held prompts prove the delivery never writes while its read is still open
+// (pgx rejects that as "conn busy" and the handoff stayed activating forever).
+func TestCompletedHandoffDeliversEveryHeldPrompt(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	transition, err := store.StartSessionInterfaceTransition(ctx, principal, fixture.orgID,
+		fixture.sessionID, domain.SessionInterfaceTUI, domain.SessionInterfaceChat,
+		domain.SessionInterfaceTransitionInterrupt, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turnIDs []string
+	for _, text := range []string{"run the tests", "then open a PR"} {
+		held, err := store.SendMessage(ctx, principal, fixture.orgID, fixture.sessionID, "held-"+uuid.NewString(), text, domain.ChatTurnSettings{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			TurnID string `json:"turnId"`
+		}
+		if err := json.Unmarshal(held.Payload, &payload); err != nil || payload.TurnID == "" {
+			t.Fatalf("held message carries no turn id: %s (%v)", held.Payload, err)
+		}
+		turnIDs = append(turnIDs, payload.TurnID)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_interface_transitions
+		SET phase = 'activating', claimed_by = 'deliver-test', claimed_at = now() WHERE id = $1`, transition.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteCoordinatedInterfaceTransition(ctx, "deliver-test", transition.ID); err != nil {
+		t.Fatalf("complete handoff with two held prompts: %v", err)
+	}
+	var phase string
+	var undelivered int
+	if err := admin.QueryRow(ctx, `SELECT phase FROM ao_interface_transitions WHERE id = $1`, transition.ID).Scan(&phase); err != nil {
+		t.Fatal(err)
+	}
+	if phase != "completed" {
+		t.Fatalf("handoff phase = %q, want completed", phase)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_interface_transition_messages
+		WHERE transition_id = $1 AND delivered_at IS NULL`, transition.ID).Scan(&undelivered); err != nil {
+		t.Fatal(err)
+	}
+	if undelivered != 0 {
+		t.Fatalf("undelivered held prompts = %d, want 0", undelivered)
+	}
+	for _, turnID := range turnIDs {
+		var state string
+		if err := admin.QueryRow(ctx, `SELECT state FROM ao_turns WHERE org_id = $1 AND id = $2`, fixture.orgID, turnID).Scan(&state); err != nil {
+			t.Fatalf("held prompt %s has no turn: %v", turnID, err)
+		}
+		if state != "queued" {
+			t.Fatalf("held prompt %s turn state = %q, want queued", turnID, state)
+		}
+	}
+}

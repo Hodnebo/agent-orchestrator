@@ -434,32 +434,41 @@ func deliverInterfaceTransitionMessages(ctx context.Context, tx pgx.Tx, orgID, s
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	delivered := false
-	for rows.Next() {
-		var messageID int64
-		var turnID string
-		var sequence int64
-		var modeCap string
-		var denied []string
-		if err := rows.Scan(&messageID, &turnID, &sequence, &modeCap, &denied); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO ao_turns (
-			id, org_id, session_id, user_message_sequence, mode_cap, denied_commands
-		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
-		ON CONFLICT (id) DO NOTHING`, turnID, orgID, sessionID, sequence, modeCap, nonNilStrings(denied)); err != nil {
-			return normalizeConstraintError(err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, messageID); err != nil {
-			return err
-		}
-		delivered = true
+	// Read every held message before writing: a pgx transaction is one
+	// connection, which rejects a statement while a result set is still open
+	// ("conn busy").
+	type heldMessage struct {
+		id       int64
+		turnID   string
+		sequence int64
+		modeCap  string
+		denied   []string
 	}
+	var held []heldMessage
+	for rows.Next() {
+		var message heldMessage
+		if err := rows.Scan(&message.id, &message.turnID, &message.sequence, &message.modeCap, &message.denied); err != nil {
+			rows.Close()
+			return err
+		}
+		held = append(held, message)
+	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if delivered {
+	for _, message := range held {
+		if _, err := tx.Exec(ctx, `INSERT INTO ao_turns (
+			id, org_id, session_id, user_message_sequence, mode_cap, denied_commands
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
+		ON CONFLICT (id) DO NOTHING`, message.turnID, orgID, sessionID, message.sequence, message.modeCap, nonNilStrings(message.denied)); err != nil {
+			return normalizeConstraintError(err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, message.id); err != nil {
+			return err
+		}
+	}
+	if len(held) > 0 {
 		if _, err := tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, sessionID); err != nil {
 			return err
 		}
