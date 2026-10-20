@@ -13,6 +13,7 @@ import { space, type } from "../tokens";
 import {
 	RENDER_BRIDGE_SCRIPT,
 	RENDER_ZOOM_SCRIPT,
+	REPORT_SETTLE_LIMIT_MS,
 	clampRenderHeight,
 	initialRenderHeight,
 	isRenderPageLoad,
@@ -21,7 +22,6 @@ import {
 	rememberedRenderHeight,
 	renderFrameLive,
 	renderTheme,
-	settledRenderHeight,
 	renderThemeFragment,
 	renderThemeScript,
 	subscribeRenderViewport,
@@ -186,32 +186,34 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
 	const [expanded, setExpanded] = useState(false);
+	// Sized on this device already: by a report this mount, or one saved earlier.
+	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
 	const measure = useCallback(() => {
 		frame.current?.measureInWindow((_x, y, _width, height) => {
 			// A cell the list has clipped measures as zero; leave it as it was.
-			if (height > 0) setLive((current) => renderFrameLive(y, height, viewportHeight, current));
+			if (height > 0) setLive((current) => renderFrameLive(y, height, viewportHeight, current, measured));
 		});
-	}, [viewportHeight]);
+	}, [viewportHeight, measured]);
 	useEffect(() => subscribeRenderViewport(measure), [measure]);
 	// A page that leaves range reloads when it returns, so it is loading again.
 	const { unload } = page;
-	const measured = useRef<number | undefined>(undefined);
-	useEffect(() => {
-		if (live) return;
-		unload();
-		// Its next page opens at the saved height, as after a relaunch.
-		measured.current = undefined;
-	}, [live, unload]);
-	const onHeight = useCallback((reported: number) => {
-		if (!width) return;
-		// A frame that opened at this device's saved height keeps it unless the
-		// page really differs, so a relaunch neither shifts nor creeps.
-		const saved = measured.current === undefined ? rememberedRenderHeight(render.path, width) : undefined;
-		const next = settledRenderHeight(measured.current ?? saved ?? reported, reported, saved !== undefined);
-		measured.current = next;
-		rememberRenderHeight(render.path, width, next);
-		setContentHeight(next);
-	}, [render.path, width]);
+	useEffect(() => { if (!live) unload(); }, [live, unload]);
+	// The skeleton stays until the page has a settled height, so the page appears
+	// at its size instead of resizing in view. A page that never reports one is
+	// shown anyway once it has had time to.
+	const { ready } = page;
+	const readyFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(readyFallback.current), []);
+	const onLoaded = useCallback(() => {
+		clearTimeout(readyFallback.current);
+		readyFallback.current = setTimeout(ready, REPORT_SETTLE_LIMIT_MS + 500);
+	}, [ready]);
+	const onHeight = useCallback((height: number) => {
+		if (width) rememberRenderHeight(render.path, width, height);
+		setContentHeight(height);
+		clearTimeout(readyFallback.current);
+		ready();
+	}, [render.path, width, ready]);
 
 	if (!config || failed) {
 		return <Pressable
@@ -229,7 +231,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 
 	const height = clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
-		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
+		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
 		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} /> : null}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}

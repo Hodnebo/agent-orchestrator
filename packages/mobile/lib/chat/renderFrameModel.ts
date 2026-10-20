@@ -76,27 +76,13 @@ export function initialRenderHeight(render: RenderRef, width: number | undefined
  * Whether a frame keeps a live WebView, from where it sits in the window. A
  * page mounts once it is within half a screen of view and unmounts only past
  * a screen and a half, so a frame at the edge does not reload as it wobbles.
+ * A page this device has never measured mounts two screens out and stays until
+ * it has: it is sized before it reaches the screen, so it never shifts there.
  */
-export function renderFrameLive(top: number, height: number, viewportHeight: number, live: boolean): boolean {
-	const margin = viewportHeight * (live ? 1.5 : 0.5);
+export function renderFrameLive(top: number, height: number, viewportHeight: number, live: boolean, measured = true): boolean {
+	const screens = measured ? (live ? 1.5 : 0.5) : (live ? 2.5 : 2);
+	const margin = viewportHeight * screens;
 	return top + height > -margin && top < viewportHeight + margin;
-}
-
-/**
- * How far a page's report may differ from a height this device already saved
- * before it counts as new. A stored page never changes, but a WebView opened at
- * the saved height measures it a few pixels differently (Android reads taller
- * each launch), and applying that would shift the thread and creep.
- */
-const SAVED_HEIGHT_TOLERANCE = 4;
-
-/**
- * The frame height after a page reports its own. A frame that opened at a
- * saved height keeps it for a report within the tolerance; otherwise the
- * report wins.
- */
-export function settledRenderHeight(current: number, reported: number, openedAtSaved: boolean): number {
-	return openedAtSaved && Math.abs(reported - current) <= SAVED_HEIGHT_TOLERANCE ? current : reported;
 }
 
 /**
@@ -249,6 +235,11 @@ export function renderThemeScript(theme: RenderTheme): string {
 	return `window.postMessage(${JSON.stringify(message)}, "*"); true;`;
 }
 
+/** How long a page's height must hold still before the frame takes it. */
+export const REPORT_SETTLE_MS = 80;
+/** The longest a page waits for its images and fonts before it reports anyway. */
+export const REPORT_SETTLE_LIMIT_MS = 1500;
+
 /**
  * The bootstrap only reports its height and hands off links when framed; in a
  * WebView the page is top level, so this does both over the native bridge.
@@ -258,21 +249,47 @@ export const RENDER_BRIDGE_SCRIPT = `(function () {
   var bridge = window.ReactNativeWebView;
   if (!bridge || window.__aoRenderBridge) return;
   window.__aoRenderBridge = true;
-  var last;
-  function report() {
+  var last, timer, settled = false;
+  function measure() {
     var r = document.documentElement;
-    var h = Math.ceil(r.scrollHeight > r.clientHeight ? r.scrollHeight : r.getBoundingClientRect().height);
+    // The content box. scrollHeight never drops below the viewport, and on
+    // Android the viewport rounds a pixel taller than the frame, so trusting it
+    // reported "frame + 1" forever: frames stayed too tall and grew each time.
+    // It only counts when it beats the viewport, which means real overflow.
+    var view = Math.max(r.clientHeight, window.innerHeight || 0);
+    var h = Math.ceil(r.scrollHeight > view + 1 ? r.scrollHeight : r.getBoundingClientRect().height);
     if (!h || h === last) return;
     last = h;
     bridge.postMessage(JSON.stringify({ type: "height", height: h }));
   }
+  // A height only counts once it holds still: a layout mid-change would size
+  // the frame for a moment and then size it again.
+  function report() {
+    if (!settled) return;
+    clearTimeout(timer);
+    timer = setTimeout(measure, ${REPORT_SETTLE_MS});
+  }
+  // Nothing is reported until the images are decoded and the fonts are in:
+  // before that the page measures short (a reloaded page reported 92px of its
+  // 309px), and the frame would jump down and back up.
+  function settle() {
+    if (settled) return;
+    settled = true;
+    report();
+  }
+  var waits = Array.prototype.map.call(document.images || [], function (img) {
+    return img.decode ? img.decode().catch(function () {}) : null;
+  });
+  if (document.fonts && document.fonts.ready) waits.push(document.fonts.ready);
+  Promise.all(waits).then(settle, settle);
+  // A page that never settles (an image that neither loads nor fails) still reports.
+  setTimeout(settle, ${REPORT_SETTLE_LIMIT_MS});
   if (window.ResizeObserver) {
-    var observer = new ResizeObserver(report);
+    var observer = new window.ResizeObserver(report);
     observer.observe(document.documentElement);
     if (document.body) observer.observe(document.body);
   }
   window.addEventListener("load", report);
-  report();
   document.addEventListener("click", function (e) {
     if (!e.isTrusted) return;
     var link = e.composedPath().find(function (n) { return n && n.matches && n.matches("a[href]"); });

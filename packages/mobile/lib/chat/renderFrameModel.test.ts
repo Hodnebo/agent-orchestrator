@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { darkTheme, lightTheme } from "../theme";
 import {
 	RENDER_BRIDGE_SCRIPT,
 	RENDER_MAX_HEIGHT,
+	REPORT_SETTLE_LIMIT_MS,
+	REPORT_SETTLE_MS,
 	RENDER_ZOOM_SCRIPT,
 	RENDER_MIN_HEIGHT,
 	initialRenderHeight,
@@ -14,7 +16,6 @@ import {
 	serializeRememberedHeights,
 	subscribeRememberedHeights,
 	renderSkeletonLines,
-	settledRenderHeight,
 	subscribeRenderViewport,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
@@ -163,6 +164,15 @@ describe("renderFrameLive", () => {
 		expect(renderFrameLive(-1550, 300, viewport, true)).toBe(false);
 	});
 
+	it("measures a page this device has never sized two screens before it arrives", () => {
+		expect(renderFrameLive(viewport + 1500, 300, viewport, false, false)).toBe(true);
+		expect(renderFrameLive(viewport + 1700, 300, viewport, false, false)).toBe(false);
+		// Mounted and still measuring: it stays a little further out, so it cannot flap.
+		expect(renderFrameLive(viewport + 1900, 300, viewport, true, false)).toBe(true);
+		// Once measured, the usual range applies: a page that far out lets go.
+		expect(renderFrameLive(viewport + 1900, 300, viewport, true, true)).toBe(false);
+	});
+
 	it("keeps a page taller than the screen while any part is near", () => {
 		expect(renderFrameLive(-1800, 2000, viewport, false)).toBe(true);
 	});
@@ -254,40 +264,80 @@ describe("renderSkeletonLines", () => {
 });
 
 describe("RENDER_BRIDGE_SCRIPT height report", () => {
-	function reportedHeight(page: { scrollHeight: number; clientHeight: number; contentHeight: number }): number | undefined {
-		const posted: string[] = [];
-		const window = { ReactNativeWebView: { postMessage: (data: string) => posted.push(data) }, addEventListener: () => {} };
+	type Page = { scrollHeight: number; clientHeight: number; innerHeight: number; contentHeight: number };
+
+	/** Runs the bridge against a fake page; returns the heights it posts, in order, and a way to resize. */
+	function bridge(page: Page, images: Array<{ decode: () => Promise<void> }> = []) {
+		const heights: number[] = [];
+		let resize: (() => void) | undefined;
+		const window = {
+			ReactNativeWebView: { postMessage: (data: string) => { const message = readRenderBridgeMessage(data); if (message?.type === "height") heights.push(message.height); } },
+			addEventListener: () => {},
+			innerHeight: page.innerHeight,
+			ResizeObserver: class { constructor(callback: () => void) { resize = callback; } observe() {} },
+		};
 		const document = {
-			documentElement: { scrollHeight: page.scrollHeight, clientHeight: page.clientHeight, getBoundingClientRect: () => ({ height: page.contentHeight }) },
+			documentElement: { get scrollHeight() { return page.scrollHeight; }, get clientHeight() { return page.clientHeight; }, getBoundingClientRect: () => ({ height: page.contentHeight }) },
 			body: null,
+			images,
 			addEventListener: () => {},
 		};
-		new Function("window", "document", RENDER_BRIDGE_SCRIPT)(window, document);
-		const message = posted.map((data) => readRenderBridgeMessage(data)).find((value) => value?.type === "height");
-		return message?.type === "height" ? message.height : undefined;
+		new Function("window", "document", "setTimeout", "clearTimeout", RENDER_BRIDGE_SCRIPT)(window, document, setTimeout, clearTimeout);
+		return { heights, resize: () => resize?.() };
 	}
 
-	it("grows a frame the page overflows to the page's full height", () => {
-		expect(reportedHeight({ scrollHeight: 640, clientHeight: 312, contentHeight: 312 })).toBe(640);
+	async function settle() {
+		await vi.advanceTimersByTimeAsync(REPORT_SETTLE_MS + 1);
+	}
+
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("reports the content, not Android's viewport rounded a pixel taller than the frame", async () => {
+		// Measured on Android: a 327dp frame, a 328px viewport, 309px of content.
+		const run = bridge({ scrollHeight: 328, clientHeight: 327, innerHeight: 328, contentHeight: 308.9 });
+		await settle();
+		expect(run.heights).toEqual([309]);
 	});
 
-	it("shrinks a frame taller than its page to the content height", () => {
-		expect(reportedHeight({ scrollHeight: 520, clientHeight: 520, contentHeight: 318.2 })).toBe(319);
+	it("grows a frame the page really overflows", async () => {
+		const run = bridge({ scrollHeight: 640, clientHeight: 312, innerHeight: 312, contentHeight: 312 });
+		await settle();
+		expect(run.heights).toEqual([640]);
+	});
+
+	it("shrinks a frame taller than its page to the content height", async () => {
+		const run = bridge({ scrollHeight: 520, clientHeight: 520, innerHeight: 520, contentHeight: 318.2 });
+		await settle();
+		expect(run.heights).toEqual([319]);
+	});
+
+	it("says nothing until the images are decoded, so a half-laid-out page is never reported", async () => {
+		const page = { scrollHeight: 92, clientHeight: 309, innerHeight: 309, contentHeight: 92 };
+		let decoded!: () => void;
+		const run = bridge(page, [{ decode: () => new Promise<void>((resolve) => { decoded = resolve; }) }]);
+		run.resize();
+		await settle();
+		expect(run.heights).toEqual([]);
+		page.contentHeight = 308.9;
+		decoded();
+		await settle();
+		expect(run.heights).toEqual([309]);
+	});
+
+	it("reports once a burst of layout changes holds still", async () => {
+		const page = { scrollHeight: 300, clientHeight: 300, innerHeight: 300, contentHeight: 100 };
+		const run = bridge(page);
+		page.contentHeight = 200; run.resize();
+		page.contentHeight = 279; run.resize();
+		await settle();
+		expect(run.heights).toEqual([279]);
+	});
+
+	it("reports anyway when an image never settles", async () => {
+		const run = bridge({ scrollHeight: 300, clientHeight: 300, innerHeight: 300, contentHeight: 120 }, [{ decode: () => new Promise<void>(() => {}) }]);
+		await vi.advanceTimersByTimeAsync(REPORT_SETTLE_LIMIT_MS + REPORT_SETTLE_MS + 1);
+		expect(run.heights).toEqual([120]);
 	});
 });
 
-describe("settledRenderHeight", () => {
-	it("keeps a saved height through a report that is only measurement noise", () => {
-		expect(settledRenderHeight(321, 324, true)).toBe(321);
-		expect(settledRenderHeight(321, 317, true)).toBe(321);
-	});
-
-	it("takes a report that really differs from the saved height", () => {
-		expect(settledRenderHeight(321, 340, true)).toBe(340);
-		expect(settledRenderHeight(321, 300, true)).toBe(300);
-	});
-
-	it("always takes the first measurement of a page", () => {
-		expect(settledRenderHeight(312, 316, false)).toBe(316);
-	});
-});

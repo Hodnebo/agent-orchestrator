@@ -209,7 +209,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maxToRenderPerBatch={4}
 				updateCellsBatchingPeriod={32}
 				windowSize={5}
-				maintainVisibleContentPosition={inverted ? { minIndexForVisible: 0 } : undefined}
+				// Content off screen can resize (a page measured ahead, earlier history
+				// loading in); what is on screen stays put on both platforms.
+				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
 				onScroll={(event) => {
 					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
 					followsTail.current = inverted
