@@ -110,7 +110,8 @@ export function useStayAwake(enabled = true) {
 			};
 			const ensureDesktop = async (lidClosed = false) => {
 				if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
-				if (sessions.length > 0 && (!lidClosed || desktopLid)) return;
+				// A temporary owner or automatic rule cannot satisfy persistent user intent.
+				if (sessions.some((s) => s.scope === "ao" && s.mode === "indefinite" && s.lidClosed === lidClosed)) return;
 				try {
 					await start(lidClosed);
 				} catch (e) {

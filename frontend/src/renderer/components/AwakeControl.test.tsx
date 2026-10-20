@@ -67,6 +67,8 @@ function MobileControl() {
 	return <>
 		<button disabled={stay.busy || !stay.supported} onClick={() => stay.set(!stay.on)} aria-pressed={stay.on}>Mobile wake</button>
 		<button disabled={stay.busy || !stay.supported} onClick={() => stay.setLid(!stay.lidOn)} aria-pressed={stay.lidOn}>Lid wake</button>
+		<button disabled={stay.busy || !stay.supported} onClick={() => stay.set(true)}>Enable wake</button>
+		<button disabled={stay.busy || !stay.supported} onClick={() => stay.setLid(true)}>Enable lid wake</button>
 		{stay.error ? <span role="alert">{stay.error}</span> : null}
 	</>;
 }
@@ -354,6 +356,52 @@ describe("shared Stay Awake controls", () => {
 		await act(async () => { client.setQueryData(mobileStatusQueryKey, structuredClone(mobile)); });
 		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
 		expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+	});
+	it.each([
+		{ name: "session-scoped lid owner", owner: awakeSession({ scope: "session", sessionId: "work", lidClosed: true }), lidRule: false },
+		{ name: "timed lid owner", owner: awakeSession({ mode: "duration", lidClosed: true }), lidRule: false },
+		{ name: "idle owner and automatic lid rule", owner: awakeSession({}), lidRule: true },
+		{ name: "indefinite idle owner", owner: awakeSession({}), lidRule: false },
+		{ name: "ended indefinite lid owner", owner: awakeSession({ lidClosed: true, endedAt: "earlier" }), lidRule: false },
+	])("establishes persistent lid wake alongside an existing $name", async ({ owner, lidRule }) => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		state.sessions = [owner];
+		state.active = !owner.endedAt;
+		state.lidActive = state.active && owner.lidClosed;
+		if (lidRule) state.rules = [{ id: "automatic", enabled: true, lidClosed: true }] as AwakeState["rules"];
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Enable lid wake" }));
+		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: true }) }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Enable lid wake" })).toBeEnabled());
+		// Completion of the previous owner/rule must leave persistent lid wake intact.
+		await act(async () => {
+			await test.post("/api/v1/awake/sessions/{awakeId}/end", { params: { path: { awakeId: owner.id } } });
+			state.rules = [];
+			state.activeRules = [];
+			client.setQueryData(awakeQueryKey, snapshot());
+		});
+		expect(state.active).toBe(true);
+		expect(state.lidActive).toBe(true);
+		expect(state.sessions.filter((s) => !s.endedAt)).toEqual([expect.objectContaining({ id: "new", scope: "ao", mode: "indefinite", lidClosed: true })]);
+		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
+	});
+	it("establishes persistent idle wake alongside a session-scoped idle owner", async () => {
+		state.sessions = [awakeSession({ scope: "session", sessionId: "work" })];
+		state.active = true;
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Enable wake" }));
+		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: false }) }));
+	});
+	it.each([false, true])("reuses a matching indefinite AO owner (lidClosed=%s)", async (lidClosed) => {
+		state.capabilities.push({ id: "lid", available: lidClosed, reason: "" });
+		state.sessions = [awakeSession({ lidClosed })];
+		state.active = true;
+		state.lidActive = lidClosed;
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: lidClosed ? "Enable lid wake" : "Enable wake" }));
+		await waitFor(() => expect(coffee()).not.toHaveAttribute("aria-busy"));
+		expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/sessions", expect.anything());
+		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(1);
 	});
 	it.each([
 		{ scope: "ao" as const, mode: "duration" as const },
