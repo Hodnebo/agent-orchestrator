@@ -163,7 +163,7 @@ function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onC
 	// "none" in the field stands for no limit, not a number of minutes; the unit
 	// keeps its room so the row does not shift once a number is typed.
 	const showsNoLimit = noDefault && value === "";
-	return <TooltipProvider><label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id}>
+	return <label className="flex shrink-0 items-center gap-1 text-xs text-settings-muted" htmlFor={id}>
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<Input
@@ -194,7 +194,7 @@ function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onC
 		</Tooltip>
 		<span aria-hidden="true" className={cn(showsNoLimit && "invisible")}>{t("settings.project.stepTimeoutUnit")}</span>
 		<span className="sr-only" id={hintId}>{hint}</span>
-	</label></TooltipProvider>;
+	</label>;
 }
 
 /** The variables a Cloud project's Setup and Cleanup steps can use. */
@@ -341,7 +341,9 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 								<p><code>{"AO_WORKTREE_PATH"}</code>: {t(`settings.project.${kind}WorktreePath`)}</p>
 							</div>}
 						</details>}
-						<div className="space-y-4">
+						{/* One provider for the list's time limit tooltips, so moving from one
+						    field to the next shows its tooltip at once. */}
+						<TooltipProvider><div className="space-y-4">
 							{drafts[kind].map((step, index) => <div key={index}>
 								<div className="mb-1 flex items-center justify-between gap-2">
 									<label className="text-sm font-medium text-settings-label" htmlFor={`${kind}-step-${index}`}>{t(`settings.project.${kind}Step`, { number: index + 1 })}</label>
@@ -370,7 +372,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 							</div>)}
 							{cloud && showRepositoryMenu ? <p className="text-xs text-settings-muted">{t("settings.project.stepRepositoryHint", { defaultValue: "Each step runs in the repository chosen for it, after every repository is checked out." })}</p> : null}
 							<Button className="gap-1.5 self-start text-settings-muted hover:text-settings-label" disabled={locked} onClick={() => updateSteps(kind, [...drafts[kind], emptyStep()])} size="sm" type="button" variant="ghost"><Plus aria-hidden="true" size={16} />{t(kind === "setup" ? "settings.project.addSetupStep" : "settings.project.addCleanupStep")}</Button>
-						</div>
+						</div></TooltipProvider>
 					</div>
 					{kind === "cleanup" && !cloud && <div className="settings-content-row space-y-2">
 						<p className="text-xs text-settings-muted">{t("settings.project.cleanupRetryHint")}</p>
