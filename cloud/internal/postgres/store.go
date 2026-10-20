@@ -48,6 +48,17 @@ type Store struct {
 	// activityLog is told about activity rows the store writes itself, inside
 	// the transaction they describe (see commitWithActivity).
 	activityLog func(context.Context, domain.ActivityEvent)
+	// coderReadableNames stores a readable Coder workspace name on each new
+	// Coder session (SetCoderReadableWorkspaceNames).
+	coderReadableNames bool
+}
+
+// SetCoderReadableWorkspaceNames turns readable Coder workspace names on for
+// sessions created from now on (config.Config.CoderReadableWorkspaceNames).
+// Off, the default, a new session stores no name and keeps the <prefix>-<id>
+// name; a stored name is read either way. Call it before serving requests.
+func (s *Store) SetCoderReadableWorkspaceNames(enabled bool) {
+	s.coderReadableNames = enabled
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {

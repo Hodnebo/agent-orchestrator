@@ -124,6 +124,11 @@ type CoderConfig struct {
 	// Coder may pick; empty allows any. The default TemplateID is always
 	// allowed. Bring-your-own connections are not limited.
 	AllowedTemplateIDs []string
+	// WorkerWorkingFolder stamps the project's working folder as the checkout
+	// of a session whose worker runs as the dedicated ao-worker user
+	// (config.Config.CoderWorkerWorkingFolder). Off, such sessions keep the
+	// durable root's repository folder; a stamped folder is honored either way.
+	WorkerWorkingFolder bool
 }
 
 // TemplateAllowed reports whether a session on this deployment's Coder may use
@@ -881,8 +886,10 @@ func (d ProvisioningDefaults) SessionPlanForProviderWithCoder(harness, providerO
 		if override != nil {
 			addCoderDevEnvironment(coderProfile, override)
 		}
-		if err := addCoderCheckoutDirectory(coderProfile, coder, override); err != nil {
-			return Plan{}, err
+		if d.Coder.WorkerWorkingFolder {
+			if err := addCoderCheckoutDirectory(coderProfile, coder, override); err != nil {
+				return Plan{}, err
+			}
 		}
 		resourceProfile["coder"] = coderProfile
 		bootstrapContext["coder"] = map[string]any{

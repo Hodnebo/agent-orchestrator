@@ -102,7 +102,9 @@ func TestCreateWorkerChildInheritsTheWorkingFolderCheckout(t *testing.T) {
 					CoderConnections: tc.connections(t),
 				},
 			}
-			srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderCoder), sandbox.ProviderCoder)
+			provisioning := bothProviderProvisioning(sandbox.ProviderCoder)
+			provisioning.Coder.WorkerWorkingFolder = true
+			srv := newChildServer(store, provisioning, sandbox.ProviderCoder)
 			rec := httptest.NewRecorder()
 			srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
 			if rec.Code != http.StatusCreated {

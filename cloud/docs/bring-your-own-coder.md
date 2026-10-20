@@ -35,7 +35,9 @@ local project has: open the project's settings and choose **Scripts**.
   the session and never changes it otherwise: renaming the chat does not
   rename the workspace. Sessions created before
   this scheme keep their original `<prefix>-<id>` (or `ao-<id>`) workspace
-  names. The session's top bar shows the workspace name with a link that
+  names, and so do new sessions while the control plane's
+  `AO_CLOUD_CODER_READABLE_NAMES` is off (see
+  [Coder rollout flags](deployment.md#coder-rollout-flags)). The session's top bar shows the workspace name with a link that
   opens it in Coder, for as long as the session exists.
 - **Durable root.** AO keeps its own state under the workspace user's home
   (`$HOME/.ao`): the worker, its logs, and the agent's configuration and
@@ -124,7 +126,9 @@ remote, and falls back to a fresh clone in `$HOME/repository`.
 
 ### Working folder with the `ao-worker` user
 
-With **Run the agent as the workspace user** off (the default), a project's
+With **Run the agent as the workspace user** off (the default), and the
+control plane's `AO_CLOUD_CODER_WORKER_WORKING_FOLDER` on (see
+[Coder rollout flags](deployment.md#coder-rollout-flags)), a project's
 **Working folder** (Project settings > Repositories, for example
 `~/work/{repo}`) is where AO clones the main repository instead of
 `$HOME/repository`, and the additional repositories go beside it

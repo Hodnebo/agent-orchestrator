@@ -332,6 +332,7 @@ func (s *Store) CreateSession(
 		var err error
 		session, err = createSessionTx(
 			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
+			s.coderReadableNames,
 		)
 		return err
 	})
@@ -575,6 +576,7 @@ func (s *Store) CreateGitHubScratchProject(
 			input.Session,
 			"",
 			principal.UserID,
+			s.coderReadableNames,
 		)
 		if err != nil {
 			return err
@@ -645,6 +647,7 @@ func createSessionTx(
 	billing billingPolicy,
 	input domain.CreateSession,
 	parentSessionID, actorUserID string,
+	readableCoderNames bool,
 ) (domain.Session, error) {
 	if input.Mode == "" {
 		input.Mode = "standard"
@@ -843,11 +846,13 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, err
 	}
-	if provider == sandbox.ProviderCoder {
+	if provider == sandbox.ProviderCoder && readableCoderNames {
 		// The Coder workspace name is chosen here, the only point that knows
 		// the new session id, from the session's kind and its display name
 		// at creation. It is stored on the immutable profile, so a later
-		// rename of the session never changes it.
+		// rename of the session never changes it. Without readable names
+		// (SetCoderReadableWorkspaceNames) nothing is stored and the session
+		// keeps the <prefix>-<id> name every release computes.
 		if resourceProfile, err = sandbox.StampCoderWorkspaceName(
 			resourceProfile, session.Kind, session.DisplayName, session.ID, time.Now(),
 		); err != nil {

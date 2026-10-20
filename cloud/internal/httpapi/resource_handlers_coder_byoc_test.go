@@ -154,25 +154,32 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 // repository when the session is created.
 func TestCreateSessionStampsTheWorkingFolderCheckout(t *testing.T) {
 	t.Parallel()
-	store := &stubCoderBYOCStore{
-		personalCredentialAvailable: true,
-		projectConfig:               json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`),
-		repositoryURL:               "https://github.com/acme/alice.git",
-	}
-	srv := newBYOCServer(store)
+	for _, enabled := range []bool{true, false} {
+		store := &stubCoderBYOCStore{
+			personalCredentialAvailable: true,
+			projectConfig:               json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`),
+			repositoryURL:               "https://github.com/acme/alice.git",
+		}
+		srv := newBYOCServer(store)
+		srv.provisioning.Coder.WorkerWorkingFolder = enabled
 
-	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+		rec := httptest.NewRecorder()
+		srv.createSession(rec, byocCreateSessionRequest(t))
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
-	}
-	profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
-	if err != nil {
-		t.Fatalf("decode stamped profile: %v", err)
-	}
-	if profile.CheckoutDirectory != "~/work/alice" || profile.WorkingDirectory != "" || profile.RunsAsWorkspaceUser() {
-		t.Fatalf("stamped profile = %+v", profile)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+		}
+		profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+		if err != nil {
+			t.Fatalf("decode stamped profile: %v", err)
+		}
+		// With AO_CLOUD_CODER_WORKER_WORKING_FOLDER off (production until
+		// the rollback target honors a stamped folder) the session keeps the
+		// durable root checkout.
+		want := map[bool]string{true: "~/work/alice", false: ""}[enabled]
+		if profile.CheckoutDirectory != want || profile.WorkingDirectory != "" || profile.RunsAsWorkspaceUser() {
+			t.Fatalf("working folder %v: stamped profile = %+v", enabled, profile)
+		}
 	}
 }
 

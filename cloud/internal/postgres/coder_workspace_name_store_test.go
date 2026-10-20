@@ -18,6 +18,7 @@ import (
 // back to the computed one.
 func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	store.SetCoderReadableWorkspaceNames(true)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	connection, err := store.UpsertProviderConnection(
@@ -126,6 +127,44 @@ func TestCreateSessionStoresTheCoderWorkspaceName(t *testing.T) {
 	}
 	if legacy.BYOCoderWorkspace == nil || legacy.BYOCoderWorkspace.Name != "" || legacy.BYOCoderWorkspace.NamePrefix != "acme" {
 		t.Fatalf("legacy workspace ref = %+v, want the prefix and no stored name", legacy.BYOCoderWorkspace)
+	}
+}
+
+// Without readable names (the production default until the rollback target
+// reads stored names) a new Coder session stores no workspace name, so every
+// release computes the same <prefix>-<id> name for it.
+func TestCreateSessionStoresNoCoderWorkspaceNameWithoutReadableNames(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	connection, err := store.UpsertProviderConnection(
+		ctx, principal, fixture.orgID, "coder", "default", []byte("ciphertext"), []byte("nonce"),
+		json.RawMessage(`{"baseUrl":"https://coder.acme.test","owner":"acme-bot","templateId":"3b3f373d-c42d-5313-a57e-b2abe56e2fe3"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(ctx, principal, fixture.orgID, "create-"+uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "codex", DisplayName: "Fix the login bug",
+		Provider: "coder", SandboxConnectionID: connection.ID,
+		ResourceProfile:  json.RawMessage(`{"coder":{"baseUrl":"https://coder.acme.test","owner":"acme-bot","templateId":"3b3f373d-c42d-5313-a57e-b2abe56e2fe3","durableRoot":"$HOME","workspaceNamePrefix":"acme"}}`),
+		BootstrapContext: json.RawMessage(`{}`), Release: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err := admin.QueryRow(ctx,
+		`SELECT resource_profile FROM ao_sandboxes WHERE org_id = $1 AND session_id = $2`, fixture.orgID, session.ID,
+	).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := sandbox.DecodeCoderSessionProfile(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.WorkspaceName != "" || decoded.WorkspaceNameRetry != "" || decoded.WorkspaceNameIssuedAt != nil {
+		t.Fatalf("stored profile %s names its workspace", raw)
 	}
 }
 
