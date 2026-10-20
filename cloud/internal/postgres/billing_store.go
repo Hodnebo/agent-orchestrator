@@ -1378,6 +1378,7 @@ func billedRunningSessionsTx(ctx context.Context, tx pgx.Tx, orgID string) ([]bi
 				SELECT 1 FROM ao_turns t
 				WHERE t.org_id = sb.org_id AND t.session_id = sb.session_id
 					AND t.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+					AND NOT `+queuedBehindFailedStartupSQL("t", "sb")+`
 			)
 			OR EXISTS (
 				SELECT 1 FROM ao_review_runs r

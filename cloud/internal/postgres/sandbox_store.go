@@ -64,6 +64,7 @@ func (s *Store) ClaimSandboxes(
 							WHERE turn.org_id = sandbox.org_id
 								AND turn.session_id = sandbox.session_id
 								AND turn.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+								AND NOT `+queuedBehindFailedStartupSQL("turn", "sandbox")+`
 						)
 						OR EXISTS (
 							SELECT 1 FROM ao_sessions session
@@ -246,6 +247,7 @@ func (s *Store) AcceptSandboxProviderPause(
 					WHERE turn.org_id = sandbox.org_id
 						AND turn.session_id = sandbox.session_id
 						AND turn.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+						AND NOT `+queuedBehindFailedStartupSQL("turn", "sandbox")+`
 				)
 				AND NOT EXISTS (
 					SELECT 1 FROM ao_sessions session
@@ -645,6 +647,7 @@ func (s *Store) PauseIfIdle(
 					WHERE ao_turns.session_id = $1
 						AND ao_turns.org_id = $2
 						AND ao_turns.state IN ('queued', 'provisioning', 'running', 'cancel_requested')
+						AND NOT `+queuedBehindFailedStartupSQL("ao_turns", "ao_sandboxes")+`
 				)
 				-- A manual PR review is work in flight even though it is not
 				-- represented by a normal user turn. Keep its worker alive until

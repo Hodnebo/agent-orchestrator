@@ -97,6 +97,26 @@ func (s *Store) ClearWorkspaceStartupError(
 	})
 }
 
+// workspaceStartupErrorCodesSQL lists domain.WorkspaceStartupErrorCodes as
+// SQL literals (a constant, so the constant session select can use it).
+const workspaceStartupErrorCodesSQL = "'" + domain.WorkspaceStartupErrorCheckout + "', '" +
+	domain.WorkspaceStartupErrorWorkingDirectory + "', '" + domain.WorkspaceStartupErrorProjectSetup + "', '" +
+	domain.WorkspaceStartupErrorWorkingDirectoryOccupied + "'"
+
+// queuedBehindFailedStartupSQL is the condition that turn (an ao_turns
+// alias) is a queued turn of a session whose current workspace startup
+// failed: its worker could not check the repository out or run the project's
+// Setup and reported it on sandbox (an ao_sandboxes alias, see
+// RecordWorkspaceStartupError). Its Chat controller claims no turn until the
+// person reopens the session and the retry succeeds, so such a turn (a new
+// session's task) is not work in flight: it does not keep the VM running,
+// hold off idle pause, count as busy for the plan, or make the session read
+// active. Opening the session still wakes it and drives the retry.
+func queuedBehindFailedStartupSQL(turn, sandbox string) string {
+	return "(" + turn + ".state = 'queued' AND COALESCE(" + sandbox + ".startup_error_code, '') IN (" +
+		workspaceStartupErrorCodesSQL + "))"
+}
+
 // truncateTail bounds text to limit bytes on a valid UTF-8 boundary, keeping
 // the tail (the most recent output) when keepTail is set and the head
 // otherwise.
