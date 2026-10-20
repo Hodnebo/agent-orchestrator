@@ -9,7 +9,6 @@ import {
 	GitCompareArrows,
 	Maximize2,
 	Minimize2,
-	RefreshCw,
  Columns2,
  Rows3,
  ListChevronsDownUp,
@@ -239,6 +238,17 @@ export function SessionFileExplorer({
 	// the All files tree beside the preview; picking one scrolls to its diff.
 	const reviewFiles = review.target.files;
 	const reviewTreeData = useMemo(() => buildWorkspaceFileTree(reviewFiles ?? []), [reviewFiles]);
+	// With no files the rail would only say the folder is empty, so the review
+	// takes the whole width instead. A read in flight keeps the last answer, so
+	// moving between two empty picks doesn't flash the rail in and out.
+	const [reviewRailShown, setReviewRailShown] = useState(() => (reviewFiles?.length ?? 0) > 0);
+	useLayoutEffect(() => {
+		if (review.target.state !== "pending") setReviewRailShown((reviewFiles?.length ?? 0) > 0);
+	}, [review.target.state, reviewFiles]);
+	// A filter that matches none of the files empties the rail too; the review's
+	// own no-match message then takes the whole width. Matched as the review does.
+	const reviewFilter = filter.trim().toLowerCase();
+	const reviewFilterMatches = !reviewFilter || (reviewFiles ?? []).some((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(reviewFilter));
 	const [reviewTreePath, setReviewTreePath] = useState<string | null>(null);
 	const [reviewScrollRequest, setReviewScrollRequest] = useState<{ path: string; key: number }>();
 	const selectReviewTreePath = (node: TreeNode) => {
@@ -367,7 +377,6 @@ export function SessionFileExplorer({
 
 	const viewControls = (
 		<>
-			{source.kind === "snapshot" ? <Tooltip><TooltipTrigger asChild><Button aria-label={t("files.snapshotRefresh")} onClick={review.refreshSource} size="icon-sm" type="button" variant="ghost"><RefreshCw aria-hidden="true" className="size-icon-base"/></Button></TooltipTrigger><TooltipContent side="bottom">{t("files.snapshotRefresh")}</TooltipContent></Tooltip> : null}
 			{viewMenu}
 			{hasViewTabs ? (
 				<div aria-label={t("files.viewMode")} className="flex shrink-0 items-center gap-1" role="tablist">
@@ -468,26 +477,33 @@ export function SessionFileExplorer({
 					</PanelMessage>
 				) : filesData ? (
 					isMaximized ? (
+						// The review keeps its panel whether or not the rail shows, so a
+						// filter that empties the rail doesn't remount it (and lose its
+						// collapsed and loaded files), as the tree beside the preview does.
 						<ResizablePanelGroup className={cn("min-h-0 flex-1", headerInFrame && "border-t border-border")}>
-							<ResizablePanel defaultSize="74%" minSize="40%">
+							<ResizablePanel defaultSize="74%" id="files-review" minSize="40%">
 								{reviewPane}
 							</ResizablePanel>
-							<ResizableHandle />
-							<ResizablePanel defaultSize="26%" minSize="18%" maxSize="50%">
-								{reviewFiles ? (
-									<FileTree
-										changedOnly
-										changedOnlyData={reviewTreeData}
-										expandChanged
-										filterText={filter}
-										onSelectPath={selectReviewTreePath}
-										selectedPath={reviewTreePath}
-										sessionId={sessionId}
-									/>
-								) : review.target.state === "pending" ? (
-									<PanelMessage compact>{t("files.loading")}</PanelMessage>
-								) : null}
-							</ResizablePanel>
+							{reviewRailShown && reviewFilterMatches ? (
+								<>
+									<ResizableHandle />
+									<ResizablePanel defaultSize="26%" id="files-review-rail" maxSize="50%" minSize="18%">
+										{reviewFiles ? (
+											<FileTree
+												changedOnly
+												changedOnlyData={reviewTreeData}
+												expandChanged
+												filterText={filter}
+												onSelectPath={selectReviewTreePath}
+												selectedPath={reviewTreePath}
+												sessionId={sessionId}
+											/>
+										) : review.target.state === "pending" ? (
+											<PanelMessage compact>{t("files.loading")}</PanelMessage>
+										) : null}
+									</ResizablePanel>
+								</>
+							) : null}
 						</ResizablePanelGroup>
 					) : reviewPane
 				) : null

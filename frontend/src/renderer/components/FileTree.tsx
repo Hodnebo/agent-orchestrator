@@ -86,6 +86,29 @@ const TREE_UNSAFE_CSS = `
   :host([data-pointer-focus]) button[data-type="item"][data-item-focused="true"]:before {
     outline: none;
   }
+  /* Names are cut once, at the end, with an ellipsis. Pierre's middle cut
+     keeps the extension in view by drawing each half twice with an overlaid
+     marker and the tail right-to-left, which garbles in this theme
+     ("ComponentPreviewCli…tsx", a dropped dot). Flatten its halves back into
+     one left-to-right line and let the row truncate it. */
+  [data-item-section="content"] > [data-truncate-group-container="middle"] {
+    display: block !important;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  [data-item-section="content"] > [data-truncate-group-container="middle"] :is([data-truncate-segment-priority], [data-truncate-container], [data-truncate-grid], [data-truncate-grid] > div, [data-truncate-content="visible"], [data-truncate-content="visible"] > span) {
+    display: inline !important;
+    position: static !important;
+    overflow: visible !important;
+    direction: ltr !important;
+    unicode-bidi: normal !important;
+    margin: 0 !important;
+  }
+  [data-item-section="content"] > [data-truncate-group-container="middle"] :is([data-truncate-content="overflow"], [data-truncate-marker-cell], [data-truncate-fill]) {
+    display: none !important;
+  }
 `;
 
 const EXPAND_SECONDS = 0.14;
@@ -350,7 +373,7 @@ function WorkspaceFileTree({
 				<p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
 			) : null}
 			{(rootQuery.data?.truncated || directoryQueries.some(query=>query.data?.truncated)) ? <p className="p-3 text-xs text-muted-foreground">{t("files.treeTruncated")}</p> : null}
-   {isEmpty ? <p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p> : null}
+   {isEmpty ? <p className="p-3 text-xs text-muted-foreground">{normalizedFilter ? t("files.explorer.noFilterMatches") : t("files.explorer.empty")}</p> : null}
 			{!isPending && !activeError && !isEmpty ? (
 				<PierreTreeSurface
 					data={data}
@@ -642,7 +665,7 @@ function ChangedFileTree({
 	if (files.length === 0) {
 		return (
 			<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5">
-				<p className="p-3 text-xs text-muted-foreground">{t("files.explorer.empty")}</p>
+				<p className="p-3 text-xs text-muted-foreground">{filterText.trim() ? t("files.noFilterMatches") : t("files.explorer.empty")}</p>
 			</div>
 		);
 	}

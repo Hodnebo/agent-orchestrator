@@ -2165,6 +2165,7 @@
 	"files.explorer.changedOnly": "Changed only",
 	"files.explorer.branchUnavailable": "{{branch}} ist nicht mehr verfügbar; der ausgecheckte Branch wird angezeigt.",
 	"files.explorer.empty": "This folder is empty.",
+	"files.explorer.noFilterMatches": "No files match this filter.",
 	"files.explorer.tree": "File tree",
 	"files.explorer.selectFile": "Select a file to preview.",
 	"files.explorer.tooLarge": "File is too large to preview ({{size}}).",
@@ -3216,7 +3217,6 @@
 	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto.",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
-	"files.snapshotRefresh": "Reload selected revision",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}"
 }

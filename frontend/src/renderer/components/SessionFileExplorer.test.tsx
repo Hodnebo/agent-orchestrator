@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
@@ -649,6 +649,48 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(screen.getByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
 	});
 
+	it("drops the maximized changed-files rail while the review has no files", async () => {
+		const nothingStaged = { ...manifest, sections: { ...manifest.sections, staged: [], unstaged: [changed] } };
+		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string } } }) => {
+			if (path.endsWith("/workspace/manifest")) return { data: { ...nothingStaged, sessionId: init.params.path.sessionId } };
+			if (path.endsWith("/workspace/branches")) return { data: { ...branchList, sessionId: init.params.path.sessionId } };
+			if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, sessionId: init.params.path.sessionId } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		// jsdom draws every element as an empty box at 0,0, so the rail's resize
+		// handle would claim every click; move it out of the way.
+		const rect = HTMLElement.prototype.getBoundingClientRect;
+		const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			return this.dataset.slot === "resizable-handle" ? new DOMRect(-1000, -1000, 1, 1) : rect.call(this);
+		});
+		const { container } = renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-empty-rail" />);
+		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("true");
+
+		await userEvent.click(changesTrigger());
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Staged/ }));
+		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
+		// Nothing to list: the review takes the whole width, with no split.
+		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
+		expect(container.querySelectorAll('[data-slot="resizable-panel"]')).toHaveLength(1);
+		expect(container.querySelector('[data-slot="resizable-handle"]')).toBeNull();
+
+		await userEvent.click(changesTrigger());
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Unstaged/ }));
+		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("true");
+		const review = screen.getByTestId("review-pane");
+
+		// A filter that matches none of the files empties the rail, so it goes too,
+		// without remounting the review beside it.
+		const filter = screen.getByRole("textbox", { name: "Filter files" });
+		await userEvent.type(filter, "nothing-matches");
+		await waitFor(() => expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument());
+		expect(screen.getByTestId("review-pane")).toBe(review);
+		await userEvent.clear(filter);
+		expect(await screen.findByTestId("tree-changed-only")).toBeInTheDocument();
+		expect(screen.getByTestId("review-pane")).toBe(review);
+		rectSpy.mockRestore();
+	});
+
 	it("keeps the pickers for a session with no changes that has a pull request", async () => {
 		const clean = { ...manifest, files: [], sections: { uncommitted: [], committed: [], staged: [], unstaged: [], untracked: [] }, summary: { additions: 0, deletions: 0, files: 0 } };
 		const titlebar = document.createElement("div");
@@ -716,6 +758,47 @@ describe("SessionFileExplorer review pickers", () => {
 		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/history", expect.objectContaining({ params: { path: { sessionId }, query: { branch: "main" } } }));
 		for (const [path] of getMock.mock.calls) expect(READ_PATHS.some((read) => String(path).endsWith(read))).toBe(true);
 		for (const [path] of postMock.mock.calls) expect(String(path)).toMatch(/\/workspace\/(history\/selection|diffs)$/);
+	});
+
+	it("keeps another branch current on its own, with no reload button", async () => {
+		let mainTip = SHA("2");
+		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string }; query?: { branch?: string } } }) => {
+			const sessionId = init.params.path.sessionId;
+			if (path.endsWith("/workspace/manifest")) return { data: { ...manifest, sessionId } };
+			if (path.endsWith("/workspace/branches")) {
+				return { data: { ...branchList, sessionId, branches: branchList.branches.map((row) => (row.name === "main" ? { ...row, tipSha: mainTip } : row)) } };
+			}
+			if (path.endsWith("/workspace/history")) return { data: { ...(init.params.query?.branch === "main" ? mainHistory : checkedOutHistory), sessionId } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		getMock.mockClear();
+		const reads = (suffix: string, branch?: string) => getMock.mock.calls.filter(([path, init]) => init.params.path.sessionId === "sess-auto-refresh" && String(path).endsWith(suffix) && (branch === undefined || init.params.query?.branch === branch)).length;
+		const regainFocus = () => act(() => {
+			focusManager.setFocused(false);
+			focusManager.setFocused(true);
+		});
+		renderWithQuery(<SessionFileExplorer sessionId="sess-auto-refresh" />);
+		await screen.findByRole("button", { name: "Branch to review: feature/login" });
+		await waitFor(() => expect(reads("/workspace/branches")).toBe(1));
+
+		// On the checked-out branch workspace events keep things current: focus alone reads nothing.
+		regainFocus();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(reads("/workspace/branches")).toBe(1);
+
+		await userEvent.click(screen.getByRole("button", { name: "Branch to review: feature/login" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^main/ }));
+		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("branch:main:all"));
+		expect(screen.queryByRole("button", { name: "Reload selected revision" })).not.toBeInTheDocument();
+		const branchReads = reads("/workspace/branches");
+		const mainReads = reads("/workspace/history", "main");
+
+		// Someone pushes to main; coming back to the window picks it up.
+		mainTip = SHA("7");
+		regainFocus();
+		await waitFor(() => expect(reads("/workspace/branches")).toBe(branchReads + 1));
+		await waitFor(() => expect(reads("/workspace/history", "main")).toBe(mainReads + 1));
+		focusManager.setFocused(undefined);
 	});
 
 	it("falls back with a notice when the selected branch disappears", async () => {

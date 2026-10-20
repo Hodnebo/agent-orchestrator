@@ -225,6 +225,13 @@ describe("FileTree", () => {
 		await waitFor(() => expect(host.shadowRoot?.querySelector('[data-item-path="lib/util/text.ts"]')).not.toBeNull());
 	});
 
+	it("says a filter matched nothing rather than that the folder is empty", async () => {
+		const changedOnlyData: TreeNode[] = [{ name: "notes.txt", path: "notes.txt", type: "file", status: "added" }];
+		renderWithQuery(<FileTree changedOnly changedOnlyData={changedOnlyData} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="zzz" />);
+		expect(await screen.findByText("No changed files match this filter.")).toBeInTheDocument();
+		expect(screen.queryByText("This folder is empty.")).not.toBeInTheDocument();
+	});
+
 	it("selects a changed file from Pierre's path-first tree", async () => {
 		const changedOnlyData: TreeNode[] = [{ name: "notes.txt", path: "notes.txt", type: "file", status: "modified" }];
 		const onSelectPath = vi.fn();

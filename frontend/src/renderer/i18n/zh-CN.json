@@ -2231,6 +2231,7 @@
 	"files.explorer.changedOnly": "Changed only",
 	"files.explorer.branchUnavailable": "{{branch}} 已不可用；正在显示已检出的分支。",
 	"files.explorer.empty": "This folder is empty.",
+	"files.explorer.noFilterMatches": "No files match this filter.",
 	"files.explorer.tree": "File tree",
 	"files.explorer.selectFile": "Select a file to preview.",
 	"files.explorer.tooLarge": "File is too large to preview ({{size}}).",
@@ -3198,7 +3199,6 @@
 	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。",
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
-	"files.snapshotRefresh": "Reload selected revision",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}"
 }

@@ -41,6 +41,8 @@ import {
 
 /** Ticks reach the queries this long after the last one, so a run of ticks sends one request. */
 const TICK_SETTLE_MS = 250;
+/** How often a viewed branch or PR is read again; nothing watches them as it does the worktree. */
+const OTHER_BRANCH_REFRESH_MS = 30_000;
 const LEGACY_SCOPES: readonly ReviewChangesScope[] = ["combined", "staged", "unstaged"];
 const WORKING_SCOPES: readonly ReviewChangesScope[] = ["uncommitted", "staged", "unstaged"];
 const UNCOMMITTED_SCOPES: readonly ReviewChangesScope[] = ["uncommitted"];
@@ -54,7 +56,6 @@ export type FilesReviewSelection = {
 	target: ReviewTarget;
 	/** Reads again what a failed target read: the picked branch's history or the combined commits. */
 	retryTarget: () => void;
- refreshSource: () => void;
 	/** Explains a fall back to the checked-out branch; "" otherwise. */
 	notice: string;
 	/** Ticks every listed commit between the oldest and newest tick, which always combine. */
@@ -102,9 +103,17 @@ export function useFilesReviewSelection({
 	const selection: FilesSelection = (legacy || scratch) && stored.branch.kind !== "checked_out" ? DEFAULT_FILES_SELECTION : stored;
 	const branch = selection.branch;
 
+	// The worktree's own changes, commits and pushes arrive as workspace events.
+	// Another branch or a PR moves without any, so while one is viewed the list
+	// is read again on a timer and when the window regains focus; a moved tip
+	// keys a new history read, so the review follows it.
+	const viewingOtherBranch = branch.kind !== "checked_out";
 	const branchesQuery = useQuery({
 		...sessionWorkspaceBranchesQueryOptions(sessionId, t("files.branches.error"), hostId),
 		enabled: Boolean(manifest) && !legacy && !scratch,
+		refetchInterval: viewingOtherBranch ? OTHER_BRANCH_REFRESH_MS : false,
+		// "always": the list counts as fresh for 15s, which would skip a focus read.
+		refetchOnWindowFocus: viewingOtherBranch ? "always" : false,
 	});
 	const branchRows = branchesQuery.data?.branches;
 	const selectedRow = branchRows ? findBranchRow(branchRows, branch) : undefined;
@@ -285,7 +294,6 @@ export function useFilesReviewSelection({
 		branchMenu,
 		hasPullRequest,
 		target,
-		refreshSource: () => {invalidateWorkspaceViews(queryClient,sessionId,hostId);void branchesQuery.refetch();void historyQuery.refetch();},
 		retryTarget: () => {
 			if (historyQuery.isError) void historyQuery.refetch();
 			if (selectionQuery.isError) void selectionQuery.refetch();
