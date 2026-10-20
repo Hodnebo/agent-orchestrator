@@ -400,6 +400,12 @@ func TestCoderCheckoutSiblings(t *testing.T) {
 	if want := []string{"billing", "alice-api"}; !slices.Equal(got, want) {
 		t.Fatalf("siblings = %q, want %q", got, want)
 	}
+	// "repository" (the durable root's own checkout folder) is never
+	// pre-created; the worker clones it only into a folder it can create.
+	reserved := json.RawMessage(`{"repos":[{"url":"https://github.com/acme/repository"},{"url":"https://github.com/acme/billing"}]}`)
+	if got, want := CoderCheckoutSiblings(reserved, "~/alice"), []string{"billing"}; !slices.Equal(got, want) {
+		t.Fatalf("siblings = %q, want %q", got, want)
+	}
 	if got := CoderCheckoutSiblings(json.RawMessage(`{}`), "~/work/alice"); got != nil {
 		t.Fatalf("siblings without additional repositories = %q", got)
 	}

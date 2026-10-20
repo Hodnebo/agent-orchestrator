@@ -882,6 +882,16 @@ func cloneExtraRepos(
 		// repo's .git/config. In the user's own workspace an existing checkout
 		// is adopted without writing AO's git configuration into it.
 		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
+		if blocked := worker.ExtraRepoFolderBlocked(checkout.Path); blocked != "" {
+			// Typically a repository added to the project after the session
+			// was created, beside a working folder whose parent the template
+			// made: the bootstrap prepared only the folders known then.
+			logger.Warn("multi-repo: additional repository skipped: AO cannot create its folder. "+
+				"A repository added to the project after this session was created is checked out in new sessions; "+
+				"start a new session to work on it.",
+				"repo", checkout.URL, "path", checkout.Path, "reason", blocked)
+			continue
+		}
 		adopted, err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, worker.ExtraRepoOptions{
 			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
 			Token: token, DataDir: dataDir, Adopt: userWorkspace,
