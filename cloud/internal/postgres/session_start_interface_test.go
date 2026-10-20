@@ -3,7 +3,10 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/google/uuid"
@@ -251,5 +254,77 @@ func TestFallBackChatStart(t *testing.T) {
 	if _, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fixture.sessionID, "worker-stale", fixture.epoch,
 		"CHAT_ADAPTER_UNAVAILABLE", "no npm"); err == nil {
 		t.Fatal("a stale worker moved the session")
+	}
+}
+
+// A scratch project's first orchestrator resolves its interface like any
+// orchestrator (Chat where its harness can start there) and keeps the user's
+// default for the workers it spawns. Without a default the create's payload
+// carries none (TestLegacyProjectCreateRetriesSurviveConfigNormalization
+// replays a scratch create made before the field).
+func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	var installationID string
+	if err := admin.QueryRow(ctx, `INSERT INTO ao_github_installations
+		(org_id, github_installation_id, github_account_id, account_login, account_type, repository_selection, installed_by_user_id)
+		VALUES ($1, $2, $2, 'octo', 'Organization', 'selected', $3) RETURNING id::text`,
+		fixture.orgID, time.Now().UnixNano(), fixture.userID).Scan(&installationID); err != nil {
+		t.Fatal(err)
+	}
+	for index, tc := range []struct {
+		harness          string
+		defaultInterface domain.SessionInterface
+		want             domain.SessionInterface
+	}{
+		{"codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"claude-code", "", domain.SessionInterfaceChat},
+		{"cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+	} {
+		repositoryID := time.Now().UnixNano() + int64(index)
+		url := fmt.Sprintf("https://github.com/octo/scratch-%d", repositoryID)
+		if _, err := admin.Exec(ctx, `INSERT INTO ao_github_repositories
+			(github_repository_id, github_owner_account_id, name, full_name, html_url, clone_url, visibility)
+			VALUES ($1, 1, 'scratch', 'octo/scratch', $2, $3, 'private')`, repositoryID, url, url+".git"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = admin.Exec(context.Background(), `DELETE FROM ao_github_repository_grants WHERE github_repository_id = $1`, repositoryID)
+			_, _ = admin.Exec(context.Background(), `DELETE FROM ao_github_repositories WHERE github_repository_id = $1`, repositoryID)
+		})
+		if _, err := admin.Exec(ctx, `INSERT INTO ao_github_repository_grants (org_id, installation_id, github_repository_id, repository_selection)
+			VALUES ($1, $2, $3, 'selected')`, fixture.orgID, installationID, repositoryID); err != nil {
+			t.Fatal(err)
+		}
+		key := uuid.NewString()
+		_, session, err := store.CreateGitHubScratchProject(ctx, principal, fixture.orgID, key, 100, domain.CreateGitHubScratchProject{
+			Repository:  domain.GitHubRepository{GitHubRepositoryID: repositoryID},
+			DisplayName: "Scratch",
+			Session: domain.CreateSession{
+				Kind: "orchestrator", Harness: tc.harness, DisplayName: "Orchestrator", Prompt: "start",
+				Mode: "trusted", DeniedCommands: []string{}, Provider: "docker", DefaultInterface: tc.defaultInterface,
+			},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.harness, err)
+		}
+		if session.Interface != tc.want {
+			t.Fatalf("%s orchestrator interface = %q, want %q", tc.harness, session.Interface, tc.want)
+		}
+		var stored string
+		var payload []byte
+		if err := admin.QueryRow(ctx, `SELECT default_interface FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != string(tc.defaultInterface) {
+			t.Fatalf("%s: stored default = %q, want %q", tc.harness, stored, tc.defaultInterface)
+		}
+		if err := admin.QueryRow(ctx, `SELECT payload FROM ao_commands WHERE org_id = $1 AND idempotency_key = $2`, fixture.orgID, key).Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if hasDefault := strings.Contains(string(payload), `"DefaultInterface"`); hasDefault != (tc.defaultInterface != "") {
+			t.Fatalf("%s: payload %s, DefaultInterface present = %v", tc.harness, payload, hasDefault)
+		}
 	}
 }

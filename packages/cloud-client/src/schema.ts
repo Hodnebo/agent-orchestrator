@@ -2049,6 +2049,8 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
+                /** @description The user's default session interface, as on a session create. The orchestrator starts in chat where its harness can, and the workers it spawns resolve their interface from this default. Optional; omitted is tui. */
+                defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
         CreateGitHubScratchProjectResponse: {

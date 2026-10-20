@@ -3657,6 +3657,13 @@ components:
             prompt:
               type: string
               maxLength: 65536
+            defaultInterfaceMode:
+              $ref: "#/components/schemas/SessionInterfaceMode"
+              description: >-
+                The user's default session interface, as on a session create.
+                The orchestrator starts in chat where its harness can, and the
+                workers it spawns resolve their interface from this default.
+                Optional; omitted is tui.
     CreateGitHubScratchProjectResponse:
       type: object
       additionalProperties: false
