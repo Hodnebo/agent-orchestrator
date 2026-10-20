@@ -324,6 +324,23 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 
+	it("shows the warning under the collapsed header, and only under its field once expanded", async () => {
+		const extra = (name: string): CloudCpCoderTemplateParameter => ({ name, displayName: name, type: "string", mutable: true, required: false, defaultValue: "", order: 2 });
+		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: [repos, extra("a"), extra("b"), extra("c"), extra("d")] });
+		const user = userEvent.setup();
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		const header = await screen.findByRole("button", { name: "Template options (5)" });
+		// Not opened for it: the warning sits under the header instead.
+		expect(header).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("group", { name: "Github Repositories" })).not.toBeInTheDocument();
+		expect(screen.getAllByText(warning)).toHaveLength(1);
+		await user.click(header);
+		const group = screen.getByRole("group", { name: "Github Repositories" });
+		expect(screen.getAllByText(warning)).toHaveLength(1);
+		// Now under the field, right after its checkboxes.
+		expect(group.nextElementSibling).toHaveTextContent(warning);
+	});
+
 	it("stays hidden until the connection's mode is known", async () => {
 		mocks.orgCoder = { data: undefined, isLoading: true, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);

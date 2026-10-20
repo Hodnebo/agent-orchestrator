@@ -95,6 +95,12 @@ export function CoderTemplateOptions({
 	}
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
+	const duplicateWarning = (labels: readonly string[]) => t("coder.templateOptions.duplicateClone", {
+		repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels),
+	});
+	// Collapsed, the fields (and their warnings) are hidden, so the warning
+	// moves up under the header; expanded, it sits under its field instead.
+	const collapsedDuplicates = !expanded && duplicates ? [...new Set([...duplicates.values()].flat())] : [];
 	return (
 		<section className="flex flex-col gap-3 text-sm" aria-label={t("coder.templateOptions.title")} data-testid="coder-template-options">
 			{isError ? <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.checkFailed")}</p> : null}
@@ -114,6 +120,9 @@ export function CoderTemplateOptions({
 				) : (
 					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
 				)}
+				{collapsedDuplicates.length > 0 ? (
+					<p className={cn(onboardingFieldHintClass, "text-warning")}>{duplicateWarning(collapsedDuplicates)}</p>
+				) : null}
 				<p className={onboardingFieldHintClass}>{t("coder.templateOptions.subtitle")}</p>
 			</div>
 			{expanded ? (
@@ -125,11 +134,7 @@ export function CoderTemplateOptions({
 							value={effectiveParameterValue(parameter, overrides)}
 							disabled={disabled}
 							problem={parameter.name in overrides ? valueProblem(parameter) : undefined}
-							warning={duplicates?.has(parameter.name)
-								? t("coder.templateOptions.duplicateClone", {
-									repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(duplicates.get(parameter.name) ?? []),
-								})
-								: undefined}
+							warning={duplicates?.has(parameter.name) ? duplicateWarning(duplicates.get(parameter.name) ?? []) : undefined}
 							onChange={(value) => {
 								edited.current = true;
 								onChange(withParameterValue(overrides, parameter, value));
