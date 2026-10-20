@@ -47,6 +47,22 @@ async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileSt
 	}
 }
 
+async function disableRemoteAccess() {
+	const stopped = await apiClient.POST("/api/v1/mobile/disable");
+	// Disable can report an error after the listener has already stopped.
+	if (stopped.error && (await fetchMobileStatus()).enabled) throw new Error(apiErrorMessage(stopped.error));
+}
+
+/** Puts remote access back the way it was before a turn-on that did not link this computer. */
+async function restoreRemoteAccess(before: MobileStatus) {
+	if (!before.enabled) return disableRemoteAccess();
+	// Remote access that was already on stays on. A LAN-only bridge loses the
+	// tunnel again but keeps its password, so a paired phone stays paired.
+	if (!before.noPublicTunnel) return;
+	const restored = await apiClient.POST("/api/v1/mobile/enable-lan-only");
+	if (restored.error) throw new Error(apiErrorMessage(restored.error));
+}
+
 /**
  * Lets the account's other devices open this computer: turns on the
  * authenticated remote listener with its tunnel and links this machine to the
@@ -89,33 +105,38 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
-		// remote-access keeps the password, so a phone paired over Connect Mobile stays paired.
-		const started = before.enabled
-			? await apiClient.POST("/api/v1/mobile/remote-access")
-			: await apiClient.POST("/api/v1/mobile/enable");
-		if (started.error) throw new Error(apiErrorMessage(started.error));
-		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
-		if (!ready) {
-			setNeedsConnector(true);
-			return;
+		let linked = false;
+		try {
+			// remote-access keeps the password, so a phone paired over Connect Mobile stays paired.
+			const started = before.enabled
+				? await apiClient.POST("/api/v1/mobile/remote-access")
+				: await apiClient.POST("/api/v1/mobile/enable");
+			if (started.error) throw new Error(apiErrorMessage(started.error));
+			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
+			if (!ready) {
+				setNeedsConnector(true);
+				return;
+			}
+			const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
+				headers: { Authorization: `Bearer ${ready.status.password}`, "X-AO-Account-ID": accountId },
+			});
+			if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
+			await saveAccountRemoteHost(cloudBaseUrl, {
+				hostId: issued.data.hostId,
+				label: fitLabel(await aoBridge.remotes.computerName()),
+				url: ready.url,
+				token: issued.data.token,
+			});
+			linked = true;
+		} finally {
+			// Unlinked, the switch shows off; leaving access on would keep this computer reachable while the switch says it is not.
+			if (!linked) await restoreRemoteAccess(before);
 		}
-		const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
-			headers: { Authorization: `Bearer ${ready.status.password}`, "X-AO-Account-ID": accountId },
-		});
-		if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
-		await saveAccountRemoteHost(cloudBaseUrl, {
-			hostId: issued.data.hostId,
-			label: fitLabel(await aoBridge.remotes.computerName()),
-			url: ready.url,
-			token: issued.data.token,
-		});
 	};
 
 	const turnOff = async (hostId: string) => {
 		// Cut access first: the account record only tells devices where to look.
-		const stopped = await apiClient.POST("/api/v1/mobile/disable");
-		// Disable can report an error after the listener has already stopped.
-		if (stopped.error && (await fetchMobileStatus()).enabled) throw new Error(apiErrorMessage(stopped.error));
+		await disableRemoteAccess();
 		await deleteAccountRemoteHost(cloudBaseUrl, hostId);
 	};
 

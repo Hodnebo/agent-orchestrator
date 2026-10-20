@@ -4,8 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 // The two network edges are faked; the account sync code between them is real.
 // The daemon fake follows BridgeService: enable mints a new password, the
-// quick tunnel gets its address a few status reads later, and the account
-// token needs the current password. The cloud fake follows remote_host_handlers.
+// quick tunnel gets its address a few status reads later, enable-lan-only stops
+// the tunnel but keeps a running bridge's password, and the account token needs
+// the current password. The cloud fake follows remote_host_handlers.
 const fake = vi.hoisted(() => {
 	const HOST_ID = "h_6f1c2b9e-0d4a-4c1e-9b7a-3f2d1e0c9b8a";
 	const TOKEN = "0f".repeat(32);
@@ -74,6 +75,14 @@ const fake = vi.hoisted(() => {
 				return { data: snapshot() };
 			case "/api/v1/mobile/remote-access":
 				if (daemon.enabled) daemon.noPublicTunnel = false;
+				return { data: snapshot() };
+			case "/api/v1/mobile/enable-lan-only":
+				daemon.tunnelHost = "";
+				if (!daemon.enabled) {
+					daemon.enabled = true;
+					daemon.password = `pw-${++daemon.passwordsIssued}`;
+				}
+				daemon.noPublicTunnel = true;
 				return { data: snapshot() };
 			case "/api/v1/mobile/disable":
 				daemon.enabled = false;
@@ -231,6 +240,7 @@ it("gives up with an error when the tunnel never gets an address", async () => {
 	expect(await screen.findByRole("alert")).toBeVisible();
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.cloud.hosts.size).toBe(0);
+	expect(fake.daemon.enabled).toBe(false);
 });
 
 it("turns off by cutting access and removing this computer from the account", async () => {
@@ -280,7 +290,8 @@ it("offers to install cloudflared instead of linking when there is no connector"
 	fireEvent.click(toggle);
 
 	expect(await screen.findByRole("button", { name: "Install cloudflared" })).toBeVisible();
-	expect(toggle).toHaveAttribute("aria-checked", "false");
+	await waitFor(() => expect(fake.daemon.enabled).toBe(false));
+	await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
 	expect(fake.cloud.hosts.size).toBe(0);
 });
 
@@ -305,6 +316,27 @@ it("reports a failed link and stays off", async () => {
 	expect(await screen.findByRole("alert")).toBeVisible();
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.cloud.hosts.size).toBe(0);
+	expect(fake.daemon.enabled).toBe(false);
+});
+
+it("puts a paired phone's LAN-only access back when linking fails", async () => {
+	Object.assign(fake.daemon, { enabled: true, password: "pw-phone", noPublicTunnel: true });
+	fake.cloud.failPut = true;
+	renderAccess();
+	fireEvent.click(await readySwitch());
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.daemon).toMatchObject({ enabled: true, noPublicTunnel: true, password: "pw-phone", tunnelHost: "" });
+});
+
+it("leaves remote access that was already on running when linking fails", async () => {
+	Object.assign(fake.daemon, { enabled: true, password: "pw-phone", tunnelHost: fake.TUNNEL });
+	fake.cloud.failPut = true;
+	renderAccess();
+	fireEvent.click(await readySwitch());
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.daemon).toMatchObject({ enabled: true, noPublicTunnel: false, password: "pw-phone", tunnelHost: fake.TUNNEL });
 });
 
 it("shortens a long computer name to fit the account", async () => {
