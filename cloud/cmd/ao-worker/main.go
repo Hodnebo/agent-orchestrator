@@ -1040,11 +1040,21 @@ func startInteractiveAgent(
 	case <-rehydrateDone:
 	}
 	if err := waitForHarness(ctx, logger, bootstrap.Launch.Harness); err != nil {
-		if ctx.Err() == nil {
-			logger.Warn("coding-agent harness unavailable", "error", err)
+		if ctx.Err() != nil {
+			return nil
 		}
 		transportSupervisor.AbandonStartupTask()
-		return nil
+		if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat ||
+			transportSupervisor.Interface() != workertransport.InterfaceTUI {
+			// The Chat controller owns the session; its turns report the
+			// missing harness themselves.
+			logger.Warn("coding-agent harness unavailable", "error", err)
+			return nil
+		}
+		// Reported as the session's startup error, with a Retry that checks
+		// again: a terminal session whose harness never appeared must not stay
+		// awake with a task no agent will run.
+		return fmt.Errorf("coding-agent harness unavailable: %w", err)
 	}
 	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
 		return nil // The headless controller owns this worker until a TUI handoff.
