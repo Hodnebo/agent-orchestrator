@@ -66,6 +66,24 @@ describe("ReviewChangesMenu", () => {
 		expect(trigger.querySelector("svg")).toHaveClass("lucide-chevron-down");
 	});
 
+	it("leaves +0 −0 off every row and the trigger, but keeps the rows", async () => {
+		renderMenu(
+			{ stats: { additions: 0, deletions: 0 }, scopes: [
+				{ scope: "uncommitted", stats: { additions: 0, deletions: 0 } },
+				{ scope: "staged", stats: { additions: 0, deletions: 0 } },
+				{ scope: "unstaged", stats: { additions: 0, deletions: 0 } },
+			] },
+			{ rows: [{ sha: shaOf(0), subject: "binary only", additions: 0, deletions: 0, timestamp: new Date().toISOString() }], allStats: { additions: 0, deletions: 0 } },
+		);
+		const trigger = screen.getByRole("button", { name: "Changes to review: Uncommitted" });
+		expect(trigger).toHaveTextContent(/^Uncommitted$/);
+		await openMenu();
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Uncommitted", "Staged", "Unstaged"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Commits/ }));
+		expect(await screen.findByRole("menuitemcheckbox", { name: /^All commits/ })).toHaveTextContent(/^All commits$/);
+		expect(screen.getByRole("menuitemcheckbox", { name: /^binary only/ })).toHaveTextContent(/^binary only$/);
+	});
+
 	it("lists the working scopes with stats and a check slot, and closes on a pick", async () => {
 		const { props } = renderMenu();
 		await openMenu();

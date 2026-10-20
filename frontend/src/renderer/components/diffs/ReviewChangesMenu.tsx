@@ -326,8 +326,13 @@ function CommitRow({
 	);
 }
 
-/** `muted` greys an unticked commit's totals, so colour marks what the review includes. */
+/**
+ * `muted` greys an unticked commit's totals, so colour marks what the review
+ * includes. +0 −0 says nothing, so it shows nothing; the row itself stays,
+ * since a binary-only change also counts no lines.
+ */
 function ChangeStats({ stats, muted = false, className }: { stats: ReviewChangeStats; muted?: boolean; className?: string }) {
+	if (stats.additions === 0 && stats.deletions === 0) return null;
 	return (
 		<span className={cn("flex shrink-0 items-center gap-1.5 text-caption tabular-nums", muted && "text-passive", className)}>
 			<span className={muted ? undefined : "text-success"}>+{stats.additions}</span>
