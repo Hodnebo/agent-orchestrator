@@ -6398,6 +6398,12 @@ func stepMinutes(timeout time.Duration) string {
 	return "1 minute"
 }
 
+// SetupBudget is how long a start of the project may spend in its Setup
+// steps: the sum of their time limits.
+func SetupBudget(project domain.ProjectRecord) time.Duration {
+	return postCreateBudget(0, project.Config.PostCreate)
+}
+
 // postCreateBudget is how much longer than base a start that runs these Setup
 // steps may take: the sum of their time limits, so a long Setup is never cut
 // short by the start's own deadline.

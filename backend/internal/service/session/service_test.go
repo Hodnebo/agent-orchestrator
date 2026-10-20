@@ -2592,6 +2592,7 @@ type fakeCommander struct {
 	cleanupErr       error
 	spawnErr         error
 	spawnWaitsForCtx bool
+	spawnHook        func(context.Context)
 	spawnRecord      domain.SessionRecord
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
@@ -2619,6 +2620,9 @@ type backgroundTaskCall struct {
 
 func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
 	if f.spawnWaitsForCtx {
 		<-ctx.Done()
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
@@ -2935,6 +2939,55 @@ func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T)
 	}
 	if fc.spawnCtx == nil || !errors.Is(fc.spawnCtx.Err(), context.Canceled) {
 		t.Fatal("replacement spawn must receive the cancelled request context")
+	}
+}
+
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
 	}
 }
 
