@@ -256,6 +256,8 @@ type SetupRunner struct {
 	Secrets func() []string
 	// UpdateInterval overrides liveUpdateInterval for tests.
 	UpdateInterval time.Duration
+	// LiveHeartbeat overrides liveHeartbeat for tests.
+	LiveHeartbeat time.Duration
 	// FinalWait overrides scriptStepFinalWait for tests.
 	FinalWait time.Duration
 }

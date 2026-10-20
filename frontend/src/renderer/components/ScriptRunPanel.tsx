@@ -156,7 +156,8 @@ export const QUIET_STEP_MS = 3 * 60_000;
  */
 function QuietStepNote({ step, now }: { step: ScriptRunStep; now: number }) {
 	const { t } = useTranslation();
-	const silentMs = elapsedSince(step.outputAt ?? step.startedAt, now);
+	// Server times only (outputAt): the worker's own clock may be off.
+	const silentMs = elapsedSince(step.outputAt, now);
 	if (silentMs === undefined || silentMs < QUIET_STEP_MS) return null;
 	const minutes = Math.floor(silentMs / 60_000);
 	return (

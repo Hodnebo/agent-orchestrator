@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
@@ -217,12 +218,26 @@ func TestWorkerEventRecordsScriptSteps(t *testing.T) {
 		t.Fatalf("recorded = %s", raw)
 	}
 
-	running := `{"phase":"setup","runId":"r","step":1,"total":1,"command":"c","repository":"","status":"running","output":"x","outputTruncated":false}`
+	// A running step's output age becomes OutputAt by this control plane's
+	// clock; a time the worker sent itself is never kept.
+	running := `{"phase":"setup","runId":"r","step":1,"total":1,"command":"c","repository":"","status":"running","output":"x","outputTruncated":false,` +
+		`"outputAgeMs":30000,"outputAt":"2001-01-01T00:00:00Z"}`
+	before := time.Now()
 	rec = httptest.NewRecorder()
 	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events",
 		`{"type":"workspace.script.step","payload":`+running+`}`, "worker:event"))
 	if rec.Code >= 300 {
 		t.Fatalf("running step: status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	raw = store.events[worker.ScriptStepEventType]
+	var live worker.ScriptStepEvent
+	if err := json.Unmarshal(raw, &live); err != nil {
+		t.Fatal(err)
+	}
+	outputAt, err := time.Parse(time.RFC3339Nano, live.OutputAt)
+	if err != nil || live.OutputAgeMS != nil || strings.Contains(string(raw), "outputAgeMs") ||
+		outputAt.Before(before.Add(-31*time.Second)) || outputAt.After(time.Now().Add(-29*time.Second)) {
+		t.Fatalf("live update = %s", raw)
 	}
 
 	for name, payload := range map[string]string{

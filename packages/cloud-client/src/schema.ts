@@ -2304,6 +2304,11 @@ export interface components {
             hint?: string;
             /** @description The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had 10). */
             timeoutMinutes?: number;
+            /**
+             * Format: date-time
+             * @description Set by the control plane on a running step's live update: when the step last wrote any output, by the control plane's clock (from the worker's outputAgeMs). It moves even when the output tail looks the same (a repeated line, a progress line redrawn with a carriage return): a worker updates a step that keeps writing at least every minute. Absent from an older worker; clients then use the event's createdAt.
+             */
+            outputAt?: string;
         };
         /** @description A worker reports only Setup steps (phase setup); the control plane reports Cleanup steps itself and refuses a worker's. */
         WorkerScriptStepEventInput: {
@@ -2315,6 +2320,8 @@ export interface components {
             payload: components["schemas"]["ScriptStepPayload"] & {
                 /** @enum {string} */
                 phase?: "setup";
+                /** @description On a running step's live update: how many milliseconds before the update the step last wrote any output. The control plane turns it into outputAt with its own clock and does not keep it; an outputAt the worker sends is replaced. */
+                outputAgeMs?: number;
             };
         };
         /** @description Whether the worker could prepare the session's workspace for its agent (repository checkout, the Coder connection's working directory and the project's Setup commands). A failure becomes the session's startup error and stays until a later ready report clears it. */

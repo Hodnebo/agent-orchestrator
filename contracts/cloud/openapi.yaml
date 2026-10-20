@@ -4164,6 +4164,17 @@ components:
           minimum: 1
           maximum: 120
           description: The step's time limit in minutes. Absent when it is not known (a worker or Cleanup hook that predates per-step limits, whose steps had 10).
+        outputAt:
+          type: string
+          format: date-time
+          description: >-
+            Set by the control plane on a running step's live update: when the
+            step last wrote any output, by the control plane's clock (from the
+            worker's outputAgeMs). It moves even when the output tail looks the
+            same (a repeated line, a progress line redrawn with a carriage
+            return): a worker updates a step that keeps writing at least every
+            minute. Absent from an older worker; clients then use the event's
+            createdAt.
     WorkerScriptStepEventInput:
       type: object
       additionalProperties: false
@@ -4181,6 +4192,14 @@ components:
                 phase:
                   type: string
                   enum: [setup]
+                outputAgeMs:
+                  type: integer
+                  minimum: 0
+                  description: >-
+                    On a running step's live update: how many milliseconds
+                    before the update the step last wrote any output. The
+                    control plane turns it into outputAt with its own clock and
+                    does not keep it; an outputAt the worker sends is replaced.
     WorkerWorkspaceStartupPayload:
       type: object
       additionalProperties: false

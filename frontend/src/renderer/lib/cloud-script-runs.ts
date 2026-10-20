@@ -55,6 +55,13 @@ export interface ScriptStepEventPayload {
 	hint?: string;
 	/** The step's time limit in minutes (1 to 120); absent when not known (an older worker or Cleanup hook). */
 	timeoutMinutes?: number;
+	/**
+	 * On a running step's live update: when the step last wrote any output, by
+	 * the control plane's clock (RFC 3339). It moves even when the output's tail
+	 * looks the same (a repeated line, a progress line redrawn with \r). Absent
+	 * from an older control plane or worker.
+	 */
+	outputAt?: string;
 }
 
 /** A step slot. `pending` is a step the run has not reached (no event yet). */
@@ -78,9 +85,11 @@ export interface ScriptRunStep {
 	/** See {@link ScriptStepEventPayload.timeoutMinutes}. */
 	timeoutMinutes?: number;
 	/**
-	 * While the step runs: when its newest event arrived. The worker sends a
-	 * running step's update only when its output changes, so this is when its
-	 * output last changed (or when it started, before any).
+	 * While the step runs: when it last wrote any output, by the control
+	 * plane's clock. The newest event's outputAt when it carries one (the
+	 * worker updates a step that keeps writing at least every minute), else
+	 * when that event arrived (an older worker sends an update only when the
+	 * output changes). Both are server times: a worker's clock never counts.
 	 */
 	outputAt?: string;
 }
@@ -167,7 +176,14 @@ export function parseScriptStepPayload(payload: unknown): ScriptStepEventPayload
 		dir: nonEmpty(value.dir),
 		hint: nonEmpty(value.hint),
 		timeoutMinutes: timeoutMinutes(value.timeoutMinutes),
+		outputAt: timestamp(value.outputAt),
 	};
+}
+
+/** An RFC 3339 time the payload carries, else undefined. */
+function timestamp(value: unknown): string | undefined {
+	const at = nonEmpty(value);
+	return at !== undefined && Number.isFinite(Date.parse(at)) ? at : undefined;
 }
 
 /** A step's time limit as the control plane bounds it (1 to 120 minutes), else undefined. */
@@ -254,7 +270,7 @@ export function groupScriptRuns(events: readonly CloudCpClientEvent[], { session
 				dir: failed && !payload.outputHidden ? payload.dir : undefined,
 				hint: failed ? payload.hint : undefined,
 				timeoutMinutes: payload.timeoutMinutes,
-				outputAt: payload.status === "running" ? latest?.createdAt : undefined,
+				outputAt: payload.status === "running" ? payload.outputAt ?? latest?.createdAt : undefined,
 			});
 		}
 		const failedStep = steps.find((step) => step.status === "failed" || step.status === "timed_out")?.step;
