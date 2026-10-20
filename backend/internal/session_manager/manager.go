@@ -6664,9 +6664,15 @@ func promptReadinessWaitTimeout(configured time.Duration, callerDeadline time.Ti
 	return min(configured, remaining), true
 }
 
+// promptOutputEscape matches CSI and OSC sequences. The runtime returns the raw
+// output ring, so a styled prompt such as Kimi's "│ >" arrives with a colour
+// code inside it and never matched until the readiness wait timed out.
+var promptOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
+
 func promptOutputContains(output string, patterns []string) bool {
+	plain := promptOutputEscape.ReplaceAllString(output, "")
 	for _, pattern := range patterns {
-		if pattern != "" && strings.Contains(output, pattern) {
+		if pattern != "" && (strings.Contains(output, pattern) || strings.Contains(plain, pattern)) {
 			return true
 		}
 	}
