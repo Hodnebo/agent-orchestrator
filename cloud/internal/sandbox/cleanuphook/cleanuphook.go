@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,7 +90,15 @@ const (
 	skipNoSudo = "no_sudo"
 	// skipNoAccount: the account the worker runs as does not exist.
 	skipNoAccount = "no_account"
+	// skipLink: the hook is a symbolic link, which never runs.
+	skipLink = "hook_link"
+	// skipSudoRootOnly: the login user may use sudo only as root, and
+	// runuser is not there to reach the worker's account from root.
+	skipSudoRootOnly = "sudo_root_only"
 )
+
+// accountPattern is an account name safe to spell as ~NAME in the hook command.
+var accountPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 // SkipReason reads a hook command's status: whether it skipped the hook, and
 // the reason it gave ("" from a command that gave none).
@@ -118,6 +127,10 @@ func SkippedReason(reason string) string {
 		return "AO could not run this Cleanup step: the workspace's login user cannot use sudo without a password, which AO needs to run Cleanup as the AO worker's user."
 	case skipNoAccount:
 		return "AO could not run this Cleanup step: the AO worker's user does not exist in the sandbox, so it was deleted without Cleanup."
+	case skipLink:
+		return "AO did not run this Cleanup step: the Cleanup hook in the sandbox is a symbolic link, which AO never runs."
+	case skipSudoRootOnly:
+		return "AO could not run this Cleanup step: the workspace's login user may use sudo only as root, and AO runs Cleanup as the AO worker's user, never as root."
 	default:
 		return "AO could not run this Cleanup step in the sandbox before deleting it."
 	}
@@ -141,10 +154,12 @@ const WorkspaceHook = "/workspace/.ao/worker/" + worker.CleanupHookFile
 type Runner int
 
 const (
-	// AsLoginUser runs the hook command as an ordinary login user: a hook
-	// that user owns runs directly, any other hook only as its owner through
-	// sudo, never as root or as the login user (Coder's agent terminal; a
-	// Docker exec as the container's user, where only its own hook runs).
+	// AsLoginUser runs the hook command as an ordinary login user. With an
+	// Owner other than the login user the hook runs only as that account,
+	// through sudo, never as root or as the login user (Coder's agent
+	// terminal with a dedicated worker user); without one only a hook the
+	// login user owns runs, directly (a Docker exec as the container's user,
+	// a Coder workspace-user worker).
 	AsLoginUser Runner = iota
 	// AsRoot runs the hook command as root, which runs the hook as its owner
 	// through runuser and never as root (a Freestyle exec).
@@ -196,9 +211,10 @@ const stopOwnerScript = "ao_stop() {\n" +
 type Options struct {
 	Runner Runner
 	Stop   Stop
-	// Owner, with AsRoot, is the account the hook runs as: the user the
-	// worker was provisioned to run as. Without it the hook's file owner is
-	// used (never root).
+	// Owner is the account the hook runs as: the user the worker was
+	// provisioned to run as. With AsRoot and no Owner the hook's file owner
+	// is used (never root); with AsLoginUser and no Owner the hook must be
+	// the login user's own.
 	Owner string
 }
 
@@ -216,15 +232,20 @@ func Command(hook string, budget time.Duration, override string, options Options
 		// ao_skip REASON reports the hook as not run, saying why (SkipReason).
 		"ao_skip() { printf '\\n%s:%s %s\\n' " + Marker + " " + Skipped + " \"$1\"; exit 0; }\n" +
 		"ao_owner=\n"
-	asOwner := `sudo -n -H -u "$ao_owner"`
+	// asOwner prefixes a command run as the hook's owner (ao_owner set).
+	asOwner := "ao_as"
+	// Whatever the runner, a hook that is a symbolic link never runs: it
+	// could name another account's program.
+	refuseLink := "if [ -L \"$ao_hook\" ]; then ao_skip " + skipLink + "; fi\n"
 	switch {
 	case options.Runner == AsRoot && options.Owner != "":
 		// The hook runs as the account the worker was provisioned with,
 		// whoever owns the file: an agent that swaps the hook for a link to
 		// another account's program cannot borrow that account.
 		asOwner = `runuser -u "$ao_owner" --`
-		command += "if ! [ -f \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
-			"elif ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
 			"elif ! id -u " + shellQuote(options.Owner) + " >/dev/null 2>&1; then ao_skip " + skipNoAccount + "\n" +
 			"fi\n" +
 			"ao_owner=" + shellQuote(options.Owner) + "\n" +
@@ -232,29 +253,68 @@ func Command(hook string, budget time.Duration, override string, options Options
 			"set -- " + asOwner + " \"$ao_hook\"\n"
 	case options.Runner == AsRoot:
 		asOwner = `runuser -u "$ao_owner" --`
-		command += "if ! [ -f \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
-			"elif ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
 			"fi\n" +
 			"ao_owner=$(stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip " + skipNoHook + "\n" +
 			"case \"$ao_owner\" in ''|root|UNKNOWN|\"$(id -un)\") ao_skip " + skipOwner + " ;; esac\n" +
 			"set -- " + asOwner + " \"$ao_hook\"\n"
+	case options.Owner != "":
+		// A login user that is not the worker's account (Coder's agent
+		// terminal, the worker running as ao-worker) runs the hook only as
+		// that account, through sudo, never as itself or as root: the agent
+		// controls the hook, and the login user can usually use sudo. So a
+		// hook the agent points anywhere runs with the agent's own rights,
+		// and no check here can be raced into more. Whether the hook can run
+		// is asked as the owner too: Ubuntu 25.10 and later ship uutils
+		// coreutils, whose test -x run as root is false for a file only its
+		// owner may run (the worker's hook is mode 0700). A login user that
+		// may use sudo only as root reaches the owner through runuser.
+		home := ""
+		if accountPattern.MatchString(options.Owner) {
+			home = "~" + options.Owner
+		}
+		command += refuseLink +
+			"ao_owner=" + shellQuote(options.Owner) + "\n" +
+			"ao_home=" + home + "\n" +
+			"ao_via=\n" +
+			"ao_as() {\n" +
+			"  case \"$ao_via\" in\n" +
+			"    sudo) sudo -n -H -u \"$ao_owner\" \"$@\" ;;\n" +
+			"    runuser) sudo -n runuser -u \"$ao_owner\" -- env HOME=\"$ao_home\" \"$@\" ;;\n" +
+			"    *) \"$@\" ;;\n" +
+			"  esac\n" +
+			"}\n" +
+			"if [ \"$(id -un)\" = \"$ao_owner\" ]; then\n" +
+			"  ao_owner=\n" +
+			"elif ! id -u \"$ao_owner\" >/dev/null 2>&1; then ao_skip " + skipNoAccount + "\n" +
+			"elif ! sudo -n true 2>/dev/null; then\n" +
+			// Without sudo the hook can only be looked for from outside.
+			"  if [ -e \"$ao_hook\" ] || ! [ -x \"$(dirname \"$ao_hook\")\" ]; then ao_skip " + skipNoSudo + "; fi\n" +
+			"  ao_skip " + skipNoHook + "\n" +
+			"elif sudo -n -u \"$ao_owner\" true 2>/dev/null; then ao_via=sudo\n" +
+			"elif command -v runuser >/dev/null 2>&1 && sudo -n runuser -u \"$ao_owner\" -- true 2>/dev/null; then ao_via=runuser\n" +
+			"else ao_skip " + skipSudoRootOnly + "; fi\n" +
+			"ao_state=$(ao_as sh -c 'if [ -L \"$1\" ]; then echo " + skipLink + "; elif ! [ -e \"$1\" ]; then echo " + skipNoHook +
+			"; elif [ -f \"$1\" ] && [ -x \"$1\" ]; then echo ok; else echo " + skipNotRunnable + "; fi' _ \"$ao_hook\" 2>/dev/null)\n" +
+			"case \"$ao_state\" in ok) ;; " + skipLink + "|" + skipNoHook + ") ao_skip \"$ao_state\" ;; *) ao_skip " + skipNotRunnable + " ;; esac\n" +
+			"case \"$ao_via\" in\n" +
+			"  sudo) set -- sudo -n -H -u \"$ao_owner\" \"$ao_hook\" ;;\n" +
+			"  runuser) set -- sudo -n runuser -u \"$ao_owner\" -- env HOME=\"$ao_home\" \"$ao_hook\" ;;\n" +
+			"  *) set -- \"$ao_hook\" ;;\n" +
+			"esac\n"
 	default:
-		// A hook the login user owns (the worker ran as it) runs directly;
-		// any other hook runs only as its owner through sudo, never as root
-		// or as the login user, so an agent that rewrites or chmods its hook
-		// cannot borrow the login user's (sudo-capable) account. Whether the
-		// hook can run is asked as its owner, not as root: Ubuntu 25.10 and
-		// later ship uutils coreutils, whose test -x run as root is false for
-		// a file only its owner may run (the worker's hook is mode 0700), so a
-		// root check skipped every Cleanup on those images.
-		command += "if [ -O \"$ao_hook\" ] && [ -x \"$ao_hook\" ]; then set -- \"$ao_hook\"\n" +
-			"else\n" +
-			"  sudo -n true 2>/dev/null || ao_skip " + skipNoSudo + "\n" +
-			"  ao_owner=$(sudo -n stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip " + skipNoHook + "\n" +
-			"  case \"$ao_owner\" in ''|root|UNKNOWN|\"$(id -un)\") ao_skip " + skipOwner + " ;; esac\n" +
-			"  " + asOwner + " sh -c '[ -f \"$1\" ] && [ -x \"$1\" ]' _ \"$ao_hook\" 2>/dev/null || ao_skip " + skipNotRunnable + "\n" +
-			"  set -- " + asOwner + " \"$ao_hook\"\n" +
-			"fi\n"
+		// The hook is the login user's own (the worker ran as it: a Docker
+		// container's user, a Coder workspace-user worker); any other hook is
+		// not the worker's and never runs. The agent runs as that same user,
+		// so running its hook gives it nothing it does not have.
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -O \"$ao_hook\" ]; then ao_skip " + skipOwner + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+			"fi\n" +
+			"set -- \"$ao_hook\"\n"
 	}
 	if override != "" {
 		write := shellQuote(`cat >"$1.tmp" && chmod 600 "$1.tmp" && mv "$1.tmp" "$1"`)

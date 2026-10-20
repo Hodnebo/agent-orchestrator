@@ -396,7 +396,7 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	}
 	home := t.TempDir()
 	run := func() string {
-		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, ""))
+		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, "", ""))
 		command.Env = append(os.Environ(), "HOME="+home)
 		output, err := command.CombinedOutput()
 		if err != nil {
@@ -417,12 +417,12 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	if output := run(); !strings.Contains(output, "stopping stack") || !strings.Contains(output, cleanupMarker+":4") {
 		t.Fatalf("hook output: %q", output)
 	}
-	if command := cleanupHookCommand("/srv/ao", time.Second, ""); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
+	if command := cleanupHookCommand("/srv/ao", time.Second, "", dedicatedWorkerUser); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
 		t.Fatalf("absolute root command = %q", command)
 	}
 	// The login user may run the Coder agent carrying the command: Coder's
 	// Cleanup stops none of its processes.
-	if command := cleanupHookCommand("/srv/ao", time.Second, ""); strings.Contains(command, "ao_stop") {
+	if command := cleanupHookCommand("/srv/ao", time.Second, "", dedicatedWorkerUser); strings.Contains(command, "ao_stop") {
 		t.Fatalf("coder command stops processes: %q", command)
 	}
 }
@@ -488,7 +488,7 @@ func TestCleanupHookCommandRunsTheCurrentCommands(t *testing.T) {
 	if !fits {
 		t.Fatal("a one-line Cleanup does not fit the payload limit")
 	}
-	command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, payload))
+	command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, payload, ""))
 	command.Env = append(os.Environ(), "HOME="+home)
 	output, err := command.CombinedOutput()
 	if err != nil {

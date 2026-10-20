@@ -610,25 +610,50 @@ func TestCleanupOfCommandsGivenAtLaunchMasksTheirSecrets(t *testing.T) {
 	}
 }
 
-// loginShims puts stand-ins for sudo and stat first on PATH. sudo needs -n,
-// fails outright with noSudo, and runs the command as the test user, saying on
-// stderr whom it was asked to run as. Asked to run test(1) as root, it fails,
-// as uutils coreutils (Ubuntu 25.10 and later) does for a file only its owner
-// may run. stat names owner as the owner of any file that exists.
-func loginShims(t *testing.T, owner string, noSudo bool) []string {
+// sudoPolicy is what the sudo stand-in allows the login user.
+type sudoPolicy int
+
+const (
+	// sudoAny: sudo -n as any user.
+	sudoAny sudoPolicy = iota
+	// sudoRootOnly: sudo -n only as root, with a runuser stand-in that works.
+	sudoRootOnly
+	// sudoRootOnlyNoRunuser: sudo -n only as root, and runuser fails.
+	sudoRootOnlyNoRunuser
+	// sudoNone: no passwordless sudo at all.
+	sudoNone
+)
+
+// loginShims puts stand-ins for sudo, runuser and id first on PATH. Each runs
+// the command as the test user, saying on stderr whom it was asked to run as.
+// Asked to run test(1) as root, sudo fails, as uutils coreutils (Ubuntu 25.10
+// and later) does for a file only its owner may run. id knows ao-worker.
+func loginShims(t *testing.T, policy sudoPolicy) []string {
 	t.Helper()
+	realID, err := exec.LookPath("id")
+	if err != nil {
+		t.Skip("id is unavailable")
+	}
 	bin := t.TempDir()
 	sudo := "#!/bin/sh\n[ \"$1\" = -n ] || { echo sudo without -n >&2; exit 91; }\nshift\n"
-	if noSudo {
+	if policy == sudoNone {
 		sudo += "echo 'sudo: a password is required' >&2\nexit 1\n"
 	}
-	sudo += "user=root\nwhile :; do case \"$1\" in -H) shift ;; -u) user=$2; shift 2 ;; *) break ;; esac; done\n" +
-		"if [ \"$user\" = root ] && [ \"$1\" = test ]; then exit 1; fi\n" +
+	sudo += "user=root\nwhile :; do case \"$1\" in -H) shift ;; -u) user=$2; shift 2 ;; *) break ;; esac; done\n"
+	if policy == sudoRootOnly || policy == sudoRootOnlyNoRunuser {
+		sudo += "[ \"$user\" = root ] || { echo \"sudo: not allowed as $user\" >&2; exit 1; }\n"
+	}
+	sudo += "if [ \"$user\" = root ] && [ \"$1\" = test ]; then exit 1; fi\n" +
 		"[ \"$user\" = root ] || echo \"sudo-as:$user\" >&2\n" +
 		"exec \"$@\"\n"
+	runuser := "#!/bin/sh\n[ \"$1\" = -u ] && [ \"$3\" = -- ] || { echo bad runuser call: \"$@\" >&2; exit 90; }\necho \"runuser:$2\" >&2\nshift 3\nexec \"$@\"\n"
+	if policy == sudoRootOnlyNoRunuser {
+		runuser = "#!/bin/sh\nexit 1\n"
+	}
 	shims := map[string]string{
-		"sudo": sudo,
-		"stat": "#!/bin/sh\n[ \"$1\" = -c ] && [ \"$2\" = %U ] || exit 92\n[ -e \"$3\" ] || exit 1\necho " + shellQuote(owner) + "\n",
+		"sudo":    sudo,
+		"runuser": runuser,
+		"id":      "#!/bin/sh\nif [ \"$1\" = -u ] && [ -n \"$2\" ]; then [ \"$2\" = ao-worker ] && echo 1001 && exit 0; exit 1; fi\nexec " + shellQuote(realID) + " \"$@\"\n",
 	}
 	for name, content := range shims {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o755); err != nil {
@@ -638,54 +663,167 @@ func loginShims(t *testing.T, owner string, noSudo bool) []string {
 	return append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-// Run as a login user that does not own the hook (Coder's agent terminal, the
-// worker running as ao-worker), the hook command runs the hook as its owner
-// through sudo, asking whether it can run as that owner rather than as root:
-// prod's Ubuntu 26.04 Coder image skipped every Cleanup on a root test -x.
-// Each reason it cannot run is reported after Skipped.
-func TestCommandAsLoginUserRunsAnotherUsersHookAsItsOwner(t *testing.T) {
+// writeExecutable writes a script the test user owns.
+func writeExecutable(t *testing.T, file, content string, mode os.FileMode) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// skipReasonOf runs a hook command and returns the reason it skipped the hook
+// for, failing the test if it did not skip.
+func skipReasonOf(t *testing.T, name, command string, environment []string) string {
+	t.Helper()
+	output := runHookCommand(t, command, environment)
+	_, status, ok := Split(output)
+	reason, skipped := SkipReason(status)
+	if !ok || !skipped || strings.Contains(output, "hook ran") || strings.Contains(output, "pwned") {
+		t.Fatalf("%s: output = %q, want the hook skipped", name, output)
+	}
+	return reason
+}
+
+// Run as a login user that is not the worker's account (Coder's agent
+// terminal, the worker running as ao-worker), the hook command runs the hook
+// as that account through sudo, or runuser from root when the login user may
+// use sudo only as root, and never as the login user or root. Whether the hook
+// can run is asked as the owner, not as root: prod's Ubuntu 26.04 Coder image
+// skipped every Cleanup on a root test -x. Each reason it cannot run is
+// reported after Skipped.
+func TestCommandAsLoginUserRunsTheHookAsTheWorkersAccount(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh is unavailable")
 	}
-	if os.Geteuid() == 0 {
-		t.Skip("needs a hook the test user does not own")
-	}
-	// A root-owned program stands in for the worker's hook.
-	hook, err := exec.LookPath("true")
-	if err != nil {
-		t.Skip("true is unavailable")
-	}
-	if hook, err = filepath.EvalSymlinks(hook); err != nil {
-		t.Fatal(err)
-	}
-	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsLoginUser})
+	dir := t.TempDir()
+	hook := writeExecutable(t, filepath.Join(dir, "worker", worker.CleanupHookFile), "#!/bin/sh\necho hook ran\n", 0o700)
+	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsLoginUser, Owner: "ao-worker"})
 	if strings.Contains(command, "sudo -n test") {
 		t.Fatalf("the hook command checks the hook as root:\n%s", command)
 	}
-	output := runHookCommand(t, command, loginShims(t, "ao-worker", false))
-	if !strings.Contains(output, "sudo-as:ao-worker") || !strings.Contains(output, Marker+":0") {
-		t.Fatalf("hook output: %q", output)
+	output := runHookCommand(t, command, loginShims(t, sudoAny))
+	if !strings.Contains(output, "sudo-as:ao-worker") || !strings.Contains(output, "hook ran") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("sudo: hook output = %q", output)
 	}
+	output = runHookCommand(t, command, loginShims(t, sudoRootOnly))
+	if !strings.Contains(output, "runuser:ao-worker") || strings.Contains(output, "sudo-as:") ||
+		!strings.Contains(output, "hook ran") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("root-only sudo: hook output = %q", output)
+	}
+
+	// A link to a program the login user owns never runs, whatever sudo allows.
+	pwned := writeExecutable(t, filepath.Join(t.TempDir(), "login-users-program"), "#!/bin/sh\necho pwned\n", 0o755)
+	link := filepath.Join(t.TempDir(), "worker", worker.CleanupHookFile)
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(pwned, link); err != nil {
+		t.Fatal(err)
+	}
+	notRunnable := writeExecutable(t, filepath.Join(t.TempDir(), "worker", worker.CleanupHookFile), "#!/bin/sh\necho hook ran\n", 0o600)
+	missing := filepath.Join(dir, "worker", "missing-hook.sh")
 	for name, test := range map[string]struct {
 		hook, owner string
-		noSudo      bool
+		policy      sudoPolicy
 		reason      string
 	}{
-		"no hook":      {hook: filepath.Join(t.TempDir(), worker.CleanupHookFile), owner: "ao-worker", reason: skipNoHook},
-		"not runnable": {hook: "/etc/hosts", owner: "ao-worker", reason: skipNotRunnable},
-		"root's hook":  {hook: hook, owner: "root", reason: skipOwner},
-		"no account":   {hook: hook, owner: "UNKNOWN", reason: skipOwner},
-		"no sudo":      {hook: hook, owner: "ao-worker", noSudo: true, reason: skipNoSudo},
+		"symlink":                 {hook: link, owner: "ao-worker", policy: sudoAny, reason: skipLink},
+		"symlink without sudo":    {hook: link, owner: "ao-worker", policy: sudoNone, reason: skipLink},
+		"no hook":                 {hook: missing, owner: "ao-worker", policy: sudoAny, reason: skipNoHook},
+		"no hook without sudo":    {hook: missing, owner: "ao-worker", policy: sudoNone, reason: skipNoHook},
+		"hook without sudo":       {hook: hook, owner: "ao-worker", policy: sudoNone, reason: skipNoSudo},
+		"not runnable":            {hook: notRunnable, owner: "ao-worker", policy: sudoAny, reason: skipNotRunnable},
+		"no account":              {hook: hook, owner: "postgres-x", policy: sudoAny, reason: skipNoAccount},
+		"sudo as root, no runner": {hook: hook, owner: "ao-worker", policy: sudoRootOnlyNoRunuser, reason: skipSudoRootOnly},
 	} {
-		if _, err := os.Stat(test.hook); name == "not runnable" && err != nil {
-			continue
+		command := Command(HookWord(test.hook), 10*time.Second, "", Options{Runner: AsLoginUser, Owner: test.owner})
+		if reason := skipReasonOf(t, name, command, loginShims(t, test.policy)); reason != test.reason {
+			t.Fatalf("%s: skipped %q, want %q", name, reason, test.reason)
 		}
-		command := Command(HookWord(test.hook), 10*time.Second, "", Options{Runner: AsLoginUser})
-		output := runHookCommand(t, command, loginShims(t, test.owner, test.noSudo))
-		_, status, ok := Split(output)
-		if reason, skipped := SkipReason(status); !ok || !skipped || reason != test.reason || strings.Contains(output, "sudo-as:") {
-			t.Fatalf("%s: output = %q, want skipped %s without running the hook", name, output, test.reason)
+	}
+}
+
+// Run as the worker's account, the project's current Cleanup is installed and
+// run through sudo as that account.
+func TestCommandAsLoginUserInstallsTheCurrentCleanupAsTheOwner(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []string{"sh", "base64", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is unavailable", tool)
+		}
+	}
+	dataDir, workspace := t.TempDir(), t.TempDir()
+	if err := worker.WriteCleanupHook(dataDir, []string{"echo installed-cleanup"}, workspace,
+		worker.SessionScriptEnvironment{SessionID: "session-1", WorkspaceDir: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := CommandsPayload([]string{"echo current-cleanup"}, worker.NewScriptMarkerNonce())
+	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload,
+		Options{Runner: AsLoginUser, Owner: "ao-worker"})
+	output := runHookCommand(t, command, loginShims(t, sudoAny))
+	if !strings.Contains(output, "current-cleanup") || strings.Contains(output, "installed-cleanup") ||
+		!strings.Contains(output, "sudo-as:ao-worker") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("output = %q", output)
+	}
+}
+
+// Without an owner (a Docker container's user, a Coder workspace-user worker)
+// only the login user's own hook runs, and never through a link.
+func TestCommandAsLoginUserRunsOnlyItsOwnHook(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	hook := writeExecutable(t, filepath.Join(t.TempDir(), worker.CleanupHookFile), "#!/bin/sh\necho hook ran\n", 0o700)
+	command := Command(HookWord(hook), 10*time.Second, "", Options{Runner: AsLoginUser})
+	if output := runHookCommand(t, command, os.Environ()); !strings.Contains(output, "hook ran") || !strings.Contains(output, Marker+":0") {
+		t.Fatalf("own hook: output = %q", output)
+	}
+	pwned := writeExecutable(t, filepath.Join(t.TempDir(), "program"), "#!/bin/sh\necho pwned\n", 0o755)
+	link := filepath.Join(t.TempDir(), worker.CleanupHookFile)
+	if err := os.Symlink(pwned, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string][2]string{
+		"symlink":      {link, skipLink},
+		"no hook":      {filepath.Join(t.TempDir(), worker.CleanupHookFile), skipNoHook},
+		"not runnable": {writeExecutable(t, filepath.Join(t.TempDir(), worker.CleanupHookFile), "#!/bin/sh\necho hook ran\n", 0o600), skipNotRunnable},
+	}
+	if os.Geteuid() != 0 {
+		if other, err := exec.LookPath("true"); err == nil {
+			if other, err = filepath.EvalSymlinks(other); err == nil {
+				cases["someone else's"] = [2]string{other, skipOwner}
+			}
+		}
+	}
+	for name, test := range cases {
+		command := Command(HookWord(test[0]), 10*time.Second, "", Options{Runner: AsLoginUser})
+		if reason := skipReasonOf(t, name, command, os.Environ()); reason != test[1] {
+			t.Fatalf("%s: skipped %q, want %q", name, reason, test[1])
+		}
+	}
+}
+
+// Run as root, a hook that is a link never runs, pinned owner or not.
+func TestCommandAsRootRefusesALinkedHook(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	pwned := writeExecutable(t, filepath.Join(t.TempDir(), "program"), "#!/bin/sh\necho pwned\n", 0o755)
+	link := filepath.Join(t.TempDir(), worker.CleanupHookFile)
+	if err := os.Symlink(pwned, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, options := range []Options{{Runner: AsRoot}, {Runner: AsRoot, Owner: "ao-worker"}} {
+		command := Command(HookWord(link), 10*time.Second, "", options)
+		if reason := skipReasonOf(t, "root", command, rootShims(t, "ao-worker")); reason != skipLink {
+			t.Fatalf("%+v: skipped %q, want %q", options, reason, skipLink)
 		}
 	}
 }

@@ -181,7 +181,8 @@ func TestDeleteRunsCleanupInTheContainerBeforeRemovingIt(t *testing.T) {
 	command := fmt.Sprint(cmd[2])
 	for _, want := range []string{
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
-		`if [ -O "$ao_hook" ] && [ -x "$ao_hook" ]; then set -- "$ao_hook"`,
+		`elif ! [ -O "$ao_hook" ]; then ao_skip hook_owner`,
+		`if [ -L "$ao_hook" ]; then ao_skip hook_link; fi`,
 		"timeout -k 5 600 ",
 		// The worker's agent is stopped before the hook runs.
 		`ao_stop "$ao_who" TERM`,

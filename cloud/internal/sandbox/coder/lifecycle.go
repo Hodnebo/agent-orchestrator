@@ -173,7 +173,7 @@ func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Dura
 	query := attemptURL.Query()
 	query.Set("width", "200")
 	query.Set("height", "50")
-	query.Set("command", "sh -c "+shellQuote(cleanupHookCommand(c.durableRoot, wait, plan.Override)))
+	query.Set("command", "sh -c "+shellQuote(cleanupHookCommand(c.durableRoot, wait, plan.Override, c.cleanupOwner())))
 	query.Set("backend_type", "buffered")
 	attemptURL.RawQuery = query.Encode()
 	// Opening the agent's terminal now and then ends at once with no output.
@@ -210,13 +210,27 @@ func cleanupCommandsPayload(commands []string, nonce string) (string, bool) {
 	return cleanuphook.CommandsPayload(commands, nonce)
 }
 
+// dedicatedWorkerUser is the account a Coder worker runs as unless it runs as
+// the workspace user (the reconciler's default worker user).
+const dedicatedWorkerUser = "ao-worker"
+
+// cleanupOwner is the account the Cleanup hook runs as: the dedicated worker
+// user, or "" for a worker that runs as the workspace's login user, whose hook
+// is its own.
+func (c *Client) cleanupOwner() string {
+	if c.runAsWorkspaceUser {
+		return ""
+	}
+	return dedicatedWorkerUser
+}
+
 // cleanupHookCommand runs the worker-installed Cleanup hook under the durable
-// root as its owner from the agent terminal, which runs as the workspace
-// login user (cleanuphook.Command).
-func cleanupHookCommand(durableRoot string, budget time.Duration, override string) string {
+// root as owner (the login user's own hook when owner is "") from the agent
+// terminal, which runs as the workspace login user (cleanuphook.Command).
+func cleanupHookCommand(durableRoot string, budget time.Duration, override, owner string) string {
 	hook := shellQuote(path.Join(durableRoot, ".ao", "worker", cleanupHookFile))
 	if sandbox.NormalizeCoderDurableRoot(durableRoot) == sandbox.CoderHomeDurableRoot {
 		hook = `"$HOME"/.ao/worker/` + cleanupHookFile
 	}
-	return cleanuphook.Command(hook, budget, override, cleanuphook.Options{Runner: cleanuphook.AsLoginUser})
+	return cleanuphook.Command(hook, budget, override, cleanuphook.Options{Runner: cleanuphook.AsLoginUser, Owner: owner})
 }
