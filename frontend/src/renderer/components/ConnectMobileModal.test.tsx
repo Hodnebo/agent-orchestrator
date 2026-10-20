@@ -139,7 +139,7 @@ beforeEach(() => {
 		reason: "",
 	};
 	mobileStatus.keepAwake = undefined;
-	vi.mocked(apiClient.POST).mockReset().mockImplementation(async (_path, options) => {
+	vi.mocked(apiClient.POST).mockReset().mockImplementation(async (_path: string, options?: { body?: unknown }) => {
 		if (_path === "/api/v1/mobile/keep-awake" && mobileStatus.keepAwake) {
 			Object.assign(mobileStatus.keepAwake, options?.body);
 			if (!mobileStatus.keepAwake.enabled) mobileStatus.keepAwake.active = false;
