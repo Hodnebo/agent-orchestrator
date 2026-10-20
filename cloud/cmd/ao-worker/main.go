@@ -429,6 +429,19 @@ func run(logger *slog.Logger) error {
 		SelectedModel:  bootstrap.Launch.Model,
 		SelectedEffort: bootstrap.Launch.ReasoningEffort,
 		SelectionAt:    bootstrap.Launch.SelectionAt,
+		// The first terminal agent of a fresh workspace runs the session's task
+		// from its command line (the control plane sends none once Chat took it).
+		StartupTask: firstStart && strings.TrimSpace(bootstrap.Launch.Prompt) != "",
+	}
+	// A switch to the terminal starts the terminal agent itself (after the
+	// workspace is ready); it reports that start as a terminal session does.
+	transportSupervisor.AgentReady = func(ctx context.Context) {
+		if err := client.publishEvent(ctx, "agent.ready", map[string]any{
+			"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
+			"version": workerVersion, "capabilities": workerCapabilities,
+		}); err != nil {
+			logger.Warn("publish agent.ready failed", "error", err)
+		}
 	}
 	// A Setup step counts as activity for its whole run, however quiet: idle
 	// pause must never stop a long Setup (one step may run for up to two
@@ -625,7 +638,9 @@ func run(logger *slog.Logger) error {
 		go startChatOnceWorkspaceReady(chatReadyClosed, func() {
 			// A Claude session starting in Chat first settles whether its ACP
 			// adapter installed; the Chat controller takes no turn until then.
-			if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
+			// A move to the terminal publishes agent.ready once the terminal
+			// agent starts (Supervisor.AgentReady).
+			settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
 				firstStart: firstStart,
 				ensure: func(ctx context.Context) error {
 					_, err := workerexec.EnsureClaudeACPAdapter(ctx)
@@ -633,14 +648,7 @@ func run(logger *slog.Logger) error {
 				},
 				fallBack:    client.fallBackChatStart,
 				switchToTUI: transportSupervisor.FallBackToTUI,
-			}) {
-				if err := client.publishEvent(runCtx, "agent.ready", map[string]any{
-					"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
-					"version": workerVersion, "capabilities": workerCapabilities,
-				}); err != nil {
-					logger.Warn("publish agent.ready failed", "error", err)
-				}
-			}
+			})
 		}, func() {
 			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 				runner.SetWorkspaceStartupError("")
@@ -988,16 +996,25 @@ func startInteractiveAgent(
 		if ctx.Err() == nil {
 			logger.Warn("coding-agent harness unavailable", "error", err)
 		}
+		transportSupervisor.AbandonStartupTask()
 		return nil
 	}
 	if strings.TrimSpace(bootstrap.Launch.Interface) == workertransport.InterfaceChat {
 		return nil // The headless controller owns this worker until a TUI handoff.
 	}
+	// A switch to Chat while the workspace was being prepared took the session
+	// over; the terminal agent must not start beside the Chat controller.
+	// StartStartupAgent checks again on the transport's serial loop.
+	if transportSupervisor.Interface() != workertransport.InterfaceTUI {
+		return nil
+	}
 	if transportSupervisor.AgentCommandFactory == nil {
+		transportSupervisor.AbandonStartupTask()
 		return errors.New("coding-agent command factory is unavailable")
 	}
 	agentCommand, err := transportSupervisor.AgentCommandFactory(ctx, bootstrap.Launch.AgentSessionID, "", "")
 	if err != nil {
+		transportSupervisor.AbandonStartupTask()
 		return fmt.Errorf("build interactive coding-agent command: %w", err)
 	}
 	runtimeEnv := map[string]string{
@@ -1019,15 +1036,13 @@ func startInteractiveAgent(
 	for key, value := range runtimeEnv {
 		agentCommand.Env[key] = value
 	}
-	agentTerminal, err := client.ensureAgentTerminal(ctx)
+	started, err := transportSupervisor.StartStartupAgent(ctx, agentCommand)
 	if err != nil {
-		if agentCommand.Cleanup != nil {
-			agentCommand.Cleanup()
-		}
-		return fmt.Errorf("initialize agent terminal: %w", err)
+		transportSupervisor.AbandonStartupTask()
+		return err
 	}
-	if err := transportSupervisor.StartAgent(ctx, agentCommand, agentTerminal); err != nil {
-		return fmt.Errorf("start interactive coding-agent terminal: %w", err)
+	if !started {
+		return nil // An interface switch made during startup took over.
 	}
 	if err := client.publishEvent(ctx, "agent.ready", map[string]any{
 		"workerId":     bootstrap.WorkerID,

@@ -113,6 +113,13 @@ func (s *Supervisor) inspectInterface() (any, error) {
 	s.iface.mu.Lock()
 	defer s.iface.mu.Unlock()
 	if s.iface.current == InterfaceTUI {
+		if s.startupTaskWaiting() {
+			// The terminal agent has not started yet (its workspace is not
+			// ready) and runs the session's task from its command line once it
+			// does. A drain waits for that task, as for any running turn, so a
+			// switch to Chat does not drop it.
+			return interfaceInspectResult{Idle: false}, nil
+		}
 		idle, unverified := s.tuiSourceIdle()
 		return interfaceInspectResult{
 			Idle:                 idle,
@@ -181,6 +188,14 @@ func (s *Supervisor) stopInterface(ctx context.Context, policy string) error {
 			}
 		}
 		s.tuiHandoffClosing = true
+		if s.pendingTUIStart != nil {
+			// A switch away before the workspace became ready: the terminal
+			// agent never started, and now never does.
+			s.pendingTUIStart = nil
+			s.agentStarting = false
+			s.pendingAgentTerminalData = nil
+			s.pendingAgentTerminalSize = nil
+		}
 		s.mu.Unlock()
 		err := s.closeTerminalForInterfaceHandoff(ctx, id)
 		if err != nil {
@@ -198,19 +213,6 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 	if input.TargetInterface == InterfaceChat {
 		return s.startChat(ctx)
 	}
-	// Terminal target: rebuild the interactive command only when a real native
-	// conversation was observed after ChatUI's turn. For a fresh session there
-	// is no identity to resume; keep the plain bootstrap command instead of
-	// manufacturing a resume command for a conversation that does not exist.
-	nativeConversationID := s.nativeConversationID(ctx, input)
-	s.mu.Lock()
-	needsFreshCommand := s.AgentCommand.Path == ""
-	s.mu.Unlock()
-	if nativeConversationID != "" || needsFreshCommand || input.Model != "" || input.ReasoningEffort != "" {
-		if err := s.refreshAgentCommand(ctx, nativeConversationID, input.Model, input.ReasoningEffort); err != nil {
-			return err
-		}
-	}
 	// Chat -> TUI closes the old agent terminal record. Obtain the replacement
 	// handle from the control plane before starting the PTY; otherwise the
 	// worker starts a process on the stale bootstrap handle while the renderer
@@ -222,6 +224,77 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 	}
 	if strings.TrimSpace(terminal.TerminalID) == "" {
 		return errors.New("control plane returned no agent terminal")
+	}
+	s.mu.Lock()
+	if s.holdAgentInput && !s.workspaceReady {
+		// The checkout or the project's Setup is still running (or failed and
+		// waits for a retry). The terminal agent runs its task from its command
+		// line as soon as it starts, so it must not start in a workspace that is
+		// not ready: commit the switch, reserve the agent terminal (its input
+		// and viewport are kept, as during a TUI session's own startup) and
+		// start it when MarkWorkspaceReady releases the workspace.
+		s.AgentTerminalID = terminal.TerminalID
+		s.agentStarting = true
+		s.pendingTUIStart = &pendingTUIStart{input: input, terminal: terminal}
+		s.mu.Unlock()
+		// After s.mu: the interface lock is taken first everywhere else. The
+		// start MarkWorkspaceReady queues runs on this same loop, so after this.
+		s.iface.mu.Lock()
+		s.iface.current = InterfaceTUI
+		s.iface.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	return s.openTUIAgent(ctx, input, terminal)
+}
+
+// pendingTUIStart is a switch to the terminal committed while the workspace
+// was not ready yet. MarkWorkspaceReady starts it.
+type pendingTUIStart struct {
+	input    interfacePayload
+	terminal worker.AgentTerminalResponse
+}
+
+// startPendingTUI starts the terminal agent a switch committed while the
+// workspace was not ready. It runs on Run's serial loop, queued by
+// MarkWorkspaceReady, so it never interleaves with an interface command; a
+// switch away from the terminal in the meantime cancelled it (stopInterface).
+func (s *Supervisor) startPendingTUI(ctx context.Context) error {
+	s.mu.Lock()
+	pending := s.pendingTUIStart
+	s.pendingTUIStart = nil
+	s.mu.Unlock()
+	if pending == nil || s.iface.Current() != InterfaceTUI {
+		return nil
+	}
+	if err := s.openTUIAgent(ctx, pending.input, pending.terminal); err != nil {
+		s.mu.Lock()
+		s.agentStarting = false
+		s.startupTaskAbandoned = true
+		s.pendingAgentTerminalData = nil
+		s.pendingAgentTerminalSize = nil
+		s.mu.Unlock()
+		s.Logger.Error("start the terminal agent after the workspace became ready", "error", err)
+		return err
+	}
+	return nil
+}
+
+// openTUIAgent starts the terminal agent of a switch to the terminal on the
+// agent terminal the control plane ticketed for it.
+func (s *Supervisor) openTUIAgent(ctx context.Context, input interfacePayload, terminal worker.AgentTerminalResponse) error {
+	// Rebuild the interactive command only when a real native conversation was
+	// observed after ChatUI's turn. For a fresh session there is no identity to
+	// resume; keep the plain bootstrap command instead of manufacturing a resume
+	// command for a conversation that does not exist.
+	nativeConversationID := s.nativeConversationID(ctx, input)
+	s.mu.Lock()
+	needsFreshCommand := s.AgentCommand.Path == ""
+	s.mu.Unlock()
+	if nativeConversationID != "" || needsFreshCommand || input.Model != "" || input.ReasoningEffort != "" {
+		if err := s.refreshAgentCommand(ctx, nativeConversationID, input.Model, input.ReasoningEffort); err != nil {
+			return err
+		}
 	}
 	s.setAgentTerminalID(terminal.TerminalID)
 	s.iface.mu.Lock()
@@ -235,6 +308,7 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 		return err
 	}
 	s.mu.Lock()
+	s.agentStarting = false
 	s.agentStarted = true
 	if input.Model != "" {
 		s.SelectedModel = input.Model
@@ -243,6 +317,9 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 	}
 	s.mu.Unlock()
 	s.flushReadyAgentTerminal()
+	if s.AgentReady != nil {
+		s.AgentReady(ctx)
+	}
 	return nil
 }
 

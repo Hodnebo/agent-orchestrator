@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -112,6 +113,14 @@ type Supervisor struct {
 	// PersistAgent keeps the interactive agent alive across worker restarts
 	// (see persistentAgent). It takes effect only when dtach is installed.
 	PersistAgent bool
+	// StartupTask reports that the terminal agent's first start in this
+	// worker runs the session's task from its command line. Until it starts,
+	// a drain treats the terminal as busy (see startupTaskWaiting).
+	StartupTask bool
+	// AgentReady, when set, reports that a switch to the terminal started the
+	// terminal agent (the agent.ready event a terminal session's own start
+	// publishes).
+	AgentReady func(context.Context)
 
 	persistOnce              sync.Once
 	persist                  *persistentAgent
@@ -134,6 +143,12 @@ type Supervisor struct {
 	// prompt (see mayStartTurn).
 	lastTUISubmitAt   time.Time
 	tuiHandoffClosing bool
+	// pendingTUIStart is a switch to the terminal committed before the
+	// workspace was ready; MarkWorkspaceReady starts it.
+	pendingTUIStart *pendingTUIStart
+	// startupTaskAbandoned records that the terminal agent's start failed, so
+	// the StartupTask it carried no longer holds a drain.
+	startupTaskAbandoned bool
 
 	// The worker's own commands (FallBackToTUI) run on Run's serial loop,
 	// like the control plane's interface commands, never beside them.
@@ -187,11 +202,76 @@ func (s *Supervisor) HoldAgentInputUntilWorkspaceReady() {
 // MarkWorkspaceReady releases prompts collected while the agent was waiting for
 // its checkout. If the agent PTY has not started yet, the prompts remain queued
 // until StartAgent makes the terminal live.
+//
+// A switch to the terminal committed while the workspace was not ready starts
+// its terminal agent now, on Run's serial loop.
 func (s *Supervisor) MarkWorkspaceReady() {
 	s.mu.Lock()
 	s.workspaceReady = true
+	pendingTUI := s.pendingTUIStart != nil
 	s.mu.Unlock()
 	s.flushReadyAgentTerminal()
+	if pendingTUI {
+		s.queueOnLoop(s.startPendingTUI)
+	}
+}
+
+// StartStartupAgent starts a terminal session's own agent once its workspace
+// is ready (StartAgent on a freshly ticketed agent terminal), unless an
+// interface switch made while the workspace was being prepared took over: the
+// session is in Chat now, or the switch back to the terminal starts the agent
+// itself. It runs on Run's serial loop, so it never interleaves with an
+// interface command, and reports whether it started the agent. A command it
+// does not start is cleaned up.
+func (s *Supervisor) StartStartupAgent(ctx context.Context, command workerexec.Command) (bool, error) {
+	started := false
+	err := s.runOnLoop(ctx, func(ctx context.Context) error {
+		s.mu.Lock()
+		superseded := s.pendingTUIStart != nil || s.agentStarted || s.agentStarting
+		s.mu.Unlock()
+		if superseded || s.iface.Current() != InterfaceTUI {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return nil
+		}
+		terminal, err := s.Control.EnsureAgentTerminal(ctx)
+		if err != nil {
+			if command.Cleanup != nil {
+				command.Cleanup()
+			}
+			return fmt.Errorf("initialize agent terminal: %w", err)
+		}
+		if err := s.StartAgent(ctx, command, terminal); err != nil {
+			return fmt.Errorf("start interactive coding-agent terminal: %w", err)
+		}
+		started = true
+		return nil
+	})
+	return started, err
+}
+
+// Interface is the committed interface the transport runs ("tui" or "chat").
+func (s *Supervisor) Interface() string {
+	return s.iface.Current()
+}
+
+// AbandonStartupTask records that the terminal agent could not start, so its
+// StartupTask no longer holds a drain.
+func (s *Supervisor) AbandonStartupTask() {
+	s.mu.Lock()
+	s.startupTaskAbandoned = true
+	s.mu.Unlock()
+}
+
+// startupTaskWaiting reports a terminal agent that has not started yet and
+// runs the session's task once it does: a terminal session's own agent, or the
+// one a switch to the terminal made while the workspace was being prepared.
+func (s *Supervisor) startupTaskWaiting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.StartupTask && !s.agentStarted && !s.startupTaskAbandoned &&
+		(s.pendingTUIStart != nil || s.InitialInterface != InterfaceChat)
 }
 
 type terminalProcess struct {
@@ -332,6 +412,19 @@ func (s *Supervisor) loopWakeChannel() chan struct{} {
 // for control plane work, and returns the command's result. It returns
 // ctx's error if ctx ends first.
 func (s *Supervisor) runOnLoop(ctx context.Context, command func(context.Context) error) error {
+	done := s.queueOnLoop(command)
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// queueOnLoop queues command for Run's serial loop, waking the loop from its
+// wait for control plane work, without waiting for it. The returned channel
+// receives the command's result.
+func (s *Supervisor) queueOnLoop(command func(context.Context) error) <-chan error {
 	queued := loopCommand{run: command, done: make(chan error, 1)}
 	s.loopMu.Lock()
 	s.loopCommands = append(s.loopCommands, queued)
@@ -340,12 +433,7 @@ func (s *Supervisor) runOnLoop(ctx context.Context, command func(context.Context
 	case s.loopWakeChannel() <- struct{}{}:
 	default:
 	}
-	select {
-	case err := <-queued.done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return queued.done
 }
 
 // runLoopCommands runs the queued worker commands in order and reports
