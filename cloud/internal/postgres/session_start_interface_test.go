@@ -146,3 +146,80 @@ func TestCreateOrchestratorChildInheritsInterface(t *testing.T) {
 		t.Fatalf("claude child of a TUI orchestrator = %q, want tui", child.Interface)
 	}
 }
+
+// A session created in Chat whose worker cannot start Chat moves to the TUI
+// before anything ran: the prompt's queued turn is settled (the TUI gets the
+// prompt on its command line) and a failed TUI-to-Chat transition carries the
+// notice. A session the person switched to Chat does not move.
+func TestFallBackChatStart(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "do the work",
+		Provider: "docker", Interface: domain.SessionInterfaceChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := store.FallBackChatStart(ctx, fixture.orgID, session.ID, "CHAT_START_UNSUPPORTED", "started in the terminal")
+	if err != nil || !moved {
+		t.Fatalf("FallBackChatStart = %v, %v; want moved", moved, err)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.Interface != domain.SessionInterfaceTUI || launch.Prompt != "do the work" {
+		t.Fatalf("launch interface = %q prompt = %q, want the TUI with the prompt", launch.Interface, launch.Prompt)
+	}
+	if state, found, _ := initialTurn(t, admin, session.ID); !found || state != "completed" {
+		t.Fatalf("initial turn state = %q (found %v), want completed", state, found)
+	}
+	transition, found, err := store.GetLatestRelevantSessionInterfaceTransition(ctx, principal, fixture.orgID, session.ID)
+	if err != nil || !found {
+		t.Fatalf("notice transition: found=%v err=%v", found, err)
+	}
+	if transition.Phase != domain.SessionInterfaceTransitionFailed || transition.TargetInterface != domain.SessionInterfaceChat ||
+		transition.ErrorCode != "CHAT_START_UNSUPPORTED" || transition.ErrorDetail != "started in the terminal" {
+		t.Fatalf("notice transition = %+v", transition)
+	}
+	// Moved once; asking again changes nothing.
+	if moved, err := store.FallBackChatStart(ctx, fixture.orgID, session.ID, "CHAT_START_UNSUPPORTED", "again"); err != nil || moved {
+		t.Fatalf("second FallBackChatStart = %v, %v; want not moved", moved, err)
+	}
+
+	// The fixture session was switched to Chat by the person: it stays.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET interface = 'chat' WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO ao_interface_transitions (org_id, session_id, source_interface, target_interface, policy, phase, completed_at)
+		VALUES ($1, $2, 'tui', 'chat', 'drain', 'completed', now())`, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		"CHAT_ADAPTER_UNAVAILABLE", "no npm"); err != nil || moved {
+		t.Fatalf("switched session: WorkerFallBackChatStart = %v, %v; want not moved", moved, err)
+	}
+	// A new Chat session's current worker moves it.
+	fresh, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "go",
+		Provider: "docker", Interface: domain.SessionInterfaceChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `INSERT INTO ao_worker_connections (session_id, org_id, sandbox_id, epoch, worker_id, version)
+		VALUES ($1, $2, $1, 1, 'worker-fresh', 'test')`, fresh.ID, fixture.orgID); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fresh.ID, "worker-fresh", 1,
+		"CHAT_ADAPTER_UNAVAILABLE", "no npm"); err != nil || !moved {
+		t.Fatalf("fresh session: WorkerFallBackChatStart = %v, %v; want moved", moved, err)
+	}
+	// Only the session's current worker may ask.
+	if _, err := store.WorkerFallBackChatStart(ctx, fixture.orgID, fixture.sessionID, "worker-stale", fixture.epoch,
+		"CHAT_ADAPTER_UNAVAILABLE", "no npm"); err == nil {
+		t.Fatal("a stale worker moved the session")
+	}
+}

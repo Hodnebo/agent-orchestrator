@@ -41,6 +41,13 @@ const CapabilityWorkspacePathPlaceholder = "workspace.path-placeholder"
 // plane only describes those to the agent for a worker that advertises it.
 const CapabilityMultiRepo = "workspace.multi-repo"
 
+// CapabilityChatStart, in a worker's capabilities, means it starts a session
+// created in Chat straight into the Chat controller, and itself moves the
+// session to the TUI (POST /worker/interface/chat-start-fallback) when it
+// cannot run that controller. The control plane moves a never-started Chat
+// session to the TUI for a worker that does not report it.
+const CapabilityChatStart = "agent.chat-start"
+
 // CapabilitiesHeader carries a worker's capabilities, comma separated, on its
 // requests (the reconnect GET has no body to report them in).
 const CapabilitiesHeader = "AO-Worker-Capabilities"
