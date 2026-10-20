@@ -318,6 +318,80 @@ func TestFallBackChatStartLeavesAChatThatRan(t *testing.T) {
 	}
 }
 
+// A person's switch that commits while the fallback waits on the session row
+// keeps the session where the switch put it: the fallback checks the
+// session's transitions after it holds the row lock, not in a snapshot taken
+// before the switch committed.
+func TestFallBackChatStartWaitsForASwitchInProgress(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "do the work",
+		Provider: "docker", Interface: domain.SessionInterfaceChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The switch, as StartSessionInterfaceTransition runs it: lock the row,
+	// then record the transition; it commits only after the fallback waits.
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM ao_sessions WHERE id = $1 FOR UPDATE`, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO ao_interface_transitions (org_id, session_id, source_interface, target_interface, policy, phase)
+		VALUES ($1, $2, 'chat', 'tui', 'drain', 'requested')`, fixture.orgID, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		moved bool
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		moved, err := store.FallBackChatStart(ctx, fixture.orgID, session.ID, "CHAT_START_UNSUPPORTED", "x")
+		done <- result{moved, err}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("the fallback did not wait for the switch: moved=%v err=%v", r.moved, r.err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fallback never waited on the session row")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.moved {
+		t.Fatalf("FallBackChatStart during a switch = %v, %v; want not moved", r.moved, r.err)
+	}
+	var iface string
+	if err := admin.QueryRow(ctx, `SELECT interface FROM ao_sessions WHERE id = $1`, session.ID).Scan(&iface); err != nil {
+		t.Fatal(err)
+	}
+	if iface != "chat" {
+		t.Fatalf("interface = %q, want chat", iface)
+	}
+}
+
 // A scratch project's first orchestrator resolves its interface like any
 // orchestrator (Chat where its harness can start there) and keeps the user's
 // default for the workers it spawns. Without a default the create's payload

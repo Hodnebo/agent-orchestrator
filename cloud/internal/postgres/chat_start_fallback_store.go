@@ -54,29 +54,50 @@ func (s *Store) WorkerFallBackChatStart(
 }
 
 func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code, detail string) (bool, error) {
-	var prompt string
+	// Lock the session row first, as StartSessionInterfaceTransition does, and
+	// check the session's history in later statements: their snapshot is taken
+	// after the lock, so a transition committed while this waited is seen
+	// rather than missed by a snapshot taken before it.
+	var iface, prompt, agentSessionID string
 	err := tx.QueryRow(ctx,
-		`UPDATE ao_sessions session
-		SET interface = 'tui', updated_at = now()
-		WHERE session.org_id = $1 AND session.id = $2
-		  AND session.interface = 'chat'
-		  AND session.agent_session_id = ''
-		  AND NOT EXISTS (
-			SELECT 1 FROM ao_interface_transitions transition
-			WHERE transition.org_id = session.org_id AND transition.session_id = session.id
-		  )
-		  AND NOT EXISTS (
-			SELECT 1 FROM ao_turns turn
-			WHERE turn.org_id = session.org_id AND turn.session_id = session.id
-			  AND (turn.attempt_count > 0 OR turn.state <> 'queued')
-		  )
-		RETURNING session.prompt`,
+		`SELECT interface, prompt, agent_session_id FROM ao_sessions
+		WHERE org_id = $1 AND id = $2
+		FOR UPDATE`,
 		orgID, sessionID,
-	).Scan(&prompt)
+	).Scan(&iface, &prompt, &agentSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
+		return false, err
+	}
+	if iface != "chat" || agentSessionID != "" {
+		return false, nil
+	}
+	var started bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM ao_interface_transitions transition
+			WHERE transition.org_id = $1 AND transition.session_id = $2
+		) OR EXISTS (
+			SELECT 1 FROM ao_turns turn
+			WHERE turn.org_id = $1 AND turn.session_id = $2
+			  AND (turn.attempt_count > 0 OR turn.state <> 'queued')
+		)`,
+		orgID, sessionID,
+	).Scan(&started); err != nil {
+		return false, err
+	}
+	// Any transition, active or settled, keeps the session where it is: an
+	// active one is the person's switch in progress.
+	if started {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE ao_sessions SET interface = 'tui', updated_at = now()
+		WHERE org_id = $1 AND id = $2`,
+		orgID, sessionID,
+	); err != nil {
 		return false, err
 	}
 	if prompt != "" {
