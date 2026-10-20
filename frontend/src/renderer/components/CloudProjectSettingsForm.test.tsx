@@ -315,7 +315,7 @@ describe("Cloud project Coder template", () => {
 		project.config.coder = { templateId: "tpl-1" };
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
-		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses the project name.")).toBeInTheDocument();
+		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-o-<id> / <prefix>-w-<word>-<id>; empty uses the project name.")).toBeInTheDocument();
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
 		await userEvent.type(prefix, "acme");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { workspaceNamePrefix: "acme" } } }));
