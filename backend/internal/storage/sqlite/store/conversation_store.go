@@ -1055,7 +1055,7 @@ func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectI
 	return conversationToDomain(row), nil
 }
 
-// ConversationForSession looks up a session's conversation.
+// SessionForActivityProviderItem finds the session holding an action activity.
 func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItemID string) (domain.SessionID, bool, error) {
 	sessionID, err := s.qr.SelectSessionForActivityProviderItem(ctx, providerItemID)
 	if errors.Is(err, sql.ErrNoRows) || sessionID == nil {
@@ -1067,6 +1067,7 @@ func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItem
 	return *sessionID, true, nil
 }
 
+// ConversationForSession looks up a session's conversation.
 func (s *Store) ConversationForSession(
 	ctx context.Context,
 	session domain.SessionID,
