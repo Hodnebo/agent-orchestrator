@@ -97,6 +97,11 @@ const (
 	// skipSudoRootOnly: the login user may use sudo only as root, and
 	// runuser is not there to reach the worker's account from root.
 	skipSudoRootOnly = "sudo_root_only"
+	// skipNoWorkingFolder: the session never got its working folder (it was
+	// in use, for example by the Coder template), so its worker installed a
+	// hook that runs no Cleanup (worker.WriteSkippedCleanupHook): the folder
+	// is not the session's to clean up.
+	skipNoWorkingFolder = worker.CleanupSkipNoWorkingFolder
 )
 
 // accountPattern is an account name safe to spell as ~NAME in the hook command.
@@ -133,6 +138,8 @@ func SkippedReason(reason string) string {
 		return "AO did not run this Cleanup step: the Cleanup hook in the sandbox is a symbolic link, which AO never runs."
 	case skipSudoRootOnly:
 		return "AO could not run this Cleanup step: the workspace's login user may use sudo only as root, and AO runs Cleanup as the AO worker's user, never as root."
+	case skipNoWorkingFolder:
+		return "Cleanup did not run: this session never got its working folder."
 	default:
 		return "AO could not run this Cleanup step in the sandbox before deleting it."
 	}
@@ -346,6 +353,8 @@ func Command(hook string, budget time.Duration, override string, options Options
 		"  ao_out=$(\"$@\" 2>&1 </dev/null)\n" +
 		"fi\n" +
 		"ao_code=$?\n" +
+		// A hook that runs no Cleanup prints only why (worker.WriteSkippedCleanupHook).
+		"case \"$ao_out\" in " + shellQuote(worker.CleanupHookSkippedPrefix+skipNoWorkingFolder) + ") ao_skip " + skipNoWorkingFolder + " ;; esac\n" +
 		"printf '%s\\n' \"$ao_out\" | tail -c " + strconv.Itoa(OutputLimit) + "\n" +
 		"printf '\\n%s:%s\\n' " + Marker + " \"$ao_code\"\n"
 }

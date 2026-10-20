@@ -899,3 +899,28 @@ func TestSkipOnceReportsANotRunningSandboxOnce(t *testing.T) {
 		t.Fatal("a not-running report must not look like a finished Cleanup run")
 	}
 }
+
+// A session that never got its working folder runs no Cleanup there, even
+// with the project's current Cleanup passed in: the hook command reports the
+// run as skipped, saying why.
+func TestCommandSkipsTheCleanupOfASessionWithoutItsWorkingFolder(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	dataDir := t.TempDir()
+	if err := worker.WriteSkippedCleanupHook(dataDir, worker.CleanupSkipNoWorkingFolder); err != nil {
+		t.Fatal(err)
+	}
+	payload, fits := CommandsPayload([]string{"echo pwned"}, worker.NewScriptMarkerNonce())
+	if !fits {
+		t.Fatal("payload does not fit")
+	}
+	command := Command(HookWord(filepath.Join(dataDir, worker.CleanupHookFile)), 10*time.Second, payload, Options{Runner: AsLoginUser})
+	if reason := skipReasonOf(t, "no working folder", command, os.Environ()); reason != skipNoWorkingFolder {
+		t.Fatalf("skipped %q, want %q", reason, skipNoWorkingFolder)
+	}
+	if got := SkippedReason(skipNoWorkingFolder); got != "Cleanup did not run: this session never got its working folder." {
+		t.Fatalf("reason = %q", got)
+	}
+}

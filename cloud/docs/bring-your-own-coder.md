@@ -137,7 +137,10 @@ never takes over or changes a folder that already exists: if the template
 already cloned `~/work/<repo>` (for example because the project ticked that in
 its **Template options**), the session stops with "The working folder is already
 in use". Untick it in the Template options, or turn on **Run the agent as the
-workspace user** to work in the template's checkout instead. A restarted or
+workspace user** to work in the template's checkout instead. Such a session
+never opens its terminal in that folder, and deleting it runs no Cleanup
+("Cleanup did not run: this session never got its working folder"), so the
+project's Cleanup never touches the template's folder. A restarted or
 restored session keeps using AO's own folder.
 
 ### What goes where

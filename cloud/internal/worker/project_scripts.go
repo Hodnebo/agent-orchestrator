@@ -578,6 +578,33 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	return writeFileAtomic(hook, []byte(content.String()), 0o700)
 }
 
+// CleanupHookSkippedPrefix starts the only line a hook that runs no Cleanup
+// prints (WriteSkippedCleanupHook), followed by its reason. The control
+// plane's hook command reports that run as skipped with the reason.
+const CleanupHookSkippedPrefix = "__AO_CLEANUP_HOOK_SKIPPED__:"
+
+// CleanupSkipNoWorkingFolder is the reason a session that never got its
+// working folder (the folder was in use, for example by the Coder template)
+// runs no Cleanup: the folder is someone else's, so the project's Cleanup
+// must never run there.
+const CleanupSkipNoWorkingFolder = "no_working_folder"
+
+// WriteSkippedCleanupHook installs a Cleanup hook that runs no Cleanup
+// command and reports reason instead (CleanupHookSkippedPrefix), for a session
+// whose Cleanup must never run, whatever the project's Cleanup is when the
+// session is deleted. Any commands script from an earlier start is emptied.
+func WriteSkippedCleanupHook(dataDir, reason string) error {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(filepath.Join(dataDir, CleanupCommandsFile), []byte(CleanupCommandsScript(nil, NewScriptMarkerNonce())), 0o600); err != nil {
+		return err
+	}
+	content := "#!/bin/sh\n# Written by the AO worker: this session's Cleanup never runs (" + reason + ").\n" +
+		"printf '%s\\n' " + shellQuote(CleanupHookSkippedPrefix+reason) + "\n"
+	return writeFileAtomic(filepath.Join(dataDir, CleanupHookFile), []byte(content), 0o700)
+}
+
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	temporary := path + ".tmp-" + strconv.Itoa(os.Getpid())
 	if err := os.WriteFile(temporary, data, mode); err != nil {
