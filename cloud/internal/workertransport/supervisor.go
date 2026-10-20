@@ -162,6 +162,9 @@ type Supervisor struct {
 	// startupTaskAbandoned records that the terminal agent's start failed, so
 	// the StartupTask it carried no longer holds a drain.
 	startupTaskAbandoned bool
+	// workspaceStartupFailed records a failed checkout or Setup that waits for
+	// the session's retry (SetWorkspaceStartupFailed).
+	workspaceStartupFailed bool
 	// agentReadyUnsent records an agent.ready the control plane did not take;
 	// the turn forwarder sends it again before it claims a turn.
 	agentReadyUnsent bool
@@ -314,6 +317,28 @@ func (s *Supervisor) AbandonStartupTask() {
 	s.mu.Lock()
 	s.startupTaskAbandoned = true
 	s.mu.Unlock()
+}
+
+// SetWorkspaceStartupFailed records that the workspace's checkout or Setup
+// failed and waits for the session's retry (true), or that a retry is
+// preparing it again (false).
+func (s *Supervisor) SetWorkspaceStartupFailed(failed bool) {
+	s.mu.Lock()
+	s.workspaceStartupFailed = failed
+	s.mu.Unlock()
+}
+
+// startupFailureWaiting reports a startup that failed and waits for the
+// session's retry with no terminal agent running: the workspace's checkout
+// or Setup, or the terminal agent's own start (startPendingTUI).
+func (s *Supervisor) startupFailureWaiting() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentStarted {
+		return false
+	}
+	return (s.holdAgentInput && !s.workspaceReady && s.workspaceStartupFailed) ||
+		(s.pendingTUIStart != nil && s.pendingTUIStart.failed)
 }
 
 // startupTaskWaiting reports a terminal agent that has not started yet and

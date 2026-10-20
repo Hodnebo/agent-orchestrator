@@ -115,6 +115,14 @@ func (s *Supervisor) inspectInterface() (any, error) {
 	defer s.iface.mu.Unlock()
 	if s.iface.current == InterfaceTUI {
 		if s.startupTaskWaiting() {
+			if s.startupFailureWaiting() {
+				// The startup failed and waits for the session's retry, which
+				// may never come: no task runs, but the terminal keeps it. The
+				// drain waits a bounded time and then fails, leaving the
+				// session (and its task) in the terminal; a stop-now switch
+				// still moves it.
+				return interfaceInspectResult{QuiescenceUnverified: true}, nil
+			}
 			// The terminal agent has not started yet (its workspace is not
 			// ready) and runs the session's task from its command line once it
 			// does. A drain waits for that task, as for any running turn, so a

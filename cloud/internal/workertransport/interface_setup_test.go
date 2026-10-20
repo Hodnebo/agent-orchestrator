@@ -510,3 +510,49 @@ func TestSwitchToChatAfterAFailedTerminalStartClearsTheFailure(t *testing.T) {
 		t.Fatalf("terminal agent started %d times after the switch to Chat", got)
 	}
 }
+
+func (h *setupSwitchHarness) inspect(t *testing.T) interfaceInspectResult {
+	t.Helper()
+	inspection, err := h.supervisor.inspectInterface()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inspection.(interfaceInspectResult)
+}
+
+// While the terminal's task waits for a startup that failed (its Setup, or
+// the terminal agent's own start) and nothing runs, a drain to Chat cannot
+// prove the terminal idle but sees no work: it waits a bounded time and then
+// fails, leaving the task in the terminal, instead of waiting for a retry
+// that may never come. While Setup runs, the drain waits for the task.
+func TestDrainDuringAFailedStartupIsBounded(t *testing.T) {
+	t.Run("setup failed", func(t *testing.T) {
+		h := newSetupSwitchHarness(t, InterfaceTUI)
+		if got := h.inspect(t); got.Idle || got.QuiescenceUnverified {
+			t.Fatalf("inspect while Setup runs = %+v, want busy", got)
+		}
+		h.supervisor.SetWorkspaceStartupFailed(true)
+		if got := h.inspect(t); got.Idle || !got.QuiescenceUnverified {
+			t.Fatalf("inspect after Setup failed = %+v, want quiescence unverified", got)
+		}
+		h.supervisor.SetWorkspaceStartupFailed(false) // the retry runs Setup again
+		if got := h.inspect(t); got.Idle || got.QuiescenceUnverified {
+			t.Fatalf("inspect while the retry runs = %+v, want busy", got)
+		}
+	})
+	t.Run("terminal agent start failed", func(t *testing.T) {
+		h := newSetupSwitchHarness(t, InterfaceChat)
+		h.switchTo(t, InterfaceTUI)
+		h.failBuilds.Store(agentStartAttempts)
+		h.supervisor.MarkWorkspaceReady()
+		h.waitForReports(t, 1)
+		if got := h.inspect(t); got.Idle || !got.QuiescenceUnverified {
+			t.Fatalf("inspect after the start failed = %+v, want quiescence unverified", got)
+		}
+		h.retry(t)
+		h.waitForAgentStarts(t, 1)
+		if h.supervisor.startupFailureWaiting() {
+			t.Fatal("the started agent still reads as a failed startup")
+		}
+	})
+}

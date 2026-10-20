@@ -577,6 +577,7 @@ func run(logger *slog.Logger) error {
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
 			failure := checkoutStartupFailure(err)
 			if !awaitStartupRetry(runCtx, checkoutRequested, func() {
+				transportSupervisor.SetWorkspaceStartupFailed(true)
 				reportWorkspaceStartup(runCtx, logger, client, failure)
 				if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 					runner.SetWorkspaceStartupError(failure.Message)
@@ -588,6 +589,7 @@ func run(logger *slog.Logger) error {
 			}) {
 				return
 			}
+			transportSupervisor.SetWorkspaceStartupFailed(false)
 			reopened = true
 			if workingDirectoryErr != nil {
 				// The whole worker (agent, terminal, Cleanup hook) was set up
@@ -627,6 +629,7 @@ func run(logger *slog.Logger) error {
 			}
 			failure := setupStartupFailure(*failed)
 			if !awaitStartupRetry(runCtx, checkoutRequested, func() {
+				transportSupervisor.SetWorkspaceStartupFailed(true)
 				reportWorkspaceStartup(runCtx, logger, client, failure)
 				if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 					runner.SetWorkspaceStartupError(failure.Message + ": " + failed.Output)
@@ -638,6 +641,7 @@ func run(logger *slog.Logger) error {
 			}) {
 				return
 			}
+			transportSupervisor.SetWorkspaceStartupFailed(false)
 			reopened = true
 		}
 		// Clears a failure this or an earlier worker reported for the session.
