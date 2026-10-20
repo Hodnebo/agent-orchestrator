@@ -560,6 +560,10 @@ func (s *Server) scratchSessionPlan(
 		placement = coderPlacement{}
 		plan, err = s.provisioning.SessionPlanForProviderWithCoder(harness, provider, placement.options, placement.override)
 	}
+	if err == nil {
+		// The session this plan is for is the scratch project's orchestrator.
+		plan, err = plan.ForOrchestrator()
+	}
 	if err != nil {
 		s.writeSessionPlanError(w, r, orgID, "", err)
 		return sandbox.Plan{}, "", false

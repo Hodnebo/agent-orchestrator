@@ -20,7 +20,9 @@ local project has: open the project's settings and choose **Scripts**.
   the project. Concurrent sessions never share a workspace, a checkout or a
   shell.
 - **Workspace names.** A session's workspace is named `<prefix>-<id>`, where
-  `<id>` is the start of the session id. For a bring-your-own Coder the prefix
+  `<id>` is the start of the session id. The project orchestrator's is named
+  `<prefix>-orch-<id>` (the prefix shortened if needed), so it is easy to tell
+  apart from the workers'. For a bring-your-own Coder the prefix
   defaults to the project name, lowercased and shortened to fit Coder's
   naming rules; set **Workspace name prefix** in the project's
   settings (or when creating the project) to choose another. The session's top

@@ -395,3 +395,50 @@ func TestSessionPlanForProviderWithCoderAllowedTemplates(t *testing.T) {
 		t.Fatalf("no allowed list: %v", err)
 	}
 }
+
+// A project orchestrator's Coder workspace is named <prefix>-orch-<id>, so it
+// is told apart from the project's worker workspaces; the stored profile stays
+// valid, and other plans are untouched.
+func TestPlanForOrchestratorNamesTheWorkspace(t *testing.T) {
+	t.Parallel()
+	defaults := ProvisioningDefaults{
+		Provider: ProviderCoder,
+		Coder: CoderConfig{
+			BaseURL: "https://coder.example.com", Owner: "owner", TemplateID: "2a2e262c-b31c-4202-946d-a19ad45d1fd2",
+			AgentName: "dev", DurableRoot: "/persistent/ao", WorkerTokenTTL: time.Minute,
+		},
+	}
+	for _, tc := range []struct{ projectPrefix, want string }{
+		{"", "ao-orch"},
+		{"todo-app", "todo-app-orch"},
+		{"abcdefghijklmn-pqrst", "abcdefghijklmn-orch"},
+	} {
+		var options *CoderSessionOptions
+		if tc.projectPrefix != "" {
+			options = &CoderSessionOptions{WorkspaceNamePrefix: tc.projectPrefix}
+		}
+		plan, err := defaults.SessionPlanForProviderWithCoder("claude-code", ProviderCoder, options, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker, err := DecodeCoderSessionProfile(plan.ResourceProfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		orchestratorPlan, err := plan.ForOrchestrator()
+		if err != nil {
+			t.Fatal(err)
+		}
+		orchestrator, err := DecodeCoderSessionProfile(orchestratorPlan.ResourceProfile)
+		if err != nil {
+			t.Fatalf("%q: stored orchestrator profile is invalid: %v", tc.projectPrefix, err)
+		}
+		if worker.WorkspaceNamePrefix != tc.projectPrefix || orchestrator.WorkspaceNamePrefix != tc.want || orchestrator.Owner != worker.Owner {
+			t.Fatalf("%q: worker prefix %q, orchestrator prefix %q", tc.projectPrefix, worker.WorkspaceNamePrefix, orchestrator.WorkspaceNamePrefix)
+		}
+	}
+	docker := Plan{Provider: ProviderDocker, ResourceProfile: json.RawMessage(`{"image":"x"}`)}
+	if unchanged, err := docker.ForOrchestrator(); err != nil || string(unchanged.ResourceProfile) != `{"image":"x"}` {
+		t.Fatalf("docker plan changed: %s, %v", unchanged.ResourceProfile, err)
+	}
+}

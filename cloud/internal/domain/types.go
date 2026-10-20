@@ -251,6 +251,21 @@ func ValidateCoderWorkspaceNamePrefix(prefix string) error {
 	return nil
 }
 
+// CoderOrchestratorWorkspaceNamePrefix marks a project orchestrator's Coder
+// workspace so it is told apart from the project's worker workspaces:
+// <prefix>-orch, the prefix shortened to keep the result a valid prefix. An
+// empty prefix stands for the default "ao".
+func CoderOrchestratorWorkspaceNamePrefix(prefix string) string {
+	const suffix = "-orch"
+	if prefix = strings.TrimSpace(prefix); prefix == "" {
+		prefix = "ao"
+	}
+	if limit := MaxCoderWorkspaceNamePrefix - len(suffix); len(prefix) > limit {
+		prefix = strings.TrimRight(prefix[:limit], "-")
+	}
+	return prefix + suffix
+}
+
 // CoderWorkspaceNamePrefixFor derives a workspace name prefix from a project
 // name: lower-cased, every run of other characters a single hyphen, starting
 // with a letter, at most MaxCoderWorkspaceNamePrefix characters, so it

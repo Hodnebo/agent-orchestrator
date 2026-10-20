@@ -669,6 +669,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		coderOverride, request.SandboxProviderConnectionID = nil, ""
 		plan, err = s.provisioning.SessionPlanForProviderWithCoder(request.Harness, request.Provider, coderOpts, coderOverride)
 	}
+	if err == nil && request.Kind == "orchestrator" {
+		plan, err = plan.ForOrchestrator()
+	}
 	if err != nil {
 		s.writeSessionPlanError(w, r, orgID, request.ProjectID, err)
 		return

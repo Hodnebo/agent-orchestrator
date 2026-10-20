@@ -522,6 +522,47 @@ type Plan struct {
 	BootstrapContext json.RawMessage
 }
 
+// ForOrchestrator names a Coder session's workspace for a project
+// orchestrator, <prefix>-orch-<id> (domain.CoderOrchestratorWorkspaceNamePrefix),
+// so it is told apart from the project's worker workspaces in Coder. The name
+// is read back from the stored plan for the session's whole life. Other
+// providers' plans are returned unchanged.
+func (p Plan) ForOrchestrator() (Plan, error) {
+	if p.Provider != ProviderCoder || len(p.ResourceProfile) == 0 {
+		return p, nil
+	}
+	var resource map[string]json.RawMessage
+	if err := json.Unmarshal(p.ResourceProfile, &resource); err != nil {
+		return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
+	}
+	raw, ok := resource["coder"]
+	if !ok {
+		return p, nil
+	}
+	var coder map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &coder); err != nil {
+		return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
+	}
+	var prefix string
+	if value, ok := coder["workspaceNamePrefix"]; ok {
+		if err := json.Unmarshal(value, &prefix); err != nil {
+			return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
+		}
+	}
+	encoded, err := json.Marshal(domain.CoderOrchestratorWorkspaceNamePrefix(prefix))
+	if err != nil {
+		return Plan{}, err
+	}
+	coder["workspaceNamePrefix"] = encoded
+	if resource["coder"], err = json.Marshal(coder); err != nil {
+		return Plan{}, err
+	}
+	if p.ResourceProfile, err = json.Marshal(resource); err != nil {
+		return Plan{}, err
+	}
+	return p, nil
+}
+
 // SessionPlan stamps the provisioning plan one session's sandbox runs from.
 // The harness selects the rootfs template when a per-harness mapping exists
 // (see NodeOpsConfig.RootFSByHarness); the plan is stored on the sandbox row,

@@ -1431,3 +1431,17 @@ func TestCurrentUserRejectsEmptyUsername(t *testing.T) {
 		t.Fatal("CurrentUser accepted an empty username")
 	}
 }
+
+// An orchestrator's workspace name keeps its role marker and stays within
+// Coder's 32-character limit, even for the longest project prefix.
+func TestOrchestratorWorkspaceNameFitsCoder(t *testing.T) {
+	const sessionID = "6d1f3b9a-2c4e-4f8a-9b1d-0e2f4a6c8e10"
+	for _, project := range []string{"", "todo-app", "abcdefghijklmnopqrst"} {
+		prefix := domain.CoderOrchestratorWorkspaceNamePrefix(project)
+		name := WorkspaceNameWithPrefix(prefix, sessionID)
+		if domain.ValidateCoderWorkspaceNamePrefix(prefix) != nil || !strings.HasPrefix(name, prefix+"-") ||
+			!strings.Contains(name, "-orch-") || len(name) > 32 {
+			t.Fatalf("project %q: prefix %q, name %q (%d)", project, prefix, name, len(name))
+		}
+	}
+}

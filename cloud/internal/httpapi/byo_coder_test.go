@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,7 +50,8 @@ func TestPutOrgCoderConfigStoresStartupPolicy(t *testing.T) {
 }
 
 // A BYO coder session inherits the connection's startup policy (lenient mount,
-// 20-minute budget) and the project's workspace name prefix.
+// 20-minute budget) and the project's workspace name prefix; the project
+// orchestrator's workspace is marked -orch so it is told apart in Coder.
 func TestCreateSessionStampsBYOStartupPolicyAndPrefix(t *testing.T) {
 	t.Parallel()
 	projectConfig, err := domain.MergeProjectCoderConfig(nil, domain.ProjectCoderConfig{
@@ -58,19 +60,27 @@ func TestCreateSessionStampsBYOStartupPolicyAndPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &stubCoderBYOCStore{personalCredentialAvailable: true, projectConfig: projectConfig}
-	rec := httptest.NewRecorder()
-	newBYOCServer(store).createSession(rec, byocCreateSessionRequest(t))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
-	}
-	profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.WorkspaceNamePrefix != "ahmad" || profile.StartupTimeoutSeconds != 1200 ||
-		profile.RequireMountedDurableRoot == nil || *profile.RequireMountedDurableRoot {
-		t.Fatalf("stamped profile = %+v, want prefix ahmad, 1200s, lenient mount", profile)
+	for kind, wantPrefix := range map[string]string{"orchestrator": "ahmad-orch", "worker": "ahmad"} {
+		store := &stubCoderBYOCStore{personalCredentialAvailable: true, projectConfig: projectConfig}
+		req := byocCreateSessionRequest(t)
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(body), `"kind":"orchestrator"`, `"kind":"`+kind+`"`, 1)))
+		rec := httptest.NewRecorder()
+		newBYOCServer(store).createSession(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s: status = %d, want 201; body = %s", kind, rec.Code, rec.Body.String())
+		}
+		profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if profile.WorkspaceNamePrefix != wantPrefix || profile.StartupTimeoutSeconds != 1200 ||
+			profile.RequireMountedDurableRoot == nil || *profile.RequireMountedDurableRoot {
+			t.Fatalf("%s: stamped profile = %+v, want prefix %s, 1200s, lenient mount", kind, profile, wantPrefix)
+		}
 	}
 }
 
