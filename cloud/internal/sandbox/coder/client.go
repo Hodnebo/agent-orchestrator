@@ -655,10 +655,22 @@ func (c *Client) workspaceName(sessionID string) string {
 // predatesWorkspaceName reports a workspace created well before this session
 // chose its stored name: it carries the name but belongs to another session
 // (two sessions whose readable names collide), so AO must never adopt,
-// bootstrap or delete it as this session's.
-func (c *Client) predatesWorkspaceName(view workspace) bool {
-	return !c.workspaceNameIssuedAt.IsZero() && !view.CreatedAt.IsZero() &&
-		view.CreatedAt.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
+// bootstrap or delete it as this session's. The workspace's created_at is by
+// the Coder server's clock and the name's time by the control plane's, so
+// created_at is first moved onto the control plane's clock by how far the
+// Coder server's clock was off when it answered (its Date header, coderNow,
+// against receivedAt): a bring-your-own Coder whose clock runs minutes behind
+// never makes the session's own workspace look like another's. Without a
+// Date header created_at is taken as is.
+func (c *Client) predatesWorkspaceName(view workspace, coderNow, receivedAt time.Time) bool {
+	if c.workspaceNameIssuedAt.IsZero() || view.CreatedAt.IsZero() {
+		return false
+	}
+	created := view.CreatedAt
+	if !coderNow.IsZero() && !receivedAt.IsZero() {
+		created = created.Add(receivedAt.Sub(coderNow))
+	}
+	return created.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
 }
 
 // Create provisions a Coder workspace from the configured template.
@@ -749,7 +761,8 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	var view workspace
 	requestPath := "/api/v2/users/" + url.PathEscape(c.owner) + "/workspace/" +
 		url.PathEscape(expectedName)
-	err := c.do(ctx, http.MethodGet, requestPath, nil, &view)
+	coderNow, err := c.doAt(ctx, http.MethodGet, requestPath, nil, &view)
+	receivedAt := time.Now()
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return sandbox.Environment{}, false, nil
 	}
@@ -762,7 +775,7 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	if normalizeState(view.LatestBuild.Status) == sandbox.StateDeleted {
 		return sandbox.Environment{}, false, nil
 	}
-	if c.predatesWorkspaceName(view) {
+	if c.predatesWorkspaceName(view, coderNow, receivedAt) {
 		// Another session's workspace holds this name. Report it absent: a
 		// create then fails on Coder's name conflict instead of adopting it,
 		// and a deletion completes without touching it.
@@ -2305,17 +2318,24 @@ func isConflict(err error) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
+	_, err := c.doAt(ctx, method, requestPath, body, output)
+	return err
+}
+
+// doAt is do that also returns the Coder server's clock when it answered
+// (its Date header; zero when it sent none or an unreadable one).
+func (c *Client) doAt(ctx context.Context, method, requestPath string, body, output any) (time.Time, error) {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("coder: encode request: %w", err)
+			return time.Time{}, fmt.Errorf("coder: encode request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+requestPath, requestBody)
 	if err != nil {
-		return fmt.Errorf("coder: create request: %w", err)
+		return time.Time{}, fmt.Errorf("coder: create request: %w", err)
 	}
 	request.Header.Set("Coder-Session-Token", c.token)
 	if body != nil {
@@ -2323,22 +2343,23 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
+		return time.Time{}, fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
 	}
 	defer response.Body.Close()
+	serverNow, _ := http.ParseTime(response.Header.Get("Date"))
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return sandbox.ErrNotFound
+		return serverNow, sandbox.ErrNotFound
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
+		return serverNow, &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))
-		return nil
+		return serverNow, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBody)).Decode(output); err != nil {
-		return fmt.Errorf("coder: decode API response: %w", err)
+		return serverNow, fmt.Errorf("coder: decode API response: %w", err)
 	}
-	return nil
+	return serverNow, nil
 }
