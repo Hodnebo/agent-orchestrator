@@ -611,35 +611,33 @@ func run(logger *slog.Logger) error {
 			}
 			reopened = true
 		}
-		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-			runner.SetWorkspaceStartupError("")
-		}
 		// Clears a failure this or an earlier worker reported for the session.
 		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
 		close(rehydrateDone)
-		if !chatReadyClosed {
+		go startChatOnceWorkspaceReady(chatReadyClosed, func() {
 			// A Claude session starting in Chat first settles whether its ACP
 			// adapter installed; the Chat controller takes no turn until then.
-			go func() {
-				if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
-					firstStart: firstStart,
-					ensure: func(ctx context.Context) error {
-						_, err := workerexec.EnsureClaudeACPAdapter(ctx)
-						return err
-					},
-					fallBack:    client.fallBackChatStart,
-					switchToTUI: transportSupervisor.FallBackToTUI,
-				}) {
-					if err := client.publishEvent(runCtx, "agent.ready", map[string]any{
-						"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
-						"version": workerVersion, "capabilities": workerCapabilities,
-					}); err != nil {
-						logger.Warn("publish agent.ready failed", "error", err)
-					}
+			if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
+				firstStart: firstStart,
+				ensure: func(ctx context.Context) error {
+					_, err := workerexec.EnsureClaudeACPAdapter(ctx)
+					return err
+				},
+				fallBack:    client.fallBackChatStart,
+				switchToTUI: transportSupervisor.FallBackToTUI,
+			}) {
+				if err := client.publishEvent(runCtx, "agent.ready", map[string]any{
+					"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
+					"version": workerVersion, "capabilities": workerCapabilities,
+				}); err != nil {
+					logger.Warn("publish agent.ready failed", "error", err)
 				}
-				close(chatWorkspaceReady)
-			}()
-		}
+			}
+		}, func() {
+			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+				runner.SetWorkspaceStartupError("")
+			}
+		}, func() { close(chatWorkspaceReady) })
 		transportSupervisor.MarkWorkspaceReady()
 		// Serve durable-restore checkpointing now that the checkout and the git
 		// credential helper are in place. The capture is triggered by the agent's
@@ -669,6 +667,23 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 	return first
+}
+
+// startChatOnceWorkspaceReady lets the Chat controller take turns once the
+// workspace is ready, after settle (settleClaudeChatStart) decided whether
+// the session stays in Chat. A start whose checkout or Setup failed opened
+// the controller already (chatOpened), so an interface handoff can complete,
+// but it claims no turn while the startup error is set. After a successful
+// retry that error is cleared only once settle returns, so the session's task
+// gets the same adapter wait and terminal fallback as a start that succeeded
+// the first time. Otherwise the controller opens (openChat) after settle.
+func startChatOnceWorkspaceReady(chatOpened bool, settle, clearStartupError, openChat func()) {
+	settle()
+	if chatOpened {
+		clearStartupError()
+		return
+	}
+	openChat()
 }
 
 // withoutPromptChatRan drops the session's task from a terminal agent's
