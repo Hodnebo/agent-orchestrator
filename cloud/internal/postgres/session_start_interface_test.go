@@ -271,7 +271,7 @@ func TestFallBackChatStart(t *testing.T) {
 }
 
 // A session created in Chat whose Chat already ran stays in Chat when a later
-// worker (a restart, a reconnect without the chat-start capability, or an
+// worker (a restart, a bootstrap without the chat-start capability, or an
 // adapter install blip) asks to move it: its first turn was claimed or
 // settled, or the agent reported its conversation. Moving it would show a
 // false notice and run its first task again in the terminal.

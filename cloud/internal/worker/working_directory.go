@@ -45,8 +45,9 @@ const CapabilityMultiRepo = "workspace.multi-repo"
 // CapabilityChatStart, in a worker's capabilities, means it starts a session
 // created in Chat straight into the Chat controller, and itself moves the
 // session to the TUI (POST /worker/interface/chat-start-fallback) when it
-// cannot run that controller. The control plane moves a never-started Chat
-// session to the TUI for a worker that does not report it.
+// cannot run that controller. For a worker that does not report it, the
+// control plane moves a never-started Claude Chat session to the TUI when the
+// worker bootstraps.
 const CapabilityChatStart = "agent.chat-start"
 
 // CapabilitiesHeader carries a worker's capabilities, comma separated, on its

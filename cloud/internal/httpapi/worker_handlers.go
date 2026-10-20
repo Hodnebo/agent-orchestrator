@@ -245,11 +245,8 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	if err := s.startLaunchInTUIIfChatUnsupported(r, claims.OrgID, &launch,
-		headerReportsCapability(r, worker.CapabilityChatStart)); err != nil {
-		s.writeStoreError(w, r, err)
-		return
-	}
+	// No Chat-start fallback here (startLaunchInTUIIfChatUnsupported): the
+	// worker may be live, already running the interface it started in.
 	launchContext, err := launchContextFrom(launch, launchCapabilities{
 		resolvesWorkspacePath: headerReportsCapability(r, worker.CapabilityWorkspacePathPlaceholder),
 		multiRepo:             headerReportsCapability(r, worker.CapabilityMultiRepo),

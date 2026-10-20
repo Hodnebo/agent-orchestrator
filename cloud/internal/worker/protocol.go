@@ -86,7 +86,9 @@ func (l LaunchContext) ProjectScripts() (postCreate, preRemove []string) {
 // carries (POST /worker/interface/chat-start-fallback and the control plane's
 // own move for a worker without CapabilityChatStart).
 const (
-	// ChatStartUnsupported: the session's worker cannot start in Chat.
+	// ChatStartUnsupported: the session's worker predates CapabilityChatStart,
+	// so it cannot set up Chat for Claude (the control plane's move, for a
+	// Claude session only).
 	ChatStartUnsupported = "CHAT_START_UNSUPPORTED"
 	// ChatStartAdapterUnavailable: Claude's Chat controller needs the Claude
 	// ACP adapter, which the workspace lacks and the worker could not install
