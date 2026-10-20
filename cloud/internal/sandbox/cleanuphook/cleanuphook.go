@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,8 +39,9 @@ const (
 	// Marker precedes the hook command's last line, which carries the hook's
 	// exit status or Skipped.
 	Marker = "__AO_PROJECT_CLEANUP__"
-	// Skipped is what the hook command reports when the worker never
-	// installed a hook (the worker never started), or the hook may not run.
+	// Skipped is what the hook command reports, followed by a reason
+	// (SkipReason), when the worker never installed a hook (the worker never
+	// started), or the hook may not run.
 	Skipped = "skipped"
 	// Budget bounds the whole Cleanup run, so the sandbox is still deleted
 	// well within the reconciler's deletion deadline. Each command also has
@@ -73,6 +75,75 @@ const (
 	stageOutputLimit = 2048
 )
 
+// Why the hook command skipped the hook: the word after Skipped in its
+// status (SkipReason).
+const (
+	// skipNoHook: there is no hook, so the worker never started there.
+	skipNoHook = "no_hook"
+	// skipNotRunnable: the hook is there but its owner cannot run it.
+	skipNotRunnable = "not_runnable"
+	// skipOwner: the hook belongs to root, the login user or no account, so
+	// it is not the worker's and is never run.
+	skipOwner = "hook_owner"
+	// skipNoSudo: the login user does not own the hook and cannot use sudo
+	// without a password to run it as its owner.
+	skipNoSudo = "no_sudo"
+	// skipNoAccount: the account the worker runs as does not exist.
+	skipNoAccount = "no_account"
+	// skipLink: the hook is a symbolic link, which never runs.
+	skipLink = "hook_link"
+	// skipSudoRootOnly: the login user may use sudo only as root, and
+	// runuser is not there to reach the worker's account from root.
+	skipSudoRootOnly = "sudo_root_only"
+)
+
+// accountPattern is an account name safe to spell as ~NAME in the hook command.
+var accountPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// SkipReason reads a hook command's status: whether it skipped the hook, and
+// the reason it gave ("" from a command that gave none).
+func SkipReason(status string) (reason string, skipped bool) {
+	fields := strings.Fields(status)
+	if len(fields) == 0 || fields[0] != Skipped {
+		return "", false
+	}
+	if len(fields) > 1 {
+		reason = fields[1]
+	}
+	return reason, true
+}
+
+// SkippedReason is what each step of a Cleanup the hook command skipped says,
+// for the reason it gave.
+func SkippedReason(reason string) string {
+	switch reason {
+	case skipNoHook:
+		return "AO could not run this Cleanup step: the sandbox has no Cleanup hook from the AO worker (the worker may never have started there), so it was deleted without Cleanup."
+	case skipNotRunnable:
+		return "AO could not run this Cleanup step: the AO worker's user cannot run the Cleanup hook in the sandbox, so it was deleted without Cleanup."
+	case skipOwner:
+		return "AO could not run this Cleanup step: the Cleanup hook in the sandbox does not belong to the AO worker's user, so AO did not run it before deleting the sandbox."
+	case skipNoSudo:
+		return "AO could not run this Cleanup step: the workspace's login user cannot use sudo without a password, which AO needs to run Cleanup as the AO worker's user."
+	case skipNoAccount:
+		return "AO could not run this Cleanup step: the AO worker's user does not exist in the sandbox, so it was deleted without Cleanup."
+	case skipLink:
+		return "AO did not run this Cleanup step: the Cleanup hook in the sandbox is a symbolic link, which AO never runs."
+	case skipSudoRootOnly:
+		return "AO could not run this Cleanup step: the workspace's login user may use sudo only as root, and AO runs Cleanup as the AO worker's user, never as root."
+	default:
+		return "AO could not run this Cleanup step in the sandbox before deleting it."
+	}
+}
+
+// NotRunningReason is what each step of a Cleanup says when the sandbox was
+// not running when AO deleted it.
+const NotRunningReason = "The sandbox was not running when AO deleted it, so this Cleanup step did not run."
+
+// UnreachableReason is what each step of a Cleanup says when the sandbox was
+// running but AO could not reach it to run Cleanup.
+const UnreachableReason = "AO could not reach the sandbox when it deleted it, so this Cleanup step did not run."
+
 // WorkspaceHook is the Cleanup hook's path in the /workspace layout the
 // reconciler gives every provider but Coder (AO_DATA_DIR
 // /workspace/.ao/worker).
@@ -83,10 +154,12 @@ const WorkspaceHook = "/workspace/.ao/worker/" + worker.CleanupHookFile
 type Runner int
 
 const (
-	// AsLoginUser runs the hook command as an ordinary login user: a hook
-	// that user owns runs directly, any other hook only as its owner through
-	// sudo, never as root or as the login user (Coder's agent terminal; a
-	// Docker exec as the container's user, where only its own hook runs).
+	// AsLoginUser runs the hook command as an ordinary login user. With an
+	// Owner other than the login user the hook runs only as that account,
+	// through sudo, never as root or as the login user (Coder's agent
+	// terminal with a dedicated worker user); without one only a hook the
+	// login user owns runs, directly (a Docker exec as the container's user,
+	// a Coder workspace-user worker).
 	AsLoginUser Runner = iota
 	// AsRoot runs the hook command as root, which runs the hook as its owner
 	// through runuser and never as root (a Freestyle exec).
@@ -138,9 +211,10 @@ const stopOwnerScript = "ao_stop() {\n" +
 type Options struct {
 	Runner Runner
 	Stop   Stop
-	// Owner, with AsRoot, is the account the hook runs as: the user the
-	// worker was provisioned to run as. Without it the hook's file owner is
-	// used (never root).
+	// Owner is the account the hook runs as: the user the worker was
+	// provisioned to run as. With AsRoot and no Owner the hook's file owner
+	// is used (never root); with AsLoginUser and no Owner the hook must be
+	// the login user's own.
 	Owner string
 }
 
@@ -155,38 +229,92 @@ type Options struct {
 func Command(hook string, budget time.Duration, override string, options Options) string {
 	seconds := strconv.Itoa(max(1, int(budget/time.Second)))
 	command := "ao_hook=" + hook + "\n" +
-		"ao_skip() { printf '\\n%s:%s\\n' " + Marker + " " + Skipped + "; exit 0; }\n" +
+		// ao_skip REASON reports the hook as not run, saying why (SkipReason).
+		"ao_skip() { printf '\\n%s:%s %s\\n' " + Marker + " " + Skipped + " \"$1\"; exit 0; }\n" +
 		"ao_owner=\n"
-	asOwner := `sudo -n -H -u "$ao_owner"`
+	// asOwner prefixes a command run as the hook's owner (ao_owner set).
+	asOwner := "ao_as"
+	// Whatever the runner, a hook that is a symbolic link never runs: it
+	// could name another account's program.
+	refuseLink := "if [ -L \"$ao_hook\" ]; then ao_skip " + skipLink + "; fi\n"
 	switch {
 	case options.Runner == AsRoot && options.Owner != "":
 		// The hook runs as the account the worker was provisioned with,
 		// whoever owns the file: an agent that swaps the hook for a link to
 		// another account's program cannot borrow that account.
 		asOwner = `runuser -u "$ao_owner" --`
-		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ] && id -u " + shellQuote(options.Owner) + " >/dev/null 2>&1; then\n" +
-			"  ao_owner=" + shellQuote(options.Owner) + "\n" +
-			"  case \"$ao_owner\" in root|\"$(id -un)\") ao_skip ;; esac\n" +
-			"  set -- " + asOwner + " \"$ao_hook\"\n" +
-			"else ao_skip; fi\n"
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+			"elif ! id -u " + shellQuote(options.Owner) + " >/dev/null 2>&1; then ao_skip " + skipNoAccount + "\n" +
+			"fi\n" +
+			"ao_owner=" + shellQuote(options.Owner) + "\n" +
+			"case \"$ao_owner\" in root|\"$(id -un)\") ao_skip " + skipOwner + " ;; esac\n" +
+			"set -- " + asOwner + " \"$ao_hook\"\n"
 	case options.Runner == AsRoot:
 		asOwner = `runuser -u "$ao_owner" --`
-		command += "if [ -f \"$ao_hook\" ] && [ -x \"$ao_hook\" ]; then\n" +
-			"  ao_owner=$(stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip\n" +
-			"  case \"$ao_owner\" in ''|root|\"$(id -un)\") ao_skip ;; esac\n" +
-			"  set -- " + asOwner + " \"$ao_hook\"\n" +
-			"else ao_skip; fi\n"
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+			"fi\n" +
+			"ao_owner=$(stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip " + skipNoHook + "\n" +
+			"case \"$ao_owner\" in ''|root|UNKNOWN|\"$(id -un)\") ao_skip " + skipOwner + " ;; esac\n" +
+			"set -- " + asOwner + " \"$ao_hook\"\n"
+	case options.Owner != "":
+		// A login user that is not the worker's account (Coder's agent
+		// terminal, the worker running as ao-worker) runs the hook only as
+		// that account, through sudo, never as itself or as root: the agent
+		// controls the hook, and the login user can usually use sudo. So a
+		// hook the agent points anywhere runs with the agent's own rights,
+		// and no check here can be raced into more. Whether the hook can run
+		// is asked as the owner too: Ubuntu 25.10 and later ship uutils
+		// coreutils, whose test -x run as root is false for a file only its
+		// owner may run (the worker's hook is mode 0700). A login user that
+		// may use sudo only as root reaches the owner through runuser.
+		home := ""
+		if accountPattern.MatchString(options.Owner) {
+			home = "~" + options.Owner
+		}
+		command += refuseLink +
+			"ao_owner=" + shellQuote(options.Owner) + "\n" +
+			"ao_home=" + home + "\n" +
+			"ao_via=\n" +
+			"ao_as() {\n" +
+			"  case \"$ao_via\" in\n" +
+			"    sudo) sudo -n -H -u \"$ao_owner\" \"$@\" ;;\n" +
+			"    runuser) sudo -n runuser -u \"$ao_owner\" -- env HOME=\"$ao_home\" \"$@\" ;;\n" +
+			"    *) \"$@\" ;;\n" +
+			"  esac\n" +
+			"}\n" +
+			"if [ \"$(id -un)\" = \"$ao_owner\" ]; then\n" +
+			"  ao_owner=\n" +
+			"elif ! id -u \"$ao_owner\" >/dev/null 2>&1; then ao_skip " + skipNoAccount + "\n" +
+			"elif ! sudo -n true 2>/dev/null; then\n" +
+			// Without sudo the hook can only be looked for from outside.
+			"  if [ -e \"$ao_hook\" ] || ! [ -x \"$(dirname \"$ao_hook\")\" ]; then ao_skip " + skipNoSudo + "; fi\n" +
+			"  ao_skip " + skipNoHook + "\n" +
+			"elif sudo -n -u \"$ao_owner\" true 2>/dev/null; then ao_via=sudo\n" +
+			"elif command -v runuser >/dev/null 2>&1 && sudo -n runuser -u \"$ao_owner\" -- true 2>/dev/null; then ao_via=runuser\n" +
+			"else ao_skip " + skipSudoRootOnly + "; fi\n" +
+			"ao_state=$(ao_as sh -c 'if [ -L \"$1\" ]; then echo " + skipLink + "; elif ! [ -e \"$1\" ]; then echo " + skipNoHook +
+			"; elif [ -f \"$1\" ] && [ -x \"$1\" ]; then echo ok; else echo " + skipNotRunnable + "; fi' _ \"$ao_hook\" 2>/dev/null)\n" +
+			"case \"$ao_state\" in ok) ;; " + skipLink + "|" + skipNoHook + ") ao_skip \"$ao_state\" ;; *) ao_skip " + skipNotRunnable + " ;; esac\n" +
+			"case \"$ao_via\" in\n" +
+			"  sudo) set -- sudo -n -H -u \"$ao_owner\" \"$ao_hook\" ;;\n" +
+			"  runuser) set -- sudo -n runuser -u \"$ao_owner\" -- env HOME=\"$ao_home\" \"$ao_hook\" ;;\n" +
+			"  *) set -- \"$ao_hook\" ;;\n" +
+			"esac\n"
 	default:
-		// A hook the login user owns (the worker ran as it) runs directly;
-		// any other hook runs only as its owner through sudo, never as root
-		// or as the login user, so an agent that rewrites or chmods its hook
-		// cannot borrow the login user's (sudo-capable) account.
-		command += "if [ -O \"$ao_hook\" ] && [ -x \"$ao_hook\" ]; then set -- \"$ao_hook\"\n" +
-			"elif sudo -n test -x \"$ao_hook\" 2>/dev/null; then\n" +
-			"  ao_owner=$(sudo -n stat -c %U \"$ao_hook\" 2>/dev/null) || ao_skip\n" +
-			"  case \"$ao_owner\" in ''|root|\"$(id -un)\") ao_skip ;; esac\n" +
-			"  set -- " + asOwner + " \"$ao_hook\"\n" +
-			"else ao_skip; fi\n"
+		// The hook is the login user's own (the worker ran as it: a Docker
+		// container's user, a Coder workspace-user worker); any other hook is
+		// not the worker's and never runs. The agent runs as that same user,
+		// so running its hook gives it nothing it does not have.
+		command += refuseLink +
+			"if ! [ -e \"$ao_hook\" ]; then ao_skip " + skipNoHook + "\n" +
+			"elif ! [ -O \"$ao_hook\" ]; then ao_skip " + skipOwner + "\n" +
+			"elif ! [ -f \"$ao_hook\" ] || ! [ -x \"$ao_hook\" ]; then ao_skip " + skipNotRunnable + "\n" +
+			"fi\n" +
+			"set -- \"$ao_hook\"\n"
 	}
 	if override != "" {
 		write := shellQuote(`cat >"$1.tmp" && chmod 600 "$1.tmp" && mv "$1.tmp" "$1"`)
@@ -308,8 +436,9 @@ func ExitCode(status string) int {
 // before the status (at least its last OutputLimit bytes), status the status
 // after Marker, and err why no status arrived. It appends the run's step
 // events to the session (sandbox.RecordSessionEvent) and finishes the stage
-// with attrs: a failed run with its output excerpt and hint, a run with no
-// hook as skipped, and a run that never reported as an error. A run that
+// with attrs: a failed run with its output excerpt and hint, a run the hook
+// command skipped as skipped (each step skipped with the reason it gave), and
+// a run that never reported as an error. A run that
 // never reported still appends its steps: those its partial output shows, or
 // else each current step as skipped with the provider's error
 // (ExecFailedReason), so the session shows why Cleanup did not run. Nothing
@@ -324,8 +453,13 @@ func Report(
 	name string,
 ) {
 	exitCode := ExitCode(status)
+	skipReason, skipped := SkipReason(status)
 	switch {
-	case err == nil && status != Skipped:
+	case err == nil && skipped:
+		// The hook did not run: each step says why, so the session shows its
+		// Cleanup did not run.
+		recordSkippedSteps(ctx, steps, SkippedReason(skipReason))
+	case err == nil:
 		steps.ExitCode, steps.Duration = exitCode, time.Since(steps.StartedAt)
 		for _, event := range worker.CleanupStepEvents(printed, steps) {
 			sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, event)
@@ -344,8 +478,11 @@ func Report(
 	switch {
 	case err != nil:
 		finish(fmt.Errorf("%s: project cleanup did not report: %w", name, err), attrs)
-	case status == Skipped:
+	case skipped:
 		attrs["result"] = Skipped
+		if skipReason != "" {
+			attrs["skip_reason"] = skipReason
+		}
 		finish(nil, attrs)
 	case exitCode != 0:
 		// The tail carries the failed step, its command, the user and groups
@@ -362,9 +499,9 @@ func Report(
 }
 
 // ReportNotRun reports a Cleanup that could not run at all: the stage as
-// skipped, failed with err, and, when the run carries the project's current
-// Cleanup, each of its steps as skipped on the session with reason (said to
-// the user) as its hint. The deletion goes ahead.
+// skipped, failed with err (nil when nothing went wrong), and each of its
+// steps, when known, as skipped on the session with reason (said to the user)
+// as its hint. The deletion goes ahead.
 func ReportNotRun(
 	ctx context.Context,
 	finish func(error, map[string]string),
@@ -385,11 +522,16 @@ func ExecFailedReason(err error) string {
 	return "AO could not run this Cleanup step in the sandbox before deleting it: " + activity.Truncate(detail, 300)
 }
 
-// recordSkippedSteps appends each of the run's current Cleanup steps as
-// skipped, with reason as its hint; nothing when the run does not carry them.
+// recordSkippedSteps appends each of the run's Cleanup steps as skipped, with
+// reason as its hint: the project's current Cleanup when the run carries it,
+// else the commands the hook would have run; nothing when neither is known.
 func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason string) {
-	total := len(steps.Commands)
-	for index, stored := range steps.Commands {
+	commands := steps.Commands
+	if len(commands) == 0 {
+		commands = steps.KnownCommands
+	}
+	total := len(commands)
+	for index, stored := range commands {
 		repository, command, _ := domain.ParseRepoScriptCommand(stored)
 		sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, worker.SanitizeScriptStepEvent(worker.ScriptStepEvent{
 			Phase: worker.ScriptPhaseCleanup, RunID: steps.RunID, Step: index + 1, Total: total,
@@ -439,6 +581,9 @@ type Run struct {
 // one organization take every slot) and a deletion is never held for long.
 type Tracker struct {
 	runs sync.Map // key -> *Run
+	// skipped records the sandboxes whose Cleanup was reported as not run
+	// (SkipOnce): key -> when.
+	skipped sync.Map
 
 	// MaxRuns, MaxOrgRuns and QueueWait override DefaultMaxRuns,
 	// DefaultMaxOrgRuns and DefaultQueueWait when positive (tests).
@@ -567,7 +712,27 @@ func Skipper(ctx context.Context, attrs map[string]string, steps worker.CleanupR
 	}
 }
 
+// SkipOnce reports, once per key (the sandbox), a Cleanup that does not run
+// because the sandbox cannot run it (reason, said on each step: for example
+// NotRunningReason). A re-issued Delete reports nothing again. The report is
+// kept apart from the runs Lookup reads, so a later Delete that finds the
+// sandbox running still runs its Cleanup. It takes no run slot and never
+// holds the deletion.
+func (t *Tracker) SkipOnce(ctx context.Context, key string, attrs map[string]string, steps worker.CleanupRun, reason string) {
+	if _, loaded := t.skipped.LoadOrStore(key, time.Now()); loaded {
+		return
+	}
+	t.prune()
+	ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), attrs, steps, reason, nil)
+}
+
 func (t *Tracker) prune() {
+	t.skipped.Range(func(key, value any) bool {
+		if time.Since(value.(time.Time)) > RecordTTL {
+			t.skipped.Delete(key)
+		}
+		return true
+	})
 	t.runs.Range(func(key, value any) bool {
 		run := value.(*Run)
 		select {

@@ -41,12 +41,18 @@ export function CloudSessionStartupError({
 	sessionId,
 	problem,
 	coderWorkspaceUrl,
+	ended = false,
 }: {
 	orgId: string;
 	sessionId: string;
 	problem: Exclude<CloudStartupProblem, { phase: "retrying" }>;
 	/** Bring-your-own Coder workspace page, so the user can inspect it. */
 	coderWorkspaceUrl?: string;
+	/**
+	 * The session was deleted (archived): its workspace is gone, so nothing
+	 * can retry it in place. The card says to restore it instead of offering Retry.
+	 */
+	ended?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
@@ -150,7 +156,9 @@ export function CloudSessionStartupError({
 					<p className="text-sm leading-relaxed text-muted-foreground">
 						{rerunning ? t("cloud.startupError.workspaceRerunning") : problem.message ?? t("cloud.startupError.unavailableDescription")}
 					</p>
-					{failed ? (
+					{failed && ended ? (
+						<p className="text-xs text-muted-foreground">{t("cloud.startupError.restoreToRetry")}</p>
+					) : failed ? (
 						<Button
 							type="button"
 							variant="outline"

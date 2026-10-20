@@ -92,8 +92,10 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	case sandbox.StatePaused, sandbox.StateStopped:
 		resume = true
 	default:
-		// Starting or pausing: not a VM the hook can run in now.
-		return true
+		// Starting or pausing: not a VM the hook can run in yet. A later
+		// Delete runs its Cleanup once it is running or paused (or the
+		// deletion deadline deletes it without).
+		return false
 	}
 	plan, _ := cleanuphook.NewPlan(ctx, "provider_id", key)
 	// Detached from the reconcile pass's cancellation, but keeping its stage

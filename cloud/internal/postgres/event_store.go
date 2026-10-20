@@ -380,7 +380,7 @@ func appendUserMessage(
 		if err := tx.QueryRow(ctx, `INSERT INTO ao_interface_transition_messages (
 			org_id, transition_id, client_message_id, message, user_message_sequence,
 			mode_cap, denied_commands
-		) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING turn_id`, orgID, transitionID, clientMessageID, text, event.Sequence,
 			modeCap, nonNilStrings(deniedCommands)).Scan(&turnID); err != nil {
 			return domain.ClientEvent{}, normalizeConstraintError(err)

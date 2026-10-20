@@ -28,10 +28,12 @@ var cleanupRuns cleanuphook.Tracker
 // Delete returns false and the reconciler re-issues it on a later tick. As on
 // Coder, nothing runs for a project with no Cleanup now, a container that is
 // not running (a paused session's worker is stopped, and starting it again
-// would replay its spent bootstrap ticket), or a Delete marked
+// would replay its spent bootstrap ticket; its Cleanup is reported as not
+// run, once), or a Delete marked
 // sandbox.WithoutCleanup, and Cleanup never blocks deletion: a failure or a
-// run over its budget is only reported. It runs only before permanent
-// removal, never on stop, pause or a Recreate.
+// run over its budget is only reported. A restarting container is left for a
+// later Delete. It runs only before permanent removal, never on stop, pause
+// or a Recreate.
 func (c *Client) cleanupFinished(ctx context.Context, view containerView) bool {
 	if sandbox.CleanupSkipped(ctx) {
 		return true
@@ -43,10 +45,17 @@ func (c *Client) cleanupFinished(ctx context.Context, view containerView) bool {
 	if current, known := sandbox.CleanupCommands(ctx); known && len(current) == 0 {
 		return true
 	}
-	if !view.State.Running || view.State.Paused || view.State.Restarting {
-		return true
+	if view.State.Restarting {
+		// Coming back: a later Delete runs its Cleanup (or the deletion
+		// deadline removes it without).
+		return false
 	}
 	plan, _ := cleanuphook.NewPlan(ctx, "provider_id", key)
+	if !view.State.Running || view.State.Paused {
+		// Nothing runs in it; the session still says its Cleanup did not run.
+		cleanupRuns.SkipOnce(ctx, key, map[string]string{"provider_id": key}, plan.Steps, cleanuphook.NotRunningReason)
+		return true
+	}
 	wait := c.cleanupWait
 	if wait <= 0 {
 		wait = cleanuphook.Budget

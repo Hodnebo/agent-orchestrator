@@ -22,6 +22,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook/cleanuphooktest"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -124,16 +126,38 @@ type cleanupCoder struct {
 	transitions []string
 	hookRuns    int
 	hookCommand string
+	// deleteBuilds makes a delete transition start a pending delete build,
+	// as Coder does, which the workspace then reports.
+	deleteBuilds bool
+}
+
+// setBuild replaces the workspace's latest build status and transition.
+func (f *cleanupCoder) setBuild(status, transition string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.view.LatestBuild.ID = uuid.NewString()
+	f.view.LatestBuild.Status = status
+	f.view.LatestBuild.Transition = transition
 }
 
 func (f *cleanupCoder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch {
+	case request.URL.Path == "/api/v2/workspaces/"+testWorkspaceID && request.Method == http.MethodGet:
+		f.mu.Lock()
+		view := f.view
+		f.mu.Unlock()
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(view)
 	case request.URL.Path == "/api/v2/workspaces/"+testWorkspaceID+"/builds" && request.Method == http.MethodPost:
 		var body map[string]string
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		f.mu.Lock()
 		f.transitions = append(f.transitions, body["transition"])
+		deleteBuilds := f.deleteBuilds
 		f.mu.Unlock()
+		if deleteBuilds && body["transition"] == "delete" {
+			f.setBuild("pending", "delete")
+		}
 		writer.WriteHeader(http.StatusCreated)
 		_, _ = writer.Write([]byte(`{}`))
 	case request.URL.Path == "/api/v2/workspaceagents/"+testAgentID+"/pty" &&
@@ -238,6 +262,7 @@ func newCleanupCoder(t *testing.T, buildStatus, status, output string) (*cleanup
 	client.durableRoot = sandbox.CoderHomeDurableRoot
 	client.cleanupWait = 5 * time.Second
 	client.cleanupInline = 50 * time.Millisecond
+	client.cleanupTracker = &cleanuphook.Tracker{}
 	return fake, client
 }
 
@@ -317,7 +342,7 @@ func TestDeleteProceedsWhenCleanupNeverReports(t *testing.T) {
 	// A run whose limit is long past: it never reports.
 	wedged := make(chan struct{})
 	defer close(wedged)
-	cleanupRuns.Start(key, "", -time.Hour, func() { <-wedged }, func(string) {})
+	client.runs().Start(key, "", -time.Hour, func() { <-wedged }, func(string) {})
 	if err := client.Delete(context.Background(), testWorkspaceID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -371,7 +396,7 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	}
 	home := t.TempDir()
 	run := func() string {
-		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, ""))
+		command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, "", ""))
 		command.Env = append(os.Environ(), "HOME="+home)
 		output, err := command.CombinedOutput()
 		if err != nil {
@@ -392,12 +417,12 @@ func TestCleanupHookCommandRunsTheInstalledHook(t *testing.T) {
 	if output := run(); !strings.Contains(output, "stopping stack") || !strings.Contains(output, cleanupMarker+":4") {
 		t.Fatalf("hook output: %q", output)
 	}
-	if command := cleanupHookCommand("/srv/ao", time.Second, ""); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
+	if command := cleanupHookCommand("/srv/ao", time.Second, "", dedicatedWorkerUser); !strings.Contains(command, "'/srv/ao/.ao/worker/"+cleanupHookFile+"'") {
 		t.Fatalf("absolute root command = %q", command)
 	}
 	// The login user may run the Coder agent carrying the command: Coder's
 	// Cleanup stops none of its processes.
-	if command := cleanupHookCommand("/srv/ao", time.Second, ""); strings.Contains(command, "ao_stop") {
+	if command := cleanupHookCommand("/srv/ao", time.Second, "", dedicatedWorkerUser); strings.Contains(command, "ao_stop") {
 		t.Fatalf("coder command stops processes: %q", command)
 	}
 }
@@ -463,7 +488,7 @@ func TestCleanupHookCommandRunsTheCurrentCommands(t *testing.T) {
 	if !fits {
 		t.Fatal("a one-line Cleanup does not fit the payload limit")
 	}
-	command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, payload))
+	command := exec.Command("sh", "-c", cleanupHookCommand(sandbox.CoderHomeDurableRoot, 10*time.Second, payload, ""))
 	command.Env = append(os.Environ(), "HOME="+home)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -575,5 +600,104 @@ func TestCleanupSkippedDeletesAtOnce(t *testing.T) {
 	c := &Client{baseURL: "http://127.0.0.1:1", durableRoot: sandbox.CoderHomeDurableRoot}
 	if !c.cleanupFinished(sandbox.WithoutCleanup(context.Background()), "workspace-1") {
 		t.Fatal("a Delete that skips Cleanup waited for it")
+	}
+}
+
+// A Cleanup that does not run is never silent: the hook command's reason (here
+// the login user had no passwordless sudo) and a workspace that is not
+// running both mark each of the project's Cleanup steps skipped with a reason
+// on the session, once.
+func TestDeleteShowsASkippedCleanupOnEveryStep(t *testing.T) {
+	t.Parallel()
+	commands := []string{"docker compose down", "echo done"}
+	for name, test := range map[string]struct {
+		build, status, reason string
+	}{
+		"hook skipped": {build: "running", status: cleanupSkipped + " no_sudo", reason: "sudo"},
+		"stopped":      {build: "stopped", status: "0", reason: "not running"},
+	} {
+		fake, client := newCleanupCoder(t, test.build, test.status, "")
+		close(fake.release)
+		recorder := &cleanuphooktest.Recorder{}
+		ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+		if err := client.Delete(ctx, testWorkspaceID); err != nil {
+			t.Fatalf("%s: delete: %v", name, err)
+		}
+		stage := recorder.WaitStage(t)
+		if stage.Err != nil || stage.Attrs["result"] != cleanupSkipped {
+			t.Fatalf("%s: stage = %+v", name, stage)
+		}
+		// A re-issued Delete reports nothing again.
+		_ = client.Delete(ctx, testWorkspaceID)
+		events := recorder.Events(t)
+		if len(events) != len(commands) {
+			t.Fatalf("%s: events = %+v", name, events)
+		}
+		for index, event := range events {
+			if event.Status != worker.ScriptStepSkipped || event.Phase != worker.ScriptPhaseCleanup ||
+				event.Command != commands[index] || !strings.Contains(event.Hint, test.reason) {
+				t.Fatalf("%s: step %d = %+v", name, index+1, event)
+			}
+		}
+	}
+}
+
+// A re-issued Delete after the delete build started (pending, then failed)
+// reports no second Cleanup: not a false "not running" run after a Cleanup
+// that ran, nor a second one for a stopped workspace.
+func TestReissuedDeleteDuringTheDeleteBuildReportsNoSecondCleanup(t *testing.T) {
+	t.Parallel()
+	commands := []string{"make down"}
+	ran := "@@ao-step-{nonce} 1 1 start 0 / make down\nstopped\n@@ao-step-{nonce} 1 1 end 0 5\n"
+	for name, build := range map[string]string{"ran": "running", "stopped": "stopped"} {
+		fake, client := newCleanupCoder(t, build, "0", ran)
+		fake.deleteBuilds = true
+		close(fake.release)
+		client.cleanupInline = 5 * time.Second
+		recorder := &cleanuphooktest.Recorder{}
+		ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+		if err := client.Delete(ctx, testWorkspaceID); err != nil {
+			t.Fatalf("%s: delete: %v", name, err)
+		}
+		recorder.WaitStage(t)
+		before := len(recorder.Events(t))
+		_ = client.Delete(ctx, testWorkspaceID) // the delete build is pending
+		fake.setBuild(buildStatusFailed, "delete")
+		_ = client.Delete(ctx, testWorkspaceID) // the delete build failed
+		events := recorder.Events(t)
+		if len(events) != before || before != len(commands) {
+			t.Fatalf("%s: events %d before the delete build, %d after: %+v", name, before, len(events), events)
+		}
+		if runs, _, _ := fake.snapshot(); (name == "ran") != (runs == 1) || runs > 1 {
+			t.Fatalf("%s: hook runs = %d", name, runs)
+		}
+	}
+}
+
+// A Delete while the workspace is still starting (a resume) neither deletes
+// it nor reports its Cleanup as not run: a later Delete, once it runs, runs
+// the Cleanup.
+func TestDeleteOfAStartingWorkspaceRunsCleanupOnceItRuns(t *testing.T) {
+	t.Parallel()
+	fake, client := newCleanupCoder(t, "starting", "0", "")
+	close(fake.release)
+	client.cleanupInline = 5 * time.Second
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), []string{"make down"})
+	if err := client.Delete(ctx, testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if runs, transitions, _ := fake.snapshot(); runs != 0 || len(transitions) != 0 {
+		t.Fatalf("a starting workspace: hook runs = %d, transitions = %v", runs, transitions)
+	}
+	if _, ok := recorder.Stage(); ok {
+		t.Fatal("a starting workspace reported its Cleanup")
+	}
+	fake.setBuild("running", "start")
+	if err := client.Delete(ctx, testWorkspaceID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if runs, transitions, _ := fake.snapshot(); runs != 1 || len(transitions) != 1 || transitions[0] != "delete" {
+		t.Fatalf("once running: hook runs = %d, transitions = %v", runs, transitions)
 	}
 }

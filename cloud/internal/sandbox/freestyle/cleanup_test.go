@@ -60,6 +60,15 @@ func (f *fakeAPI) exists(id string) bool {
 	return ok
 }
 
+// setState sets the state the fake reports for VM id.
+func (f *fakeAPI) setState(id, state string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	view := f.vms[id]
+	view.State = state
+	f.vms[view.ID], f.vms[view.Slug] = view, view
+}
+
 // stepOutput is what the hook prints for a successful two-step Cleanup whose
 // commands script carries nonce, followed by the hook command's status.
 func stepOutput(nonce string) string {
@@ -397,5 +406,54 @@ func TestDeleteRunsCleanupInlineWhenBackgroundIsRefused(t *testing.T) {
 	}
 	if events := recorder.Events(t); len(events) != 2 || events[0].Status != worker.SetupSucceeded {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+// A hook command that skipped the hook (with its reason) marks each of the
+// project's Cleanup steps skipped on the session, and the VM is deleted.
+func TestDeleteShowsASkippedCleanupOnEveryStep(t *testing.T) {
+	t.Parallel()
+	commands := []string{"make down", "echo done"}
+	api, client, id := cleanupVM(t, "running")
+	api.execOut = "\n" + cleanuphook.Marker + ":" + cleanuphook.Skipped + " no_account\n"
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if stage := recorder.WaitStage(t); stage.Err != nil || stage.Attrs["result"] != cleanuphook.Skipped {
+		t.Fatalf("stage = %+v", stage)
+	}
+	events := recorder.Events(t)
+	if len(events) != len(commands) || api.exists(id) {
+		t.Fatalf("events = %+v, calls = %v", events, api.calls())
+	}
+	for index, event := range events {
+		if event.Status != worker.ScriptStepSkipped || event.Command != commands[index] || !strings.Contains(event.Hint, "does not exist") {
+			t.Fatalf("step %d = %+v", index+1, event)
+		}
+	}
+}
+
+// A Delete while the VM is still starting neither deletes it nor reports its
+// Cleanup as not run; once it runs, a later Delete runs the Cleanup.
+func TestDeleteOfAStartingVMRunsCleanupOnceItRuns(t *testing.T) {
+	t.Parallel()
+	api, client, id := cleanupVM(t, "starting")
+	recorder := &cleanuphooktest.Recorder{}
+	ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), []string{"make down"})
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok := recorder.Stage(); ok || api.execs() != 0 || !api.exists(id) {
+		t.Fatalf("a starting VM: calls = %v", api.calls())
+	}
+	api.setState(id, "running")
+	if err := client.Delete(ctx, sandbox.ID(id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	recorder.WaitStage(t)
+	if api.execs() != 1 {
+		t.Fatalf("once running: calls = %v", api.calls())
 	}
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -137,6 +138,9 @@ type Client struct {
 	// cleanupInline bounds how long one Delete waits for a Cleanup run before
 	// returning to the reconciler; zero uses cleanupInlineWait.
 	cleanupInline time.Duration
+	// cleanupTracker overrides the process's Cleanup bookkeeping (cleanupRuns)
+	// in tests, whose fakes share one workspace ID.
+	cleanupTracker *cleanuphook.Tracker
 }
 
 var (

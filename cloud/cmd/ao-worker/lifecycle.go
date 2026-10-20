@@ -147,6 +147,28 @@ type projectScripts struct {
 	PreRemove  []string
 }
 
+// awaitStartupRetry reports a failed checkout or Setup (report) and waits
+// for a retry request: the session reopened, or its Retry. A request already
+// waiting when the step failed is dropped first. The desktop asks once when
+// the session is opened, and opening a new session usually happens while its
+// checkout and Setup are still running, so that request was made before
+// anything failed. Kept, it re-ran the failed step the moment it failed, with
+// nothing done by the user. Only a request made once the failure is reported
+// retries the step. It reports false when ctx ends first.
+func awaitStartupRetry(ctx context.Context, requests <-chan struct{}, report func()) bool {
+	select {
+	case <-requests:
+	default:
+	}
+	report()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-requests:
+		return true
+	}
+}
+
 // refreshProjectScripts reads the project's current Setup and Cleanup
 // commands before a reopened session retries Setup, so a script fixed in
 // Project settings > Scripts is the one the retry runs, as a local retry reads
@@ -190,7 +212,7 @@ func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorProjectSetup,
-		Message: message + " Fix the project's Setup script (Project settings > Scripts), then reopen this session to retry.",
+		Message: message + " Fix the project's Setup script (Project settings > Scripts), then select Retry on this session.",
 		Detail:  detail,
 	}
 }

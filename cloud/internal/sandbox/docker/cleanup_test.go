@@ -181,7 +181,8 @@ func TestDeleteRunsCleanupInTheContainerBeforeRemovingIt(t *testing.T) {
 	command := fmt.Sprint(cmd[2])
 	for _, want := range []string{
 		"ao_hook='/workspace/.ao/worker/cleanup-hook.sh'",
-		`if [ -O "$ao_hook" ] && [ -x "$ao_hook" ]; then set -- "$ao_hook"`,
+		`elif ! [ -O "$ao_hook" ]; then ao_skip hook_owner`,
+		`if [ -L "$ao_hook" ]; then ao_skip hook_link; fi`,
 		"timeout -k 5 600 ",
 		// The worker's agent is stopped before the hook runs.
 		`ao_stop "$ao_who" TERM`,
@@ -322,5 +323,27 @@ func TestDemuxTailJoinsFramesAndKeepsTheTail(t *testing.T) {
 	}
 	if _, err := demuxTail(strings.NewReader(stream.String()[:20]), 100); err == nil {
 		t.Fatal("a truncated frame read as complete")
+	}
+}
+
+// A stopped worker runs no Cleanup, but the session still shows each of the
+// project's Cleanup steps as skipped, saying the sandbox was not running.
+func TestDeleteOfAStoppedWorkerShowsItsCleanupSkipped(t *testing.T) {
+	t.Parallel()
+	engine, client := newCleanupEngine(t, false)
+	recorder := &cleanuphooktest.Recorder{}
+	commands := []string{"make down"}
+	ctx := sandbox.WithCleanupCommands(recorder.Context(context.Background()), commands)
+	if err := client.Delete(ctx, sandbox.ID(engine.id)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if calls, execs, removed := engine.snapshot(); execs != 0 || !removed {
+		t.Fatalf("calls = %v", calls)
+	}
+	stage, ok := recorder.Stage()
+	events := recorder.Events(t)
+	if !ok || stage.Err != nil || stage.Attrs["result"] != cleanuphook.Skipped || len(events) != 1 ||
+		events[0].Status != worker.ScriptStepSkipped || events[0].Hint != cleanuphook.NotRunningReason {
+		t.Fatalf("stage = %+v, events = %+v", stage, events)
 	}
 }

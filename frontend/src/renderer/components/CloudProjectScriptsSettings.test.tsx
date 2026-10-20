@@ -51,7 +51,7 @@ it("edits a Cloud project's Setup and Cleanup and saves only the two lists", asy
 	expect(screen.getByLabelText("Step 1")).toHaveValue("docker compose -p \"ao-$AO_SESSION_ID\" down");
 	// The local daemon's retry has no Cloud equivalent, and Coder runs Cleanup.
 	expect(screen.queryByRole("button", { name: "Retry cleanup" })).toBeNull();
-	expect(screen.queryByText(/Cleanup only runs for projects that use Coder/)).toBeNull();
+	expect(screen.queryByText(/deleted without it/)).toBeNull();
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	// Settings merge objects but replace arrays: coder, worker and the rest stay as stored.
@@ -73,15 +73,27 @@ it("clears a list by saving it empty", async () => {
 	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: { postCreate: ["npm ci"], preRemove: [] } });
 });
 
-it("says Cleanup does not run for a project outside Coder", async () => {
-	// A project pinned to Freestyle, with no Coder config, runs outside Coder
-	// whatever the org default is.
+it("does not say Cleanup is skipped for a project on Freestyle or Docker, which run it", async () => {
+	const { coder: _coder, ...withoutCoder } = stored;
+	for (const provider of ["freestyle", "docker"]) {
+		mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: provider }) });
+		const { unmount } = renderScripts();
+		await userEvent.click(await screen.findByRole("tab", { name: "Cleanup" }));
+		expect(screen.getByLabelText("Step 1")).toBeInTheDocument();
+		expect(screen.queryByText(/deleted without it/)).toBeNull();
+		unmount();
+	}
+});
+
+it("says Cleanup does not run for a project on a provider without it", async () => {
+	// A project pinned to a provider that has no Cleanup run, with no Coder
+	// config, is deleted without it whatever the org default is.
 	mocks.defaultProvider = "coder";
 	const { coder: _coder, ...withoutCoder } = stored;
-	mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: "freestyle" }) });
+	mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: "createos" }) });
 	renderScripts();
 	await userEvent.click(await screen.findByRole("tab", { name: "Cleanup" }));
-	expect(screen.getByText(/Cleanup only runs for projects that use Coder/)).toBeInTheDocument();
+	expect(screen.getByText(/Cleanup runs before AO deletes a Coder, Freestyle or Docker workspace/)).toBeInTheDocument();
 });
 
 it("reports unsaved edits as dirty without the autosave Saving state, and lists the variables plainly", async () => {

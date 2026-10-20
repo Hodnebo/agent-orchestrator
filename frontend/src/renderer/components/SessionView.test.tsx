@@ -25,6 +25,7 @@ const closeShellTerminalMock = vi.hoisted(() => vi.fn());
 const cloudReviewGetMock = vi.hoisted(() => vi.fn());
 const cloudCpClientMock = vi.hoisted(() => ({
 	resumeSession: vi.fn(async () => ({ session: {} })),
+	requestWorkspaceCheckout: vi.fn(async () => undefined),
 	listChatEvents: vi.fn(),
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
@@ -1648,6 +1649,36 @@ describe("SessionView", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Paused by Coder");
 		await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 		expect(cloudResumeMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		const id = "sess-2";
+		for (const [code, prepares] of [
+			["repository_checkout_failed", true],
+			["project_setup_failed", false],
+		] as const) {
+			checkout.mockClear();
+			cloudResumeMock.mockClear();
+			const session = workerSession(id);
+			session.cloud = {
+				orgId: "cloud-org",
+				sandboxProvider: "freestyle",
+				desiredState: "running",
+				observedState: "running",
+				startupError: { code, message: "Setup step 1 failed: exit status 3.", at: "2026-10-19T13:21:45Z" },
+			};
+			const view = render(<SessionView sessionId={id} />);
+			await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", id));
+			if (prepares) {
+				await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
+			} else {
+				// The checkout would follow the resume; let that chain settle first.
+				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+				expect(checkout).not.toHaveBeenCalled();
+			}
+			view.unmount();
+		}
 	});
 
 	it("shows only the multi-step loader while a cloud workspace is connecting", () => {

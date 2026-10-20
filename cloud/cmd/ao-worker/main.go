@@ -515,20 +515,19 @@ func run(logger *slog.Logger) error {
 			}
 			logger.Error("background workspace startup failed; waiting for session open", "error", err)
 			failure := checkoutStartupFailure(err)
-			reportWorkspaceStartup(runCtx, logger, client, failure)
-			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				runner.SetWorkspaceStartupError(failure.Message)
-			}
-			if !chatReadyClosed {
-				close(chatWorkspaceReady)
-				chatReadyClosed = true
-			}
-			select {
-			case <-runCtx.Done():
+			if !awaitStartupRetry(runCtx, checkoutRequested, func() {
+				reportWorkspaceStartup(runCtx, logger, client, failure)
+				if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+					runner.SetWorkspaceStartupError(failure.Message)
+				}
+				if !chatReadyClosed {
+					close(chatWorkspaceReady)
+					chatReadyClosed = true
+				}
+			}) {
 				return
-			case <-checkoutRequested:
-				reopened = true
 			}
+			reopened = true
 			if workingDirectoryErr != nil {
 				// The whole worker (agent, terminal, Cleanup hook) was set up
 				// around the fallback workspace, so the configured directory is
@@ -563,20 +562,19 @@ func run(logger *slog.Logger) error {
 				return
 			}
 			failure := setupStartupFailure(*failed)
-			reportWorkspaceStartup(runCtx, logger, client, failure)
-			if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
-				runner.SetWorkspaceStartupError(failure.Message + ": " + failed.Output)
-			}
-			if !chatReadyClosed {
-				close(chatWorkspaceReady)
-				chatReadyClosed = true
-			}
-			select {
-			case <-runCtx.Done():
+			if !awaitStartupRetry(runCtx, checkoutRequested, func() {
+				reportWorkspaceStartup(runCtx, logger, client, failure)
+				if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
+					runner.SetWorkspaceStartupError(failure.Message + ": " + failed.Output)
+				}
+				if !chatReadyClosed {
+					close(chatWorkspaceReady)
+					chatReadyClosed = true
+				}
+			}) {
 				return
-			case <-checkoutRequested:
-				reopened = true
 			}
+			reopened = true
 		}
 		if runner, ok := chatRunner.(interface{ SetWorkspaceStartupError(string) }); ok {
 			runner.SetWorkspaceStartupError("")
