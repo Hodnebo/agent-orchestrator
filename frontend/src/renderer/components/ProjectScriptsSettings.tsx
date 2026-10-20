@@ -171,7 +171,8 @@ function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onC
 					aria-invalid={invalid || undefined}
 					aria-label={t("settings.project.stepTimeout", { number })}
 					autoComplete="off"
-					className="h-7 w-12 px-2 text-right text-xs tabular-nums"
+					// A no-limit field is wider: its placeholder is a word ("none").
+					className={cn("h-7 px-2 text-right text-xs tabular-nums", noDefault ? "w-16" : "w-12")}
 					disabled={disabled}
 					id={id}
 					inputMode="numeric"
