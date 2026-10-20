@@ -1,11 +1,7 @@
 /**
- * One menu for who answers the next message and how: saved setups, then Agent,
- * Model and Effort rows that each open a list, then the on/off settings.
- * Typing searches every agent's models.
- *
- * The running agent's settings apply straight away. Another agent is only held
- * as pending: the switch runs with the next message (or on Switch, in a
- * terminal), so browsing the lists never restarts anything.
+ * One menu for who answers next: saved setups, Agent/Model/Effort rows, then toggles.
+ * The running agent's settings apply at once; another agent is only held as pending
+ * until the next message (or Switch, in a terminal), so browsing never restarts anything.
  */
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +67,16 @@ export interface PendingAgentSwitch {
 	approvalMode?: ApprovalMode;
 }
 
+/** The effort a switch starts at: the one the picker shows. A Cursor variant id already carries it. */
+export function switchEffort(pending: PendingAgentSwitch): string | undefined {
+	return pending.effort ?? (listsModelVariants(pending.harness) ? undefined : pending.shownEffort);
+}
+
+/** Claude Code only compacts early on its larger-window models. */
+export function compactsEarly(harness: string | undefined, model = ""): boolean {
+	return harness === "claude-code" && !/haiku|opus-4-5/.test(model);
+}
+
 /** What the chat surface passes down to turn the model control into this one. */
 export interface AgentSwitchProps {
 	projectId: string;
@@ -128,10 +134,7 @@ const TRIGGER_CLASS =
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 const DIVIDER = "mt-1 border-t border-border pt-1";
 
-/**
- * A catalog that lists one entry per model setting, shown as one model per
- * family with effort, thinking and speed moved to their own controls.
- */
+/** A variant-per-setting catalog as one model per family, with effort, thinking and speed as controls. */
 function variantSource(
 	models: PickerModel[],
 	selectedId: string | undefined,
@@ -220,11 +223,8 @@ export function AgentModelPicker({
 		enabled: !terminal,
 		staleTime: 60_000,
 	}).data;
-	// Only agents that can run are offered, as in New Task; the rest are set up
-	// from Manage agents. Unknown readiness stays selectable: the daemon checks
-	// the target before it touches the running agent.
-	// A terminal's own agent is left out: its model is changed there with /model.
-	// Names are AO's own, so the list and model search agree.
+	// Only runnable agents are offered, as in New Task; unknown readiness stays selectable
+	// since the daemon checks the target first. A terminal's own agent is left out (/model there).
 	const agents = useMemo(() => [
 		...(terminal ? [] : [{ id: currentHarness, label: agentLabel(currentHarness) }]),
 		...(terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).flatMap((id) => {
@@ -239,20 +239,17 @@ export function AgentModelPicker({
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
-	// The command line's Cursor ids fold the settings into the model. A running
-	// Cursor chat reports them as its own settings, which are kept as they are.
+	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
 		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) } : current;
 	const currentSource: PickerSource = disabled
 		? { ...live, onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
 		: live;
-	// The other agents' model lists load once the menu is open: the picked
-	// agent's for its rows, the rest so search reaches every model.
+	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
 	const queryClient = useQueryClient();
-	// Warmed as the pointer or focus reaches the trigger, so the first keystrokes
-	// already search every agent instead of waiting for the menu to open.
+	// Warmed on hover or focus, so the first keystrokes already search every agent.
 	const warmCatalogs = () => {
 		for (const agent of others) void queryClient.prefetchQuery(agentModelsQueryOptions(agent.id, projectId, hostId));
 	};
@@ -260,8 +257,7 @@ export function AgentModelPicker({
 		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
 	});
 	const { settings: hostSettings } = useSettings(hostId);
-	// The models a pending agent offers are the ones its own session will: a running
-	// chat lists those from the agent itself, so the catalog is narrowed to match.
+	// A pending agent offers the models its own session will, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
 		harness,
 		offeredCatalogModels(
@@ -328,12 +324,10 @@ export function AgentModelPicker({
 	const modelValue = pending
 		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? t("agentSwitch.defaultModel")
 		: source.modelLabel;
-	// Claude Code only compacts early on its larger-window models.
-	const offersAutoCompact = pending?.harness === "claude-code" && !/haiku|opus-4-5/.test(pending.model ?? "");
+	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 
 	return (
-		// Not modal: a click on the composer while this is open must reach it, so one
-		// click both closes the menu and focuses the composer.
+		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
 			<OptionMenuTrigger
 				ref={management.triggerRef}
@@ -563,17 +557,9 @@ function otherAgentSource(
 	const levels = (effortSource?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default");
 	// Ultracode runs at Extra High, so it is only for models that have that level.
 	const offersUltracode = harness === "claude-code" && levels.includes("xhigh");
-	const keep = {
-		harness,
-		model: pending?.model,
-		modelLabel: pending?.modelLabel,
-		shownEffort: defaultEffort,
-		fastMode: fastOn || undefined,
-		autoCompactWindow: pending?.autoCompactWindow,
-	};
+	const keep = { harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort, fastMode: fastOn || undefined, autoCompactWindow: pending?.autoCompactWindow };
 	return {
-		// With a model list, the agent's default is one of its rows. The
-		// plain row is only for an agent that lists none.
+		// The plain row is only for an agent that lists no models.
 		models: listed.length > 0 ? listed : [{ id: "", label: "Default model" }],
 		modelId: chosen,
 		modelLabel: pending?.modelLabel ?? agentLabel(harness),
@@ -581,12 +567,11 @@ function otherAgentSource(
 			// Fast mode carries over only to a model that also offers it.
 			const next = catalog?.find((model) => (id ? model.id === id : model.isDefault));
 			onPick({
-				harness,
+				...keep,
 				model: id || undefined,
 				modelLabel: listed.find((model) => model.id === id)?.label,
 				shownEffort: next?.defaultEffort,
 				fastMode: Boolean(next?.supportsFast && pending?.fastMode) || undefined,
-				autoCompactWindow: pending?.autoCompactWindow,
 			});
 		},
 		efforts: [

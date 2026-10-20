@@ -1024,8 +1024,7 @@ export const ChatComposer = memo(function ChatComposer({
 			setDurableDelivery(delivery);
 			return;
 		}
-		// The chat already holds this message (or steer), so it arrived even though
-		// its answer was lost, for instance when the app restarted mid-send.
+		// The chat already holds this message (or steer): it arrived though its answer was lost.
 		const observed = acceptedClientMessageIds?.has(delivery.clientMessageId);
 		if (delivery.state !== "accepted" && !observed) return;
 		if (automaticDeliveryRecoveryAttempted.current === delivery.clientMessageId) return;
@@ -1795,8 +1794,7 @@ export const ChatComposer = memo(function ChatComposer({
 				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
-					// A menu opened from the composer renders in a portal, but React still
-					// bubbles its clicks here; focusing the editor would close that menu.
+					// Portal menus still bubble clicks here; focusing the editor would close them.
 					if (!e.currentTarget.contains(e.target as Node)) return;
 					if ((e.target as HTMLElement).closest('[contenteditable="true"]')) return;
 					// The focusable context tooltip must keep its focus on click.
@@ -1985,8 +1983,7 @@ export const ChatComposer = memo(function ChatComposer({
 								{addMenuItems ? (
 									<OptionMenu
 										onOpenChange={(open) => {
-											// Measured on open: the panel sits on top of the chat box and is
-											// as wide as it, rather than hanging off the button.
+											// Measured on open: the panel sits on the chat box, as wide as it.
 											const button = addMenuTrigger.current;
 											const box = button?.closest("form")?.getBoundingClientRect();
 											const origin = button?.getBoundingClientRect();

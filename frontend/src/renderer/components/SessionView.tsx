@@ -1413,8 +1413,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local terminal session keeps its agent and the switch to chat in the tab's
-	// menu. A Cloud session cannot switch agent, so it keeps the plain control.
+	// A local terminal session's tab menu holds its agent and the switch to chat; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
 	const sessionTabActions = !session || showChatSurface || session.cloud

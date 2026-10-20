@@ -38,7 +38,6 @@ import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import { clientForSessionHost } from "../../lib/host-clients";
-import { listsModelVariants } from "../../lib/model-variants";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
@@ -46,7 +45,7 @@ import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
-import { ComposerErrorNotice, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { apiErrorMessage } from "../../lib/api-client";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -124,12 +123,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	workspaceTabs,
 	workspaceTabActions,
 	workspaceActiveTabKey,
+	workspaceFileActive,
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	accountMoving,
 	agentResuming,
-	workspaceFileActive,
 	controllerResumeError,
 	newWorkDisabled,
 	arriving,
@@ -176,6 +175,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
+	/** A file overlay hides the chat surface, so it must not offer a suggestion. */
+	workspaceFileActive?: boolean;
 	/** Session-owned order shared with the terminal UI surface. */
 	auxiliaryTabOrder?: string[];
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
@@ -185,8 +186,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	accountMoving?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
-	/** A file overlay hides the chat surface, so it must not offer a suggestion. */
-	workspaceFileActive?: boolean;
 	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
@@ -229,15 +228,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		snapshot?.controller?.state === "busy" || commands.busy || acceptedLocalWorkPending;
 	const hasRunningTurn = Boolean(snapshot?.turns.some((turn) => turn.state === "running"));
 	const queuedTurnCount = snapshot?.turns.filter((turn) => turn.state === "queued").length ?? 0;
-	// Choosing another agent only records the choice. The switch runs with the
-	// next message, so the handoff note is written when it is needed.
+	// Choosing another agent only records the choice; the switch runs with the next message.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
-	// Sending is the switch, so a pick is only kept while the chat stays in view.
-	// Opening another session already drops it; another tab of this one does too,
-	// or a message typed on coming back could go to an agent no longer meant.
+	// Sending is the switch, so a pick is dropped once another tab comes forward: a message
+	// typed on coming back could otherwise go to an agent no longer meant.
 	useEffect(() => {
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
@@ -245,11 +242,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
+	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
-	// The agent's model and option lists are cached by session. A switch made
-	// elsewhere (another window or device) leaves the outgoing agent's, so they
-	// follow the agent the chat reports.
+	// Catalogs are cached by session; a switch made elsewhere (another window or device)
+	// leaves the outgoing agent's, so they follow the agent the chat reports.
 	useEffect(() => {
 		if (!currentHarness) return;
 		const key = ["conversation-catalog-harness", hostId ?? "", session.id];
@@ -265,8 +262,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
 	}, [chosenSwitch, currentHarness]);
 	const pendingHarness = pendingSwitch?.harness;
-	// The daemon checks an agent can run as a chat the first time it starts one,
-	// which can take a second; run that check now so the send does not wait on it.
+	// The daemon's first-start chat check can take a second; run it now so the send does not wait.
 	useEffect(() => {
 		if (!pendingHarness) return;
 		void clientForSessionHost(hostId)
@@ -293,15 +289,14 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
 	);
 	const switchBlocked = agentBusy || providerSwitch.isPending;
-	// Picking a model for the pending agent replaces the choice; the permission mode
-	// picked for that agent stays with it.
+	// A new pick for the same agent keeps the permission mode picked for it.
 	const choosePendingSwitch = useCallback((next: PendingAgentSwitch | undefined) => {
 		setChosenSwitch((current) => next && current?.approvalMode && current.harness === next.harness && !next.approvalMode
 			? { ...next, approvalMode: current.approvalMode }
 			: next);
 	}, []);
-	// While the agent runs in a mode it needed (Pi runs only bypassed), a switch
-	// away goes back to the chat's own, which its switch marker keeps.
+	// While the agent runs in a mode it needed (Pi only bypassed), a switch away goes back
+	// to the chat's own, which its switch marker keeps.
 	const chatPermissionMode = useMemo(() => {
 		const marker = snapshot?.items.findLast((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
 		const detail = marker?.kind === "activity" ? marker.detail : undefined;
@@ -350,8 +345,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
 	// A background resume keeps the last-known catalogs visible so the model
 	// picker doesn't blank out while the agent spins up.
-	// A sleeping, waking or reconnecting agent cannot report its settings yet. The
-	// bar shows the last known and saved ones, disabled, rather than nothing.
+	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
 	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
@@ -636,24 +630,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						})),
 					};
 					// A new message replaces an earlier switch's failure.
-					setSendSwitchError(undefined);
-					providerSwitch.reset();
+					clearSwitchError();
 					if (!pendingSwitch) return commands.send(message);
 					const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
-					// Match the displayed effort, as the terminal switch does. Cursor's
-					// variant model id already carries its effort.
-					const effort = pendingSwitch.effort ?? (listsModelVariants(targetHarness) ? undefined : pendingSwitch.shownEffort);
+					const effort = switchEffort(pendingSwitch);
 					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow, permissionMode: pendingSwitch.approvalMode };
 					// The transcript draws the "Switched" line from this while the daemon works.
 					const switchDisplay = currentHarness
 						? { sourceHarness: currentHarness, sourceModel: snapshot?.settings?.model, targetModel: model, targetEffort: effort }
 						: undefined;
-					// Nothing was sent if the switch fails, so the draft must stay editable
-					// instead of being held as a delivery that might have gone through.
+					// Nothing was sent if the switch fails, so the draft stays editable. A refused
+					// switch drops the pick; with no clear answer it stays until the chat shows its agent.
 					const switchFailed = (error: unknown) => {
-						// A refused switch leaves the previous agent and its settings, so the
-						// composer shows them again. With no clear answer the pick stays until
-						// the chat shows which agent it has.
 						if (error instanceof ProviderSwitchFailed) setChosenSwitch(undefined);
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
 						return Object.assign(new Error(apiErrorMessage(error)), { code: AGENT_SWITCH_FAILED });
@@ -664,8 +652,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						ultracode.onChange(Boolean(pendingSwitch.ultracode));
 					};
 					if (attachments?.length) {
-						// Attachments upload on their own route, so this send follows the switch.
-						// The message shows at once; the switch can take seconds.
+						// Attachments upload on their own route, so this send follows the switch; the message shows at once.
 						if (clientMessageId) {
 							commands.echoBeforeSend(
 								{ clientMessageId, text, excerpts },
@@ -689,9 +676,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							setSendSwitchError(error.reason);
 							throw switchFailed(error);
 						}
-						// The switch went through and only the send failed, or no answer came.
-						// The chat is read back, and once it runs the picked agent the pick is
-						// dropped, so a retry goes as an ordinary send to that agent.
+						// The switch went through and only the send failed, or no answer came. The chat is
+						// read back; once it runs the picked agent the pick drops, so a retry is an ordinary send.
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
 						throw error;
 					}
@@ -703,10 +689,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
-						onDismiss={() => {
-							providerSwitch.reset();
-							setSendSwitchError(undefined);
-						}}
+						onDismiss={clearSwitchError}
 					/>
 				) : undefined)}
 				onDecide={commands.resolve}
@@ -731,9 +714,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
-				// Until the agent's own settings arrive the bar shows the saved ones,
-				// disabled, rather than nothing: asleep, waking, or its list still loading.
-				// With none saved yet it waits, so defaults never pass for the chat's own.
+				// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
+				// none saved yet it waits, so defaults never pass for the chat's own.
 				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
 					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
 				settingsLoading={settingsLoading}

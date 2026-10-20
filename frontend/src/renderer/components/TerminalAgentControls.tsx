@@ -3,11 +3,10 @@ import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
 import { agentLabel } from "../lib/agent-options";
-import { listsModelVariants } from "../lib/model-variants";
 import { apiErrorMessage } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
-import { AgentModelPicker, DismissButton, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
+import { AgentModelPicker, DismissButton, switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
 import { ProviderMark } from "./chat/ProviderMark";
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
 import { TopbarButton } from "./TopbarButton";
@@ -16,10 +15,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
 /**
- * The menu on a terminal session's tab: the running agent, which opens the
- * agent picker beside the menu, and the switch to the chat view.
- * Picking another agent adds Switch and Cancel under its settings; the switch
- * runs when Switch is pressed, because a terminal has no next message to wait on.
+ * A terminal session tab's menu: the agent picker and the switch to chat. A picked agent
+ * adds Switch and Cancel, since a terminal has no next message to wait on.
  */
 export function TerminalSessionMenu({
 	session,
@@ -46,10 +43,7 @@ export function TerminalSessionMenu({
 	const switchNow = () => {
 		if (!pending) return;
 		const { harness: targetHarness, model, fastMode, ultracode, autoCompactWindow } = pending;
-		// The effort the picker shows is the one the agent starts with, not the agent's
-		// own configured default. A Cursor id already carries its effort.
-		const effort = pending.effort ?? (listsModelVariants(targetHarness) ? undefined : pending.shownEffort);
-		void providerSwitch.mutateAsync({ targetHarness, model, effort, fastMode, ultracode, autoCompactWindow })
+		void providerSwitch.mutateAsync({ targetHarness, model, effort: switchEffort(pending), fastMode, ultracode, autoCompactWindow })
 			.then(() => { setPending(undefined); setOpen(false); })
 			.catch((error) => showGlobalToast(t("agentSwitch.switchFailed"), apiErrorMessage(error), "error"));
 	};

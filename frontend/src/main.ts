@@ -222,10 +222,8 @@ const APP_DISPLAY_NAME = "Orchestrator.inc";
 // panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
 
-// Chromium keeps its cookie encryption key in the macOS keychain. An unsigned
-// dev Electron is a new app to macOS every time its binary changes, so it asked
-// for keychain access on start. Dev runs use Chromium's stand-in key instead;
-// packaged builds keep the keychain.
+// An unsigned dev Electron is a new app to macOS whenever its binary changes, so Chromium's
+// keychain-held cookie key prompted on start. Dev runs use the stand-in key; packaged keep the keychain.
 if (!app.isPackaged && process.platform === "darwin") {
 	app.commandLine.appendSwitch("use-mock-keychain");
 }

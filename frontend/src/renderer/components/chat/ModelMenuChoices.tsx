@@ -24,8 +24,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
-	// A query matches rows across every agent's catalog, which can run to
-	// hundreds. Rendering them all per keystroke is what made search lag.
+	// A query can match hundreds of rows across every agent's catalog; rendering them all lagged.
 	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
 	const allMatches = useMemo(() => {
 		if (!normalizedQuery) return models;
@@ -49,13 +48,11 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		const element = scrollRef.current;
 		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
 	}, []);
-	// A new search starts at the top. A refreshed list, such as a running chat's
-	// settings polled again, keeps the scroll where it is.
+	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
 	useLayoutEffect(() => {
 		if (scrollRef.current && scrollRef.current.scrollTop !== 0) scrollRef.current.scrollTop = 0;
 	}, [normalizedQuery]);
-	// Measured after paint: reading scrollHeight in a layout effect forces a
-	// reflow of every row before each keystroke can show.
+	// Measured after paint: reading scrollHeight in a layout effect reflows every row per keystroke.
 	useEffect(() => {
 		const frame = requestAnimationFrame(updateScrollCue);
 		const element = scrollRef.current;

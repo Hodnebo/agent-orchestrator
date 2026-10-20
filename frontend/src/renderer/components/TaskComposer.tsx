@@ -555,8 +555,7 @@ export function TaskComposer({
 	const effectiveEffort = effort && effort !== "default"
 		? effort
 		: aoDefaultEffort ?? (isStandalone && effortOptions.includes(implicitEffort) ? implicitEffort : "");
-	// Cursor's effort and thinking are part of its model id. They get the same effort
-	// button as other agents, and a pick there swaps the model id.
+	// Cursor's effort and thinking are part of its model id; its effort button swaps the id.
 	const cursorFamilies = listsModelVariants(selectedAgent)
 		? collapseModelVariants((modelCatalog?.models ?? []).filter((item) => isConcreteModelID(item.id)))
 		: undefined;

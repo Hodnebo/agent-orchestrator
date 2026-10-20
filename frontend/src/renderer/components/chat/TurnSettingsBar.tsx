@@ -36,7 +36,7 @@ import { effortDisplayLabel, EffortMenuItems, EffortPicker, formatEffortLabel } 
 import { agentModelDisplayLabel, claudeChoiceModel, isDefaultPlaceholderLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { Switch } from "../ui/switch";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, AutoCompactRow, compactsEarly, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
@@ -173,8 +173,7 @@ export function TurnSettingsBar({
 	const displayConfigOptions = useMemo(
 		() => (harness === "agy" ? agyComposerOptions(configOptions ?? []) : configOptions ?? []).map((option) => isModelOption(option) ? {
 			...option,
-			// Claude Code can list one model twice, by alias and by the id the chat
-			// started with. The picker shows it once, as the current one if either is.
+			// Claude Code can list one model twice (alias and start id); it shows once.
 			choices: dedupeChoicesByName(option.choices.map((choice) => providerQualifiedChoice(choice, harness ?? "")).map((choice) => ({
 				...choice,
 				name: claudeLabels?.(choice.value, choice.name) ?? agentModelDisplayLabel(harness, choice.name),
@@ -233,9 +232,8 @@ export function TurnSettingsBar({
 	const nativeEffortUnset = !settings.reasoningEffort || settings.reasoningEffort === "default";
 	useApplyEffortDefault(
 		`${harness}:${settings.model ?? fallback?.id}`,
-		// Only for a model this agent lists. Just after an agent switch the settings
-		// can still be the previous agent's, and saving an effort would save its
-		// model onto the new agent with it.
+		// Only for a model this agent lists: just after a switch the settings can still be
+		// the previous agent's, and saving an effort would carry its model onto the new one.
 		nativeModelMenu && nativeEffortUnset && (selected ?? fallback) ? fallbackEffort(efforts, (selected ?? fallback)?.defaultEffort) : undefined,
 		(value) => onChange?.({ ...settings, reasoningEffort: value }),
 		{ disabled: optionDisabled || !onChange, applyOnMount: autoSelectEffortOnOpen },
@@ -282,14 +280,12 @@ export function TurnSettingsBar({
 		if (settings.planMode) onChange?.({ ...settings, planMode: undefined });
 		else if (grouped.executionMode && planLeaveValue) applyOption(grouped.executionMode.id, { value: planLeaveValue });
 	};
-	// A provider that keeps plan in its one mode setting has no permission mode
-	// while planning, so the picker shows the one it goes back to.
+	// While planning, a provider whose one mode setting holds plan shows the mode it returns to.
 	const shownModeOption = modeOption && planning && planLeaveValue
 		? { ...modeOption, currentValue: planLeaveValue }
 		: modeOption;
-	// With another agent picked for the next message, the permission control is
-	// that agent's: the mode it will start in, which it may not share with the
-	// chat (Kimi runs only in its default, Pi only with permissions bypassed).
+	// With another agent picked, the permission control is the mode it will start in,
+	// which it may not share with the chat (Kimi runs only in its default, Pi only bypassed).
 	const pending = agentSwitch?.pending;
 	const pendingModes = pending ? agentSwitch?.pendingPermissionModes : undefined;
 	const pendingAgent = pending ? agentLabel(pending.harness) : "";
@@ -298,8 +294,7 @@ export function TurnSettingsBar({
 		?? settings.approvalMode ?? "default";
 	const pendingWanted = pending?.approvalMode ?? agentSwitch?.chatPermissionMode ?? chatMode;
 	const pendingMode = pendingRuns(pendingWanted) ? pendingWanted : pendingModes?.[0] ?? pendingWanted;
-	const pendingCopy = pending?.harness === "codex" ? CODEX_APPROVAL_COPY : APPROVAL_COPY;
-	const pendingOrder = pending?.harness === "codex" ? CODEX_APPROVAL_ORDER : APPROVAL_ORDER;
+	const [pendingCopy, pendingOrder] = pending?.harness === "codex" ? [CODEX_APPROVAL_COPY, CODEX_APPROVAL_ORDER] as const : [APPROVAL_COPY, APPROVAL_ORDER] as const;
 	const startsInNote = pendingMode !== pendingWanted
 		? t("agentSwitch.startsInMode", { agent: pendingAgent, mode: pendingCopy[pendingWanted].label, target: pendingCopy[pendingMode].label })
 		: undefined;
@@ -318,8 +313,7 @@ export function TurnSettingsBar({
 		ultracode && harness === "claude-code" && onChangeConfigOption &&
 		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
 	);
-	// Claude Code only compacts early on its larger-window models.
-	const offersAutoCompact = Boolean(autoCompact && harness === "claude-code" && !/haiku|opus-4-5/.test(primaryModelOption?.currentValue ?? ""));
+	const offersAutoCompact = Boolean(autoCompact) && compactsEarly(harness, primaryModelOption?.currentValue);
 	const current: PickerSource = nativeModelMenu && onChange
 		? {
 			models: (harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels)
@@ -381,8 +375,7 @@ export function TurnSettingsBar({
 				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
 				: {}),
 		};
-	// Plan mode and the on/off settings live in the add menu. What is left here
-	// is anything the agent offers beyond its first model and effort setting.
+	// Plan and on/off settings live in the add menu; here is anything past the first model and effort.
 	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (offersAutoCompact || grouped.extra.length > 0 ||
 		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
 	const pickerExtras = hasPickerExtras ? (
@@ -415,8 +408,7 @@ export function TurnSettingsBar({
 								current={current}
 								agentSwitch={agentSwitch}
 								disabled={optionDisabled}
-								// Only an agent that sends back its own settings has any to load. AO keeps
-								// the rest itself, and their quick save would just flicker the rows.
+								// Only an agent that sends back its own settings has any to load; AO's would just flicker.
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
@@ -1535,7 +1527,7 @@ function isModeOption(option: ChatConfigOption): boolean {
 }
 
 function isInlineToggleOption(option: ChatConfigOption): boolean {
-	return option.type === "boolean" || isThinkingToggle(option) || /(?:^|[\s_-])fast(?:[\s_-]|$)/i.test(`${option.id} ${option.name}`);
+	return option.type === "boolean" || isThinkingToggle(option) || isFastOption(option);
 }
 
 /** Cursor reports thinking as an on/off choice among its effort settings. */
@@ -1630,9 +1622,8 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 				: choice,
 		),
 	} : option;
-	// An agent's mode named Default is its own when the other modes are too
-	// (Kimi's Default, Plan, Auto and YOLO). It stands in for "the agent decides"
-	// only alone, or beside modes the daemon matched to AO's.
+	// A mode named Default is the agent's own beside its other own modes (Kimi's Default, Plan,
+	// Auto, YOLO); it means "the agent decides" only alone or beside modes matched to AO's.
 	const placeholderMode = (choice: ChatConfigOption["choices"][number]) =>
 		choice.permissionMode !== "default" &&
 		(isDefaultPlaceholderLabel(choice.name) || /^use agent permissions$/i.test(choice.name.trim())) &&

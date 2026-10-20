@@ -55,9 +55,8 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 describe("AgentModelPicker", () => {
 	beforeEach(() => {
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
+		window.localStorage.clear();
 	});
-
-	beforeEach(() => window.localStorage.clear());
 
 	it("is one menu of Agent, Model and Effort rows for the running agent", async () => {
 		const user = userEvent.setup();

@@ -94,10 +94,7 @@ export class ProviderSwitchFailed extends Error {
 	}
 }
 
-/**
- * A remote daemon's gateway answers 502–504 while the daemon may still finish
- * the switch, so those say nothing about whether it happened.
- */
+/** A remote daemon's gateway answers 502–504 while the daemon may still finish the switch. */
 const switchOutcomeUnknown = (status: number) => status === 502 || status === 503 || status === 504;
 
 interface ConversationSendMutationInput {
@@ -477,8 +474,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 /** Drops what was cached from a session's outgoing agent once it switched. */
 async function refreshAfterProviderSwitch(queryClient: QueryClient, sessionId: string, hostId?: string) {
-	// Provider catalogs are keyed by the AO session id, so the outgoing provider's
-	// go first, before the new agent can show them as its own.
+	// Catalogs are keyed by AO session id, so the outgoing agent's go before the new one can show them.
 	clearConversationProviderCatalogs(queryClient, sessionId, hostId);
 	await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 	await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
@@ -581,11 +577,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				createdAt: new Date().toISOString(),
 				backgroundWake,
 				queued: turnActive && !backgroundWake,
-				providerSwitch: switchEcho(
-					variables.input.switchDisplay,
-					variables.input.providerSwitch?.targetHarness,
-					Math.max(0, ...(current?.pages.map((page) => page.latestSequence) ?? [])),
-				),
+				providerSwitch: switchEcho(variables.input.switchDisplay, variables.input.providerSwitch?.targetHarness, newestCachedSequence(queryClient, variables.targetSessionId, hostId)),
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
@@ -610,8 +602,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		}: ConversationSendMutationInput) => {
 			const { providerSwitch, switchDisplay: _switchDisplay, ...message } = input;
 			if (providerSwitch) {
-				// One request: the daemon switches, then sends, so the message does not
-				// wait on this renderer refetching between the two.
+				// One request: the daemon switches, then sends, without waiting on a refetch here.
 				const refresh = () => void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
 				const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
 					params: { path: { sessionId: targetSessionId } },
@@ -1433,8 +1424,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// Held across the whole write, paired with the cancel below: `onMutate`
 		// runs before the request and `onSettled` after the result is committed,
 		// so no poll can start or land inside that window.
-		// The picked value shows at once; the agent's reply, which can take seconds,
-		// brings the settings that depend on it.
+		// The picked value shows at once; the agent's (possibly slow) reply brings what depends on it.
 		onMutate: async ({ optionId, value }) => {
 			setWriting(true);
 			await queryClient.cancelQueries({ queryKey });

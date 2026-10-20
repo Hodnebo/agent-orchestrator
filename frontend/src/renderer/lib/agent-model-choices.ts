@@ -26,10 +26,8 @@ export function filterDisabledModels<T extends { id: string }>(
 }
 
 /**
- * The catalog models an agent that is not running yet would offer: those of the
- * providers it has credentials for (its own session lists no others), without
- * the ones switched off in Settings. A catalog that names no configured provider,
- * or none of whose models belong to one, is offered whole.
+ * The catalog models a not-yet-running agent would offer: its credentialed providers' (as its
+ * own session lists), minus those switched off in Settings. Offered whole if none match.
  */
 export function offeredCatalogModels<T extends { id: string; provider?: string }>(
 	catalog: { models: T[]; configuredProviders?: string[]; runnableModels?: string[] } | undefined,

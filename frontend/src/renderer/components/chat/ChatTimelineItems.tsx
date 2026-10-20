@@ -381,8 +381,7 @@ export function ProviderSwitchMarker({ activity }: { activity: ConversationActiv
 	const detail = activity.detail;
 	const switching = Boolean(detail?.switching);
 	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
-	// A row that first appears already switched and only seconds old is the switch the
-	// user just made, so it opens from closed; older ones, as in a reloaded history, start open.
+	// A switched row only seconds old is the one just made, so it opens from closed; older ones start open.
 	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
 	useEffect(() => {
 		if (switching || open) return;
@@ -404,8 +403,7 @@ export function ProviderSwitchMarker({ activity }: { activity: ConversationActiv
 					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
 				</span>
 				{named ? (
-					// Closed while the switch runs, then its width grows from 0 to its own. Nothing
-					// else animates. A marker that mounts already switched starts open.
+					// Closed while the switch runs, then its width grows from 0 to its own.
 					<div
 						className={cn(
 							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",

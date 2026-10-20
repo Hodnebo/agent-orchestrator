@@ -1476,8 +1476,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			emitUserInput(report, "protocol");
 		});
 		const protocolInput = term.onData((data) => {
-			// A replayed scrollback can hold an agent's old colour queries. xterm
-			// answers them as it parses the replay, and the agent, no longer
+			// xterm answers old colour queries in a replayed scrollback, and the agent, no longer
 			// waiting, takes the answer as typed text ("11;rgb:…" in Droid's prompt).
 			if (pendingReplayWrites === 0) oscColorForwarder.push(data);
 			cursorPositionForwarder.push(data);

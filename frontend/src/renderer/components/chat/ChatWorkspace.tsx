@@ -847,8 +847,7 @@ function ChatWorkspaceContent({
 	const handleChatSurfaceClick = useCallback((event: ReactMouseEvent<HTMLElement>) => {
 		const target = event.target;
 		if (!(target instanceof Element)) return;
-		// A menu opened from the chat (the agent picker) renders in a portal, but
-		// React still bubbles its clicks here; focusing the composer would close it.
+		// Portal menus (the agent picker) still bubble clicks here; focusing the composer would close them.
 		if (!event.currentTarget.contains(target)) return;
 		// A click fires after a drag selection ends. Focusing the composer here would
 		// collapse the range the user just selected in the transcript.
@@ -1375,8 +1374,7 @@ function ChatWorkspaceContent({
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
-					// While the agent is waking or starting. Opening a chat is what wakes it, and
-					// it reads "hibernated" until it is ready; a wake that fails ends "stopped".
+					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					afterPermissions={composerAction}
 					models={models ?? []}
@@ -3271,62 +3269,28 @@ export function Timeline({
 							echoMatchesItem(echo, item, backgroundQueuedTurnIds),
 					),
 			)
-			.flatMap((echo, index): ConversationItem[] => {
-				const sequence = snapshot.latestSequence + index + 0.01;
-				const message: ConversationMessage = {
-					kind: "message",
-					id: `local:${echo.clientMessageId}`,
-					turnId: `local:${echo.clientMessageId}`,
-					clientMessageId: echo.clientMessageId,
-					sequence,
-					revision: 0,
-					role: "user",
-					origin: "human",
-					text: echo.text,
-					continuation: echo.continuation,
-					content: echo.excerpts?.map((excerpt) => ({
-						type: "excerpt",
-						text: excerpt.text,
-						sourceConversationId: excerpt.conversationId,
-						sourceMessageId: excerpt.messageId,
-						sourceRevision: excerpt.revision,
-					})),
-					streaming: false,
-					delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
-					createdAt: echo.createdAt,
-				};
-				const sent = echo.providerSwitch;
-				// A message sent with an agent switch shows the "Switched" line above it
-				// at once, until the daemon's own line arrives and takes its place.
-				const switchArrived = sent && items.some(
-					(item) =>
-						item.kind === "activity" &&
-						item.detail?.event === "provider_switch" &&
-						item.detail.targetHarness === sent.targetHarness &&
-						item.sequence > sent.afterSequence,
-				);
-				if (!sent || switchArrived) return [message];
-				const marker: ConversationActivity = {
-					kind: "activity",
-					id: `local-switch:${echo.clientMessageId}`,
-					sequence: sequence - 0.005,
-					revision: 0,
-					activityKind: "system",
-					status: "completed",
-					summary: "Switched agent",
-					createdAt: echo.createdAt,
-					detail: {
-						event: "provider_switch",
-						sourceHarness: sent.sourceHarness,
-						targetHarness: sent.targetHarness,
-						sourceModel: sent.sourceModel,
-						targetModel: sent.targetModel,
-						targetEffort: sent.targetEffort,
-						switching: true,
-					},
-				};
-				return [marker, message];
-			});
+			.flatMap((echo, index) => withLocalSwitchMarker(echo, items, {
+				kind: "message",
+				id: `local:${echo.clientMessageId}`,
+				turnId: `local:${echo.clientMessageId}`,
+				clientMessageId: echo.clientMessageId,
+				sequence: snapshot.latestSequence + index + 0.01,
+				revision: 0,
+				role: "user",
+				origin: "human",
+				text: echo.text,
+				continuation: echo.continuation,
+				content: echo.excerpts?.map((excerpt) => ({
+					type: "excerpt",
+					text: excerpt.text,
+					sourceConversationId: excerpt.conversationId,
+					sourceMessageId: excerpt.messageId,
+					sourceRevision: excerpt.revision,
+				})),
+				streaming: false,
+				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
+				createdAt: echo.createdAt,
+			}));
 	}, [items, localEchos, snapshot.latestSequence, snapshot.turns]);
 	const backgroundQueuedTurnIds = useMemo(
 		() => new Set(
@@ -3342,8 +3306,7 @@ export function Timeline({
 			...withSwitchMarkerKeys(items.filter(
 				(item) => !(item.kind === "message" && item.role === "user" && (
 					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
-					// A terminal switch hands the note to the agent as its first prompt, so a
-					// conversation read back from the terminal carries it. It is not the user's.
+					// A terminal switch hands the note over as the first prompt; it is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
 				)),
 			)),
@@ -4692,9 +4655,8 @@ const itemKey = (item: ConversationItem): string =>
 		: item.id;
 
 /**
- * The daemon's "Switched" line takes the id of the optimistic one drawn above the
- * same message, so React keeps the node and its label morphs from "Switching…" to
- * "Switched" instead of one line unmounting for the other.
+ * The daemon's "Switched" line takes the id of the optimistic one above the same message,
+ * so React keeps the node and its label morphs from "Switching…" to "Switched".
  */
 function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
 	const nextMessageId = (marker: ConversationItem) => {
@@ -4706,8 +4668,7 @@ function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
 		return next?.clientMessageId;
 	};
 	const isMarker = (item: ConversationItem) => item.kind === "activity" && item.detail?.event === "provider_switch";
-	// Only the marker nearest before a message was drawn with it: a switch whose
-	// send failed, then another, leaves two markers before the same message.
+	// Only the marker nearest before a message was drawn with it (a failed switch, then another, leaves two).
 	const nearest = new Map<string, number>();
 	for (const item of items) {
 		const id = isMarker(item) ? nextMessageId(item) : undefined;
@@ -4717,6 +4678,32 @@ function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
 		const id = isMarker(item) ? nextMessageId(item) : undefined;
 		return id && nearest.get(id) === item.sequence ? { ...item, id: `local-switch:${id}` } : item;
 	});
+}
+
+/** A message sent with a switch shows the "Switched" line above it at once, until the daemon's arrives. */
+function withLocalSwitchMarker(echo: ConversationLocalEcho, items: ConversationItem[], message: ConversationMessage): ConversationItem[] {
+	const sent = echo.providerSwitch;
+	const switchArrived = sent && items.some(
+		(item) =>
+			item.kind === "activity" &&
+			item.detail?.event === "provider_switch" &&
+			item.detail.targetHarness === sent.targetHarness &&
+			item.sequence > sent.afterSequence,
+	);
+	if (!sent || switchArrived) return [message];
+	const { afterSequence: _afterSequence, ...display } = sent;
+	const marker: ConversationActivity = {
+		kind: "activity",
+		id: `local-switch:${echo.clientMessageId}`,
+		sequence: message.sequence - 0.005,
+		revision: 0,
+		activityKind: "system",
+		status: "completed",
+		summary: "Switched agent",
+		createdAt: echo.createdAt,
+		detail: { event: "provider_switch", ...display, switching: true },
+	};
+	return [marker, message];
 }
 
 /** Whether a durable row is the one a local echo stands in for. */

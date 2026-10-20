@@ -1,9 +1,7 @@
 /**
- * Some agents list one entry per combination of model, reasoning effort,
- * thinking and speed: Cursor reports "Claude Opus 4.7 1M High Thinking Fast" and
- * two hundred and fifty siblings. Those are one model with settings, so the
- * picker shows the model once and moves the rest to the effort and speed
- * controls. The variant id is still what is sent to the agent.
+ * Cursor lists one entry per model, effort, thinking and speed ("Claude Opus 4.7 1M High
+ * Thinking Fast" and ~250 siblings). Pickers show each model once with the settings as
+ * controls; the variant id is still what is sent to the agent.
  */
 
 export interface ModelVariant {
@@ -147,10 +145,7 @@ export function findModelVariant(families: ModelFamily[], variantId: string | un
 	return undefined;
 }
 
-/**
- * The family's variant closest to the wanted settings. Effort wins over
- * thinking, and thinking over speed, because not every combination exists.
- */
+/** The family's variant closest to the wanted settings: effort over thinking over speed, as not every combination exists. */
 export function pickModelVariant(
 	family: ModelFamily,
 	want: { effort?: string; thinking?: boolean; fast?: boolean },
@@ -165,10 +160,7 @@ export function pickModelVariant(
 const UPPERCASE_WORDS = new Set(["gpt", "glm", "ai", "api"]);
 const GROUP_NAMES: Record<string, string> = { openai: "OpenAI", xai: "xAI", deepseek: "DeepSeek", "z.ai": "Z.ai" };
 
-/**
- * A readable name for a model an agent lists only by its id: "gpt-5.3-codex-spark"
- * becomes "GPT-5.3 Codex Spark". A label that is already written out is kept.
- */
+/** A readable name for a model listed only by id ("gpt-5.3-codex-spark" is "GPT-5.3 Codex Spark"); written-out labels are kept. */
 export function readableModelLabel(label: string): string {
 	// A routed id ("openrouter/anthropic/claude-haiku-4.5") is named by its last part.
 	label = label.slice(label.lastIndexOf("/") + 1);
@@ -185,16 +177,7 @@ export function readableModelLabel(label: string): string {
 	return words.join(" ");
 }
 
-/**
- * The heading for models an agent lists under a provider id: "openai-codex"
- * becomes "OpenAI Codex". An agent's own id adds nothing, so it
- * yields no heading: Kimi's "managed:kimi-code" is not shown.
- */
-/**
- * A running agent's own model choice named "<provider>/<model>", as Pi's chat
- * names them: the model's name under its provider, as the agent's catalog
- * shows it in the switch picker.
- */
+/** A running agent's "<provider>/<model>" choice (Pi's chat) named as its catalog shows it, under its provider. */
 export function providerQualifiedChoice<T extends { value: string; name: string; group?: string; groupName?: string }>(choice: T, harness: string): T {
 	const slash = choice.value.indexOf("/");
 	if (slash <= 0 || choice.group || choice.groupName) return choice;
@@ -203,6 +186,10 @@ export function providerQualifiedChoice<T extends { value: string; name: string;
 	return { ...choice, name: readableModelLabel(choice.name.slice(slash + 1)), group: modelGroupLabel(provider, harness) };
 }
 
+/**
+ * The heading for models listed under a provider id: "openai-codex" becomes "OpenAI Codex".
+ * An agent's own id yields none: Kimi's "managed:kimi-code" is not shown.
+ */
 export function modelGroupLabel(group: string | undefined, harness: string): string | undefined {
 	const raw = (group ?? "").trim();
 	if (!raw) return undefined;

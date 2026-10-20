@@ -123,8 +123,7 @@ export function AgentModelCombobox({
 		[models],
 	);
 	const explicitModel = isConcreteModelID(value) ? value : "";
-	// Cursor lists one id per model setting. The menu shows each model once, with
-	// its effort, thinking and speed as controls; the id saved is still the variant's.
+	// Cursor lists one id per model setting: each model shows once, but the variant's id is saved.
 	const families = useMemo(
 		() => (listsModelVariants(agentId) ? collapseModelVariants(concreteModels.map((model) => ({ id: model.id, label: model.label }))) : undefined),
 		[agentId, concreteModels],
@@ -521,8 +520,7 @@ export function AgentModelCombobox({
 						aria-hidden="true"
 					/>
 				</div>
-				{/* Where effort sits in this menu, Cursor's effort and thinking open beside the
-				    model like the other agents'. Its fast mode is not offered here, as for them. */}
+				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
 				{variant && tuning && (variant.family.efforts.length > 1 || variant.family.hasThinkingChoice) && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />

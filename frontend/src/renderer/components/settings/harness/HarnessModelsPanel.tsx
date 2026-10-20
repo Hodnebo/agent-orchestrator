@@ -100,8 +100,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
-	// Cursor lists one id per model setting. Each model shows once, and its switch
-	// turns all of its variants on or off together.
+	// Cursor lists one id per model setting; each model shows once and switches all its variants.
 	const families = listsModelVariants(agentId) ? collapseModelVariants(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
 	const familyIds = new Map(families?.map((family) => [family.id, family.variants.map((variant) => variant.id)]));
 	const idsOf = (id: string) => familyIds.get(id) ?? [id];

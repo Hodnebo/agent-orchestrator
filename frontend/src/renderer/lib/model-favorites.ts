@@ -1,10 +1,6 @@
 import { create } from "zustand";
 
-/**
- * A model the user starred in the agent picker, with the settings it had: one
- * favourite per model row. For an agent whose catalog folds settings into the
- * model id (Cursor), `model` is that exact variant.
- */
+/** A model row starred in the agent picker, with its settings. For Cursor, `model` is the exact variant. */
 export interface ModelFavorite {
 	harness: string;
 	/** The row in the agent's model list. */
