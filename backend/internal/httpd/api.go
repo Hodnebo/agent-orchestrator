@@ -59,6 +59,7 @@ type APIDeps struct {
 	Events                   cdcSubscriber
 	Telemetry                ports.EventSink
 	Mobile                   *controllers.MobileController
+	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
 	BrowserChrome            controllers.BrowserChromeService
 	PreviewServer            controllers.ManagedPreviewServer
