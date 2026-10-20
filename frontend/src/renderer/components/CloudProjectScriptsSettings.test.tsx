@@ -215,7 +215,10 @@ it("shows a step's time limit hint, with what empty means, on keyboard focus", a
 	expect(field).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
 	expect(field).not.toHaveAttribute("title");
 	act(() => field.focus());
-	expect(await screen.findByRole("tooltip")).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+	const tooltip = await screen.findByRole("tooltip");
+	expect(tooltip).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+	// Beside the field, so it covers neither the Scripts description above nor the step's command below.
+	expect(tooltip.closest("[data-side]")).toHaveAttribute("data-side", "left");
 });
 
 it("does not mark the time limit of an empty step, which saving drops", async () => {

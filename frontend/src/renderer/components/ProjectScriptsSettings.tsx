@@ -141,8 +141,8 @@ const stepTimeoutInvalid = (step: ScriptStepDraft) => step.command.trim() !== ""
  * A step's own time limit: a compact minutes field beside the step's other
  * controls. Empty is the default (placeholder); a value outside 1 to 120 is
  * marked invalid at once and keeps the form from saving. Its hint (the range
- * and what empty means) shows in a tooltip on hover and keyboard focus, and is
- * the field's description.
+ * and what empty means) shows in a tooltip on hover and keyboard focus, beside
+ * the field, and is the field's description.
  */
 function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onChange }: {
 	id: string;
@@ -190,7 +190,9 @@ function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onC
 					value={value}
 				/>
 			</TooltipTrigger>
-			<TooltipContent side="top" className="max-w-64">{hint}</TooltipContent>
+			{/* Beside the field: above it, it covered the end of the Scripts
+			    description, and below it, the step's command. */}
+			<TooltipContent side="left" className="max-w-64">{hint}</TooltipContent>
 		</Tooltip>
 		<span aria-hidden="true" className={cn(showsNoLimit && "invisible")}>{t("settings.project.stepTimeoutUnit")}</span>
 		<span className="sr-only" id={hintId}>{hint}</span>
