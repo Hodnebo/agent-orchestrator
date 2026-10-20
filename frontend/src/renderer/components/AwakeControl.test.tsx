@@ -469,6 +469,37 @@ describe("shared Stay Awake controls", () => {
 		expect(state.active).toBe(true);
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 	});
+	it.each(["expired", "live", "unknown"])("attempts every lid release when the first failed owner is %s", async (failureState) => {
+		state.sessions = [awakeSession({ id: "first", lidClosed: true }), awakeSession({ id: "second", lidClosed: true }), awakeSession({ id: "idle" })];
+		state.active = true;
+		state.lidActive = true;
+		mobile.keepAwake.enabled = true;
+		await show();
+		// The daemon may expire a timed owner after the UI has cached it.
+		if (failureState === "expired") state.sessions[0].endedAt = "now";
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/awake/sessions/{awakeId}/end" && options.params.path.awakeId === "first") return { error: "first release rejected" };
+			return post(path, options);
+		});
+		if (failureState === "unknown") test.get.mockImplementation(async (path) => path === "/api/v1/awake" ? { error: "status unavailable" } : { data: structuredClone(mobile) });
+		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
+		await waitFor(() => expect(state.sessions.find((s) => s.id === "second")?.endedAt).toBe("now"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Lid wake" })).toBeEnabled());
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions/{awakeId}/end", { params: { path: { awakeId: "first" } } });
+		expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: false, lidClosed: false } });
+		expect(mobile.keepAwake.enabled).toBe(false);
+		expect(state.sessions.find((s) => s.id === "idle")?.endedAt).toBeUndefined();
+		expect(state.active).toBe(true);
+		if (failureState === "expired") {
+			expect(state.lidActive).toBe(false);
+			expect(screen.queryByRole("alert")).toBeNull();
+			expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
+		} else {
+			expect(state.lidActive).toBe(true);
+			expect(screen.getByRole("alert")).toHaveTextContent("first release rejected");
+		}
+	});
 	it("pauses all automatic rules and replaces all owners when disabling a lid rule", async () => {
 		state.sessions = [awakeSession({ id: "timer", mode: "duration" }), awakeSession({ id: "agent", scope: "session", sessionId: "work" })];
 		state.rules = [{ id: "lid-rule", enabled: true, lidClosed: true }, { id: "idle-rule", enabled: true, lidClosed: false }] as AwakeState["rules"];

@@ -150,7 +150,22 @@ export function useStayAwake(enabled = true) {
 					// Temporary owners cannot preserve the Keep awake setting on their own.
 					if (!sessions.some((s) => !s.lidClosed && s.scope === "ao" && s.mode === "indefinite")) await start();
 					const endLid = async () => {
-						for (const s of sessions) if (s.lidClosed) await awake.actAsync({ kind: "end", id: s.id });
+						const failures: { id: string; error: unknown }[] = [];
+						for (const s of sessions) if (s.lidClosed) {
+							try {
+								await awake.actAsync({ kind: "end", id: s.id });
+							} catch (error) {
+								failures.push({ id: s.id, error });
+							}
+						}
+						if (failures.length) {
+							// A cached owner may have expired already. Confirm its absence
+							// after attempting every release; never hide a still-live owner.
+							await cache.cancelQueries({ queryKey: awakeQueryKey });
+							const latest = await cache.fetchQuery<AwakeState>({ queryKey: awakeQueryKey, staleTime: 0 }).catch(() => undefined);
+							const failure = failures.find(({ id }) => !latest || latest.sessions.some((s) => s.id === id && !s.endedAt));
+							if (failure) throw failure.error;
+						}
 					};
 					const results = await Promise.allSettled([endLid(), releaseMobile()]);
 					for (const result of results) if (result.status === "rejected") throw result.reason;
