@@ -4385,15 +4385,17 @@ const TurnGroup = memo(function TurnGroup({
 			</LiveResponseStatus>
 		) : null;
 	const outcome = group.outcome;
-	// "Worked for" opens where the live window was, over the same beat the window
-	// folds, so the top of the turn reads as the work collapsing into its summary
-	// rather than one line appearing while another vanishes. A settled turn loaded
-	// from history mounts it without the animation. The wrapper's own gutter keeps
-	// the summary's hover wash, which overhangs by 4px, inside the clip.
+	// "Worked for" is the fold for the turn's work, so it appears only when there is
+	// work to fold: a turn that went straight to its answer has nothing to open and
+	// shows the answer alone. It opens where the live window was, over the same beat
+	// the window folds, so the top of the turn reads as the work collapsing into its
+	// summary rather than one line appearing while another vanishes. A settled turn
+	// loaded from history mounts it without the animation. The wrapper's own gutter
+	// keeps the summary's hover wash, which overhangs by 4px, inside the clip.
 	const disclosureKey = `${group.key}:worked`;
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
-			{outcome ? (
+			{outcome && foldedRuns.length > 0 ? (
 				<motion.div
 					key="turn-worked-summary"
 					initial={{ height: 0, opacity: 0 }}
@@ -4406,7 +4408,7 @@ const TurnGroup = memo(function TurnGroup({
 						open={Boolean(activityDisclosureOverrides[disclosureKey])}
 						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 					>
-						{foldedRuns.length > 0 ? foldedRuns.map(renderRun) : undefined}
+						{foldedRuns.map(renderRun)}
 					</TurnWorkSummary>
 				</motion.div>
 			) : null}
