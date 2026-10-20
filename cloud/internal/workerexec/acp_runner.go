@@ -33,17 +33,21 @@ type acpSession struct {
 	steering  bool
 }
 
+// lockedBuffer collects an agent's stderr, which os/exec copies in from its
+// own goroutine while a failing turn reads it. The buffer is a field, not
+// embedded: an embedded bytes.Buffer would lend it ReadFrom, which io.Copy
+// prefers over Write, and the copy would then skip the lock.
 type lockedBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
+	mu     sync.Mutex
+	buffer bytes.Buffer
 }
 
 func (b *lockedBuffer) Write(value []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(value)
+	return b.buffer.Write(value)
 }
-func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.Buffer.String() }
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }
 
 func (s *acpSession) Steer(ctx context.Context, turnID, text string) error {
 	if s == nil || turnID != s.turnID || !s.steering {
