@@ -733,6 +733,42 @@ describe("CloudSessionChatSurface", () => {
 		expect(snapshot.controller.state).toBe("busy");
 	});
 
+	it("shows the session starting, not working, while its Setup runs ahead of the first turn", async () => {
+		const setupStep = (sequence: number, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId: "run-1", step: 1, total: 1, status, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+		// Setup running: the first prompt waits on it rather than being worked on.
+		const during = toSnapshot(session, [prompt, setupStep(2, "running")]);
+		expect(during.turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]);
+		expect(during.controller.state).toBe("ready");
+		// Setup done: the turn is the active request again while the worker claims it.
+		const after = toSnapshot(session, [prompt, setupStep(2, "running"), { ...setupStep(3, "succeeded"), createdAt: "2026-10-20T16:03:01Z" }]);
+		expect(after.turns[0].state).toBe("running");
+		// Its working time counts from Setup's end, not from the prompt.
+		expect(after.turns[0].startedAt).toBe("2026-10-20T16:03:01Z");
+
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, setupStep(2, "running")], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].session.provisionState).toBe("provisioning"));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		// The startup checklist in place of a working timer, and nothing to stop.
+		expect(props.session.provisionSteps).toEqual([
+			{ id: "setup", status: "running", startedAt: expect.any(String) },
+			{ id: "agent", status: "pending" },
+		]);
+		expect(props.onInterrupt).toBeUndefined();
+		expect(props.onSteer).toBeUndefined();
+	});
+
 	it("queues only later Cloud sends while the first awaits its worker", () => {
 		const events: CloudCpClientEvent[] = [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "First", turnId: "turn-1" }, createdAt: session.updatedAt },

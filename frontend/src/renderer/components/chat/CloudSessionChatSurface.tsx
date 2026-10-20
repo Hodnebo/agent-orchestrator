@@ -9,7 +9,7 @@ import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRI
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspace";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -219,6 +219,23 @@ function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActiv
 		detail: { event: "workspace.script.run", scriptRun: run },
 		createdAt,
 	};
+}
+
+/**
+ * The startup checklist a Cloud Chat session shows while its project's Setup
+ * runs: the worker takes no turn until Setup finishes, so the session's first
+ * prompt is waiting on Setup, not being worked on. Undefined once no Setup is
+ * running (a worker that sends no step events never shows it).
+ */
+export function cloudSetupStartupSteps(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): SessionProvisionStep[] | undefined {
+	if (events.some((event) => event.type === "chat.turn_started")) return undefined;
+	const setup = groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) })
+		.filter((run) => run.phase === "setup").at(-1);
+	if (setup?.status !== "running") return undefined;
+	return [
+		{ id: "setup", status: "running", startedAt: setup.startedAt },
+		{ id: "agent", status: "pending" },
+	];
 }
 
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
@@ -436,10 +453,18 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	}
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
-	// the active request; only later messages should appear in the queue.
-	if (!orderedTurns.some((turn) => turn.state === "running")) {
+	// the active request; only later messages should appear in the queue. While
+	// the project's Setup runs it is not: nothing works on it until Setup ends,
+	// and the startup checklist (cloudSetupStartupSteps) shows that instead.
+	if (!orderedTurns.some((turn) => turn.state === "running") && !cloudSetupStartupSteps(session, events)) {
 		const next = orderedTurns.find((turn) => turn.state === "queued");
-		if (next) next.state = "running";
+		if (next) {
+			next.state = "running";
+			// Its working time starts once a Setup it waited on ended, not when
+			// it was sent: Setup time is not agent time.
+			const setupEnd = [...scriptRuns.values()].filter((run) => run.phase === "setup" && run.status !== "running").at(-1)?.lastEventAt;
+			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
+		}
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
@@ -613,6 +638,14 @@ export function CloudSessionChatSurface({
 	const snapshot = useMemo(() => ({
 		...toSnapshot(session, eventsQuery.data ?? []), settings: { ...settings, approvalMode: shownApprovalMode },
 	}), [eventsQuery.data, session, settings, shownApprovalMode]);
+	// While Setup runs, the session reads as starting, as a local session's
+	// startup does: the checklist in place of a working timer, and messages
+	// that send in order once the agent starts.
+	const setupStartupSteps = useMemo(() => cloudSetupStartupSteps(session, eventsQuery.data ?? []), [eventsQuery.data, session]);
+	const setupStartupSession = useMemo<WorkspaceSession>(
+		() => setupStartupSteps ? { ...session, provisionState: "provisioning", provisionSteps: setupStartupSteps } : session,
+		[session, setupStartupSteps],
+	);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -740,7 +773,7 @@ export function CloudSessionChatSurface({
 			steerPending={steer.isPending}
 			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
-			session={session}
+			session={setupStartupSession}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
