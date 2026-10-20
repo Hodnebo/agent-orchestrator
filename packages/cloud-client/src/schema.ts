@@ -377,7 +377,7 @@ export interface paths {
         delete: operations["deleteSession"];
         options?: never;
         head?: never;
-        /** @description Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId} does. */
+        /** @description Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId} does. The project orchestrator cannot be renamed (ORCHESTRATOR_RENAME_UNSUPPORTED). */
         patch: operations["updateSession"];
         trace?: never;
     };

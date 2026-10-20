@@ -565,7 +565,9 @@ paths:
     patch:
       operationId: updateSession
       tags: [Sessions]
-      description: Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId} does.
+      description: >-
+        Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId}
+        does. The project orchestrator cannot be renamed (ORCHESTRATOR_RENAME_UNSUPPORTED).
       requestBody:
         required: true
         content:

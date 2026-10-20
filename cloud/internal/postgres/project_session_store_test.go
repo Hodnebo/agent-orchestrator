@@ -233,6 +233,17 @@ func TestRenameSession(t *testing.T) {
 	if renamed.DisplayName != "Fix the login page" || read.DisplayName != "Fix the login page" {
 		t.Fatalf("display name = %q / %q", renamed.DisplayName, read.DisplayName)
 	}
+	var audits int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_audit_events WHERE action = 'session.renamed' AND resource_id = $1`, fixture.sessionID).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("rename audit events = %d, err %v", audits, err)
+	}
+	// The project orchestrator keeps its role as its name, as locally.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator' WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RenameSession(ctx, principal, fixture.orgID, fixture.sessionID, "Other"); !errors.Is(err, ErrOrchestratorRename) {
+		t.Fatalf("orchestrator rename = %v, want ErrOrchestratorRename", err)
+	}
 }
 
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {

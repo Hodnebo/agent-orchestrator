@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -65,7 +66,7 @@ type sessionRenameStore interface {
 }
 
 type updateSessionRequest struct {
-	DisplayName string `json:"displayName"`
+	DisplayName *string `json:"displayName"`
 }
 
 // updateSession renames a session, as the local daemon's PATCH /sessions/{id}
@@ -83,16 +84,30 @@ func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request updateSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The session update request is invalid.")
 		return
 	}
-	name := strings.TrimSpace(request.DisplayName)
-	if name == "" || utf8.RuneCountInString(name) > 100 {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "A session name needs 1 to 100 characters.")
+	// The local daemon's codes and limits for the same request.
+	name := ""
+	if request.DisplayName != nil {
+		name = strings.TrimSpace(*request.DisplayName)
+	}
+	if name == "" {
+		writeError(w, r, http.StatusUnprocessableEntity, "DISPLAY_NAME_REQUIRED", "displayName is required.")
+		return
+	}
+	if utf8.RuneCountInString(name) > 100 {
+		writeError(w, r, http.StatusUnprocessableEntity, "DISPLAY_NAME_TOO_LONG", "displayName must be 100 characters or fewer.")
 		return
 	}
 	session, err := store.RenameSession(r.Context(), principalFrom(r), orgID, sessionID, name)
+	if errors.Is(err, postgres.ErrOrchestratorRename) {
+		writeError(w, r, http.StatusUnprocessableEntity, "ORCHESTRATOR_RENAME_UNSUPPORTED", "The project orchestrator cannot be renamed.")
+		return
+	}
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return

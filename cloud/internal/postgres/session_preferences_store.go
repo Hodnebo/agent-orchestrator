@@ -278,8 +278,18 @@ func (s *Store) RenameSession(
 		if access.Role == "viewer" {
 			return ErrForbidden
 		}
-		if _, err := tx.Exec(ctx, `UPDATE ao_sessions SET display_name = $3, updated_at = now()
-			WHERE org_id = $1 AND id = $2`, orgID, sessionID, displayName); err != nil {
+		var kind string
+		if err := tx.QueryRow(ctx, `UPDATE ao_sessions SET display_name = $3, updated_at = now()
+			WHERE org_id = $1 AND id = $2 AND kind <> 'orchestrator'
+			RETURNING kind`, orgID, sessionID, displayName).Scan(&kind); errors.Is(err, pgx.ErrNoRows) {
+			return ErrOrchestratorRename
+		} else if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO ao_audit_events (
+				org_id, actor_user_id, action, resource_type, resource_id
+			) VALUES ($1, $2, 'session.renamed', 'session', $3)`,
+			orgID, principal.UserID, sessionID); err != nil {
 			return err
 		}
 		return getSession(ctx, tx, orgID, sessionID, &session)
