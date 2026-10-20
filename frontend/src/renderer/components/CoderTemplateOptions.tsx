@@ -2,15 +2,19 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCoderTemplateParameters } from "../hooks/useCoderTemplateParameters";
+import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import type { CloudCpCoderTemplateParameter } from "../lib/cloud-cp/types";
 import {
+	coderReusesTemplateCheckout,
 	decodeListValue,
+	duplicateCloneOptions,
 	editableTemplateParameters,
 	effectiveParameterValue,
 	encodeListValue,
 	withParameterValue,
 } from "../lib/coder-template-parameters";
 import { onboardingFieldErrorClass, onboardingFieldHintClass } from "../lib/onboarding-ui";
+import { cn } from "../lib/utils";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -44,6 +48,8 @@ export function CoderTemplateOptions({
 	onChange,
 	disabled,
 	footer,
+	repositoryUrls = [],
+	projectWorkingDirectory,
 }: {
 	orgId: string | undefined;
 	templateId: string | undefined;
@@ -52,10 +58,24 @@ export function CoderTemplateOptions({
 	disabled?: boolean;
 	/** Shown under the fields, e.g. the settings form's save state. */
 	footer?: ReactNode;
+	/** The project's main and additional repositories, which AO checks out itself. */
+	repositoryUrls?: readonly string[];
+	/** The project's own working folder, when it sets one. */
+	projectWorkingDirectory?: string;
 }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { parameters: all, isError, settled } = useCoderTemplateParameters(orgId, templateId, true, overrides);
 	const parameters = editableTemplateParameters(all);
+	// A ticked template option naming one of the project's repositories makes
+	// the template clone a second copy beside AO's own checkout, unless the
+	// session adopts the template's checkout (workspace user with reuse or a
+	// working folder). Stay quiet until the connection's mode is known; a
+	// disabled read (no own Coder connection) means the default ao-worker.
+	const orgCoder = useOrgCoderConfig();
+	const modeKnown = orgCoder.data !== undefined || (!orgCoder.isLoading && !orgCoder.isError);
+	const duplicates = modeKnown && !coderReusesTemplateCheckout(orgCoder.data ?? null, projectWorkingDirectory)
+		? duplicateCloneOptions(parameters, overrides, repositoryUrls)
+		: undefined;
 	// Only an edit made here prunes values: a saved value is never dropped just
 	// because the form opened.
 	const edited = useRef(false);
@@ -105,6 +125,11 @@ export function CoderTemplateOptions({
 							value={effectiveParameterValue(parameter, overrides)}
 							disabled={disabled}
 							problem={parameter.name in overrides ? valueProblem(parameter) : undefined}
+							warning={duplicates?.has(parameter.name)
+								? t("coder.templateOptions.duplicateClone", {
+									repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(duplicates.get(parameter.name) ?? []),
+								})
+								: undefined}
 							onChange={(value) => {
 								edited.current = true;
 								onChange(withParameterValue(overrides, parameter, value));
@@ -128,6 +153,7 @@ function TemplateParameterField({
 	value,
 	disabled,
 	problem,
+	warning,
 	onChange,
 }: {
 	parameter: CloudCpCoderTemplateParameter;
@@ -135,6 +161,8 @@ function TemplateParameterField({
 	disabled?: boolean;
 	/** Coder's error about the current value, shown under the field. */
 	problem?: string;
+	/** A heads-up about the current value that does not block saving. */
+	warning?: string;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -253,6 +281,7 @@ function TemplateParameterField({
 			{heading}
 			{hint}
 			{control}
+			{warning ? <p className={cn(onboardingFieldHintClass, "text-warning")}>{warning}</p> : null}
 			{problemText}
 		</div>
 	);

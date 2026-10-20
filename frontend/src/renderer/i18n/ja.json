@@ -2947,6 +2947,7 @@
 	"coder.templateOptions.title": "テンプレートオプション",
 	"coder.templateOptions.titleCount": "テンプレートオプション ({{total}})",
 	"coder.templateOptions.subtitle": "Coder テンプレート独自のオプションです。このプロジェクトのリポジトリは AO が自分でチェックアウトします。",
+	"coder.templateOptions.duplicateClone": "テンプレートは {{repos}} も、AO が作業するコピーとは別にクローンします。コピーを 1 つにするにはチェックを外してください。",
 	"coder.templateOptions.required": "必須",
 	"coder.templateOptions.loadFailed": "このテンプレートのオプションを読み込めませんでした。",
 	"coder.templateOptions.checkFailed": "これらのオプションをテンプレートで確認できませんでした。最後に編集した値を変更して、もう一度お試しください。",

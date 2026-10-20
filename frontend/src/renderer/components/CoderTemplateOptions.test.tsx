@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	getCoderTemplateParameters: vi.fn(),
 	evaluateCoderTemplateParameters: vi.fn(),
 	hasCoder: true,
+	orgCoder: { data: null, isLoading: false, isError: false } as { data: Record<string, unknown> | null | undefined; isLoading: boolean; isError: boolean },
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -25,6 +26,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ hasCoder: mocks.hasCoder }) }));
+vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => mocks.orgCoder }));
 
 const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "branch", displayName: "Base branch", description: "Checked out on boot.", type: "string", mutable: true, required: false, defaultValue: "main", order: 2 },
@@ -42,12 +44,17 @@ const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "size", type: "string", mutable: true, required: false, defaultValue: "medium" },
 ];
 
-function Harness({ initial = {}, onChange }: { initial?: Record<string, string>; onChange: (next: Record<string, string>) => void }) {
+function Harness({ initial = {}, onChange, repositoryUrls }: {
+	initial?: Record<string, string>;
+	onChange: (next: Record<string, string>) => void;
+	repositoryUrls?: string[];
+}) {
 	const [overrides, setOverrides] = useState(initial);
 	return (
 		<CoderTemplateOptions
 			orgId="org-1"
 			templateId="tpl-1"
+			repositoryUrls={repositoryUrls}
 			overrides={overrides}
 			onChange={(next) => {
 				setOverrides(next);
@@ -57,12 +64,12 @@ function Harness({ initial = {}, onChange }: { initial?: Record<string, string>;
 	);
 }
 
-function renderOptions(initial?: Record<string, string>) {
+function renderOptions(initial?: Record<string, string>, repositoryUrls?: string[]) {
 	const onChange = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={client}>
-			<Harness initial={initial} onChange={onChange} />
+			<Harness initial={initial} onChange={onChange} repositoryUrls={repositoryUrls} />
 		</QueryClientProvider>,
 	);
 	return { onChange };
@@ -263,5 +270,64 @@ describe("CoderTemplateOptions with dynamic parameters", () => {
 		await userEvent.clear(screen.getByRole("textbox", { name: "Region" }));
 		await userEvent.type(screen.getByRole("textbox", { name: "Region" }), "us");
 		await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), { timeout: 4000 });
+	});
+});
+
+describe("CoderTemplateOptions duplicate clone warning", () => {
+	const repos: CloudCpCoderTemplateParameter = {
+		name: "github_repos", displayName: "Github Repositories", type: "list(string)", mutable: false, required: false, defaultValue: "[]", order: 1,
+		options: [{ name: "Alice", value: "Alice" }, { name: "Bob", value: "bob-svc" }],
+	};
+	const projectRepos = ["https://github.com/11x-ai/alice", "https://github.com/11x-ai/carol"];
+	const warning = /Your template will also clone .*, separate from the copy AO works in\. Untick to keep one copy\./;
+
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		mocks.hasCoder = true;
+		mocks.orgCoder = { data: null, isLoading: false, isError: false };
+		mocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [repos] });
+		mocks.evaluateCoderTemplateParameters.mockReset().mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
+	});
+
+	it("warns when a ticked option names a project repository and AO clones as ao-worker", async () => {
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		const { onChange } = renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		expect(await screen.findByText("Your template will also clone Alice, separate from the copy AO works in. Untick to keep one copy.")).toBeInTheDocument();
+		// A heads-up, not an error: nothing blocks saving.
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("checkbox", { name: "Alice" }));
+		expect(onChange).toHaveBeenLastCalledWith({});
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("warns for the default ao-worker when the org has no Coder connection of its own", async () => {
+		renderOptions({ github_repos: "[\"Alice\"]" }, ["https://github.com/11x-ai/Alice.git"]);
+		expect(await screen.findByText(warning)).toBeInTheDocument();
+	});
+
+	it("stays hidden while the option is unticked", async () => {
+		renderOptions(undefined, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("stays hidden when no ticked option names a project repository", async () => {
+		renderOptions({ github_repos: "[\"bob-svc\"]" }, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("stays hidden when the session reuses the template's checkout as the workspace user", async () => {
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "workspace", reuseExistingCheckout: true, tokenSet: true }, isLoading: false, isError: false };
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("stays hidden until the connection's mode is known", async () => {
+		mocks.orgCoder = { data: undefined, isLoading: true, isError: false };
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		await screen.findByText("Github Repositories");
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 });
