@@ -25,6 +25,7 @@ type Store interface {
 	RollbackCoordinatedSessionInterface(ctx context.Context, owner, orgID, transitionID string) error
 	CompleteCoordinatedInterfaceTransition(ctx context.Context, owner, transitionID string) error
 	ReleaseCoordinatedInterfaceClaim(ctx context.Context, owner, transitionID string) error
+	FailTerminatedInterfaceTransition(ctx context.Context, owner, transitionID string, from domain.SessionInterfaceTransitionPhase, errorCode, errorDetail string) error
 }
 
 // WorkerDriver executes handoff steps on the worker that owns the agent process.
@@ -458,9 +459,10 @@ func (c *Coordinator) pruneRecoveryRetries(now time.Time) {
 // endTerminated fails a handoff whose session was deleted: its worker is gone
 // and a deleted session never gets another, so no step (and no recovery proof)
 // can run. Without this a recovery_required handoff on a deleted session asks
-// for a worker on every tick forever. Prompts it held stay undelivered, as any
-// prompt a deleted session never ran; they are not turned into turns that a
-// restored session would run unasked.
+// for a worker on every tick forever. Prompts it held become failed turns
+// that say they were not sent because the session was deleted
+// (postgres.TerminatedInterfaceMessageError): never lost silently, and never
+// run unasked once the session is restored.
 func (c *Coordinator) endTerminated(ctx context.Context, transition postgres.CoordinatedInterfaceTransition) error {
 	delete(c.recoveryRetries, transition.ID)
 	delete(c.unverifiedSince, transition.ID)
@@ -471,11 +473,8 @@ func (c *Coordinator) endTerminated(ctx context.Context, transition postgres.Coo
 	}
 	stepCtx, cancel := context.WithTimeout(ctx, c.options.StepTimeout)
 	defer cancel()
-	err := c.store.AdvanceCoordinatedInterfaceTransition(
-		stepCtx, c.owner, transition.ID, transition.Phase,
-		domain.SessionInterfaceTransitionFailed, transition.NativeConversationID,
-		SessionTerminatedCode, detail, false,
-	)
+	err := c.store.FailTerminatedInterfaceTransition(stepCtx, c.owner, transition.ID, transition.Phase,
+		SessionTerminatedCode, detail)
 	if errors.Is(err, postgres.ErrTransitionStale) {
 		return errCoordinationLost
 	}

@@ -608,6 +608,100 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 	return transitions, nil
 }
 
+// TerminatedInterfaceMessageError is what each prompt held by a handoff of a
+// deleted session says: it is shown as a failed turn, so the prompt is neither
+// lost silently nor run unasked once the session is restored.
+const TerminatedInterfaceMessageError = "This message was not sent because the session was deleted."
+
+// FailTerminatedInterfaceTransition ends a claimed handoff of a deleted
+// session as failed with errorCode and errorDetail. Each prompt it held
+// becomes a failed turn with TerminatedInterfaceMessageError (a
+// chat.turn_aborted event on its message), never a queued one, so a restored
+// session shows the prompts as not sent instead of running them late.
+func (s *Store) FailTerminatedInterfaceTransition(
+	ctx context.Context,
+	owner, transitionID string,
+	from domain.SessionInterfaceTransitionPhase,
+	errorCode, errorDetail string,
+) error {
+	return s.withService(ctx, func(tx pgx.Tx) error {
+		var orgID, sessionID string
+		if err := tx.QueryRow(ctx, `SELECT org_id, session_id FROM ao_interface_transitions
+			WHERE id = $1 AND claimed_by = $2 AND phase = $3 FOR UPDATE`,
+			transitionID, owner, from).Scan(&orgID, &sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTransitionStale
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, orgID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id, turn_id, user_message_sequence, mode_cap, denied_commands
+			FROM ao_interface_transition_messages
+			WHERE org_id = $1 AND transition_id = $2 AND delivered_at IS NULL
+			ORDER BY id FOR UPDATE`, orgID, transitionID)
+		if err != nil {
+			return err
+		}
+		type held struct {
+			id       int64
+			turnID   string
+			sequence int64
+			modeCap  string
+			denied   []string
+		}
+		var messages []held
+		for rows.Next() {
+			var message held
+			if err := rows.Scan(&message.id, &message.turnID, &message.sequence, &message.modeCap, &message.denied); err != nil {
+				rows.Close()
+				return err
+			}
+			messages = append(messages, message)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, message := range messages {
+			tag, err := tx.Exec(ctx, `INSERT INTO ao_turns (
+				id, org_id, session_id, user_message_sequence, mode_cap, denied_commands,
+				state, error_message, completed_at
+			) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, 'failed', $7, now())
+			ON CONFLICT (id) DO NOTHING`, message.turnID, orgID, sessionID, message.sequence,
+				message.modeCap, nonNilStrings(message.denied), TerminatedInterfaceMessageError)
+			if err != nil {
+				return normalizeConstraintError(err)
+			}
+			// Handled: the message never reaches a controller.
+			if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, message.id); err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				continue
+			}
+			if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_aborted", map[string]any{
+				"turnId": message.turnID, "attempt": 0, "error": TerminatedInterfaceMessageError,
+			}); err != nil {
+				return err
+			}
+		}
+		tag, err := tx.Exec(ctx, `UPDATE ao_interface_transitions
+			SET phase = 'failed', error_code = $3, error_detail = $4,
+				completed_at = now(), updated_at = now()
+			WHERE id = $1 AND claimed_by = $2 AND phase = $5`,
+			transitionID, owner, errorCode, errorDetail, from)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrTransitionStale
+		}
+		return nil
+	})
+}
+
 // RenewCoordinatedInterfaceClaim keeps a claimed transition leased to this
 // owner while a bounded worker operation is in flight.
 func (s *Store) RenewCoordinatedInterfaceClaim(

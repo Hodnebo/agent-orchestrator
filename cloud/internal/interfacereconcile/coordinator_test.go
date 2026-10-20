@@ -41,6 +41,7 @@ type fakeStore struct {
 	heldMessagesReleased bool
 	claimCursor          int
 	claimLimits          []int
+	terminatedFailed     int
 }
 
 func (f *fakeStore) ClaimCoordinatedInterfaceTransitions(_ context.Context, _ string, limit int, _ time.Duration) ([]postgres.CoordinatedInterfaceTransition, error) {
@@ -112,6 +113,21 @@ func (f *fakeStore) CompleteCoordinatedInterfaceTransition(ctx context.Context, 
 	return nil
 }
 func (f *fakeStore) ReleaseCoordinatedInterfaceClaim(ctx context.Context, owner, transitionID string) error {
+	return nil
+}
+func (f *fakeStore) FailTerminatedInterfaceTransition(_ context.Context, _, transitionID string, from domain.SessionInterfaceTransitionPhase, errorCode, errorDetail string) error {
+	f.terminatedFailed++
+	for index := range f.transitions {
+		if f.transitions[index].ID != transitionID {
+			continue
+		}
+		if f.transitions[index].Phase != from {
+			return postgres.ErrTransitionStale
+		}
+		f.transitions[index].Phase = domain.SessionInterfaceTransitionFailed
+		f.transitions[index].ErrorCode = errorCode
+		f.transitions[index].ErrorDetail = errorDetail
+	}
 	return nil
 }
 
@@ -802,7 +818,8 @@ func TestReconcileDrainRestartsProofWindowWhenATurnStarts(t *testing.T) {
 // stay recovery_required and ask for one on every tick forever (prod: seven
 // such sessions logged "dispatch interface.ready: worker unavailable" about
 // eight times a second for two weeks). It now ends as failed without touching
-// the worker and without turning its held prompts into turns.
+// the worker, and its held prompts end as failed turns that say they were not
+// sent, never queued ones.
 func TestReconcileEndsHandoffOfDeletedSession(t *testing.T) {
 	for _, phase := range []domain.SessionInterfaceTransitionPhase{
 		domain.SessionInterfaceTransitionRecovery,
@@ -826,8 +843,8 @@ func TestReconcileEndsHandoffOfDeletedSession(t *testing.T) {
 		if !strings.Contains(got.ErrorDetail, "deleted") || !strings.Contains(got.ErrorDetail, "SOURCE_DRAIN_FAILED") {
 			t.Fatalf("%s: detail %q does not explain the deletion and keep the earlier failure", phase, got.ErrorDetail)
 		}
-		if store.heldMessagesReleased {
-			t.Fatalf("%s: held prompts of a deleted session were turned into turns", phase)
+		if store.heldMessagesReleased || store.terminatedFailed != 1 {
+			t.Fatalf("%s: held prompts must end as not sent (released=%t, failed=%d)", phase, store.heldMessagesReleased, store.terminatedFailed)
 		}
 		if driver.readyCalls+driver.interruptCalls+driver.inspectCalls+driver.startCalls != 0 {
 			t.Fatalf("%s: a deleted session's worker was asked to act: %+v", phase, driver)
