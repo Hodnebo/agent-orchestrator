@@ -299,6 +299,7 @@ func (r SetupRunner) Run(
 	defer steps.close()
 	started := time.Now()
 	event = SetupEvent{Status: SetupSucceeded}
+	ownedOnly := OwnedRepoFoldersOnly(r.DataDir)
 	for index, command := range commands {
 		logPath := ""
 		if logs != "" {
@@ -307,6 +308,14 @@ func (r SetupRunner) Run(
 		timeout := timeouts[index]
 		if r.StepTimeout > 0 {
 			timeout = r.StepTimeout
+		}
+		if folder, _, ok := domain.ParseRepoScriptCommand(command); ok && ownedOnly {
+			// An additional repository's folder the template made is not
+			// AO's: the step never runs there, and the rest still run.
+			if path := filepath.Join(filepath.Dir(dir), folder); ForeignRepoFolder(path) {
+				steps.skipOne(index+1, command, timeout, ForeignRepoFolderHint(DisplayPath(path, os.Getenv(UserHomeEnv))))
+				continue
+			}
 		}
 		live := steps.start(index+1, command, logPath, timeout)
 		step := runProjectScriptStep(ctx, command, timeout, dir, environment.Map(), logPath, live)
@@ -503,13 +512,25 @@ func CleanupCommandsScript(steps []string, nonce string) string {
 			"  case \"$ao_t\" in ''|*[!0-9]*) ao_t=0 ;; esac\n" +
 			"  echo \"$ao_t\"\n}\n")
 		script.WriteString("printf '%s\\n' " + shellQuote(marker+"log") + "\" $(dirname \"$0\")/" + cleanupStateDir + "/output\"\n")
+		// A hook whose session's checkouts must be AO's own sets
+		// ownedRepoFoldersEnv (WriteCleanupHook): an additional repository's
+		// folder that is not the hook user's own (ForeignRepoFolder) is the
+		// Coder template's, and no step runs in it. The steps never see it.
+		script.WriteString("ao_owned_only=${" + ownedRepoFoldersEnv + ":-}\nunset " + ownedRepoFoldersEnv + "\n" +
+			"ao_foreign() { [ -L \"$1\" ] || { [ -e \"$1\" ] && { ! [ -d \"$1\" ] || ! [ -O \"$1\" ]; }; }; }\n")
 	}
 	for index, command := range commands {
 		step := strconv.Itoa(index + 1)
 		seconds := strconv.Itoa(int(timeouts[index] / time.Second))
 		summary, repository := scriptCommandSummary(command, redactor)
+		guarded := repository != ""
 		if repository == "" {
 			repository = scriptMarkerMainRepository
+		}
+		if guarded {
+			script.WriteString("if [ \"$ao_owned_only\" = 1 ] && ao_foreign " + shellQuote("../"+repository) + "; then\n" +
+				"  printf '%s\\n' " + shellQuote(marker+step+" "+total+" skip "+scriptSkipForeignFolder+" "+repository+" "+summary) + "\n" +
+				"else\n")
 		}
 		script.WriteString("ao_started=$(ao_ms)\n")
 		script.WriteString("printf '%s %s %s\\n' " + shellQuote(marker+step+" "+total+" start") + " \"$ao_started\" " +
@@ -526,6 +547,9 @@ func CleanupCommandsScript(steps []string, nonce string) string {
 			"  echo \"ran as $(id -un 2>/dev/null) (groups: $(id -Gn 2>/dev/null)) in $(pwd)\" >&2\n" +
 			"  " + end +
 			"  exit \"$ao_code\"\nfi\n" + end)
+		if guarded {
+			script.WriteString("fi\n")
+		}
 	}
 	return script.String()
 }
@@ -570,6 +594,11 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 	sort.Strings(keys)
 	for _, key := range keys {
 		content.WriteString("export " + key + "=" + shellQuote(values[key]) + "\n")
+	}
+	if OwnedRepoFoldersOnly(dataDir) {
+		// The commands script skips an additional repository's step whose
+		// folder is not the worker's own (CleanupCommandsScript).
+		content.WriteString("export " + ownedRepoFoldersEnv + "=1\n")
 	}
 	content.WriteString("sh " + shellQuote(commandsPath) + " >>\"$ao_state/output\" 2>&1\n" +
 		"ao_code=$?\n" +

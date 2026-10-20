@@ -20,6 +20,11 @@ import (
 //	@@ao-step-<nonce> log <path>
 //	@@ao-step-<nonce> <n> <total> start <epochMs> <repository or /> <command>
 //	@@ao-step-<nonce> <n> <total> end <exitCode> <durationMs> [<timeoutSeconds>]
+//	@@ao-step-<nonce> <n> <total> skip <reason> <repository> <command>
+//
+// A skip marker stands for a step the script did not run, for reason: so far
+// only scriptSkipForeignFolder, an additional repository's folder that is not
+// AO's (ForeignRepoFolderHint).
 //
 // A script from before per-step time limits leaves the timeout out; its steps
 // had ProjectScriptStepTimeout.
@@ -31,6 +36,13 @@ const (
 	// scriptMarkerMainRepository stands for the main repository in a start
 	// marker; a repository folder never contains a slash.
 	scriptMarkerMainRepository = "/"
+	// scriptSkipForeignFolder is a skip marker's reason for a step of an
+	// additional repository whose folder is not AO's.
+	scriptSkipForeignFolder = "foreign_folder"
+	// ownedRepoFoldersEnv, set to 1 by a Cleanup hook whose session's
+	// checkouts must be AO's own (OwnedRepoFoldersOnly), makes its commands
+	// script skip the steps of an additional repository whose folder is not.
+	ownedRepoFoldersEnv = "AO_CLEANUP_OWNED_REPO_FOLDERS_ONLY"
 )
 
 var (
@@ -229,6 +241,23 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				current.event.Command = boundScriptCommand(redactor.redactCommand(parts[2]))
 			}
 			steps[step] = current
+		case "skip":
+			if current != nil && !current.finished {
+				finish(current, -1, 0, 0)
+			}
+			parts := strings.SplitN(rest, " ", 3)
+			skipped := &cleanupStep{event: ScriptStepEvent{Step: step, Status: ScriptStepSkipped}, finished: true}
+			if len(parts) > 1 && parts[1] != scriptMarkerMainRepository {
+				skipped.event.Repository = parts[1]
+			}
+			if len(parts) > 2 {
+				skipped.event.Command = boundScriptCommand(redactor.redactCommand(parts[2]))
+			}
+			if parts[0] == scriptSkipForeignFolder && skipped.event.Repository != "" {
+				skipped.event.Hint = ForeignRepoFolderHint("../" + skipped.event.Repository)
+			}
+			steps[step] = skipped
+			current, lastFinished = nil, step
 		case "end":
 			parts := strings.Fields(rest)
 			exitCode, duration, timeout := -1, time.Duration(0), time.Duration(0)
@@ -306,7 +335,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 				event.StartedAt = scriptTimestamp(time.UnixMilli(step.startedMs))
 			}
 			event.Output, event.OutputTruncated = redactor.scriptStepOutput(step.output.String(), step.headDropped)
-			if event.Status != SetupSucceeded {
+			if event.Status != SetupSucceeded && event.Status != ScriptStepSkipped {
 				cleanupFailureContext(&event, event.Output)
 			}
 		case number < firstSeen:

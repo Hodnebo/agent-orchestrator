@@ -48,6 +48,28 @@ func resolveCheckoutDirectory(logger *slog.Logger, dir string) error {
 	return nil
 }
 
+// recordOwnedRepoFolders marks, for a session whose checkouts must be AO's
+// own (owned: a dedicated-user worker's working folder), that an additional
+// repository's folder that already exists beside the working folder and is not
+// the worker's (the Coder template's own clone) is never used, as the main
+// folder is not (worker.RecordOwnedRepoFolders): AO does not check the
+// repository out there, and its Setup and Cleanup steps are skipped. Each such
+// repository is reported as skipped. Any other session clears the mark.
+func recordOwnedRepoFolders(logger *slog.Logger, dataDir string, owned bool, launch worker.LaunchContext, workspace string) {
+	refused, err := worker.RecordOwnedRepoFolders(dataDir, owned,
+		worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:])
+	if err != nil {
+		logger.Warn("multi-repo: could not record which additional repository folders are AO's own", "error", err)
+	}
+	for _, checkout := range refused {
+		logger.Warn("multi-repo: additional repository skipped: "+
+			worker.DisplayPath(checkout.Path, os.Getenv(worker.UserHomeEnv))+" already exists (created by your Coder template), "+
+			"so AO does not check it out there or run its Setup and Cleanup steps in it. "+
+			"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.",
+			"repo", checkout.URL, "path", checkout.Path)
+	}
+}
+
 // refusedCheckoutWorkspace names the empty folder, in the worker's own data
 // directory, a session whose working folder was refused works in: its shell,
 // terminal and agent never open in the refused folder, which is not AO's.

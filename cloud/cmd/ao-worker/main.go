@@ -186,6 +186,10 @@ func run(logger *slog.Logger) error {
 	// checkoutRefused: the project's working folder is not AO's to use, so
 	// the session never works there and its Cleanup never runs there.
 	checkoutRefused := false
+	// ownedCheckouts: every checkout of the session must be AO's own folder,
+	// the additional repositories' beside the working folder as well as the
+	// main one (recordOwnedRepoFolders).
+	ownedCheckouts := false
 	switch {
 	case workingDirectory != "" && hasRepository:
 		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
@@ -207,6 +211,7 @@ func run(logger *slog.Logger) error {
 		workspace, workingDirectoryErr = settleCheckoutDirectory(logger, checkoutDirectory, dataDir)
 		reuse.Workspace = workspace
 		checkoutRefused = workingDirectoryErr != nil
+		ownedCheckouts = true
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
 		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
 		workspace = reuse.Workspace
@@ -226,6 +231,7 @@ func run(logger *slog.Logger) error {
 		ProjectID:     bootstrap.Launch.ProjectID,
 		ProjectName:   bootstrap.Launch.ProjectName,
 	}
+	recordOwnedRepoFolders(logger, dataDir, ownedCheckouts, bootstrap.Launch, workspace)
 	// The project's Cleanup commands run before the workspace is deleted; the
 	// provider runs this hook (cleanuphook) since the worker is gone by then.
 	// A session that never got its working folder installs a hook that runs
@@ -891,12 +897,17 @@ func cloneExtraRepos(
 			"repo", repo.URL, "folder", worker.ExtraRepoDirName(repo.URL))
 	}
 	adoptedAny := false
+	ownedOnly := worker.OwnedRepoFoldersOnly(dataDir)
 	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
 		// A clone uses the main checkout's askpass mechanism: the token stays in
 		// the command's environment and never enters the URL, argv, or the
 		// repo's .git/config. In the user's own workspace an existing checkout
 		// is adopted without writing AO's git configuration into it.
 		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
+		if ownedOnly && worker.ForeignRepoFolder(checkout.Path) {
+			// Reported when the worker started (recordOwnedRepoFolders).
+			continue
+		}
 		if blocked := worker.ExtraRepoFolderBlocked(checkout.Path); blocked != "" {
 			// Typically a repository added to the project after the session
 			// was created, beside a working folder whose parent the template

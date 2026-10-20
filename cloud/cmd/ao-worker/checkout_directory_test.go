@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,5 +153,52 @@ func TestRefusedWorkingFolderGetsAWorkspaceOfAOsOwn(t *testing.T) {
 	owned := filepath.Join(home, "work", "bob")
 	if workspace, err := settleCheckoutDirectory(discardLogger(), owned, dataDir); err != nil || workspace != owned {
 		t.Fatalf("AO's own folder = %q, %v", workspace, err)
+	}
+}
+
+// Beside a working folder, an additional repository's folder the template
+// already made (its own clone) is refused like the main folder: the worker
+// reports the repository as skipped when it starts, never checks it out
+// there, and marks the session so its Setup and Cleanup steps for it are
+// skipped. A session that is not a dedicated-user working folder clears the
+// mark.
+func TestAWorkingFoldersRepositoryFolderTheTemplateMadeIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home", "ubuntu")
+	workspace := filepath.Join(home, "work", "alice")
+	templateClone := filepath.Join(root, "template-billing")
+	for _, dir := range []string{workspace, templateClone} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(templateClone, filepath.Join(home, "work", "billing")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(worker.UserHomeEnv, home)
+	dataDir := filepath.Join(root, "data")
+	bootstrap := worker.BootstrapResponse{SessionID: "sess-1", Launch: worker.LaunchContext{
+		RepositoryURL: "https://github.com/acme/alice", Branch: "ao/sess-1",
+		// A local origin that does not exist, so a clone attempt fails fast.
+		ExtraRepos: []worker.RepoRef{{URL: filepath.Join(root, "remotes", "billing")}},
+	}}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	recordOwnedRepoFolders(logger, dataDir, true, bootstrap.Launch, workspace)
+	if !strings.Contains(logs.String(), "multi-repo: additional repository skipped: ~/work/billing already exists (created by your Coder template)") ||
+		!worker.OwnedRepoFoldersOnly(dataDir) {
+		t.Fatalf("logs = %s, marked = %v", logs.String(), worker.OwnedRepoFoldersOnly(dataDir))
+	}
+	logs.Reset()
+	cloneExtraRepos(context.Background(), logger, "", bootstrap, workspace, dataDir, false)
+	if strings.Contains(logs.String(), "unavailable") {
+		t.Fatalf("the worker tried to check billing out in the template's folder: %s", logs.String())
+	}
+	if entries, _ := os.ReadDir(templateClone); len(entries) != 0 {
+		t.Fatalf("the template's folder changed: %v", entries)
+	}
+	recordOwnedRepoFolders(logger, dataDir, false, bootstrap.Launch, workspace)
+	if worker.OwnedRepoFoldersOnly(dataDir) {
+		t.Fatal("a session that is not a working folder kept the mark")
 	}
 }

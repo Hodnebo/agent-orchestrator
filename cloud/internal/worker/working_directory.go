@@ -244,13 +244,84 @@ func resolveOwnedCheckoutDirectory(dir, home string, uid int) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrCheckoutDirectoryUnusable, DisplayPath(dir, home), err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("%w: %s", ErrWorkingDirectoryOccupied, DisplayPath(dir, home))
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != uid {
+	if foreignFolder(info, uid) {
 		return fmt.Errorf("%w: %s", ErrWorkingDirectoryOccupied, DisplayPath(dir, home))
 	}
 	return nil
+}
+
+// foreignFolder reports whether info is not a folder of uid's own: a symbolic
+// link, not a folder, or a folder another user owns.
+func foreignFolder(info os.FileInfo, uid int) bool {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return true
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(stat.Uid) != uid
+}
+
+// ownedRepoFoldersFile, in the worker data directory, marks a session whose
+// checkouts must all be AO's own folders: a dedicated-user worker's
+// working-folder checkout (CheckoutDirectoryEnv) and the additional
+// repositories beside it. An additional repository's folder that already
+// exists there and is not the worker's (the Coder template's own clone, from
+// one of its options) is then never used, as the main folder is not: AO does
+// not check the repository out in it, and its Setup and Cleanup steps are
+// skipped (ForeignRepoFolder). The file lists the folders refused when the
+// worker started, for diagnosis.
+const ownedRepoFoldersFile = "owned-repo-folders"
+
+// RecordOwnedRepoFolders marks dataDir's session as one whose checkouts must
+// be AO's own (owned), or clears the mark, and returns the additional
+// repositories' checkouts (extras) whose folders are refused now.
+func RecordOwnedRepoFolders(dataDir string, owned bool, extras []RepoCheckout) ([]RepoCheckout, error) {
+	path := filepath.Join(dataDir, ownedRepoFoldersFile)
+	if !owned {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	var refused []RepoCheckout
+	var listed strings.Builder
+	for _, checkout := range extras {
+		if ForeignRepoFolder(checkout.Path) {
+			refused = append(refused, checkout)
+			listed.WriteString(checkout.Path + "\n")
+		}
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return refused, err
+	}
+	return refused, writeFileAtomic(path, []byte(listed.String()), 0o600)
+}
+
+// OwnedRepoFoldersOnly reports whether dataDir marks its session as one whose
+// checkouts must be AO's own (RecordOwnedRepoFolders).
+func OwnedRepoFoldersOnly(dataDir string) bool {
+	_, err := os.Stat(filepath.Join(dataDir, ownedRepoFoldersFile))
+	return err == nil
+}
+
+// ForeignRepoFolder reports whether path exists and is not a folder of the
+// worker's own (foreignFolder): one AO never checks a repository out in or
+// runs a Setup or Cleanup step in when its checkouts must be its own.
+func ForeignRepoFolder(path string) bool {
+	return foreignRepoFolder(path, os.Getuid())
+}
+
+func foreignRepoFolder(path string, uid int) bool {
+	info, err := os.Lstat(path)
+	return err == nil && foreignFolder(info, uid)
+}
+
+// ForeignRepoFolderHint says why a Setup or Cleanup step of an additional
+// repository did not run: its folder (as shown) already exists and is not
+// AO's.
+func ForeignRepoFolderHint(folder string) string {
+	return folder + " already exists (created by your Coder template), so AO did not run this step in it. " +
+		"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it. " +
+		"Start a new session after changing it."
 }
 
 // DisplayPath names dir for a person: below home it starts with "~/".

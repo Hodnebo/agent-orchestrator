@@ -153,7 +153,13 @@ in use". Untick it in the Template options, or turn on **Run the agent as the
 workspace user** to work in the template's checkout instead. Such a session
 never opens its terminal in that folder, and deleting it runs no Cleanup
 ("Cleanup did not run: this session never got its working folder"), so the
-project's Cleanup never touches the template's folder. A restarted or
+project's Cleanup never touches the template's folder. An additional
+repository's folder beside it that the template already cloned (say
+`~/work/billing`) is refused the same way: the session starts on its other
+repositories, logs that it skipped that one, and shows that repository's Setup
+and Cleanup steps as skipped ("... already exists (created by your
+Coder template), so AO did not run this step in it."), never running them in
+the template's folder. A restarted or
 restored session keeps using AO's own folder. The additional repositories'
 folders are prepared for the repositories the project lists when the session
 is created; a repository added later is checked out in new sessions (an

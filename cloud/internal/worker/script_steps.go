@@ -40,7 +40,10 @@ const (
 // SetupFailed and SetupTimedOut.
 const (
 	ScriptStepRunning = "running"
-	// ScriptStepSkipped is a step that never ran because an earlier one failed.
+	// ScriptStepSkipped is a step that never ran because an earlier one
+	// failed, or, with a Hint saying why, one AO did not run (for example in
+	// an additional repository's folder that is not AO's,
+	// ForeignRepoFolderHint).
 	ScriptStepSkipped = "skipped"
 )
 
@@ -1157,6 +1160,19 @@ func (s *setupStepEvents) skip(commands []string, timeouts []time.Duration) {
 		event.Command, event.Repository = scriptStepCommand(command, s.redactor)
 		s.publisher.final(event)
 	}
+}
+
+// skipOne reports step, which did not run, with why (hint).
+func (s *setupStepEvents) skipOne(step int, command string, timeout time.Duration, hint string) {
+	if s.publisher == nil {
+		return
+	}
+	event := ScriptStepEvent{
+		Phase: ScriptPhaseSetup, RunID: s.runID, Step: step, Total: s.total,
+		Status: ScriptStepSkipped, TimeoutMinutes: timeoutMinutes(timeout), Hint: hint,
+	}
+	event.Command, event.Repository = scriptStepCommand(command, s.redactor)
+	s.publisher.final(event)
 }
 
 func (s *setupStepEvents) close() {
