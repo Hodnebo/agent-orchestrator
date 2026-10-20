@@ -70,18 +70,37 @@ func newCheckpointer(
 		harness:      bootstrap.Launch.Harness,
 		scratch:      worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL),
 		logger:       logger,
-		siblings:     siblingCheckoutPaths(bootstrap.Launch, workspace),
+		siblings:     siblingCheckoutPaths(bootstrap.Launch, workspace, dataDir),
 		siblingTrees: map[string]*string{},
 	}
 }
 
-// siblingCheckoutPaths lists the additional repositories' checkout paths.
-func siblingCheckoutPaths(launch worker.LaunchContext, workspace string) []string {
+// siblingCheckoutPaths lists the additional repositories' checkout paths
+// (usedExtraCheckouts): a template's own clone AO refused is never
+// checkpointed or restored into.
+func siblingCheckoutPaths(launch worker.LaunchContext, workspace, dataDir string) []string {
 	var paths []string
-	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+	for _, checkout := range usedExtraCheckouts(launch, workspace, dataDir) {
 		paths = append(paths, checkout.Path)
 	}
 	return paths
+}
+
+// usedExtraCheckouts lists the additional repositories' checkouts AO uses. In
+// a session whose checkouts must be AO's own (worker.OwnedRepoFoldersOnly), a
+// folder that is not (worker.ForeignRepoFolder: the Coder template's own
+// clone) is left out, as a repository skipped for its folder name is: AO did
+// not check it out there and never changes it.
+func usedExtraCheckouts(launch worker.LaunchContext, workspace, dataDir string) []worker.RepoCheckout {
+	ownedOnly := worker.OwnedRepoFoldersOnly(dataDir)
+	var checkouts []worker.RepoCheckout
+	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+		if ownedOnly && worker.ForeignRepoFolder(checkout.Path) {
+			continue
+		}
+		checkouts = append(checkouts, checkout)
+	}
+	return checkouts
 }
 
 // checkpoint captures the transcript and uncommitted work once. It is invoked by
@@ -323,7 +342,7 @@ func rehydrateSession(
 
 	ref := preservedRefPrefix + bootstrap.SessionID
 	if !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
-		for _, dir := range siblingCheckoutPaths(bootstrap.Launch, workspace) {
+		for _, dir := range siblingCheckoutPaths(bootstrap.Launch, workspace, dataDir) {
 			if info, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !info.IsDir() {
 				continue
 			}

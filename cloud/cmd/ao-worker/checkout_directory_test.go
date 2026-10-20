@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -200,5 +202,44 @@ func TestAWorkingFoldersRepositoryFolderTheTemplateMadeIsSkipped(t *testing.T) {
 	recordOwnedRepoFolders(logger, dataDir, false, bootstrap.Launch, workspace)
 	if worker.OwnedRepoFoldersOnly(dataDir) {
 		t.Fatal("a session that is not a working folder kept the mark")
+	}
+}
+
+// A refused additional repository folder (the template's own clone) is not
+// one of the session's: the checkpointer neither preserves nor restores work
+// in it, and the agent CLI is not told it is a session repository. Without
+// the owned-folders mark (a workspace-user session) it still is.
+func TestARefusedRepositoryFolderIsNotCheckpointedOrAdvertised(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "work", "alice")
+	templateClone := filepath.Join(root, "template-billing")
+	for _, dir := range []string{workspace, templateClone, filepath.Join(root, "work", "api")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(templateClone, filepath.Join(root, "work", "billing")); err != nil {
+		t.Fatal(err)
+	}
+	launch := worker.LaunchContext{RepositoryURL: "https://github.com/acme/alice", ExtraRepos: []worker.RepoRef{
+		{URL: "https://github.com/acme/billing"}, {URL: "https://github.com/acme/api"},
+	}}
+	dataDir := filepath.Join(root, "data")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	recordOwnedRepoFolders(logger, dataDir, true, launch, workspace)
+	if got, want := siblingCheckoutPaths(launch, workspace, dataDir), []string{filepath.Join(root, "work", "api")}; !slices.Equal(got, want) {
+		t.Errorf("checkpointed siblings = %q, want %q", got, want)
+	}
+	if got := sessionRepositories(launch, workspace, dataDir); got != "acme/alice,acme/api" {
+		t.Errorf("session repositories = %q", got)
+	}
+
+	recordOwnedRepoFolders(logger, dataDir, false, launch, workspace)
+	if got := siblingCheckoutPaths(launch, workspace, dataDir); len(got) != 2 {
+		t.Errorf("checkpointed siblings without the mark = %q", got)
+	}
+	if got := sessionRepositories(launch, workspace, dataDir); got != "acme/alice,acme/billing,acme/api" {
+		t.Errorf("session repositories without the mark = %q", got)
 	}
 }

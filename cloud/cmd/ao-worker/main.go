@@ -333,7 +333,7 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_SESSION_KIND"] = bootstrap.Launch.Kind
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
 		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
-		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace)
+		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace, dataDir)
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -885,9 +885,12 @@ func prepareReusedWorkspace(
 // worker.SessionRepoCheckouts and lists them in the agent's system prompt.
 // sessionRepositories lists the session's GitHub repositories as lower-case
 // owner/name, comma-separated, for the agent CLI (worker.SessionRepositoriesEnv).
-func sessionRepositories(launch worker.LaunchContext, workspace string) string {
+// An additional repository whose folder AO refused (usedExtraCheckouts) is
+// not one of them.
+func sessionRepositories(launch worker.LaunchContext, workspace, dataDir string) string {
+	checkouts := worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[:1]
 	var names []string
-	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos) {
+	for _, checkout := range append(checkouts, usedExtraCheckouts(launch, workspace, dataDir)...) {
 		if checkout.FullName != "" {
 			names = append(names, checkout.FullName)
 		}
@@ -1004,7 +1007,7 @@ func startInteractiveAgent(
 		"AO_CHECKPOINT_SOCKET":        checkpointSocketPath,
 		"AO_PULL_REQUEST_SOCKET":      pullRequestSocketPath,
 		"AO_PULL_REQUEST_HELP":        pullRequestHelp(bootstrap.Launch),
-		worker.SessionRepositoriesEnv: sessionRepositories(bootstrap.Launch, workspace),
+		worker.SessionRepositoriesEnv: sessionRepositories(bootstrap.Launch, workspace, dataDir),
 		"AO_REVIEW_SOCKET":            reviewSocketPath,
 		"AO_REVIEW_HELP": "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
