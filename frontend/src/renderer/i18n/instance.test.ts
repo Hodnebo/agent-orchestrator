@@ -230,12 +230,14 @@ describe("app i18next instance", () => {
 			.filter((key) => key.startsWith("chat.action.") && key.endsWith("_one"))
 			.map((key) => key.slice(0, -"_one".length));
 		for (const locale of ["es", "fr", "pt-BR"] as const) {
-			const catalog = allCatalogs[locale] as Record<string, string>;
+			const catalog = allCatalogs[locale] as unknown as Record<string, string | string[]>;
 			const instance = createAppI18n(locale);
 			expect(new Intl.PluralRules(locale).select(count)).toBe("many");
 			for (const base of bases) {
 				const template = catalog[`${base}_many`];
-				expect(instance.t(base, { count }), `${locale} ${base}`).toBe(template.replace("{{count}}", String(count)));
+				expect(instance.t(base as keyof typeof enMessages, { count }), `${locale} ${base}`).toBe(
+					String(template).replace("{{count}}", String(count)),
+				);
 			}
 		}
 	});
