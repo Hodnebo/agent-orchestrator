@@ -823,3 +823,35 @@ func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
 		t.Fatalf("request deadline extended to %s, want just past the spawn's own", extended)
 	}
 }
+
+// A restore extends the request's budget by its Setup only when it recreates
+// the worktree and so runs Setup; an ordinary restore that hangs keeps the
+// request's ordinary budget.
+func TestRESTRestoreExtendsItsBudgetOnlyWhenItRunsSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recreated bool
+		want      time.Duration
+	}{
+		{"worktree kept", false, 0},
+		{"worktree recreated", true, 91*time.Minute + time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			project := st.projects["mer"]
+			project.Config.PostCreate = []string{"# ao-timeout: 90m\ntrue"}
+			st.projects["mer"] = project
+			workspace := t.TempDir()
+			if tc.recreated {
+				workspace = filepath.Join(workspace, "reclaimed")
+			}
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: workspace, Branch: "ao/mer-1", AgentSessionID: "agent-x"})
+			var extended time.Duration
+			ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
+			_, _ = m.RestoreWithMode(ctx, "mer-1")
+			if extended != tc.want {
+				t.Fatalf("request budget extended to %s, want %s", extended, tc.want)
+			}
+		})
+	}
+}

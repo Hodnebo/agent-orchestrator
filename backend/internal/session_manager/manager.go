@@ -2980,9 +2980,6 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (Res
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
-	// A restore whose worktree was reclaimed runs the project's Setup again.
-	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
-	defer cancelBudget()
 	// Mirror Kill's incomplete-handle guard: a session whose spawn failed before
 	// the workspace landed has neither WorkspacePath nor Branch, and there is
 	// nothing meaningful to restore from. Surface this as a typed 409 instead of
@@ -4527,7 +4524,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -4559,11 +4556,21 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
 	return ws, nil
+}
+
+// provisionRecreatedWorkspace runs the project's Setup for a restore whose
+// worktree was reclaimed. Only such a restore runs Setup, so only it extends
+// a REST restore's budget, from now, by the Setup steps' limits; any other
+// restore keeps the request's ordinary budget.
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancel()
+	return m.provisionWorkspace(ctx, project, workspacePath)
 }
 
 func workspacePathMissing(path string) (bool, error) {
