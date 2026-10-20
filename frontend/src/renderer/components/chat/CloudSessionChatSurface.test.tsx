@@ -438,7 +438,7 @@ describe("CloudSessionChatSurface", () => {
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.configOptions).toBeUndefined();
 		expect(props.approvalModes).toEqual(modes);
-		act(() => props.onChooseSettings({ approvalMode: chosen }));
+		act(() => props.onChooseSettings({ approvalMode: chosen }, "approvalMode"));
 		await props.onSend("hello", [], `mode-${provider}`);
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "hello", mode: ceiling, approvalMode: chosen,
@@ -457,7 +457,7 @@ describe("CloudSessionChatSurface", () => {
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.approvalModes).toEqual(["accept-edits", "auto"]);
 		expect(props.snapshot.settings?.approvalMode).toBe("auto");
-		act(() => props.onChooseSettings({ approvalMode: "bypass-permissions" }));
+		act(() => props.onChooseSettings({ approvalMode: "bypass-permissions" }, "approvalMode"));
 		await props.onSend("hello", [], "capped-message");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "hello", mode: "standard",
@@ -534,7 +534,7 @@ describe("CloudSessionChatSurface", () => {
 			text: "effort", reasoningEffort: "high", mode: "trusted",
 		}, { idempotencyKey: "trusted-effort" });
 		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).not.toHaveProperty("approvalMode");
-		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }, "approvalMode"));
 		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("second", [], "trusted-2");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "second", reasoningEffort: "high", mode: "trusted", approvalMode: "default",
@@ -551,6 +551,54 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
 			text: "third", reasoningEffort: "high", mode: "trusted", approvalMode: "default",
 		}, { idempotencyKey: "trusted-3" });
+	});
+
+	it("sends the shown default once the user picks it from the approval menu", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		const shown = cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings;
+		expect(shown?.approvalMode).toBe("bypass-permissions");
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ ...shown, approvalMode: "bypass-permissions" }, "approvalMode"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "picked-default");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "trusted", approvalMode: "bypass-permissions",
+		}, { idempotencyKey: "picked-default" });
+		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "bypass-permissions" });
+	});
+
+	it("stops showing a pick the session's mode no longer allows", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ approvalMode: "default" }, "approvalMode"));
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("default");
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", cloud: { orgId: "org-1", permissionMode: "standard" } }} />
+			</QueryClientProvider>,
+		);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.approvalModes).not.toContain("default");
+		expect(props.snapshot.settings?.approvalMode).toBe("auto");
+		await props.onSend("go", [], "dropped-mode");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "standard",
+		}, { idempotencyKey: "dropped-mode" });
 	});
 
 	it("ignores an approval mode an older build saved with the model catalog", async () => {
