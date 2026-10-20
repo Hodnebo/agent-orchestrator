@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -209,41 +211,128 @@ func NormalizeProjectRepos(mainURL string, repos []RepoRef) ([]RepoRef, error) {
 	return out, nil
 }
 
+// Each Setup or Cleanup step runs for at most its time limit, in whole
+// minutes: DefaultScriptStepTimeoutMinutes unless the step sets one from
+// MinScriptStepTimeoutMinutes to MaxScriptStepTimeoutMinutes.
+const (
+	DefaultScriptStepTimeoutMinutes = 10
+	MinScriptStepTimeoutMinutes     = 1
+	MaxScriptStepTimeoutMinutes     = 120
+)
+
+// ScriptStepTimeout is the time limit of a step that sets minutes (0, or a
+// value out of range, is the default; a value past the maximum is capped).
+func ScriptStepTimeout(minutes int) time.Duration {
+	if minutes < MinScriptStepTimeoutMinutes {
+		minutes = DefaultScriptStepTimeoutMinutes
+	}
+	return time.Duration(min(minutes, MaxScriptStepTimeoutMinutes)) * time.Minute
+}
+
+// ValidScriptStepTimeoutMinutes reports whether minutes is a time limit a
+// step may set.
+func ValidScriptStepTimeoutMinutes(minutes int) bool {
+	return minutes >= MinScriptStepTimeoutMinutes && minutes <= MaxScriptStepTimeoutMinutes
+}
+
+// scriptTimeoutMarker starts the first line of a stored step that sets its
+// own time limit: "# ao-timeout: 30m". It is a shell comment, so a control
+// plane, worker or desktop release that predates per-step limits keeps, shows
+// and runs the step (with the default limit).
+const scriptTimeoutMarker = "# ao-timeout: "
+
+var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\n`)
+
+// TimedScriptCommand is the stored form of a step with its own time limit:
+// command after a timeout marker line. A step with the default limit (0 or
+// DefaultScriptStepTimeoutMinutes, or a value that is not a limit) is command
+// unchanged.
+func TimedScriptCommand(minutes int, command string) string {
+	if minutes <= 0 || minutes == DefaultScriptStepTimeoutMinutes {
+		return command
+	}
+	return scriptTimeoutMarker + strconv.Itoa(minutes) + "m\n" + command
+}
+
+// ParseTimedScriptCommand splits a stored step written by TimedScriptCommand
+// into its time limit and command; ok is false (and command is stored) for a
+// step without a timeout marker. minutes is as written, so it may be out of
+// range.
+func ParseTimedScriptCommand(stored string) (minutes int, command string, ok bool) {
+	match := scriptTimeoutPattern.FindStringSubmatch(stored)
+	if match == nil {
+		return 0, stored, false
+	}
+	minutes, _ = strconv.Atoi(match[1])
+	return minutes, stored[len(match[0]):], true
+}
+
+// SplitScriptStepTimeout is a step's command without its timeout marker and
+// the time limit it runs with (ScriptStepTimeout).
+func SplitScriptStepTimeout(stored string) (string, time.Duration) {
+	minutes, command, _ := ParseTimedScriptCommand(stored)
+	return command, ScriptStepTimeout(minutes)
+}
+
 // ProjectScriptStep is one Setup or Cleanup command. Repository, when set, is
 // the canonical URL of the project repository the command runs in; Folder,
 // when set, is that repository's folder beside the main checkout as read back
 // from a stored step. Both empty runs it in the main repository.
+// TimeoutMinutes is the step's own time limit; 0 is the default
+// (DefaultScriptStepTimeoutMinutes).
 //
-// A step is stored as a plain string either way (see RepoScriptCommand), so a
-// control plane or desktop release that predates per-repository steps reads,
-// runs and keeps it. The {command, repository} object form is accepted on
-// input only.
+// A step is stored as a plain string either way (see RepoScriptCommand and
+// TimedScriptCommand), so a control plane or desktop release that predates
+// per-repository steps or per-step time limits reads, runs and keeps it. The
+// {command, repository, timeoutMinutes} object form is accepted on input
+// only.
 type ProjectScriptStep struct {
-	Command    string `json:"command"`
-	Repository string `json:"repository,omitempty"`
-	Folder     string `json:"-"`
+	Command        string `json:"command"`
+	Repository     string `json:"repository,omitempty"`
+	TimeoutMinutes int    `json:"timeoutMinutes,omitempty"`
+	Folder         string `json:"-"`
+	// object is true for a step given in the object form, which is stored
+	// as a plain string.
+	object bool
 }
 
+// invalidScriptStepTimeout stands for a time limit that is not a whole number
+// of minutes, which validation reports.
+const invalidScriptStepTimeout = -1
+
 // UnmarshalJSON accepts a plain command string, including the stored
-// RepoScriptCommand form, or {"command", "repository"}.
+// RepoScriptCommand and TimedScriptCommand forms, or {"command",
+// "repository", "timeoutMinutes"}.
 func (s *ProjectScriptStep) UnmarshalJSON(raw []byte) error {
 	var command string
 	if err := json.Unmarshal(raw, &command); err == nil {
-		if dir, inner, ok := ParseRepoScriptCommand(command); ok {
-			*s = ProjectScriptStep{Command: inner, Folder: dir}
+		minutes, rest, timed := ParseTimedScriptCommand(command)
+		if timed && minutes == 0 {
+			minutes = invalidScriptStepTimeout
+		}
+		if dir, inner, ok := ParseRepoScriptCommand(rest); ok {
+			*s = ProjectScriptStep{Command: inner, Folder: dir, TimeoutMinutes: minutes}
 			return nil
 		}
-		*s = ProjectScriptStep{Command: command}
+		*s = ProjectScriptStep{Command: rest, TimeoutMinutes: minutes}
 		return nil
 	}
 	var object struct {
-		Command    *string `json:"command"`
-		Repository string  `json:"repository"`
+		Command        *string         `json:"command"`
+		Repository     string          `json:"repository"`
+		TimeoutMinutes json.RawMessage `json:"timeoutMinutes"`
 	}
 	if err := json.Unmarshal(raw, &object); err != nil || object.Command == nil {
 		return errors.New("each command must be a string or an object with a command")
 	}
-	*s = ProjectScriptStep{Command: *object.Command, Repository: strings.TrimSpace(object.Repository)}
+	*s = ProjectScriptStep{Command: *object.Command, Repository: strings.TrimSpace(object.Repository), object: true}
+	if text := strings.TrimSpace(string(object.TimeoutMinutes)); text != "" && text != "null" {
+		minutes, err := strconv.Atoi(text)
+		if err != nil || minutes == 0 {
+			minutes = invalidScriptStepTimeout
+		}
+		s.TimeoutMinutes = minutes
+	}
 	return nil
 }
 
@@ -253,6 +342,12 @@ func (s ProjectScriptStep) MarshalJSON() ([]byte, error) {
 }
 
 func (s ProjectScriptStep) storedForm() string {
+	return TimedScriptCommand(s.TimeoutMinutes, s.repositoryForm())
+}
+
+// repositoryForm is the command, wrapped to run in its repository's folder
+// when that is not the main one.
+func (s ProjectScriptStep) repositoryForm() string {
 	switch {
 	case s.Repository != "":
 		return RepoScriptCommand(RepoDirName(s.Repository), s.Command)
@@ -266,11 +361,18 @@ func (s ProjectScriptStep) storedForm() string {
 // ShellCommand is the command the worker runs from the main repository's
 // checkout: the command itself, or, for a step in another repository, the
 // command run in a subshell from that repository's folder beside the main one.
+// It carries no time limit (see TimedShellCommand).
 func (s ProjectScriptStep) ShellCommand(mainURL string) string {
 	if s.Repository != "" && strings.EqualFold(s.Repository, mainURL) {
 		return s.Command
 	}
-	return s.storedForm()
+	return s.repositoryForm()
+}
+
+// TimedShellCommand is ShellCommand with the step's own time limit, when it
+// sets one, as a timeout marker line (TimedScriptCommand).
+func (s ProjectScriptStep) TimedShellCommand(mainURL string) string {
+	return TimedScriptCommand(s.TimeoutMinutes, s.ShellCommand(mainURL))
 }
 
 // RepoScriptCommand wraps a Setup or Cleanup command so it runs in another
@@ -487,6 +589,10 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 		}
 		rewrite := false
 		for index, step := range steps {
+			if step.object || step.TimeoutMinutes != 0 {
+				// Stored as a plain string, its time limit in the stored form.
+				rewrite = true
+			}
 			switch {
 			case step.Repository != "":
 				rewrite = true
@@ -500,7 +606,7 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 				}
 				// Stored as a plain command for the main repository, and as the
 				// folder form for an additional one.
-				steps[index] = ProjectScriptStep{Command: step.Command}
+				steps[index] = ProjectScriptStep{Command: step.Command, TimeoutMinutes: step.TimeoutMinutes}
 				if stored != "" {
 					steps[index].Folder = RepoDirName(stored)
 				}
@@ -510,7 +616,7 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 				if !isProjectFolder {
 					return nil, fmt.Errorf("%s step %d runs in the folder %q, which is not one of the project's repositories", key, index+1, step.Folder)
 				}
-				steps[index] = ProjectScriptStep{Command: step.Command, Folder: folder}
+				steps[index] = ProjectScriptStep{Command: step.Command, Folder: folder, TimeoutMinutes: step.TimeoutMinutes}
 			}
 		}
 		if rewrite {
