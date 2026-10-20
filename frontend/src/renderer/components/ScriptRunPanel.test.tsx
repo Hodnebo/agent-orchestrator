@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent } from "../lib/cloud-cp";
 import { forgetControlPlaneClock, groupScriptRuns, SCRIPT_STEP_EVENT } from "../lib/cloud-script-runs";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
-import { ScriptRunPanel } from "./ScriptRunPanel";
+import { claimQuietStepAnnouncement, ScriptRunPanel } from "./ScriptRunPanel";
 import { TooltipProvider } from "./ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -418,4 +418,12 @@ describe("ScriptRunPanel beside the harness update notice", () => {
 		act(() => publishHarnessUpdateNoticeRect(null));
 		expect(panel.style.getPropertyValue("--script-run-notice-clearance")).toBe("");
 	});
+});
+
+it("forgets the oldest announced quiet notes instead of keeping every one", () => {
+	expect(claimQuietStepAnnouncement("prune-test:first")).toBe(true);
+	expect(claimQuietStepAnnouncement("prune-test:first")).toBe(false);
+	for (let index = 0; index < 200; index++) claimQuietStepAnnouncement(`prune-test:${index}`);
+	expect(claimQuietStepAnnouncement("prune-test:199")).toBe(false);
+	expect(claimQuietStepAnnouncement("prune-test:first")).toBe(true);
 });
