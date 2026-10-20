@@ -115,9 +115,10 @@ describe("useFilesReviewSelection", () => {
 		const { changesMenu, branchMenu, target } = result.current;
 		expect(changesMenu).toMatchObject({ mode: "checked_out", value: { kind: "uncommitted" }, stats: { additions: 3, deletions: 1 } });
 		expect(changesMenu.scopes).toEqual([
-			{ scope: "uncommitted", stats: { additions: 3, deletions: 1 } },
-			{ scope: "staged", stats: { additions: 0, deletions: 0 } },
-			{ scope: "unstaged", stats: { additions: 3, deletions: 1 } },
+			{ scope: "uncommitted", stats: { additions: 3, deletions: 1 }, empty: false },
+			// Nothing staged: the menu leaves this row out.
+			{ scope: "staged", stats: { additions: 0, deletions: 0 }, empty: true },
+			{ scope: "unstaged", stats: { additions: 3, deletions: 1 }, empty: false },
 		]);
 		expect(changesMenu.commits).toMatchObject({ allStats: { additions: 5, deletions: 2 }, truncated: false, rangeMode: "since_base" });
 		expect(changesMenu.commits.rows[0]).toEqual({ sha: SHA("a"), subject: "Commit a", timestamp: "2026-10-01T00:00:00Z", additions: 2, deletions: 1 });
@@ -295,7 +296,7 @@ describe("useFilesReviewSelection", () => {
 		const { result } = renderSelection(manifest(), { projectKind: "workspace" });
 		await waitFor(() => expect(result.current.branchMenu?.state).toBe("ready"));
 
-		expect(result.current.changesMenu.scopes).toEqual([{ scope: "uncommitted", stats: { additions: 3, deletions: 1 } }]);
+		expect(result.current.changesMenu.scopes).toEqual([{ scope: "uncommitted", stats: { additions: 3, deletions: 1 }, empty: false }]);
 		expect(result.current.changesMenu).toMatchObject({ commitsAvailable: false, value: { kind: "uncommitted" } });
 		expect(result.current.target).toMatchObject({ scope: "uncommitted", state: "ready", files: [file("a.ts", 3, 1)] });
 		// Its pull requests are still listed to view.

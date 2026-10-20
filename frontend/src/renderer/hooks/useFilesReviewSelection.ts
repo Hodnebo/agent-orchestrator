@@ -209,7 +209,11 @@ export function useFilesReviewSelection({
 		[history],
 	);
 	const scopes = useMemo<ReviewChangesScopeOption[]>(
-		() => (legacy ? LEGACY_SCOPES : uncommittedOnly ? UNCOMMITTED_SCOPES : WORKING_SCOPES).map((scope) => ({ scope, stats: manifest ? sumChanges(scopeFiles(manifest, scope, legacy)) : undefined })),
+		() => (legacy ? LEGACY_SCOPES : uncommittedOnly ? UNCOMMITTED_SCOPES : WORKING_SCOPES).map((scope) => {
+			// Judged by files, not line totals: a binary-only change counts no lines.
+			const files = manifest ? scopeFiles(manifest, scope, legacy) : undefined;
+			return { scope, stats: files ? sumChanges(files) : undefined, empty: files ? files.length === 0 : undefined };
+		}),
 		[legacy, manifest, uncommittedOnly],
 	);
 	const allStats: ReviewChangeStats | undefined = branch.kind === "checked_out"

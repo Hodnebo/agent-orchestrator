@@ -30,7 +30,12 @@ export type ReviewChangesValue =
 
 export type ReviewChangeStats = { additions: number; deletions: number };
 
-export type ReviewChangesScopeOption = { scope: ReviewChangesScope; stats?: ReviewChangeStats };
+export type ReviewChangesScopeOption = {
+	scope: ReviewChangesScope;
+	stats?: ReviewChangeStats;
+	/** The scope has no changed files; its row is left out unless it is the pick. */
+	empty?: boolean;
+};
 
 export type ReviewCommitRow = {
 	sha: string;
@@ -143,6 +148,9 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	const shownRows = commits.rows.slice(0, shownCount);
 	const hiddenCount = commits.rows.length - shownRows.length;
 
+	// A scope with no changes has nothing to pick, so its row goes; the current
+	// pick stays, so the menu always shows what the trigger names.
+	const shownScopes = scopes.filter(({ scope, empty }) => !empty || value.kind === scope);
 	// With no commits to list, All commits would select an empty review, so only the reason shows.
 	const noCommits = commits.state === "ready" && commits.rows.length === 0;
 	const commitBlock = (
@@ -238,7 +246,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 				<DropdownMenuContent align="start" className="w-56 max-w-[calc(100vw-2rem)]" {...modalityHandlers}>
 					<DropdownMenuRadioGroup value={value.kind === "commits" ? "" : value.kind}>
 						{/* Plain labels, like the trigger; the check marks what is picked. */}
-						{scopes.map(({ scope, stats: scopeStats }) => (
+						{shownScopes.map(({ scope, stats: scopeStats }) => (
 							<DropdownMenuRadioItem className={REVIEW_MENU_ROW} key={scope} onSelect={() => onSelectScope(scope)} value={scope}>
 								<span className="min-w-0 flex-1 truncate">{scopeLabel(scope)}</span>
 								{scopeStats ? <ChangeStats stats={scopeStats} /> : null}
@@ -249,7 +257,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 					    while they load it stays, showing the loading row. */}
 					{commitsAvailable && !noCommits ? (
 						<>
-							<DropdownMenuSeparator />
+							{shownScopes.length > 0 ? <DropdownMenuSeparator /> : null}
 							{/* Commits open to the side, so the scopes stay a short list and a
 							    long history scrolls in its own panel. */}
 							<DropdownMenuSub>

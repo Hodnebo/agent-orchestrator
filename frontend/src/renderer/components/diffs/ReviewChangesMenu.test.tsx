@@ -66,22 +66,34 @@ describe("ReviewChangesMenu", () => {
 		expect(trigger.querySelector("svg")).toHaveClass("lucide-chevron-down");
 	});
 
-	it("leaves +0 −0 off every row and the trigger, but keeps the rows", async () => {
-		renderMenu(
-			{ stats: { additions: 0, deletions: 0 }, scopes: [
-				{ scope: "uncommitted", stats: { additions: 0, deletions: 0 } },
-				{ scope: "staged", stats: { additions: 0, deletions: 0 } },
-				{ scope: "unstaged", stats: { additions: 0, deletions: 0 } },
-			] },
-			{ rows: [{ sha: shaOf(0), subject: "binary only", additions: 0, deletions: 0, timestamp: new Date().toISOString() }], allStats: { additions: 0, deletions: 0 } },
-		);
-		const trigger = screen.getByRole("button", { name: "Changes to review: Uncommitted" });
-		expect(trigger).toHaveTextContent(/^Uncommitted$/);
+	it("leaves out scopes with no changes, but keeps the current pick and binary-only changes", async () => {
+		const zero = { additions: 0, deletions: 0 };
+		const scopes: ReviewChangesMenuProps["scopes"] = [
+			{ scope: "uncommitted", stats: zero, empty: false },
+			{ scope: "staged", stats: zero, empty: true },
+			{ scope: "unstaged", stats: zero, empty: false },
+		];
+		const view = renderMenu({ value: { kind: "uncommitted" }, stats: zero, scopes });
+		// No +0 −0 on the trigger or any row.
+		expect(screen.getByRole("button", { name: "Changes to review: Uncommitted" })).toHaveTextContent(/^Uncommitted$/);
 		await openMenu();
-		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Uncommitted", "Staged", "Unstaged"]);
-		await userEvent.click(screen.getByRole("menuitem", { name: /^Commits/ }));
-		expect(await screen.findByRole("menuitemcheckbox", { name: /^All commits/ })).toHaveTextContent(/^All commits$/);
-		expect(screen.getByRole("menuitemcheckbox", { name: /^binary only/ })).toHaveTextContent(/^binary only$/);
+		// Staged has no files, so it goes; a binary-only change counts no lines but is still a change.
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Uncommitted", "Unstaged"]);
+		await userEvent.keyboard("{Escape}");
+		view.view.unmount();
+
+		// The pick stays listed even when it has nothing, so the menu shows what the trigger names.
+		renderMenu({ value: { kind: "staged" }, scopes });
+		await openMenu();
+		expect(screen.getByRole("menuitemradio", { name: /^Staged/ })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("drops the divider when no scope is left above Commits", async () => {
+		renderMenu({ value: { kind: "commits", shas: [] }, scopes: [{ scope: "uncommitted", empty: true }, { scope: "staged", empty: true }, { scope: "unstaged", empty: true }] });
+		await openMenu();
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /^Commits/ })).toBeInTheDocument();
+		expect(screen.getByRole("menu").querySelector('[role="separator"]')).toBeNull();
 	});
 
 	it("lists the working scopes with stats and a check slot, and closes on a pick", async () => {

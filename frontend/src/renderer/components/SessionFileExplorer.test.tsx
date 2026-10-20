@@ -634,9 +634,13 @@ describe("SessionFileExplorer review pickers", () => {
 
 		expect(await screen.findByRole("button", { name: "Collapse all files" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Split diff view" })).toBeInTheDocument();
-
+		// Nothing is staged, so the menu leaves Staged out.
 		await userEvent.click(changesTrigger());
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Staged/ }));
+		expect((await screen.findAllByRole("menuitemradio")).map((item) => item.textContent?.replace(/[+−]\d+/g, ""))).toEqual(["Uncommitted", "Unstaged"]);
+		await userEvent.keyboard("{Escape}");
+
+		// Staged picked earlier and since emptied.
+		act(() => useUiStore.getState().setFilesSelection("sess-empty-scope", { branch: { kind: "checked_out" }, changes: { kind: "staged" } }));
 		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
 		expect(screen.queryByRole("button", { name: "Split diff view" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Collapse all files" })).not.toBeInTheDocument();
@@ -666,8 +670,8 @@ describe("SessionFileExplorer review pickers", () => {
 		const { container } = renderWithQuery(<SessionFileExplorer isMaximized sessionId="sess-empty-rail" />);
 		expect(await screen.findByTestId("tree-changed-only")).toHaveTextContent("true");
 
-		await userEvent.click(changesTrigger());
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: /^Staged/ }));
+		// Staged picked earlier and since emptied.
+		act(() => useUiStore.getState().setFilesSelection("sess-empty-rail", { branch: { kind: "checked_out" }, changes: { kind: "staged" } }));
 		await waitFor(() => expect(screen.getByTestId("review-target")).toHaveTextContent("staged"));
 		// Nothing to list: the review takes the whole width, with no split.
 		expect(screen.queryByTestId("tree-changed-only")).not.toBeInTheDocument();
