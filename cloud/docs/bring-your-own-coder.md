@@ -139,10 +139,13 @@ a folder outside it, such as `/workspace/{repo}` on a Docker template, loses
 the agent's uncommitted work when the workspace restarts. AO refuses such a
 folder when the project is saved, or, when that is only known inside the
 workspace, stops the session with "The working folder must be inside ... so
-the agent's work survives restarts." The bootstrap creates a
-missing parent folder (owned by the login user, group-writable for
-`ao-worker`) and the checkout folders (owned by `ao-worker`), and adds
-traverse permission (`o+x`) to a parent folder `ao-worker` cannot enter. It
+the agent's work survives restarts." The bootstrap creates missing parent
+folders below your home (owned by the login user; the checkout's own parent
+is group-writable for `ao-worker`) and the checkout folders (owned by
+`ao-worker`), and adds traverse permission (`o+x`) to your home or a folder
+below it that `ao-worker` cannot enter, never to `/`, `/root` or a folder
+outside your home. If it cannot prepare those folders the session stops with
+"The working directory can't be used" and the reason. It
 never takes over or changes a folder that already exists: if the template
 already cloned `~/work/<repo>` (for example because the project ticked that in
 its **Template options**), the session stops with "The working folder is already

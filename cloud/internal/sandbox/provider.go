@@ -234,6 +234,11 @@ type WorkerBootstrap struct {
 	// them empty.
 	CheckoutDirectory string
 	CheckoutSiblings  []string
+	// CheckoutHome (with CheckoutDirectory) is the workspace login user's
+	// home: the bootstrap gives traverse permission only to it and the
+	// folders below it, and creates missing parents only below it or the
+	// durable root.
+	CheckoutHome string
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.

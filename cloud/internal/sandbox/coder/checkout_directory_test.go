@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -65,8 +66,10 @@ func TestAOWorkerBootstrapUsesTheWorkingFolderCheckout(t *testing.T) {
 			}
 			for _, want := range []string{
 				"checkout_parent='/home/ubuntu/work'\n",
-				"sudo -n -u 'ao-worker' test -x '/home' || sudo -n chmod o+x '/home' || ao_folder_unusable ",
+				"sudo -n -u 'ao-worker' test -x '/home/ubuntu' || sudo -n chmod o+x '/home/ubuntu' || ao_folder_unusable ",
 				"sudo -n -u 'ao-worker' test -x '/home/ubuntu/work' || sudo -n chmod o+x '/home/ubuntu/work' || ao_folder_unusable ",
+				"if [ ! -e '/home/ubuntu/work' ] && [ ! -L '/home/ubuntu/work' ]; then\n  { sudo -n mkdir '/home/ubuntu/work' &&\n" +
+					"    sudo -n chown \"$(id -u):\"'ao-worker' '/home/ubuntu/work' &&\n    sudo -n chmod g+wx '/home/ubuntu/work'; } ||\n",
 				"ao_checkout_folder '/home/ubuntu/work/alice' || true\n",
 				"ao_checkout_folder '/home/ubuntu/work/billing' || true\n",
 				"useradd -m 'ao-worker'",
@@ -75,7 +78,9 @@ func TestAOWorkerBootstrapUsesTheWorkingFolderCheckout(t *testing.T) {
 					t.Errorf("bootstrap script missing %q", want)
 				}
 			}
-			for _, unwanted := range []string{"'" + root + "/repository'", "chmod g+wx \"$durable_root\"", "chgrp 'ao-worker' \"$durable_root\""} {
+			// Nothing outside the login user's home is ever made traversable.
+			for _, unwanted := range []string{"'" + root + "/repository'", "chmod g+wx \"$durable_root\"", "chgrp 'ao-worker' \"$durable_root\"",
+				"chmod o+x '/home' ", "chmod o+x '/' ", "mkdir -p '/home/ubuntu/work'"} {
 				if strings.Contains(script, unwanted) {
 					t.Errorf("bootstrap script still contains %q", unwanted)
 				}
@@ -171,7 +176,7 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh is required")
 	}
-	run := func(t *testing.T, directory string, siblings []string) []string {
+	run := func(t *testing.T, home, directory string, siblings []string) []string {
 		t.Helper()
 		log := filepath.Join(t.TempDir(), "changes.log")
 		script := "set -eu\n" +
@@ -179,7 +184,7 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 			"  while [ $# -gt 0 ]; do case \"$1\" in -n|-b) shift ;; -u) shift 2 ;; *) break ;; esac; done\n" +
 			"  case \"$1\" in chown|chmod|chgrp) echo \"$*\" >>" + shellQuote(log) + "; return 0 ;; esac\n" +
 			"  \"$@\"\n}\n" +
-			checkoutDirectoryScript("ao-worker", directory, siblings) + "echo __DONE__\n"
+			checkoutDirectoryScript("ao-worker", directory, siblings, home, home) + "echo __DONE__\n"
 		output, err := exec.Command("sh", "-c", script).CombinedOutput()
 		if err != nil || !strings.Contains(string(output), "__DONE__") {
 			t.Fatalf("script failed: %v\n%s", err, output)
@@ -191,7 +196,7 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 	t.Run("fresh workspace", func(t *testing.T) {
 		home := t.TempDir()
 		parent := filepath.Join(home, "work")
-		changes := run(t, filepath.Join(parent, "alice"), []string{"billing"})
+		changes := run(t, home, filepath.Join(parent, "alice"), []string{"billing"})
 		for _, dir := range []string{parent, filepath.Join(parent, "alice"), filepath.Join(parent, "billing")} {
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				t.Fatalf("%s was not created: %v", dir, err)
@@ -208,8 +213,26 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 		}
 	})
 
+	t.Run("deeper parents are the login user's", func(t *testing.T) {
+		home := t.TempDir()
+		parent := filepath.Join(home, "src", "acme")
+		changes := run(t, home, filepath.Join(parent, "alice"), nil)
+		owner := fmt.Sprintf("chown %d:%d ", os.Getuid(), os.Getgid())
+		for _, want := range []string{owner + filepath.Join(home, "src"), "chmod g+wx " + parent} {
+			if !slices.Contains(changes, want) {
+				t.Errorf("changes %q lack %q", changes, want)
+			}
+		}
+		for _, change := range changes {
+			if strings.HasPrefix(change, "chown root") {
+				t.Errorf("a parent was left to root: %q", change)
+			}
+		}
+	})
+
 	t.Run("template already cloned the folder", func(t *testing.T) {
-		parent := filepath.Join(t.TempDir(), "work")
+		home := t.TempDir()
+		parent := filepath.Join(home, "work")
 		occupied := filepath.Join(parent, "alice")
 		if err := os.MkdirAll(filepath.Join(occupied, ".git"), 0o755); err != nil {
 			t.Fatal(err)
@@ -217,7 +240,7 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 		if err := os.Symlink(occupied, filepath.Join(parent, "billing")); err != nil {
 			t.Fatal(err)
 		}
-		changes := run(t, occupied, []string{"billing", "api"})
+		changes := run(t, home, occupied, []string{"billing", "api"})
 		for _, change := range changes {
 			if strings.Contains(change, occupied) || strings.Contains(change, filepath.Join(parent, "billing")) ||
 				strings.HasSuffix(change, " "+parent) {
@@ -228,6 +251,47 @@ func TestCheckoutDirectoryScriptCreatesOnlyMissingFolders(t *testing.T) {
 			t.Errorf("the missing sibling was not prepared: %q", changes)
 		}
 	})
+}
+
+// Traverse permission is given only to the login user's home and the folders
+// below it, never to "/", "/root" or a folder outside the home; missing
+// parents are created only below the home or the durable root.
+func TestCheckoutDirectoryScriptTouchesOnlyTheHome(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, directory, home, root string
+		chmod, mkdir                []string
+		never                       []string
+	}{
+		{"home", "/home/ubuntu/work/alice", "/home/ubuntu", "/home/ubuntu",
+			[]string{"/home/ubuntu", "/home/ubuntu/work"}, []string{"/home/ubuntu/work"}, []string{"/", "/home"}},
+		{"root's home", "/root/work/alice", "/root", "/root",
+			[]string{"/root/work"}, []string{"/root/work"}, []string{"/", "/root"}},
+		{"durable root outside the home", "/srv/dev/work/alice", "/home/ubuntu", "/srv/dev",
+			nil, []string{"/srv/dev/work"}, []string{"/", "/srv", "/srv/dev", "/srv/dev/work"}},
+	} {
+		script := checkoutDirectoryScript("ao-worker", tc.directory, nil, tc.home, tc.root)
+		for _, dir := range tc.chmod {
+			if !strings.Contains(script, "sudo -n chmod o+x '"+dir+"' ") {
+				t.Errorf("%s: %s is not made traversable", tc.name, dir)
+			}
+		}
+		for _, dir := range tc.mkdir {
+			if !strings.Contains(script, "sudo -n mkdir '"+dir+"' ") {
+				t.Errorf("%s: missing %s is not created", tc.name, dir)
+			}
+		}
+		for _, dir := range tc.never {
+			if strings.Contains(script, "chmod o+x '"+dir+"' ") {
+				t.Errorf("%s: %s is made traversable", tc.name, dir)
+			}
+		}
+		for _, dir := range []string{"/srv", "/home", "/"} {
+			if strings.Contains(script, "sudo -n mkdir '"+dir+"' ") {
+				t.Errorf("%s: %s would be created", tc.name, dir)
+			}
+		}
+	}
 }
 
 // A parent folder the bootstrap cannot prepare stops the bootstrap with the
@@ -244,7 +308,7 @@ func TestCheckoutDirectoryScriptReportsAnUnusableWorkingFolder(t *testing.T) {
 		"  while [ $# -gt 0 ]; do case \"$1\" in -n|-b) shift ;; -u) shift 2 ;; *) break ;; esac; done\n" +
 		"  case \"$1\" in mkdir) echo \"mkdir: permission denied\" >&2; return 1 ;; chown|chmod|chgrp) return 0 ;; esac\n" +
 		"  \"$@\"\n}\n" +
-		checkoutDirectoryScript("ao-worker", filepath.Join(parent, "alice"), nil) + "echo __DONE__\n"
+		checkoutDirectoryScript("ao-worker", filepath.Join(parent, "alice"), nil, filepath.Dir(parent), filepath.Dir(parent)) + "echo __DONE__\n"
 	output, err := exec.Command("sh", "-c", script).CombinedOutput()
 	if err == nil || strings.Contains(string(output), "__DONE__") || !strings.Contains(string(output), workingFolderUnusableMarker+" could not create "+parent) {
 		t.Fatalf("script = %v\n%s", err, output)
