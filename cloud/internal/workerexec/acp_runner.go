@@ -249,10 +249,6 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 	return setOption("effort", turn.ReasoningEffort)
 }
 
-// claudeACPApprovalMode is the Claude approval mode a Chat turn runs with. A
-// turn's own approval mode wins; a turn without one (the session's queued first
-// prompt) follows the session mode exactly as the terminal does (claudeArgs):
-// trusted skips permission prompts, standard accepts edits.
 // claudeACPOfferedMode is the turn's approval mode adjusted to what the adapter
 // offers: auto falls back to default, and a mode taken from the session rather
 // than chosen for the turn steps down to the closest offered one instead of
@@ -273,6 +269,12 @@ func claudeACPOfferedMode(turn worker.Turn, options []acp.SessionConfigOption, m
 	return mode
 }
 
+// claudeACPApprovalMode is the Claude approval mode a Chat turn runs with. A
+// turn's own approval mode wins; a turn without one (the session's queued
+// first prompt, or a message sent without a pick) follows the session mode as
+// a headless Chat turn does (claudeArgs): trusted skips permission prompts and
+// standard accepts edits. The interactive terminal runs standard with
+// --permission-mode auto instead (agentruntime.PermissionPolicyForMode).
 func claudeACPApprovalMode(turn worker.Turn) string {
 	if turn.Mode == "read-only" {
 		return "plan"
