@@ -127,6 +127,10 @@ func SkippedReason(reason string) string {
 // not running when AO deleted it.
 const NotRunningReason = "The sandbox was not running when AO deleted it, so this Cleanup step did not run."
 
+// UnreachableReason is what each step of a Cleanup says when the sandbox was
+// running but AO could not reach it to run Cleanup.
+const UnreachableReason = "AO could not reach the sandbox when it deleted it, so this Cleanup step did not run."
+
 // WorkspaceHook is the Cleanup hook's path in the /workspace layout the
 // reconciler gives every provider but Coder (AO_DATA_DIR
 // /workspace/.ao/worker).
@@ -517,6 +521,9 @@ type Run struct {
 // one organization take every slot) and a deletion is never held for long.
 type Tracker struct {
 	runs sync.Map // key -> *Run
+	// skipped records the sandboxes whose Cleanup was reported as not run
+	// (SkipOnce): key -> when.
+	skipped sync.Map
 
 	// MaxRuns, MaxOrgRuns and QueueWait override DefaultMaxRuns,
 	// DefaultMaxOrgRuns and DefaultQueueWait when positive (tests).
@@ -645,21 +652,27 @@ func Skipper(ctx context.Context, attrs map[string]string, steps worker.CleanupR
 	}
 }
 
-// SkipOnce reports, once for key, a Cleanup that does not run because the
-// sandbox is not running (NotRunningReason). A re-issued Delete finds the
-// record and reports nothing again. It takes no run slot and never holds the
-// deletion.
-func (t *Tracker) SkipOnce(ctx context.Context, key string, attrs map[string]string, steps worker.CleanupRun) {
-	run := &Run{done: make(chan struct{}), started: time.Now()}
-	if _, loaded := t.runs.LoadOrStore(key, run); loaded {
+// SkipOnce reports, once per key (the sandbox), a Cleanup that does not run
+// because the sandbox cannot run it (reason, said on each step: for example
+// NotRunningReason). A re-issued Delete reports nothing again. The report is
+// kept apart from the runs Lookup reads, so a later Delete that finds the
+// sandbox running still runs its Cleanup. It takes no run slot and never
+// holds the deletion.
+func (t *Tracker) SkipOnce(ctx context.Context, key string, attrs map[string]string, steps worker.CleanupRun, reason string) {
+	if _, loaded := t.skipped.LoadOrStore(key, time.Now()); loaded {
 		return
 	}
 	t.prune()
-	defer close(run.done)
-	ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), attrs, steps, NotRunningReason, nil)
+	ReportNotRun(ctx, sandbox.BeginStage(ctx, Stage), attrs, steps, reason, nil)
 }
 
 func (t *Tracker) prune() {
+	t.skipped.Range(func(key, value any) bool {
+		if time.Since(value.(time.Time)) > RecordTTL {
+			t.skipped.Delete(key)
+		}
+		return true
+	})
 	t.runs.Range(func(key, value any) bool {
 		run := value.(*Run)
 		select {

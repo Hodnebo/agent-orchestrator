@@ -721,7 +721,7 @@ func TestSkipOnceReportsANotRunningSandboxOnce(t *testing.T) {
 	var tracker Tracker
 	steps := worker.CleanupRun{RunID: "run-1", Commands: []string{"make down", "docker compose down"}}
 	for range 2 {
-		tracker.SkipOnce(ctx, "vm-1", map[string]string{"provider_id": "vm-1"}, steps)
+		tracker.SkipOnce(ctx, "vm-1", map[string]string{"provider_id": "vm-1"}, steps, NotRunningReason)
 	}
 	if len(r.events) != 2 || len(r.stages) != 1 {
 		t.Fatalf("events = %+v, stages = %+v", r.events, r.stages)
@@ -734,7 +734,9 @@ func TestSkipOnceReportsANotRunningSandboxOnce(t *testing.T) {
 	if stage := r.stages[0]; stage.Err != nil || stage.Attrs["result"] != Skipped {
 		t.Fatalf("stage = %+v", stage)
 	}
-	if run, ok := tracker.Lookup("vm-1"); !ok || !run.Await(ctx, time.Millisecond) {
-		t.Fatal("a re-issued Delete must find the finished record and proceed")
+	// The report is not a run: a later Delete that finds the sandbox running
+	// still runs its Cleanup.
+	if _, ok := tracker.Lookup("vm-1"); ok {
+		t.Fatal("a not-running report must not look like a finished Cleanup run")
 	}
 }
