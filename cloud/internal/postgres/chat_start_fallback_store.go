@@ -10,8 +10,12 @@ import (
 // FallBackChatStart moves a session created in Chat to the TUI before its
 // first Chat controller starts, because the worker that is about to run it
 // cannot start in Chat. Only a session whose Chat came from its create (no
-// interface transition was ever recorded) moves: a session the person
-// switched to Chat stays on the interface they chose.
+// interface transition was ever recorded) and that never started moves: a
+// session the person switched to Chat stays on the interface they chose, and
+// a session whose Chat already ran (a turn was claimed or settled, or the
+// agent reported its conversation) stays in Chat on a later worker restart
+// or reconnect, rather than showing a false notice and running its first
+// task again in the terminal.
 //
 // In the same transaction the prompt's queued first turn is settled (the TUI
 // agent receives the prompt on its command line instead), and a failed
@@ -56,9 +60,15 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 		SET interface = 'tui', updated_at = now()
 		WHERE session.org_id = $1 AND session.id = $2
 		  AND session.interface = 'chat'
+		  AND session.agent_session_id = ''
 		  AND NOT EXISTS (
 			SELECT 1 FROM ao_interface_transitions transition
 			WHERE transition.org_id = session.org_id AND transition.session_id = session.id
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM ao_turns turn
+			WHERE turn.org_id = session.org_id AND turn.session_id = session.id
+			  AND (turn.attempt_count > 0 OR turn.state <> 'queued')
 		  )
 		RETURNING session.prompt`,
 		orgID, sessionID,

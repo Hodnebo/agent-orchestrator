@@ -268,6 +268,56 @@ func TestFallBackChatStart(t *testing.T) {
 	}
 }
 
+// A session created in Chat whose Chat already ran stays in Chat when a later
+// worker (a restart, a reconnect without the chat-start capability, or an
+// adapter install blip) asks to move it: its first turn was claimed or
+// settled, or the agent reported its conversation. Moving it would show a
+// false notice and run its first task again in the terminal.
+func TestFallBackChatStartLeavesAChatThatRan(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	for _, tc := range []struct {
+		name string
+		ran  string
+	}{
+		{"first turn completed, conversation reported",
+			`UPDATE ao_turns SET state = 'completed', attempt_count = 1, completed_at = now() WHERE session_id = $1;
+			UPDATE ao_sessions SET agent_session_id = 'native-1' WHERE id = $1`},
+		{"first turn claimed", `UPDATE ao_turns SET state = 'running', attempt_count = 1 WHERE session_id = $1`},
+		{"first turn settled without a claim", `UPDATE ao_turns SET state = 'completed', completed_at = now() WHERE session_id = $1`},
+		{"conversation reported", `UPDATE ao_sessions SET agent_session_id = 'native-1' WHERE id = $1`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+				ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "do the work",
+				Provider: "docker", Interface: domain.SessionInterfaceChat,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range strings.Split(tc.ran, ";") {
+				if _, err := admin.Exec(ctx, statement, session.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if moved, err := store.FallBackChatStart(ctx, fixture.orgID, session.ID, "CHAT_START_UNSUPPORTED", "x"); err != nil || moved {
+				t.Fatalf("FallBackChatStart = %v, %v; want not moved", moved, err)
+			}
+			launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if launch.Interface != domain.SessionInterfaceChat {
+				t.Fatalf("launch interface = %q, want chat", launch.Interface)
+			}
+			if _, found, err := store.GetLatestRelevantSessionInterfaceTransition(ctx, principal, fixture.orgID, session.ID); err != nil || found {
+				t.Fatalf("notice transition recorded: found=%v err=%v", found, err)
+			}
+		})
+	}
+}
+
 // A scratch project's first orchestrator resolves its interface like any
 // orchestrator (Chat where its harness can start there) and keeps the user's
 // default for the workers it spawns. Without a default the create's payload

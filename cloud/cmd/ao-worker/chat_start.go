@@ -15,6 +15,10 @@ import (
 // chatStartChecks are what startInterface asks of the workspace and the
 // control plane; tests replace them.
 type chatStartChecks struct {
+	// firstStart is true on the session's first worker start in this
+	// workspace (no persisted worker token). Only then may a session move off
+	// Chat: a restarted or reconnecting worker leaves the interface alone.
+	firstStart bool
 	// harnessInstalled reports whether the harness binary is on PATH.
 	harnessInstalled func(harness string) bool
 	// claudeChatStartable is workerexec.ClaudeACPAdapterStartable.
@@ -42,7 +46,7 @@ func startInterface(ctx context.Context, logger *slog.Logger, launch worker.Laun
 	if committed == "" {
 		return workertransport.InterfaceTUI
 	}
-	if committed != workertransport.InterfaceChat || launch.Harness != "claude-code" ||
+	if !checks.firstStart || committed != workertransport.InterfaceChat || launch.Harness != "claude-code" ||
 		!checks.harnessInstalled(launch.Harness) {
 		return committed
 	}
@@ -73,6 +77,8 @@ const claudeChatAdapterWait = 5 * time.Minute
 // chatAdapterSettle is what settleClaudeChatStart asks of the workspace, the
 // control plane and the transport; tests replace them.
 type chatAdapterSettle struct {
+	// firstStart is chatStartChecks.firstStart.
+	firstStart bool
 	// ensure waits for the Claude ACP adapter (workerexec.EnsureClaudeACPAdapter).
 	ensure func(ctx context.Context) error
 	// fallBack is chatStartChecks.fallBack.
@@ -89,7 +95,7 @@ type chatAdapterSettle struct {
 // same notice, rather than every Chat turn failing on the missing adapter. It
 // reports whether the session moved.
 func settleClaudeChatStart(ctx context.Context, logger *slog.Logger, launch worker.LaunchContext, settle chatAdapterSettle) bool {
-	if launch.Interface != workertransport.InterfaceChat || launch.Harness != "claude-code" {
+	if !settle.firstStart || launch.Interface != workertransport.InterfaceChat || launch.Harness != "claude-code" {
 		return false
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, claudeChatAdapterWait)

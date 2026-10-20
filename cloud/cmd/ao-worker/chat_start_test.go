@@ -22,6 +22,7 @@ func TestStartInterface(t *testing.T) {
 		startable func() error
 		moved     bool
 		moveErr   error
+		restart   bool
 		want      string
 		wantAsked bool
 	}{
@@ -33,11 +34,13 @@ func TestStartInterface(t *testing.T) {
 		{name: "no adapter and no npm moves to the terminal", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, moved: true, want: "tui", wantAsked: true},
 		{name: "a session switched to chat stays", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, want: "chat", wantAsked: true},
 		{name: "an older control plane keeps chat", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, startable: unavailable, moveErr: errors.New("404"), want: "chat", wantAsked: true},
+		{name: "a restarted worker never moves the session", launch: worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, installed: true, moved: true, restart: true, want: "chat"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			asked := false
 			got := startInterface(context.Background(), logger, tc.launch, chatStartChecks{
+				firstStart:       !tc.restart,
 				harnessInstalled: func(string) bool { return tc.installed },
 				claudeChatStartable: func() error {
 					if tc.startable == nil {
@@ -73,6 +76,7 @@ func TestSettleClaudeChatStart(t *testing.T) {
 		moved      bool
 		moveErr    error
 		switchErr  error
+		restart    bool
 		want       bool
 		wantAsked  bool
 		wantSwitch bool
@@ -85,12 +89,14 @@ func TestSettleClaudeChatStart(t *testing.T) {
 		{name: "a session switched to chat stays", launch: claudeChat, ensure: failedInstall, wantAsked: true},
 		{name: "an older control plane keeps chat", launch: claudeChat, ensure: failedInstall, moveErr: errors.New("404"), wantAsked: true},
 		{name: "the terminal could not start", launch: claudeChat, ensure: failedInstall, moved: true, switchErr: errors.New("pty"), wantAsked: true, wantSwitch: true},
+		{name: "a restarted worker never moves the session", launch: claudeChat, ensure: failedInstall, moved: true, restart: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			asked, switched := false, false
 			got := settleClaudeChatStart(context.Background(), logger, tc.launch, chatAdapterSettle{
-				ensure: tc.ensure,
+				firstStart: !tc.restart,
+				ensure:     tc.ensure,
 				fallBack: func(_ context.Context, code string) (bool, error) {
 					asked = true
 					if code != worker.ChatStartAdapterUnavailable {

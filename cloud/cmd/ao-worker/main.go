@@ -285,6 +285,7 @@ func run(logger *slog.Logger) error {
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
 	committedInterface := startInterface(ctx, logger, bootstrap.Launch, chatStartChecks{
+		firstStart:          firstStart,
 		harnessInstalled:    func(harness string) bool { return verifyHarnessAvailable(harness) == nil },
 		claudeChatStartable: workerexec.ClaudeACPAdapterStartable,
 		fallBack:            client.fallBackChatStart,
@@ -612,6 +613,7 @@ func run(logger *slog.Logger) error {
 			// adapter installed; the Chat controller takes no turn until then.
 			go func() {
 				if settleClaudeChatStart(runCtx, logger, bootstrap.Launch, chatAdapterSettle{
+					firstStart: firstStart,
 					ensure: func(ctx context.Context) error {
 						_, err := workerexec.EnsureClaudeACPAdapter(ctx)
 						return err
