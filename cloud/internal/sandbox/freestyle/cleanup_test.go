@@ -211,7 +211,9 @@ func TestDeleteReportsAFailedCleanupAndStillDeletes(t *testing.T) {
 	if err := client.Delete(recorder.Context(context.Background()), sandbox.ID(id)); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if events := recorder.Events(t); len(events) != 1 || events[0].Status != worker.SetupTimedOut {
+	// Stopped before it could say whom it ran as: the worker account the hook
+	// ran as, as a failed Setup step names its user.
+	if events := recorder.Events(t); len(events) != 1 || events[0].Status != worker.SetupTimedOut || events[0].User != workerUser {
 		t.Fatalf("timed-out events = %+v", events)
 	}
 	if stage, _ := recorder.Stage(); stage.Err == nil || api.exists(id) {

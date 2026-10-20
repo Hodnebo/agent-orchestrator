@@ -146,6 +146,7 @@ func (c *Client) runCleanup(
 ) {
 	finish := sandbox.BeginStage(ctx, cleanuphook.Stage)
 	steps := plan.Steps
+	steps.User = workerUser
 	if resume {
 		attrs["resumed"] = "true"
 		if err := c.resumeForCleanup(ctx, id, resumeWait); err != nil {

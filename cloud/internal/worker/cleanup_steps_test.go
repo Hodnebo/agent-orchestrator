@@ -239,6 +239,34 @@ func TestCleanupStoppedDuringAStep(t *testing.T) {
 	}
 }
 
+// A step stopped before the commands script could say whom it ran as is
+// reported as run by the account the control plane ran the hook as, as a
+// failed Setup step names its user; a "ran as" line in the output wins.
+func TestCleanupFailedStepNamesTheHookUser(t *testing.T) {
+	t.Parallel()
+	nonce := NewScriptMarkerNonce()
+	started := time.Now().Add(-time.Minute)
+	stopped := "@@ao-step-" + nonce + " 1 1 start " + itoa64(started.UnixMilli()) + " / make down\n" + "stopping\n"
+	events := CleanupStepEvents(stopped, CleanupRun{RunID: "r", Nonce: nonce, User: "ao-worker", ExitCode: 124, StartedAt: started, Duration: time.Minute})
+	if len(events) != 1 || events[0].Status != SetupTimedOut || events[0].User != "ao-worker" {
+		t.Fatalf("stopped step = %+v", events)
+	}
+	reported := "@@ao-step-" + nonce + " 1 1 start " + itoa64(started.UnixMilli()) + " / make down\n" +
+		"cleanup step 1 failed: exit status 2\nran as coder (groups: coder) in /home/coder/app\n" +
+		"@@ao-step-" + nonce + " 1 1 end 2 1500\n"
+	events = CleanupStepEvents(reported, CleanupRun{RunID: "r", Nonce: nonce, User: "ao-worker", ExitCode: 2, StartedAt: started, Duration: time.Minute})
+	if len(events) != 1 || events[0].Status != SetupFailed || events[0].User != "coder" || events[0].Dir != "/home/coder/app" {
+		t.Fatalf("reported step = %+v", events)
+	}
+	// A step that succeeded names no user, as a Setup step that succeeded does.
+	succeeded := "@@ao-step-" + nonce + " 1 1 start " + itoa64(started.UnixMilli()) + " / make down\n" +
+		"@@ao-step-" + nonce + " 1 1 end 0 1500\n"
+	events = CleanupStepEvents(succeeded, CleanupRun{RunID: "r", Nonce: nonce, User: "ao-worker", StartedAt: started, Duration: time.Minute})
+	if len(events) != 1 || events[0].Status != SetupSucceeded || events[0].User != "" {
+		t.Fatalf("succeeded step = %+v", events)
+	}
+}
+
 func itoa64(value int64) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)

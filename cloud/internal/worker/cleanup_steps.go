@@ -86,6 +86,11 @@ type CleanupRun struct {
 	// nothing naming it), masked in its output; both count, as a current
 	// Cleanup the hook could not install leaves the worker's commands to run.
 	KnownCommands []string
+	// User is the account the hook runs as when the control plane knows it
+	// (the worker account it provisioned): a failed step whose output does
+	// not say whom it ran as (it was stopped before the commands script could
+	// print that) is reported as run by it.
+	User string
 	// ExitCode is the hook's exit status, and StartedAt and Duration when the
 	// run started and how long it took.
 	ExitCode  int
@@ -336,7 +341,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 			}
 			event.Output, event.OutputTruncated = redactor.scriptStepOutput(step.output.String(), step.headDropped)
 			if event.Status != SetupSucceeded && event.Status != ScriptStepSkipped {
-				cleanupFailureContext(&event, event.Output)
+				cleanupFailureContext(&event, event.Output, run.User)
 			}
 		case number < firstSeen:
 			// Before the first step the output still shows; a later step ran,
@@ -398,16 +403,20 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 		event.LogPath = strings.TrimSpace(match[1])
 	}
 	if event.Status != SetupSucceeded {
-		cleanupFailureContext(&event, event.Output)
+		cleanupFailureContext(&event, event.Output, run.User)
 	}
 	return []ScriptStepEvent{fitScriptStepEvent(event)}
 }
 
 // cleanupFailureContext fills a failed Cleanup step's user, groups and
 // directory from the "ran as" line the commands script prints, and its hint.
-func cleanupFailureContext(event *ScriptStepEvent, output string) {
+// Without that line (the step was stopped before it printed one) the user is
+// runAs, the account the hook runs as, when known.
+func cleanupFailureContext(event *ScriptStepEvent, output, runAs string) {
 	if match := cleanupRanAsPattern.FindStringSubmatch(output); match != nil {
 		event.User, event.Groups, event.Dir = match[1], strings.Fields(match[2]), strings.TrimSpace(match[3])
+	} else {
+		event.User = runAs
 	}
 	exitCode := -1
 	if event.ExitCode != nil {

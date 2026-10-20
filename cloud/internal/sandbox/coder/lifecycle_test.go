@@ -583,8 +583,9 @@ func TestDeleteRecordsCleanupStepsOnTheSession(t *testing.T) {
 
 	// An older commands script without markers is one step.
 	older := run("4", "tearing down\ncleanup step 1 failed: exit status 4", nil)
+	// It does not say whom it ran as: the worker account the hook runs as.
 	if len(older) != 1 || older[0].Status != worker.SetupFailed || *older[0].ExitCode != 4 ||
-		!strings.HasPrefix(older[0].Output, "tearing down") || older[0].Total != 1 {
+		!strings.HasPrefix(older[0].Output, "tearing down") || older[0].Total != 1 || older[0].User != dedicatedWorkerUser {
 		t.Fatalf("older script events = %+v", older)
 	}
 

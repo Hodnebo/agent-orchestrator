@@ -165,6 +165,7 @@ func cleanupReachable(view workspace, agent workspaceAgent, found bool) (bool, s
 func (c *Client) runCleanup(ctx context.Context, ptyURL *url.URL, wait time.Duration, plan cleanuphook.Plan, attrs map[string]string) {
 	finish := sandbox.BeginStage(ctx, StageCleanup)
 	steps := plan.Steps
+	steps.User = c.cleanupOwner()
 	steps.StartedAt = time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, wait+cleanupMargin)
 	defer cancel()
