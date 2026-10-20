@@ -259,6 +259,11 @@ func (m *Manager) confirmTUISwitchTargetAlive(ctx context.Context, rec domain.Se
 // is restarted for nothing. A probe that cannot answer does not block: the
 // launch itself still validates.
 func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, target ports.Agent) error {
+	// These answer one task and exit in a terminal, so they cannot hold the
+	// session after taking it over. Both still switch in Chat.
+	if harness == domain.HarnessDeepSeek || harness == domain.HarnessAutohand {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: fmt.Sprintf("%s runs one task and exits in a terminal; switch to it in Chat", harness)}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if resolver, ok := target.(ports.AgentBinaryResolver); ok {
