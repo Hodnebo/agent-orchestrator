@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -140,5 +141,36 @@ func TestWorkerAgentStarted(t *testing.T) {
 	// Under another organization the session is not visible.
 	if got, err := store.WorkerAgentStarted(ctx, "00000000-0000-0000-0000-000000000000", fixture.sessionID, fixture.workerID, fixture.epoch); err != nil || got {
 		t.Fatalf("another organization: started = %v, err = %v", got, err)
+	}
+}
+
+// A session that stays in Chat never sends agent.ready: its worker epoch's
+// agent started once that epoch claimed a turn. A queued turn, or one an
+// earlier epoch claimed, does not count.
+func TestWorkerAgentStartedByAChatTurnClaim(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sessions SET interface = 'chat', harness = 'claude-code'
+		WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID)
+	started := func(epoch int64) bool {
+		t.Helper()
+		got, err := store.WorkerAgentStarted(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if _, err := store.SendMessage(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID,
+		uuid.NewString(), "hello", domain.ChatTurnSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if started(fixture.epoch) {
+		t.Fatal("a queued turn counted as the agent starting")
+	}
+	if _, claimed, err := store.ClaimWorkerTurn(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch); err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	if !started(fixture.epoch) || started(fixture.epoch+1) {
+		t.Fatal("only the epoch that claimed a turn started its agent")
 	}
 }

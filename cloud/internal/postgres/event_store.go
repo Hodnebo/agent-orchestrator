@@ -211,29 +211,28 @@ func loadIdempotentMessage(
 }
 
 // WorkerAgentStarted reports whether the session's worker epoch (workerID)
-// reported its coding agent started (agent.ready). Its agent.ready is the
-// session's newest one, as a superseded epoch can report nothing, so only the
-// newest is read.
+// started its coding agent: it reported agent.ready (a terminal agent), or it
+// claimed a turn (a Chat session's agent runs only for a claimed turn, and a
+// session that stays in Chat never sends agent.ready). A worker claims no turn
+// while its Setup runs or after it failed. Its agent.ready is the session's
+// newest one, as a superseded epoch can report nothing, so only the newest is
+// read. One round trip on the session's turn and event indexes.
 func (s *Store) WorkerAgentStarted(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error) {
 	var started bool
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		var payload []byte
-		err := tx.QueryRow(ctx,
-			`SELECT payload FROM ao_events
-			WHERE org_id = $1 AND session_id = $2 AND type = 'agent.ready'
-			ORDER BY sequence DESC
-			LIMIT 1`,
-			orgID, sessionID,
-		).Scan(&payload)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var ready worker.ReadyEvent
-		started = json.Unmarshal(payload, &ready) == nil && ready.WorkerID == workerID && ready.Epoch == epoch
-		return nil
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (
+					SELECT 1 FROM ao_turns
+					WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $4 AND attempt_count > 0
+				) OR COALESCE((
+					SELECT payload->>'workerId' = $3 AND payload->>'epoch' = $4::bigint::text
+					FROM ao_events
+					WHERE org_id = $1 AND session_id = $2 AND type = 'agent.ready'
+					ORDER BY sequence DESC
+					LIMIT 1
+				), false)`,
+			orgID, sessionID, workerID, epoch,
+		).Scan(&started)
 	})
 	return started, err
 }
