@@ -440,6 +440,7 @@ type Manager struct {
 	statusRecoveryRevision      uint64
 	statusRecoveries            map[domain.SessionID]statusRecovery
 	statusVerificationLimit     time.Duration
+	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
 	// launchStartWait bounds the wait to see a new supervised launch alive.
@@ -859,6 +860,7 @@ func New(d Deps) *Manager {
 	}
 	m.statusRecoveries = make(map[domain.SessionID]statusRecovery)
 	m.statusVerificationLimit = statusVerificationLimit
+	m.startupChatRetryDelays = defaultStartupChatRetryDelays
 	if m.reconcileWorkers < 1 {
 		m.reconcileWorkers = 1
 	}
@@ -4265,6 +4267,8 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	jobs := make(chan domain.SessionRecord)
 	var wg sync.WaitGroup
+	var retryMu sync.Mutex
+	var retryChats []domain.SessionID
 	wg.Add(workers)
 	for range workers {
 		go func() {
@@ -4280,6 +4284,11 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 				m.finishStatusRecovery(ctx, rec, err)
 				if err != nil {
 					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "error", err)
+					if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && retryableStartupChatCheck(err) {
+						retryMu.Lock()
+						retryChats = append(retryChats, rec.ID)
+						retryMu.Unlock()
+					}
 				}
 			}
 		}()
@@ -4289,6 +4298,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	close(jobs)
 	wg.Wait()
+	if len(retryChats) > 0 && ctx.Err() == nil {
+		go m.retryStartupChatChecks(ctx, retryChats)
+	}
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last

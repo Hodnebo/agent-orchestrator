@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -82,6 +83,80 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		return nil
 	}
 	return m.recordAgentExited(ctx, rec)
+}
+
+// defaultStartupChatRetryDelays spaces the reattach attempts for a Chat whose
+// startup check failed transiently. Its provider host is still running, so a
+// later attempt reconnects to it: no provider is launched and no history moves.
+var defaultStartupChatRetryDelays = []time.Duration{
+	2 * time.Second, 5 * time.Second, 10 * time.Second, 20 * time.Second,
+	30 * time.Second, time.Minute, time.Minute,
+}
+
+// retryableStartupChatCheck reports failures a later reattach can succeed past:
+// the check's deadline (a busy writer at startup) and an inconclusive host owner
+// (a replaced daemon has not detached yet). Anything else needs the user.
+func retryableStartupChatCheck(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ports.ErrChatRecoveryInconclusive)
+}
+
+// retryStartupChatChecks reattaches Chats whose startup check failed
+// transiently. Without it, a live host reads "stopped" until the user clicks
+// Resume, even though the next attempt would reconnect immediately.
+func (m *Manager) retryStartupChatChecks(ctx context.Context, ids []domain.SessionID) {
+	for _, delay := range m.startupChatRetryDelays {
+		if len(ids) == 0 {
+			return
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		remaining := ids[:0]
+		for _, id := range ids {
+			if m.retryStartupChatCheck(ctx, id) {
+				remaining = append(remaining, id)
+			}
+		}
+		ids = remaining
+	}
+}
+
+// retryStartupChatCheck makes one reattach attempt and reports whether the
+// session still needs another one.
+func (m *Manager) retryStartupChatCheck(ctx context.Context, id domain.SessionID) bool {
+	rec, found, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return ctx.Err() == nil
+	}
+	if !found || rec.IsTerminated || rec.HibernatedAt != nil ||
+		domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat || m.chat == nil ||
+		m.chat.HasLiveChatController(id) {
+		// Gone, asleep, or already reattached (for example by Resume).
+		return false
+	}
+	if err := m.beginAgentOperation(ctx, id, agentOperationReconcile); err != nil {
+		// A user operation owns the session now; look again after it ends.
+		return errors.Is(err, errAgentOperationInProgress)
+	}
+	m.beginStatusRecovery(id)
+	err = func() error {
+		defer m.endAgentOperation(id, agentOperationReconcile)
+		recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
+		defer cancel()
+		return m.checkSessionHealth(recoveryCtx, rec)
+	}()
+	m.finishStatusRecovery(ctx, rec, err)
+	if err == nil {
+		m.logger.Info("reconcile: chat reattached on retry", "sessionID", id)
+		return false
+	}
+	retry := retryableStartupChatCheck(err) && ctx.Err() == nil
+	m.logger.Warn("reconcile: chat reattach retry failed", "sessionID", id, "retrying", retry, "error", err)
+	return retry
 }
 
 // Setup's durable completion is written before any controller may launch.
