@@ -146,6 +146,13 @@ export function ShellTopbar({
 		hostId,
 	});
 	const { isSpawning, isProjectRestarting, isProvisioning, openNewTask, openOrchestrator } = projectActions;
+	// ⌘⇧O / Ctrl+Shift+G does what the Orchestrator button does for the
+	// project in scope: open, resume, or spawn. Only one topbar is mounted at
+	// a time, so the shortcut fires once. No-op without a project (root board).
+	useSessionShortcut("open-orchestrator", () => {
+		if (!supportsProjectActions || startingOrchestrator) return;
+		openOrchestrator();
+	});
 	const { showProjectEmpty } = useBoardPresentation({
 		projectId,
 		isSuccess: workspaceQuery.isSuccess,

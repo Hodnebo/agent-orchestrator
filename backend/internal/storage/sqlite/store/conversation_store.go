@@ -1106,6 +1106,21 @@ func (s *Store) LatestConversationTurn(ctx context.Context, conversationID strin
 	return turnToDomain(row), nil
 }
 
+// TurnByProviderID is the conversation's turn the provider knows as
+// providerTurnID.
+func (s *Store) TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error) {
+	row, err := s.qr.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+		ConversationID: conversationID, ProviderTurnID: providerTurnID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("select turn by provider id %s: %w", providerTurnID, err)
+	}
+	return turnToDomain(row), nil
+}
+
 // LatestVisibleUserTurnSettled checks the current branch's latest user prompt
 // without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
@@ -1452,7 +1467,8 @@ func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 	return nil
 }
 
-// RecordProviderInput saves the exact provider text before a combined turn crosses I/O.
+// RecordProviderInput saves the exact combined text for native replay. A normal
+// send records it before provider I/O; an accepted steer records it afterward.
 func (s *Store) RecordProviderInput(ctx context.Context, turnID, text string) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()

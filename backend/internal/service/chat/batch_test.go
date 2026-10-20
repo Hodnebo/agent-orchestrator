@@ -366,6 +366,63 @@ func TestSteerFlushesPendingChatMessages(t *testing.T) {
 	if _, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); !errors.Is(err, domain.ErrNoQueuedTurn) {
 		t.Fatalf("queue after steer = %v", err)
 	}
+	target, err := h.st.TurnByProviderID(ctx, h.ctrl.ConversationID(), result.Steer.ProviderTurnID)
+	if err != nil || target.ProviderInputText != steers[0].msg.Text {
+		t.Fatalf("steered batch replay identity = %+v, %v", target, err)
+	}
+}
+
+type duplicateFallbackStore struct {
+	chatsvc.Store
+	duplicate bool
+}
+
+func (s *duplicateFallbackStore) AppendUserMessage(ctx context.Context, conversationID string,
+	session domain.SessionID, generation string, msg domain.ConversationMessage,
+	turnID string, now time.Time) (bool, error) {
+	if s.duplicate {
+		// Simulate a second writer winning after SteerOrSend's initial lookup.
+		return false, nil
+	}
+	return s.Store.AppendUserMessage(ctx, conversationID, session, generation, msg, turnID, now)
+}
+
+func TestDuplicateSteerFallbackReleasesPendingBatch(t *testing.T) {
+	var duplicateStore *duplicateFallbackStore
+	h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
+		duplicateStore = &duplicateFallbackStore{Store: st}
+		return duplicateStore
+	})
+	ctx := context.Background()
+	for _, text := range []string{"pending first", "pending second"} {
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: text, ClientMessageID: text, Origin: domain.MessageOriginAutomation,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider.failWith(ports.ErrChatNoSteerableTurn)
+	duplicateStore.duplicate = true
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "duplicate", ClientMessageID: "duplicate-fallback", Origin: domain.MessageOriginHuman,
+	}, false)
+	if err != nil || result.Turn.ID != "" {
+		t.Fatalf("duplicate fallback = %+v, %v", result, err)
+	}
+	if len(provider.sentTexts()) != 1 {
+		t.Fatalf("duplicate fallback reached provider: %v", provider.sentTexts())
+	}
+	first, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || first.Text != "pending first" {
+		t.Fatalf("first pending message = %+v, %v", first, err)
+	}
+	if err := h.st.CancelQueuedTurnByID(ctx, h.ctrl.ConversationID(), first.TurnID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || second.Text != "pending second" {
+		t.Fatalf("second pending message = %+v, %v", second, err)
+	}
 }
 
 func TestQueuedBatchDoesNotTruncateProviderInput(t *testing.T) {

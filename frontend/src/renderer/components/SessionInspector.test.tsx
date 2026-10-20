@@ -700,6 +700,19 @@ describe("SessionInspector PR section", () => {
   });
 
   it("merges a ready pull request directly through the daemon", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/merge" ? {
+      data: {
+        ok: true,
+        prNumber: 7,
+        method: "squash",
+        state: "merged",
+        stateChangedAt: "2026-10-19T11:06:22Z",
+      },
+      error: undefined,
+    } : {
+      data: { ok: true, sessionId: "sess-1" },
+      error: undefined,
+    });
     const readyPR = prSummary(7, "open", {
       url: "https://example.com/pr/7",
       headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -709,7 +722,11 @@ describe("SessionInspector PR section", () => {
         unresolvedBy: [],
       },
     });
-    renderWithQuery(
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [readyPR], linkedPrs: [] } }
+      : respond(path));
+    const { queryClient } = renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
@@ -730,6 +747,13 @@ describe("SessionInspector PR section", () => {
         },
       }),
     );
+    await waitFor(() =>
+      expect(queryClient.getQueryData<{ prs: SessionPRSummary[] }>(sessionScmSummaryQueryKey("sess-1"))?.prs[0]?.state).toBe("merged"),
+    );
+    await waitFor(() =>
+      expect(prSection("Pull request").getByText("merged")).toBeInTheDocument(),
+    );
+    expect(prSection("Pull request").queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -1500,7 +1524,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
 
     live.unmount();
@@ -1561,7 +1585,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3"),
+      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
   });
 
@@ -4708,6 +4732,48 @@ describe("SessionInspector branch summary", () => {
 
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
+
+  it.each(["provisioning", "ready"] as const)("shimmers while naming in %s and reveals the final branch when its worktree is ready", (provisionState) => {
+    mockGitState({});
+    const starting = session([], {
+      branch: "ao/sess-1/root",
+      provisionState,
+      provisionSteps: provisionState === "ready" ? [{ id: "worktree", status: "running" }] : [],
+    });
+    const view = renderWithQuery(<SessionInspector session={starting} />);
+    const namingLabel = branch().getByRole("status");
+    const namingText = namingLabel.textContent;
+    expect(namingLabel).toHaveClass("chat-working-shimmer");
+    expect(namingLabel).toHaveTextContent(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/);
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, provisionSteps: [{ id: "worktree", status: "running" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByRole("status").textContent).toBe(namingText);
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider><SessionInspector session={{ ...starting, provisionState: "failed" }} /></TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+    expect(screen.queryByText("ao/sess-1/root")).not.toBeInTheDocument();
+
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <TooltipProvider>
+          <SessionInspector session={{ ...starting, branch: "ao/fix-login/root", provisionSteps: [{ id: "worktree", status: "done" }] }} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(branch().getByText("ao/fix-login/root")).toBeInTheDocument();
+    expect(screen.queryByText(/^(Generating branch name|Naming branch|Preparing branch|Initializing branch|Resolving branch name)$/)).not.toBeInTheDocument();
+  });
 
   beforeEach(() => {
     useSessionGitActionStore.setState({ pending: {} });
