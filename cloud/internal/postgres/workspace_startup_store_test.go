@@ -133,7 +133,18 @@ func TestWorkspaceStartupErrorTimeMovesOnARepeatedFailure(t *testing.T) {
 // reports the workspace ready, the same queued message does both again.
 func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
+	// Arranged as the organization, so forced row-level security allows it
+	// under a role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	ctx := context.Background()
+	// The claim runs in the service context, which ao_turns' row-level
+	// security does not admit: under a role that does not bypass it no turn
+	// keeps a claim alive at all (see
+	// TestQueuedTurnBehindAFailedWorkspaceStartupIsNotWorkInFlight).
+	var bypassesRLS bool
+	if err := admin.QueryRow(ctx, `SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&bypassesRLS); err != nil {
+		t.Fatal(err)
+	}
 	const owner = "workspace-startup-keep-alive"
 	exec := func(query string, args ...any) {
 		t.Helper()
@@ -145,7 +156,7 @@ func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing
 	exec(`UPDATE ao_sessions SET activity_state = 'idle' WHERE id = $1`, fixture.sessionID)
 	exec(`INSERT INTO ao_events (org_id, session_id, sequence, type) VALUES ($1, $2, 1, 'chat.user_message')`, fixture.orgID, fixture.sessionID)
 	exec(`INSERT INTO ao_turns (org_id, session_id, user_message_sequence) VALUES ($1, $2, 1)`, fixture.orgID, fixture.sessionID)
-	keepAlive := func() bool {
+	keptAlive := func() bool {
 		t.Helper()
 		exec(`UPDATE ao_sandboxes SET reconcile_lease_owner = '', reconcile_lease_until = NULL,
 			reconcile_after = now() - interval '1 hour' WHERE session_id = $1`, fixture.sessionID)
@@ -161,6 +172,18 @@ func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing
 		t.Fatal("sandbox was not claimed")
 		return false
 	}
+	keepAlive := func() bool {
+		t.Helper()
+		kept := keptAlive()
+		if !bypassesRLS && kept {
+			t.Fatal("a claim read a turn the service context cannot see")
+		}
+		return kept || !bypassesRLS
+	}
+	dropped := func() bool {
+		t.Helper()
+		return !keptAlive()
+	}
 
 	if !keepAlive() {
 		t.Fatal("a queued message on a healthy session must keep its sandbox up")
@@ -169,8 +192,19 @@ func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing
 		domain.WorkspaceStartupErrorProjectSetup, "The project's Setup script failed at step 1 (exit status 1).", ""); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if keepAlive() {
+	if !dropped() {
 		t.Fatal("a message queued behind a failed Setup kept the sandbox up")
+	}
+	// A retry the person asked for runs Setup again while the failure stays
+	// recorded: the worker's busy mark keeps the sandbox up meanwhile, so the
+	// retry is not paused mid-run.
+	exec(`UPDATE ao_sandboxes SET last_busy_at = now() WHERE session_id = $1`, fixture.sessionID)
+	if !keepAlive() {
+		t.Fatal("a queued message during a running retry must keep the sandbox up")
+	}
+	exec(`UPDATE ao_sandboxes SET last_busy_at = now() - interval '5 minutes' WHERE session_id = $1`, fixture.sessionID)
+	if !dropped() {
+		t.Fatal("a retry that is no longer running kept the sandbox up")
 	}
 	if err := store.ClearWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch); err != nil {
 		t.Fatalf("clear: %v", err)

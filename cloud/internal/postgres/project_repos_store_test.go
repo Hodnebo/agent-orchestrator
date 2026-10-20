@@ -157,7 +157,8 @@ func TestUpdateProjectSettingsChecksRepositorySettingsAgainstTheMainRepository(t
 }
 
 // A step's time limit is saved in the stored, plain-string form a release
-// that predates per-step limits keeps, and a limit out of range is refused.
+// that predates per-step limits keeps, and a limit out of range is refused. A
+// limit equal to a default (10 for a Cleanup step) is kept as the step's own.
 func TestUpdateProjectSettingsStoresScriptStepTimeouts(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
@@ -182,7 +183,7 @@ func TestUpdateProjectSettingsStoresScriptStepTimeouts(t *testing.T) {
 		t.Fatalf("preRemove = %s: %v", config["preRemove"], err)
 	}
 	if strings.Join(postCreate, "|") != "make up|# ao-timeout: 45m\nnpm ci|# ao-timeout: 120m\nmake seed" ||
-		strings.Join(preRemove, "|") != "make down" {
+		strings.Join(preRemove, "|") != "# ao-timeout: 10m\nmake down" {
 		t.Fatalf("stored steps = %q / %q", postCreate, preRemove)
 	}
 	for _, bad := range []string{
