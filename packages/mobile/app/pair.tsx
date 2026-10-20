@@ -10,6 +10,7 @@ import { saveConfig } from "../lib/config";
 import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
+	describeUnreachableCode,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
 } from "../lib/connectionError";
@@ -18,6 +19,7 @@ import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { pairFromCode } from "../lib/pairFlow";
+import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
 import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
 import { loadAccount } from "../lib/account";
@@ -146,11 +148,6 @@ export default function PairScreen() {
 				return;
 			}
 			haptics.warning();
-			// Use the first endpoint from the offer for error reporting, if available
-			const firstEndpoint = offer?.endpoints[0];
-			const errorTarget = firstEndpoint
-				? { host: firstEndpoint.host, port: String(firstEndpoint.port), platform: Platform.OS }
-				: { host: "", port: "", platform: Platform.OS };
 			if (result.reason === "wrong-machine") {
 				setFailure({
 					title: "Different machine",
@@ -165,6 +162,18 @@ export default function PairScreen() {
 					message: "Enter a machine name before saving this connection.",
 					showLocalNetworkHint: false,
 				});
+			} else if (result.reason === "verify-failed") {
+				// The race reached this endpoint, so whatever went wrong happened
+				// there — name it, and let a 401 read as a rejected password.
+				setFailure(
+					describeConnectionFailure(classifyConnectionFailure(result.status), {
+						host: result.endpoint.host,
+						port: String(result.endpoint.port),
+						platform: Platform.OS,
+					}),
+				);
+			} else if (result.reason === "none-reachable" || result.reason === "no-candidates") {
+				setFailure(describeUnreachableCode(offer?.endpoints ?? [], Platform.OS));
 			} else {
 				setFailure(
 					describeConnectionFailure(
@@ -175,7 +184,7 @@ export default function PairScreen() {
 								: result.reason === "incompatible"
 									? "incompatible-host"
 									: classifyConnectionFailure(undefined),
-						errorTarget,
+						{ host: "", port: "", platform: Platform.OS },
 					),
 				);
 			}
@@ -196,6 +205,10 @@ export default function PairScreen() {
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
 		await finish();
+		// A successful scan counts as a deliberate trigger for the one-shot OS
+		// prompt (see `ask` on registerForPushNow in lib/push.ts): a granted device
+		// registers with this machine now instead of waiting on the Settings switch.
+		void registerForPush(result.config, { ask: true }).catch((e) => console.warn("[push] registration failed", e));
 	}
 
 	function retry() {
@@ -231,10 +244,10 @@ export default function PairScreen() {
 			{repairHost ? (
 				<View style={styles.repairIntro}>
 					<Text style={styles.repairTitle}>Reconnect {repairHost.name}</Text>
-					<Text style={styles.repairText}>Scan the new code from AO → Settings → Connect Mobile on that machine.</Text>
+					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : <View style={styles.steps}>
-					<NumberedStep n={1} title="Enable AO on a machine" compact />
+					<NumberedStep n={1} title="Enable Orchestrator on a machine" compact />
 					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
 					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
 			</View>}
@@ -336,8 +349,8 @@ function CameraGate({
 			<Text style={styles.gateTitle}>Camera access needed</Text>
 			<Text style={styles.gateHint}>
 				{canAskAgain
-					? "AO uses the camera only to read a pairing QR code."
-					: "Camera access is turned off for AO. Enable it in system settings, or enter your details manually below."}
+					? "Orchestrator uses the camera only to read a pairing QR code."
+					: "Camera access is turned off for Orchestrator. Enable it in system settings, or enter your details manually below."}
 			</Text>
 			{canAskAgain ? (
 				// App Review 5.1.1(iv): the button ahead of the system permission

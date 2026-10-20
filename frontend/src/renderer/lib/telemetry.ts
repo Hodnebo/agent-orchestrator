@@ -1,4 +1,4 @@
-import posthog from "posthog-js/dist/module.full.no-external";
+import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
@@ -976,7 +976,17 @@ function bindErrorHandlers() {
 	});
 }
 
-type PostHogInitOptions = NonNullable<Parameters<typeof posthog.init>[1]>;
+type PostHogClient = typeof posthogModule;
+type PostHogInitOptions = NonNullable<Parameters<PostHogClient["init"]>[1]>;
+
+// The SDK (~650 KB) is loaded inside initTelemetry instead of at module load, so
+// it stays off the renderer's first-paint path. Every use below runs after
+// initTelemetry() resolved true, which is where this is assigned.
+let posthog!: PostHogClient;
+
+async function loadPostHog(): Promise<PostHogClient> {
+	return (await import("posthog-js/dist/module.full.no-external")).default;
+}
 
 export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 	return {
@@ -1038,6 +1048,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
+		posthog = await loadPostHog();
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
 		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
 		// source of truth and the bootstrap is only handed out when it is absent.
