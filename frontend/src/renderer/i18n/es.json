@@ -1687,6 +1687,7 @@
 	"shell.archiveSession": "Archivar sesión",
 	"shell.openArtifactNamed": "Abrir artefacto {{name}}",
 	"shell.moreArtifacts": "+{{count}} más",
+	"shell.openArtifactsInInspector": "Abrir en el inspector",
 	"artifacts.sessionEmpty": "Esta sesión aún no tiene artefactos.",
 	"artifacts.back": "Volver a los artefactos",
 	"artifacts.showIn": "Mostrar en {{name}}",

@@ -1905,6 +1905,7 @@
 	"shell.archiveSession": "Archive session",
 	"shell.openArtifactNamed": "Open artifact {{name}}",
 	"shell.moreArtifacts": "+{{count}} more",
+	"shell.openArtifactsInInspector": "Open in inspector",
 	"artifacts.sessionEmpty": "No artifacts in this session yet.",
 	"artifacts.back": "Back to artifacts",
 	"artifacts.showIn": "Show in {{name}}",

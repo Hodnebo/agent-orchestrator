@@ -1642,6 +1642,7 @@
 	"shell.archiveSession": "归档会话",
 	"shell.openArtifactNamed": "打开产物 {{name}}",
 	"shell.moreArtifacts": "另外 {{count}} 个",
+	"shell.openArtifactsInInspector": "在检查器中打开",
 	"artifacts.sessionEmpty": "此会话还没有产物。",
 	"artifacts.back": "返回产物",
 	"artifacts.showIn": "在 {{name}} 中显示",
