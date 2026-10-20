@@ -188,7 +188,7 @@ func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 		return true, nil
 	}
 	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
-		return false, nil
+		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
 	}
 	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
 		return true, nil
@@ -204,7 +204,7 @@ func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 	}
 	if err := os.Symlink(source, target); err != nil {
 		_ = os.Rename(aside, target)
-		return false, nil
+		return false, nil //nolint:nilerr // No link (e.g. Windows without the privilege); the copy is restored.
 	}
 	_ = os.RemoveAll(aside)
 	return true, nil
@@ -217,7 +217,7 @@ func seedKimiCredential(sourcePath, targetPath string) error {
 	// A newer login replaces the copy, which went stale once Kimi renewed it.
 	if target, err := os.Stat(targetPath); err == nil {
 		if source, err := os.Stat(sourcePath); err != nil || !source.ModTime().After(target.ModTime()) {
-			return nil
+			return nil //nolint:nilerr // No newer login to copy; the existing one stays.
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target Kimi credentials %s: %w", targetPath, err)

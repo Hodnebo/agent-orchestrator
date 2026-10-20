@@ -720,12 +720,12 @@ type Session struct {
 	HibernatedAt                     sql.NullTime
 	BranchState                      string
 	RequestedOutput                  string
-	LaunchOptions                    string
 	RuntimeReleasedLaunchID          string
 	StaleBinarySince                 sql.NullTime
 	StaleBinaryVersion               string
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
+	LaunchOptions                    string
 }
 
 type SessionAgentAccount struct {
