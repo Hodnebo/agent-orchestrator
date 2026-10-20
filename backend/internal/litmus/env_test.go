@@ -61,11 +61,15 @@ func TestBaseEnvAllowlistKeepsEssentialsAndPinnedNode(t *testing.T) {
 type scriptEnvRunner struct {
 	Runner
 	envs [][]string
+	args [][]string
+	dirs []string
 }
 
 func (r *scriptEnvRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	if name == "sh" {
 		r.envs = append(r.envs, slices.Clone(env))
+		r.args = append(r.args, slices.Clone(args))
+		r.dirs = append(r.dirs, dir)
 	}
 	return r.Runner.Run(ctx, dir, env, name, args...)
 }

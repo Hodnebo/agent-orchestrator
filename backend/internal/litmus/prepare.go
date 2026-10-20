@@ -289,6 +289,17 @@ func (s *Service) sh(ctx context.Context, dir string, env []string, script strin
 	return s.runner.Run(ctx, dir, env, "sh", "-c", script)
 }
 
+// runStep passes Args literally. The fixed exec wrapper finds Cmd on the step's
+// PATH, including the pinned Node directory, without interpreting Cmd or Args as shell code.
+func (s *Service) runStep(ctx context.Context, root string, env []string, step Step) ([]byte, error) {
+	dir := filepath.Join(root, step.Dir)
+	if len(step.Args) > 0 {
+		args := append([]string{"-c", `exec "$0" "$@"`, step.Cmd}, step.Args...)
+		return s.runner.Run(ctx, dir, env, "sh", args...)
+	}
+	return s.sh(ctx, dir, env, step.Cmd)
+}
+
 // prepareLeg makes <dataDir>/litmus/repos/<owner>__<repo>/<sha> ready to launch: a
 // shared clone of the repo's mirror (never a worktree, so sessions inside the private AO
 // cannot register worktrees in the mirror), node_modules reused or installed, predev run.
@@ -351,7 +362,7 @@ func (s *Service) prepareLeg(ctx context.Context, repo string, r Recipe, leg, sh
 	}
 	if r.Build.Cmd != "" && m.PredevAt.IsZero() {
 		t := time.Now()
-		if _, err := s.sh(ctx, filepath.Join(dir, r.Build.Dir), env, r.Build.Cmd); err != nil {
+		if _, err := s.runStep(ctx, dir, env, r.Build); err != nil {
 			return Leg{}, err
 		}
 		m.PredevAt = s.clock()
@@ -496,7 +507,7 @@ func (s *Service) install(ctx context.Context, r Recipe, dir, hash string, env [
 		}
 		_ = os.RemoveAll(modules)
 	}
-	if _, err := s.sh(ctx, filepath.Join(dir, r.Install.Dir), env, r.Install.Cmd); err != nil {
+	if _, err := s.runStep(ctx, dir, env, r.Install); err != nil {
 		return err
 	}
 	m.Install, m.InstalledAt = "npm ci", s.clock()

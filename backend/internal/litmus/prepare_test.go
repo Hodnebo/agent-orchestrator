@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -470,5 +472,79 @@ func TestPruneCloneDeletesOnlyBranchesNoWorktreeHolds(t *testing.T) {
 		if strings.Contains(c, "branch -D") && strings.Contains(c, "run_s2") {
 			t.Fatalf("deleted a branch a worktree holds: %q", c)
 		}
+	}
+}
+
+func TestPrepareHonorsInstallAndBuildArgs(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2} {
+		t.Run([]string{"success", "install failure", "build failure"}[failAt], func(t *testing.T) {
+			svc, fake := prepSvc(t, nil)
+			r, err := ParseRecipe([]byte(`kind: cli
+run: {cmd: unused}
+install:
+  dir: frontend
+  cmd: npm
+  args: [ci, --cache, "cache with spaces"]
+  cacheKey: [frontend/package-lock.json]
+build:
+  cmd: npm
+  args: [run, build, --, "$LITERAL; echo text"]
+env: {FEATURE_FLAG: recipe-value}
+`))
+			is(t, "")(nil, err)
+			runner := &scriptEnvRunner{Runner: fake}
+			svc.runner = runner
+			failed := errors.New("step failed")
+			calls := 0
+			fake.sh = func(string) error {
+				calls++
+				if calls == failAt {
+					return failed
+				}
+				return nil
+			}
+			sha := strings.Repeat("a", 40)
+			leg, err := svc.prepareLeg(ctx, DefaultRepo, r, "head", sha)
+			if (failAt == 0 && err != nil) || (failAt != 0 && !errors.Is(err, failed)) {
+				t.Fatalf("prepare error %v for failed step %d", err, failAt)
+			}
+			wantCalls := 2
+			if failAt == 1 {
+				wantCalls = 1
+			}
+			if len(runner.args) != wantCalls {
+				t.Fatalf("ran %d steps, want %d", len(runner.args), wantCalls)
+			}
+			root := filepath.Join(svc.store.reposDir(DefaultRepo), sha)
+			for i, step := range []Step{r.Install, r.Build}[:wantCalls] {
+				want := append([]string{"-c", `exec "$0" "$@"`, step.Cmd}, step.Args...)
+				if !reflect.DeepEqual(runner.args[i], want) || runner.dirs[i] != filepath.Join(root, step.Dir) || envValue(runner.envs[i], "FEATURE_FLAG") != "recipe-value" {
+					t.Errorf("step %d lost its literal arguments, directory or recipe environment", i)
+				}
+			}
+			manifest := readManifest(root)
+			if failAt != 0 && !manifest.PredevAt.IsZero() {
+				t.Fatal("failed step marked the build complete")
+			}
+			if failAt == 0 && (leg.State != "prepared" || manifest.InstalledAt.IsZero() || manifest.PredevAt.IsZero()) {
+				t.Fatal("successful argument-based steps did not complete preparation")
+			}
+		})
+	}
+}
+
+func TestRunStepKeepsArgsLiteral(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is not available")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	svc := &Service{runner: execRunner{}}
+	values := []string{"two words", "$LITERAL", "$(exit 7)", "; exit 7", "*", ""}
+	step := Step{Cmd: "printf", Args: append([]string{"%s\n"}, values...)}
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "LITERAL=expanded"}
+	out, err := svc.runStep(ctx, t.TempDir(), env, step)
+	if err != nil || string(out) != strings.Join(values, "\n")+"\n" {
+		t.Fatalf("argument execution expanded or dropped values: %q err=%v", out, err)
 	}
 }
