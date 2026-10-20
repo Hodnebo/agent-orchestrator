@@ -471,6 +471,10 @@ func ProjectWorkingDirectory(config json.RawMessage) string {
 // session's bootstrap prepares beside a working-folder checkout.
 const MaxCoderCheckoutSiblings = 20
 
+// ErrCoderCheckoutHiddenInHome refuses an ao-worker checkout folder that is
+// a hidden folder directly in the home (coderFolderHiddenInHome).
+var ErrCoderCheckoutHiddenInHome = errors.New("The working folder must not be a hidden folder directly in the home folder.")
+
 // CoderCheckoutDirectory resolves a project's working folder for a session
 // whose worker runs as the dedicated ao-worker user: {repo} becomes the main
 // repository's folder name (RepoDirName), so the session's checkout path is
@@ -493,13 +497,20 @@ func CoderCheckoutDirectory(template, repositoryURL string) (string, error) {
 	if err := ValidateCoderCheckoutDirectory(template); err != nil {
 		return "", err
 	}
+	if coderFolderHiddenInHome(template) {
+		return "", ErrCoderCheckoutHiddenInHome
+	}
 	return template, nil
 }
 
 // ValidateCoderCheckoutDirectory checks a resolved working-folder checkout
 // path for the dedicated ao-worker user: a valid working directory
 // (ValidateCoderWorkingDirectory) with no placeholder left and not inside a
-// hidden folder (coderFolderInsideHiddenFolder).
+// hidden folder (coderFolderInsideHiddenFolder). It is checked again on every
+// start of a session (its stored profile), so it does not refuse a hidden
+// folder directly in the home: CoderCheckoutDirectory refuses that when the
+// session is created, and a session created before that rule keeps the
+// folder AO made for it (the workspace bootstrap creates no such folder).
 func ValidateCoderCheckoutDirectory(value string) error {
 	if err := ValidateCoderWorkingDirectory(value); err != nil {
 		return err
@@ -528,30 +539,38 @@ func CoderCheckoutDirectoryUnusableMessage(template string, err error) string {
 // (~/.ssh, ~/.aws) holds credentials. The checkout's own folder may be hidden
 // (a {repo} of .github) below another folder: the bootstrap never opens up a
 // folder that already exists, and the worker refuses one it did not create.
-// Directly in the home it may not: a missing ~/.local would be created owned
-// by ao-worker, and the login user's shell profile puts ~/.local/bin on its
-// PATH. An absolute path's home is only known in the workspace, where
-// ExpandCheckoutDirectory refuses the same folder. Only the ao-worker
-// checkout is checked: a workspace-user session works in the template's own
-// folder and changes no permissions.
+// Directly in the home it may not be (coderFolderHiddenInHome). Only the
+// ao-worker checkout is checked: a workspace-user session works in the
+// template's own folder and changes no permissions.
 func coderFolderInsideHiddenFolder(value string) bool {
-	rest, inHome := strings.CutPrefix(value, "~/")
-	if !inHome {
-		rest, inHome = strings.CutPrefix(value, "$HOME/")
+	rest, ok := strings.CutPrefix(value, "~/")
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "$HOME/")
 	}
-	if !inHome {
+	if !ok {
 		rest = strings.TrimPrefix(value, "/")
 	}
 	segments := strings.Split(strings.Trim(rest, "/"), "/")
-	if inHome && len(segments) == 1 && strings.HasPrefix(segments[0], ".") {
-		return true
-	}
 	for _, segment := range segments[:len(segments)-1] {
 		if strings.HasPrefix(segment, ".") {
 			return true
 		}
 	}
 	return false
+}
+
+// coderFolderHiddenInHome reports a working folder that is a hidden folder
+// directly in the home (~/.local, $HOME/.github). A missing ~/.local would be
+// created owned by ao-worker, and the login user's shell profile puts
+// ~/.local/bin on its PATH. An absolute path's home is only known in the
+// workspace, whose bootstrap refuses to create the same folder.
+func coderFolderHiddenInHome(value string) bool {
+	rest, ok := strings.CutPrefix(value, "~/")
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "$HOME/")
+	}
+	rest = strings.Trim(rest, "/")
+	return ok && !strings.Contains(rest, "/") && strings.HasPrefix(rest, ".")
 }
 
 // CoderCheckoutSiblings names the folders the project's additional

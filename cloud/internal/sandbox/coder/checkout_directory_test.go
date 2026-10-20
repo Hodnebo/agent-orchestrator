@@ -193,10 +193,19 @@ func TestExpandCheckoutDirectory(t *testing.T) {
 			t.Errorf("ExpandCheckoutDirectory(%q) = %q, %v; want %q", directory, got, err, want)
 		}
 	}
-	if got, err := ExpandCheckoutDirectory("~/work/.github", "/home/ubuntu"); err != nil || got != "/home/ubuntu/work/.github" {
-		t.Errorf("a hidden checkout below a home folder = %q, %v", got, err)
+	// A hidden checkout is resolved below a home folder and directly in the
+	// home too: a session created before the rule against the latter keeps
+	// its folder, and the bootstrap refuses to create a new one.
+	for directory, want := range map[string]string{
+		"~/work/.github":      "/home/ubuntu/work/.github",
+		"~/.github":           "/home/ubuntu/.github",
+		"/home/ubuntu/.local": "/home/ubuntu/.local",
+	} {
+		if got, err := ExpandCheckoutDirectory(directory, "/home/ubuntu"); err != nil || got != want {
+			t.Errorf("ExpandCheckoutDirectory(%q) = %q, %v; want %q", directory, got, err, want)
+		}
 	}
-	for _, directory := range []string{"/alice", "/", "work/alice", "~/", "/srv/./work", "~/.local", "/home/ubuntu/.local"} {
+	for _, directory := range []string{"/alice", "/", "work/alice", "~/", "/srv/./work"} {
 		if got, err := ExpandCheckoutDirectory(directory, "/home/ubuntu"); err == nil {
 			t.Errorf("ExpandCheckoutDirectory(%q) = %q, want an error", directory, got)
 		}
@@ -449,5 +458,71 @@ func TestForSandboxCarriesTheWorkingFolderCheckout(t *testing.T) {
 	}
 	if client := legacy.(*Client); client.checkoutDirectory != "" || client.checkoutSiblings != nil {
 		t.Fatalf("legacy session client checkout = %q %q", client.checkoutDirectory, client.checkoutSiblings)
+	}
+}
+
+// A session created before AO refused a hidden working folder directly in
+// the home (a {repo} of .github under ~/{repo}) has ~/.github in its stored
+// profile. Its next bootstrap (a wake, a worker restart) still starts it, in
+// the folder AO made for it; the bootstrap only refuses to create one.
+func TestAOWorkerBootstrapKeepsAnExistingSessionsHiddenFolderInTheHome(t *testing.T) {
+	t.Parallel()
+	fake := newDevEnvCoder(t, nil)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+	base := newTestClient(t, server.URL, nil)
+	provider, err := base.ForSandbox(domain.Sandbox{SessionID: "session-1", ResourceProfile: json.RawMessage(
+		`{"coder":{"baseUrl":"` + server.URL + `","owner":"ao-integration","templateId":"` + testTemplateID +
+			`","durableRoot":"$HOME","checkoutDirectory":"~/.github"}}`)})
+	if err != nil {
+		t.Fatalf("the stored profile was refused: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := provider.(*Client).BootstrapWorker(ctx, testWorkspaceID, multiArchBootstrap(sandbox.CoderHomeDurableRoot)); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	commands := fake.recordedCommands()
+	script := unquoteBootstrap(t, commands[len(commands)-1])
+	shellSyntaxCheck(t, script)
+	if want := "if [ ! -e '/home/ubuntu/.github' ] && [ ! -L '/home/ubuntu/.github' ]; then\n  ao_folder_unusable "; !strings.Contains(script, want) {
+		t.Errorf("bootstrap script does not refuse to create the hidden folder: missing %q", want)
+	}
+}
+
+// The bootstrap never creates a hidden folder directly in the home, and
+// changes nothing before it refuses; one that exists is left as it is for the
+// worker to check.
+func TestCheckoutDirectoryScriptCreatesNoHiddenFolderInTheHome(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is required")
+	}
+	run := func(t *testing.T, home, directory string) (string, error) {
+		log := filepath.Join(t.TempDir(), "changes.log")
+		script := "sudo() { while [ $# -gt 0 ]; do case \"$1\" in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done\n" +
+			"  echo \"$*\" >>" + shellQuote(log) + "; case \"$1\" in test) return 0 ;; esac; }\n" +
+			checkoutDirectoryScript("ao-worker", directory, nil, home, home) + "echo __DONE__\n"
+		output, err := exec.Command("sh", "-c", script).CombinedOutput()
+		changes, _ := os.ReadFile(log)
+		return string(output) + "\n" + string(changes), err
+	}
+	home := t.TempDir()
+	output, err := run(t, home, filepath.Join(home, ".local"))
+	if err == nil || strings.Contains(output, "__DONE__") || !strings.Contains(output, workingFolderUnusableMarker) {
+		t.Fatalf("a missing ~/.local was not refused: %v\n%s", err, output)
+	}
+	if strings.Contains(output, "chmod") || strings.Contains(output, "mkdir") {
+		t.Fatalf("the refused bootstrap changed folders:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local")); !os.IsNotExist(err) {
+		t.Fatalf("~/.local was created: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(home, ".github"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output, err = run(t, home, filepath.Join(home, ".github"))
+	if err != nil || !strings.Contains(output, "__DONE__") || strings.Contains(output, "chown") {
+		t.Fatalf("an existing ~/.github was not left for the worker: %v\n%s", err, output)
 	}
 }

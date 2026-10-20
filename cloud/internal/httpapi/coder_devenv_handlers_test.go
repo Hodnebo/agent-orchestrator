@@ -731,6 +731,7 @@ func TestUpdateProjectSettingsRefusesAWorkingFolderInsideAHiddenFolder(t *testin
 		"byo ao-worker, hidden parent":         {true, "", "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusUnprocessableEntity},
 		"deployment coder, hidden parent":      {false, "", "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusUnprocessableEntity},
 		"byo ao-worker, hidden checkout":       {true, "", "https://github.com/acme/.github", "~/work/{repo}", true, http.StatusOK},
+		"byo ao-worker, hidden folder in home": {true, "", "https://github.com/acme/.local", "~/{repo}", true, http.StatusUnprocessableEntity},
 		"byo ao-worker, plain folder":          {true, "", "https://github.com/acme/alice", "~/work/{repo}", true, http.StatusOK},
 		"workspace user, hidden parent":        {true, domain.CoderWorkerUserWorkspace, "https://github.com/acme/alice", "~/.config/{repo}", true, http.StatusOK},
 		"standalone, hidden parent":            {true, "", "https://scratch.ao.local/abc", "~/.config/scratch", true, http.StatusOK},
@@ -754,9 +755,14 @@ func TestUpdateProjectSettingsRefusesAWorkingFolderInsideAHiddenFolder(t *testin
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
 			}
+			want := refused
+			if strings.HasPrefix(tc.folder, "~/{repo}") {
+				// The folder itself is hidden, not inside a hidden folder.
+				want = "The working folder must not be a hidden folder directly in the home folder: AO would create it as its own ao-worker user"
+			}
 			if tc.status != http.StatusOK && (!strings.Contains(rec.Body.String(), domain.WorkspaceStartupErrorWorkingDirectory) ||
-				!strings.Contains(rec.Body.String(), refused)) {
-				t.Fatalf("body = %s, want %q", rec.Body.String(), refused)
+				!strings.Contains(rec.Body.String(), want)) {
+				t.Fatalf("body = %s, want %q", rec.Body.String(), want)
 			}
 		})
 	}

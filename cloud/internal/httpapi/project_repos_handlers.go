@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -295,9 +296,12 @@ func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Req
 		return true
 	}
 	if _, err := domain.CoderCheckoutDirectory(folder, project.RepositoryURL); err != nil {
+		reason := "AO checks the repository out there as its own ao-worker user, which must not reach folders such as ~/.ssh."
+		if errors.Is(err, domain.ErrCoderCheckoutHiddenInHome) {
+			reason = "AO would create it as its own ao-worker user, and your shell runs programs from folders such as ~/.local/bin."
+		}
 		writeError(w, r, http.StatusUnprocessableEntity, domain.WorkspaceStartupErrorWorkingDirectory,
-			strings.TrimSuffix(err.Error(), ".")+": AO checks the repository out there as its own ao-worker user, "+
-				"which must not reach folders such as ~/.ssh. Choose another folder, for example ~/work/{repo}.")
+			strings.TrimSuffix(err.Error(), ".")+": "+reason+" Choose another folder, for example ~/work/{repo}.")
 		return false
 	}
 	return true

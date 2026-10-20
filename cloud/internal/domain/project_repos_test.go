@@ -396,6 +396,30 @@ func TestCoderCheckoutDirectory(t *testing.T) {
 			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, want an error", tc.template, tc.repository, got)
 		}
 	}
+	// The refusal names what is wrong with the folder.
+	for template, want := range map[string]string{
+		"~/.local":         "The working folder must not be a hidden folder directly in the home folder.",
+		"~/.config/{repo}": "The working folder must not be inside a hidden folder.",
+	} {
+		if _, err := CoderCheckoutDirectory(template, "https://github.com/acme/alice"); err == nil || err.Error() != want {
+			t.Errorf("CoderCheckoutDirectory(%q) error = %v, want %q", template, err, want)
+		}
+	}
+}
+
+// A session's stored checkout folder is checked again on every start. One
+// directly in the home that a session created before that rule holds
+// (~/.github) still passes; one inside a hidden folder never does.
+func TestValidateCoderCheckoutDirectoryKeepsAnExistingHiddenFolderInTheHome(t *testing.T) {
+	t.Parallel()
+	for _, folder := range []string{"~/.github", "$HOME/.github", "~/work/.github"} {
+		if err := ValidateCoderCheckoutDirectory(folder); err != nil {
+			t.Errorf("ValidateCoderCheckoutDirectory(%q) = %v, want nil", folder, err)
+		}
+	}
+	if err := ValidateCoderCheckoutDirectory("~/.ssh/alice"); err == nil {
+		t.Error("a checkout inside a hidden folder passed")
+	}
 }
 
 // The additional repositories' folders beside a working-folder checkout match
