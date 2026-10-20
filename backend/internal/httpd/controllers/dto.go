@@ -780,6 +780,7 @@ type SessionPreviewResponse struct {
 	SessionID  domain.SessionID `json:"sessionId"`
 	PreviewURL string           `json:"previewUrl,omitempty"`
 	Entry      string           `json:"entry,omitempty"`
+	Source     string           `json:"source,omitempty" enum:"workspace,artifact" description:"Root containing the selected static entry; omitted for external app URLs."`
 }
 
 // RenameSessionRequest is the body of PATCH /api/v1/sessions/{sessionId}.
@@ -2361,7 +2362,8 @@ type LinkPreviewResponse struct {
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
 type MobileStatusResponse struct {
-	Enabled bool `json:"enabled"`
+	Enabled             bool `json:"enabled"`
+	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 	// LoopbackOnly means direct LAN/Tailscale addresses are not listening.
 	LoopbackOnly bool `json:"loopbackOnly"`
 	// NoPublicTunnel means the user disabled the managed public connector.
@@ -2405,6 +2407,12 @@ type KeepAwakeStatus struct {
 type SetKeepAwakeRequest struct {
 	Enabled   bool  `json:"enabled"`
 	LidClosed *bool `json:"lidClosed,omitempty"`
+}
+
+// SetBrowserRemoteAccessRequest is the body of
+// POST /api/v1/mobile/browser-control.
+type SetBrowserRemoteAccessRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // SecurePairingStatus describes the optional TLS-over-Tailscale pairing mode,
@@ -2703,6 +2711,11 @@ type RetryTurnResponse struct {
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 }
 
+// SetTurnAutoResumeRequest opts one usage-limited turn into a scheduled retry.
+type SetTurnAutoResumeRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // ActivateConversationBranchResponse reports the durable head after switching.
 type ActivateConversationBranchResponse struct {
 	ActiveBranchID string `json:"activeBranchId"`
@@ -2842,11 +2855,14 @@ type ConversationTurnResponse struct {
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt remains true when the attempt is outside the active branch.
-	HasRetryAttempt bool    `json:"hasRetryAttempt,omitempty"`
-	ErrorMessage    string  `json:"errorMessage,omitempty"`
-	RequestedAt     string  `json:"requestedAt"`
-	StartedAt       *string `json:"startedAt,omitempty"`
-	CompletedAt     *string `json:"completedAt,omitempty"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt includes durable human prompts outside this timeline page.
+	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
+	ErrorMessage   string                          `json:"errorMessage,omitempty"`
+	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
+	RequestedAt    string                          `json:"requestedAt"`
+	StartedAt      *string                         `json:"startedAt,omitempty"`
+	CompletedAt    *string                         `json:"completedAt,omitempty"`
 	// RolledBack marks a turn an undo discarded. Its messages and activities are
 	// absent from this snapshot because the agent no longer remembers them; the turn
 	// is still reported so a client can say what was taken back rather than letting
@@ -2867,6 +2883,13 @@ type ConversationTurnResponse struct {
 	// rather than a history of one: the earlier versions are the same plan with fewer
 	// steps ticked off.
 	Plan *ConversationPlanResponse `json:"plan,omitempty"`
+}
+
+// ConversationUsageLimitResponse separates a quota pause from other failures.
+type ConversationUsageLimitResponse struct {
+	ResetsAt    *string `json:"resetsAt,omitempty"`
+	AutoResume  bool    `json:"autoResume"`
+	ResumeError string  `json:"resumeError,omitempty"`
 }
 
 // ConversationPlanResponse is the agent's plan for one turn.
