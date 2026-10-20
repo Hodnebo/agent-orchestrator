@@ -18,12 +18,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func providerSwitchRouteRequest(t *testing.T, svc controllers.ConversationService, method, path, body string) (int, []byte) {
-	t.Helper()
+func serveConversations(svc controllers.ConversationService, req *http.Request) *httptest.ResponseRecorder {
 	r := chi.NewRouter()
 	(&controllers.ConversationsController{Svc: svc}).Register(r)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
+	r.ServeHTTP(rec, req)
+	return rec
+}
+
+func providerSwitchRouteRequest(t *testing.T, svc controllers.ConversationService, method, path, body string) (int, []byte) {
+	t.Helper()
+	rec := serveConversations(svc, httptest.NewRequest(method, path, bytes.NewBufferString(body)))
 	return rec.Code, rec.Body.Bytes()
 }
 
@@ -128,11 +133,7 @@ func TestSessionHistoryRoutePagesAndValidates(t *testing.T) {
 
 func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 	route := func(svc *fakeConversationService, body string) *httptest.ResponseRecorder {
-		r := chi.NewRouter()
-		(&controllers.ConversationsController{Svc: svc}).Register(r)
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(body)))
-		return rec
+		return serveConversations(svc, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(body)))
 	}
 	withMessage := `{"targetHarness":"codex","message":{"text":"Recall the word.","clientMessageId":"m1"}}`
 
@@ -157,11 +158,9 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 
 	// A client that went away during the switch still gets its message sent.
 	svc = &fakeConversationService{}
-	r := chi.NewRouter()
-	(&controllers.ConversationsController{Svc: svc}).Register(r)
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(withMessage)).WithContext(gone))
+	serveConversations(svc, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(withMessage)).WithContext(gone))
 	if svc.switchRequest.TargetHarness != domain.HarnessCodex || svc.sent.ClientMessageID != "m1" || svc.sendCtxErr != nil || svc.switchCtxErr != nil {
 		t.Fatalf("after the client left: sent %+v with context error %v, want it sent", svc.sent, svc.sendCtxErr)
 	}

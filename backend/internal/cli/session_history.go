@@ -10,17 +10,14 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sessionHistoryResponse struct {
-	Turns []struct {
-		UserRequest   string    `json:"userRequest"`
-		AgentResponse string    `json:"agentResponse"`
-		At            time.Time `json:"at"`
-		Harness       string    `json:"harness,omitempty"`
-	} `json:"turns"`
-	Total  int `json:"total"`
-	Offset int `json:"offset"`
+	Turns  []domain.HandoffTurn `json:"turns"`
+	Total  int                  `json:"total"`
+	Offset int                  `json:"offset"`
 }
 
 // newSessionHistoryCommand prints a session's turns in full, newest first. It
@@ -70,7 +67,7 @@ func (c *commandContext) printSessionHistory(ctx context.Context, cmd *cobra.Com
 			header += "  " + turn.At.UTC().Format(time.RFC3339)
 		}
 		if turn.Harness != "" {
-			header += "  " + turn.Harness
+			header += "  " + string(turn.Harness)
 		}
 		if strings.TrimSpace(turn.AgentResponse) == "" {
 			turn.AgentResponse = "(no final response recorded)"

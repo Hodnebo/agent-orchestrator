@@ -17,8 +17,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-const handoffChangedFilesTimeout = 5 * time.Second
-
 // SessionTurns returns every turn AO holds for a session, oldest first: the
 // completed Chat exchanges merged by time with the stored Terminal UI turns.
 // A turn is written to one of the two stores only, so merging never repeats it.
@@ -186,7 +184,7 @@ func handoffChangedFiles(ctx context.Context, workspace, base string) []string {
 	if strings.TrimSpace(workspace) == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, handoffChangedFilesTimeout)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	seen := make(map[string]bool)
 	var files []string

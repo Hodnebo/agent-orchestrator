@@ -61,6 +61,7 @@ func TestHooks_StopFinalMessageFeedsTurnHistoryForEveryAgent(t *testing.T) {
 		{"codex", payload, true, false},
 		{"claude-code", payload, true, true},
 		{"codex", `{"agent_id":"child","last_assistant_message":"all done"}`, false, false},
+		{"opencode", `{"session_id":"ses-1","model":"m","last_assistant_message":"all done"}`, true, false},
 	} {
 		t.Run(tt.agent, func(t *testing.T) {
 			t.Setenv("AO_SESSION_ID", "ao-7")
@@ -141,26 +142,5 @@ func TestHooks_OpenCodeAndGrokPromptsReachTurnHistoryOnly(t *testing.T) {
 				t.Fatalf("the prompt leaked into the replay checkpoint: %s", capture.body)
 			}
 		})
-	}
-}
-
-func TestHooks_OpenCodeStopCarriesTheFinalMessageToTurnHistory(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "ao-7")
-	cfg := setConfigEnv(t)
-	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
-	writeRunFileFor(t, cfg, srv)
-
-	_, _, err := executeCLI(t, Deps{
-		In:           strings.NewReader(`{"session_id":"ses-1","model":"m","last_assistant_message":"Retry added."}`),
-		ProcessAlive: func(int) bool { return true },
-	}, "hooks", "opencode", "stop")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(capture.body, `"finalAssistantMessage":"Retry added."`) {
-		t.Fatalf("the final message did not reach the turn history field: %s", capture.body)
-	}
-	if strings.Contains(capture.body, `"latestAssistantUpdate"`) {
-		t.Fatalf("the final message leaked into the replay checkpoint: %s", capture.body)
 	}
 }

@@ -197,8 +197,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 		}
 	}
 
-	// The full record is one command away. The note says so even when nothing
-	// was left out, because long turns are clipped to fit the budget.
+	// Said even when no turn was left out, since long turns are clipped.
 	b.WriteString("\n## Earlier history\n")
 	if omitted := len(in.Turns) - len(older) - len(recent); omitted > 0 {
 		fmt.Fprintf(&b, "%d earlier turns are not shown. ", omitted)
@@ -215,9 +214,8 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 	return b.String()
 }
 
-// handoffTaskShownInFull reports whether the original task already appears,
-// unclipped, as the request of a turn the note shows in full. A short session
-// would otherwise print the same text twice.
+// handoffTaskShownInFull reports whether the original task already appears
+// unclipped as a shown turn's request, so a short session does not print it twice.
 func handoffTaskShownInFull(task string, recent []HandoffTurn) bool {
 	for index, turn := range recent {
 		limit := handoffPreviousUserCap
@@ -231,9 +229,8 @@ func handoffTaskShownInFull(task string, recent []HandoffTurn) bool {
 	return false
 }
 
-// handoffAssistantLabel names the agent that answered a turn when AO knows it.
-// A session can pass through several agents; without the name the reader
-// credits every earlier answer to the one it took over from.
+// handoffAssistantLabel names the agent that answered a turn when AO knows it;
+// without it the reader credits every answer to the agent it took over from.
 func handoffAssistantLabel(turn HandoffTurn) string {
 	if harness := strings.TrimSpace(string(turn.Harness)); harness != "" {
 		return "Assistant (" + harness + ")"
@@ -278,10 +275,9 @@ func quoteHandoffText(value string, limit int, marker string) string {
 	return clipHandoffText(value, limit, marker)
 }
 
-// clipHandoffText keeps the start and the end of over-long text. A request
-// usually opens with the ask and a response usually closes with what is left
-// to do, so the middle is the cheapest part to lose. Every limit in this file
-// is longer than the marker.
+// clipHandoffText keeps the start and the end of over-long text: a request opens
+// with the ask and a response closes with what is left to do. Every limit in
+// this file is longer than the marker.
 func clipHandoffText(value string, limit int, marker string) string {
 	runes := []rune(value)
 	if len(runes) <= limit {

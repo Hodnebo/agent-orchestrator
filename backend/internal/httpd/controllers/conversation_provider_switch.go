@@ -41,10 +41,8 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		}
 	}
 	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
-	// A switch the user asked for, and the message that goes with it, finish
-	// even if the client goes away meanwhile (a restarted app), within the
-	// request's own time limit. The client's retry of the same message id is
-	// then a duplicate.
+	// The switch and its message finish within the request's time limit even if
+	// the client goes away (a restarted app); its retry of the message is a duplicate.
 	ctx, cancel := withoutClientCancel(r.Context())
 	defer cancel()
 	err := c.Svc.SwitchProvider(ctx, sessionID, domain.ProviderSwitchRequest{
@@ -69,8 +67,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	} else if req.Message == nil {
 		envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok"})
 	} else {
-		// The new agent answers the message as its first turn. A send that fails
-		// now is a send failure, not a switch failure: the header tells the
+		// A send that fails now is not a switch failure: the header tells the
 		// client the switch went through.
 		turn, sendErr := c.Svc.Send(ctx, sessionID, message)
 		if sendErr != nil {
@@ -85,9 +82,8 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	}
 }
 
-// providerSwitchRefusalDetails names, for an agent that cannot run under the
-// chat's permission mode (Pi asks nothing before acting), what it lacks and the
-// modes it runs in, as a new task's refusal does, so the client can offer one.
+// providerSwitchRefusalDetails names, as a new task's refusal does, what an agent
+// refused for the chat's permission mode lacks and the modes it runs in (Pi).
 func providerSwitchRefusalDetails(refusal *domain.ProviderSwitchError) map[string]any {
 	var capabilityErr *ports.ChatCapabilityError
 	if !errors.As(refusal, &capabilityErr) {
@@ -108,9 +104,8 @@ func providerSwitchRefusalDetails(refusal *domain.ProviderSwitchError) map[strin
 // message: the switch completed, and only the message's send failed.
 const providerSwitchedHeader = "X-AO-Provider-Switched"
 
-// sessionHistory serves `ao session history`: the turns AO holds for a session
-// in full, newest first, so an agent that took over can read what its handoff
-// note left out.
+// sessionHistory serves `ao session history`: a session's turns in full, newest
+// first, for what a handoff note left out.
 func (c *ConversationsController) sessionHistory(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, r.Method, r.URL.Path)

@@ -57,13 +57,7 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 		t.Fatalf("SwitchProvider: %v", err)
 	}
 
-	driver.mu.Lock()
-	if len(driver.startConfigs) < 2 {
-		driver.mu.Unlock()
-		t.Fatalf("target start was not observed: %d starts", len(driver.startConfigs))
-	}
-	targetConfig := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
+	targetConfig := lastStart(driver)
 	if after, err := h.st.ConversationForSession(ctx, testSession); err != nil || after.Usage != nil && after.Usage.ContextWindow != 0 {
 		t.Fatalf("usage after the switch = %+v, %v; want the source's reading cleared", after.Usage, err)
 	}
@@ -314,47 +308,45 @@ func (s failingProviderSwitchStore) CommitProviderSwitch(context.Context, domain
 
 var errProviderSwitchTarget = ports.ErrChatDriverUnavailable
 
-func TestProviderSwitchStartsTheTargetUnderTheChatsPermissionMode(t *testing.T) {
-	h, _, driver := newEditHarness(t, false)
-	ctx := context.Background()
-	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
-		ApprovalMode: domain.PermissionModeBypassPermissions,
-	}); err != nil {
-		t.Fatalf("SetTurnSettings: %v", err)
-	}
-
-	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
-		t.Fatalf("SwitchProvider: %v", err)
-	}
+// lastStart is the newest provider start the driver saw.
+func lastStart(driver *editDriverState) ports.ChatStartConfig {
 	driver.mu.Lock()
-	target := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
-	if target.Permissions != ports.PermissionModeBypassPermissions {
-		t.Fatalf("target permissions = %q, want the chat's bypass mode", target.Permissions)
-	}
+	defer driver.mu.Unlock()
+	return driver.startConfigs[len(driver.startConfigs)-1]
 }
 
-func TestProviderSwitchStartsATargetThatRefusesTheChatsModeInDefault(t *testing.T) {
-	h, _, driver := newEditHarness(t, false)
-	ctx := context.Background()
-	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
-		ApprovalMode: domain.PermissionModeBypassPermissions,
-	}); err != nil {
-		t.Fatalf("SetTurnSettings: %v", err)
-	}
-	// Like Kimi, the target runs only in its default mode.
-	driver.mu.Lock()
-	driver.refusedMode = ports.PermissionModeBypassPermissions
-	driver.mu.Unlock()
-
-	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessKimi}); err != nil {
-		t.Fatalf("SwitchProvider: %v", err)
-	}
-	driver.mu.Lock()
-	target := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
-	if target.Permissions != ports.PermissionModeDefault {
-		t.Fatalf("target permissions = %q, want default for an agent that refuses bypass", target.Permissions)
+func TestProviderSwitchTargetPermissionMode(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		target  domain.AgentHarness
+		refused ports.PermissionMode // a mode the target will not run in, like Kimi
+		picked  domain.PermissionMode
+		want    ports.PermissionMode
+	}{
+		{"under the chat's mode", domain.HarnessClaudeCode, "", "", ports.PermissionModeBypassPermissions},
+		{"default when it refuses the chat's", domain.HarnessKimi, ports.PermissionModeBypassPermissions, "", ports.PermissionModeDefault},
+		{"the mode picked for it", domain.HarnessClaudeCode, "", domain.PermissionModeAcceptEdits, ports.PermissionModeAcceptEdits},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _, driver := newEditHarness(t, false)
+			ctx := context.Background()
+			if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
+				ApprovalMode: domain.PermissionModeBypassPermissions,
+			}); err != nil {
+				t.Fatalf("SetTurnSettings: %v", err)
+			}
+			driver.mu.Lock()
+			driver.refusedMode = tt.refused
+			driver.mu.Unlock()
+			if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+				TargetHarness: tt.target, PermissionMode: tt.picked,
+			}); err != nil {
+				t.Fatalf("SwitchProvider: %v", err)
+			}
+			if got := lastStart(driver).Permissions; got != tt.want {
+				t.Fatalf("target permissions = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -378,11 +370,8 @@ func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessPi}); err != nil {
 		t.Fatalf("SwitchProvider: %v", err)
 	}
-	driver.mu.Lock()
-	target := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
-	if target.Permissions != ports.PermissionModeBypassPermissions {
-		t.Fatalf("target permissions = %q, want the only mode the agent runs in", target.Permissions)
+	if got := lastStart(driver).Permissions; got != ports.PermissionModeBypassPermissions {
+		t.Fatalf("target permissions = %q, want the only mode the agent runs in", got)
 	}
 
 	// Leaving it goes back to the chat's own mode, not the one Pi needed.
@@ -392,32 +381,8 @@ func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
 		t.Fatalf("switch back: %v", err)
 	}
-	driver.mu.Lock()
-	back := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
-	if back.Permissions != ports.PermissionModeAuto {
-		t.Fatalf("permissions after leaving Pi = %q, want the chat's auto", back.Permissions)
-	}
-}
-
-func TestProviderSwitchStartsTheTargetInTheModePickedForIt(t *testing.T) {
-	h, _, driver := newEditHarness(t, false)
-	ctx := context.Background()
-	if _, err := h.svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{
-		ApprovalMode: domain.PermissionModeBypassPermissions,
-	}); err != nil {
-		t.Fatalf("SetTurnSettings: %v", err)
-	}
-	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
-		TargetHarness: domain.HarnessClaudeCode, PermissionMode: domain.PermissionModeAcceptEdits,
-	}); err != nil {
-		t.Fatalf("SwitchProvider: %v", err)
-	}
-	driver.mu.Lock()
-	target := driver.startConfigs[len(driver.startConfigs)-1]
-	driver.mu.Unlock()
-	if target.Permissions != ports.PermissionModeAcceptEdits {
-		t.Fatalf("target permissions = %q, want the mode picked for it", target.Permissions)
+	if got := lastStart(driver).Permissions; got != ports.PermissionModeAuto {
+		t.Fatalf("permissions after leaving Pi = %q, want the chat's auto", got)
 	}
 }
 

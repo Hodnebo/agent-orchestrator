@@ -35,9 +35,8 @@ type providerSwitchActivityDetail struct {
 	// TargetAutoCompactWindow is the Claude Code compaction window the target started with.
 	TargetAutoCompactWindow string `json:"targetAutoCompactWindow,omitempty"`
 	BranchID                string `json:"branchId"`
-	// PermissionMode is the mode the target started in. ChatPermissionMode is set
-	// when that is not the chat's own, because the target cannot run in it; a
-	// later switch away from the target goes back to the chat's own.
+	// PermissionMode is the mode the target started in. ChatPermissionMode is the
+	// chat's own when the target cannot run in it, for a later switch to go back to.
 	PermissionMode     ports.PermissionMode `json:"permissionMode,omitempty"`
 	ChatPermissionMode ports.PermissionMode `json:"chatPermissionMode,omitempty"`
 }
@@ -140,9 +139,8 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	if err != nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "source launch configuration is unavailable", Cause: err}
 	}
-	// The saved settings can name the session's owner from before an earlier
-	// switch. Starting the target, or restoring the source, checks that owner
-	// against the session, so take it from the session as it is now.
+	// The saved settings can name the owner from before an earlier switch; the
+	// target start and source restore check it against the session as it is now.
 	startCfg.ExpectedControllerOwner = record.ControllerOwner()
 	activeBranch, err := s.store.ConversationBranch(ctx, conversation.ID, conversation.ActiveBranchID)
 	if err != nil {
@@ -152,25 +150,26 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	sourceModel := cmp.Or(source.Settings().Model, record.Metadata.Model)
 	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
 	defer cancel()
-	// The source is idle, so the workspace does not change while it stops: list
-	// the changed files meanwhile instead of before.
+	// The source is idle, so list the changed files while it stops.
 	changedFiles := make(chan []string, 1)
 	go func() {
 		changedFiles <- handoffChangedFiles(operationCtx, record.Metadata.WorkspacePath, record.Metadata.DiffBaseSHA)
 	}()
+	// restore brings a stopped source back, or the session would sit idle with
+	// no provider behind it.
+	restore := func(err error) error {
+		if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
+			return errors.Join(err, restoreErr)
+		}
+		abortSource = false
+		return err
+	}
 	stopStarted := time.Now()
 	if err := source.closeForBranchHandoff(operationCtx); err != nil {
-		closeErr := fmt.Errorf("stop source provider: %w", err)
-		// A source that stopped anyway is brought back, or the session would sit
-		// idle with no provider behind it.
-		if source.State() == ports.ChatControllerStopped {
-			if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
-				closeErr = errors.Join(closeErr, restoreErr)
-			} else {
-				abortSource = false
-			}
+		if err = fmt.Errorf("stop source provider: %w", err); source.State() == ports.ChatControllerStopped {
+			return restore(err)
 		}
-		return closeErr
+		return err
 	}
 	stopped := time.Since(stopStarted)
 	noteInput.ChangedFiles = <-changedFiles
@@ -242,20 +241,14 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		}}, nil
 	}
 
-	// The context reading belongs to the outgoing agent's model. The target starts
-	// without one, or the meter would show it until the target reports its own.
+	// The context reading is the outgoing model's; the target reports its own.
 	if err := s.store.RecordUsage(operationCtx, conversation.ID, domain.ConversationUsage{}); err != nil {
 		s.log.Warn("clear source usage before provider switch", "session", id, "error", err)
 	}
 	targetStarted := time.Now()
 	target, err := s.startLocked(operationCtx, targetCfg)
 	if err != nil {
-		if restoreErr := s.restoreClosedSourceController(operationCtx, id, source, activeBranch, startCfg, sourceDriver); restoreErr != nil {
-			err = errors.Join(err, restoreErr)
-		} else {
-			abortSource = false
-		}
-		return fmt.Errorf("start target provider: %w", err)
+		return fmt.Errorf("start target provider: %w", restore(err))
 	}
 	source.completeBranchHandoff()
 	abortSource = false
@@ -265,8 +258,7 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 		"total", time.Since(started))
 	s.adoptTargetsLiveModel(operationCtx, id, target, request.Model)
 	if request.FastMode {
-		// Fast mode is a setting of the running controller, so it is applied to
-		// the target once it exists rather than passed through its launch.
+		// Fast mode is a setting of the running controller, not of its launch.
 		settings := target.Settings()
 		settings.FastMode = true
 		if err := target.SetSettings(operationCtx, settings); err != nil {
@@ -320,23 +312,15 @@ func (s *Service) latestSwitchMarker(ctx context.Context, conversationID string)
 }
 
 func (s *Service) sourcePermissions(source *Controller) ports.PermissionMode {
-	if mode := source.Settings().ApprovalMode; mode != "" {
-		return ports.NormalizePermissionMode(mode)
-	}
 	s.mu.RLock()
 	launched := s.startConfigs[source.owner()].Permissions
 	s.mu.RUnlock()
-	if launched != "" {
-		return ports.NormalizePermissionMode(launched)
-	}
-	return ports.PermissionModeAuto
+	return ports.NormalizePermissionMode(cmp.Or(source.Settings().ApprovalMode, launched, ports.PermissionModeAuto))
 }
 
-// adoptTargetsLiveModel saves the model the target runs when it is not the one
-// picked for it. An agent whose chat does not offer the picked model starts on
-// its own (Claude Code's chat lists the newest of each family by alias, and not
-// every model its catalog names), so the chat would otherwise show one model
-// and save another.
+// adoptTargetsLiveModel saves the model the target runs when its chat does not
+// offer the picked one (Claude Code's lists the newest of each family by alias),
+// or the chat would show one model and save another.
 func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID, target *Controller, picked string) {
 	configurer, ok := target.conv.(ports.ChatConfigOptionController)
 	if picked == "" || !ok {
@@ -351,13 +335,8 @@ func (s *Service) adoptTargetsLiveModel(ctx context.Context, id domain.SessionID
 			continue
 		}
 		live := option.Current.Select
-		if live == "" || live == picked {
+		if live == "" || live == picked || slices.ContainsFunc(option.Choices, func(choice ports.ChatConfigOptionChoice) bool { return choice.Value == picked }) {
 			return
-		}
-		for _, choice := range option.Choices {
-			if choice.Value == picked {
-				return
-			}
 		}
 		settings := target.Settings()
 		settings.Model = live

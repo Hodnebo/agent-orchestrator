@@ -114,8 +114,7 @@ type Service struct {
 	gates              map[domain.ConversationOwner]controllerGate
 	probeMu            sync.Mutex
 	probed             map[domain.AgentHarness]ports.ChatCapabilities
-	prewarmMu          sync.Mutex
-	prewarming         map[domain.AgentHarness]bool
+	prewarming         sync.Map // domain.AgentHarness -> struct{}
 	terminalSwitcher   TerminalProviderSwitcher
 }
 
@@ -331,8 +330,7 @@ func notifyControllerReady(
 	return commit, nil
 }
 
-// claudeAutoCompactWindowEnv is the Claude Code setting for the token count at
-// which it compacts a conversation on its own.
+// claudeAutoCompactWindowEnv is the token count at which Claude Code compacts on its own.
 const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 func cloneStartConfig(cfg StartConfig) StartConfig {
@@ -2332,36 +2330,21 @@ func (s *Service) switchBranchUnanswered(ctx context.Context, conversationID str
 	return true
 }
 
-// prewarmTimeout bounds one background readiness check.
-const prewarmTimeout = 30 * time.Second
-
 // PrewarmChat runs PreflightChat's capability probe in the background so a
-// later switch to harness finds it cached. The probe launches a throwaway
-// provider process the first time each harness is checked; that cost (up to
-// ~1.3s) otherwise lands on the switch itself. Failures are not cached, so a
-// later switch still reports them. One check per harness runs at a time.
+// later switch to harness finds it cached: the probe's throwaway provider
+// process (up to ~1.3s) otherwise lands on the switch. Failures are not
+// cached, so a later switch still reports them. One check per harness runs at a time.
 func (s *Service) PrewarmChat(harness domain.AgentHarness) {
 	driver, err := s.drivers.Driver(harness)
 	if err != nil {
 		return
 	}
-	s.prewarmMu.Lock()
-	if s.prewarming[harness] {
-		s.prewarmMu.Unlock()
+	if _, running := s.prewarming.LoadOrStore(harness, struct{}{}); running {
 		return
 	}
-	if s.prewarming == nil {
-		s.prewarming = make(map[domain.AgentHarness]bool)
-	}
-	s.prewarming[harness] = true
-	s.prewarmMu.Unlock()
 	go func() {
-		defer func() {
-			s.prewarmMu.Lock()
-			delete(s.prewarming, harness)
-			s.prewarmMu.Unlock()
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), prewarmTimeout)
+		defer s.prewarming.Delete(harness)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_, _ = s.driverCapabilities(ctx, harness, driver)
 	}()

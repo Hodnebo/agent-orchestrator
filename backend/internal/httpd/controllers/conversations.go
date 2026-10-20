@@ -656,9 +656,8 @@ type chatPrewarmer interface {
 	PrewarmChat(harness domain.AgentHarness)
 }
 
-// prewarmAgent starts an agent's Chat readiness check in the background. The
-// client calls it when someone picks that agent, so the switch their next send
-// makes does not wait on the check.
+// prewarmAgent starts an agent's Chat readiness check in the background when it
+// is picked, so the switch the next send makes does not wait on it.
 func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Request) {
 	prewarmer, ok := c.Svc.(chatPrewarmer)
 	if c.Svc == nil || !ok {
@@ -675,8 +674,7 @@ type chatAvailability interface {
 	ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string
 }
 
-// unavailableChatAgents lists which of the asked agents cannot run a chat
-// because an adapter they need is not installed. It starts nothing.
+// unavailableChatAgents lists the asked agents missing a chat adapter. It starts nothing.
 func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r *http.Request) {
 	checker, ok := c.Svc.(chatAvailability)
 	if c.Svc == nil || !ok {
@@ -710,9 +708,8 @@ type chatPermissionModesLister interface {
 	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
 }
 
-// chatPermissionModes lists the permission modes each asked agent runs a chat
-// in, so a picker can show beforehand the one a switch will start it in. It
-// starts nothing; an agent that cannot run a chat is left out.
+// chatPermissionModes lists the modes each asked agent runs a chat in, so a
+// picker can show the one a switch starts it in. Agents with no chat are left out.
 func (c *ConversationsController) chatPermissionModes(w http.ResponseWriter, r *http.Request) {
 	lister, ok := c.Svc.(chatPermissionModesLister)
 	if c.Svc == nil || !ok {

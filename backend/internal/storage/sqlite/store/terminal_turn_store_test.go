@@ -8,16 +8,23 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
+func newTerminalTurnSession(t *testing.T, project string) (*sqlite.Store, domain.SessionRecord) {
+	t.Helper()
 	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "turns")
-	session, err := s.CreateSession(ctx, sampleRecord("turns"))
+	seedProject(t, s, project)
+	session, err := s.CreateSession(context.Background(), sampleRecord(project))
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	return s, session
+}
+
+func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
+	s, session := newTerminalTurnSession(t, "turns")
+	ctx := context.Background()
 	at := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	request := func(harness domain.AgentHarness, thread, text string) {
 		t.Helper()
@@ -68,13 +75,8 @@ func TestTerminalTurnsPairRequestsWithResponses(t *testing.T) {
 }
 
 func TestTerminalTurnsKeepOnlyTheNewest(t *testing.T) {
-	s := newTestStore(t)
+	s, session := newTerminalTurnSession(t, "trim")
 	ctx := context.Background()
-	seedProject(t, s, "trim")
-	session, err := s.CreateSession(ctx, sampleRecord("trim"))
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 	at := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
 	for index := 1; index <= domain.TerminalTurnRetention+5; index++ {
 		at = at.Add(time.Minute)
@@ -97,13 +99,8 @@ func TestTerminalTurnsKeepOnlyTheNewest(t *testing.T) {
 }
 
 func TestTerminalTurnsJoinOnlyOnTheSameThread(t *testing.T) {
-	s := newTestStore(t)
+	s, session := newTerminalTurnSession(t, "threads")
 	ctx := context.Background()
-	seedProject(t, s, "threads")
-	session, err := s.CreateSession(ctx, sampleRecord("threads"))
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 	other := sampleRecord("threads")
 	other.ID = "threads-2"
 	if _, err := s.CreateSession(ctx, other); err != nil {
@@ -147,13 +144,8 @@ func TestTerminalTurnsJoinOnlyOnTheSameThread(t *testing.T) {
 }
 
 func TestTerminalTurnStopsGrowingPastItsCap(t *testing.T) {
-	s := newTestStore(t)
+	s, session := newTerminalTurnSession(t, "capped")
 	ctx := context.Background()
-	seedProject(t, s, "capped")
-	session, err := s.CreateSession(ctx, sampleRecord("capped"))
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 	// An agent that never reports its stop leaves the turn open.
 	for i := range 3 {
 		if err := s.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{

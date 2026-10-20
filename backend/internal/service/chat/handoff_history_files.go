@@ -119,22 +119,16 @@ func agyConversation(home string, record domain.SessionRecord) []string {
 // newestFiles returns the newest files matching pattern, up to the limit.
 func newestFiles(pattern string) []string {
 	matches, _ := filepath.Glob(pattern)
-	type found struct {
-		path string
-		mod  int64
-	}
-	var files []found
+	modified := map[string]int64{}
+	var paths []string
 	for _, path := range matches {
 		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			files = append(files, found{path, info.ModTime().UnixNano()})
+			modified[path] = info.ModTime().UnixNano()
+			paths = append(paths, path)
 		}
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mod > files[j].mod })
-	paths := make([]string, 0, min(len(files), handoffHistoryFileLimit))
-	for _, file := range files[:min(len(files), handoffHistoryFileLimit)] {
-		paths = append(paths, file.path)
-	}
-	return paths
+	sort.Slice(paths, func(i, j int) bool { return modified[paths[i]] > modified[paths[j]] })
+	return paths[:min(len(paths), handoffHistoryFileLimit)]
 }
 
 func regularFile(path string) bool {
