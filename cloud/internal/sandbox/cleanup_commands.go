@@ -18,7 +18,32 @@ const (
 	// CleanupStepGrace covers timeout(1)'s kill grace (-k 5) and a step's
 	// own start and end around its time limit.
 	CleanupStepGrace = 10 * time.Second
+	// MinCleanupQueueWait is how long a Cleanup run with no more than
+	// MinCleanupBudget waits for a run slot before it is reported as not run
+	// (CleanupQueueWait).
+	MinCleanupQueueWait = 2 * time.Minute
 )
+
+// CleanupQueueWait is how long a Cleanup run whose budget is budget waits for
+// a run slot: MinCleanupQueueWait, plus how far budget exceeds
+// MinCleanupBudget (at most MaxCleanupBudget). A run whose steps set long
+// time limits waits as long, because the runs ahead of it may take as long;
+// the reconciler's deletion deadline grows by both (CleanupDeletionExtra), so
+// a run that waited its whole queue wait still has its whole budget.
+func CleanupQueueWait(budget time.Duration) time.Duration {
+	return MinCleanupQueueWait + cleanupBudgetExtra(budget)
+}
+
+// CleanupDeletionExtra is how much longer than its default deadline the
+// reconciler keeps re-requesting a deletion whose Cleanup budget is budget:
+// the extra budget and the extra queue wait (CleanupQueueWait).
+func CleanupDeletionExtra(budget time.Duration) time.Duration {
+	return 2 * cleanupBudgetExtra(budget)
+}
+
+func cleanupBudgetExtra(budget time.Duration) time.Duration {
+	return max(0, min(budget, MaxCleanupBudget)-MinCleanupBudget)
+}
 
 // CleanupBudget is the budget of a Cleanup run that may run any of the given
 // lists of commands (each command led by its time limit's marker when it sets

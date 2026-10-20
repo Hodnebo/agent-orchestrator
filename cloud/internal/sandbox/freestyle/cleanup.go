@@ -108,7 +108,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 		// The organization is over its plan: its paused VM stays paused, and
 		// the Cleanup is reported as not run, once.
 		attrs["resumed"] = "false"
-		run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), 0, func() { skip(reason) }, skip)
+		run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), 0, 0, func() { skip(reason) }, skip)
 		return run.Await(ctx, c.cleanupInline, "provider_id", key)
 	}
 	wait := c.cleanupWait
@@ -123,7 +123,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	if resume {
 		limit += resumeWait
 	}
-	run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), limit, func() {
+	run := cleanupRuns.Start(key, sandbox.CleanupOrg(ctx), wait, limit, func() {
 		c.log.InfoContext(ctx, "freestyle: running project cleanup before deleting the VM",
 			"provider_id", key, "budget", wait, "resume", resume)
 		c.runCleanup(runCtx, id, resume, resumeWait, wait, plan, attrs)

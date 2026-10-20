@@ -187,8 +187,8 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})
 	noSkip := func(reason string) { t.Errorf("skipped: %s", reason) }
-	run := tracker.Start("vm-1", "org-1", time.Minute, func() { calls.Add(1); <-release }, noSkip)
-	if again := tracker.Start("vm-1", "org-1", time.Minute, func() { calls.Add(1) }, noSkip); again != run {
+	run := tracker.Start("vm-1", "org-1", 0, time.Minute, func() { calls.Add(1); <-release }, noSkip)
+	if again := tracker.Start("vm-1", "org-1", 0, time.Minute, func() { calls.Add(1) }, noSkip); again != run {
 		t.Fatal("a second Start for the key started another run")
 	}
 	if run.Await(context.Background(), 20*time.Millisecond) {
@@ -204,7 +204,7 @@ func TestTrackerRunsOnceAndNeverBlocksForever(t *testing.T) {
 
 	wedged := make(chan struct{})
 	defer close(wedged)
-	stale := tracker.Start("vm-2", "org-1", -time.Hour, func() { <-wedged }, noSkip)
+	stale := tracker.Start("vm-2", "org-1", 0, -time.Hour, func() { <-wedged }, noSkip)
 	if !stale.Await(context.Background(), 10*time.Millisecond) {
 		t.Fatal("a run past its limit still holds the deletion")
 	}
@@ -357,7 +357,7 @@ func TestTrackerBoundsConcurrentRuns(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan string, 10)
 	start := func(key, org string) *Run {
-		return tracker.Start(key, org, time.Minute, func() {
+		return tracker.Start(key, org, 0, time.Minute, func() {
 			mu.Lock()
 			running[org]++
 			total := 0
@@ -408,10 +408,10 @@ func TestTrackerBoundsConcurrentRuns(t *testing.T) {
 	hold := make(chan struct{})
 	defer close(hold)
 	holding := make(chan struct{})
-	full.Start("x1", "", time.Minute, func() { close(holding); <-hold }, func(string) {})
+	full.Start("x1", "", 0, time.Minute, func() { close(holding); <-hold }, func(string) {})
 	<-holding
 	skipped := make(chan string, 1)
-	queued := full.Start("x2", "", time.Minute, func() { t.Error("x2 ran without a slot") }, func(reason string) { skipped <- reason })
+	queued := full.Start("x2", "", 0, time.Minute, func() { t.Error("x2 ran without a slot") }, func(reason string) { skipped <- reason })
 	select {
 	case reason := <-skipped:
 		if reason != QueueFullReason || !queued.Await(context.Background(), time.Second) {

@@ -129,7 +129,7 @@ func (c *Client) cleanupFinished(ctx context.Context, id sandbox.ID) bool {
 	// observer so the outcome is still logged against the session.
 	runCtx := context.WithoutCancel(ctx)
 	attrs := c.stageAttrs(string(id), agent.ID)
-	run := c.runs().Start(key, sandbox.CleanupOrg(ctx), wait+cleanupMargin, func() {
+	run := c.runs().Start(key, sandbox.CleanupOrg(ctx), wait, wait+cleanupMargin, func() {
 		slog.InfoContext(ctx, "coder: running project cleanup before deleting the workspace",
 			"workspace_id", string(id), "budget", wait)
 		c.runCleanup(runCtx, ptyURL, wait, plan, attrs)
