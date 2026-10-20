@@ -389,6 +389,37 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		expect(group.nextElementSibling).toHaveTextContent(warning);
 	});
 
+	it("announces the warning and describes the option with it", async () => {
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		const notice = await screen.findByRole("status");
+		expect(notice).toHaveTextContent("Your template also clones Alice. Untick to keep one copy.");
+		expect(screen.getByRole("group", { name: "Github Repositories" })).toHaveAccessibleDescription(
+			"Your template also clones Alice. Untick to keep one copy.",
+		);
+	});
+
+	it("describes the collapsed header with the warning it shows", async () => {
+		const extra = (name: string): CloudCpCoderTemplateParameter => ({ name, displayName: name, type: "string", mutable: true, required: false, defaultValue: "", order: 2 });
+		mocks.getCoderTemplateParameters.mockResolvedValue({ parameters: [repos, extra("a"), extra("b"), extra("c"), extra("d")] });
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);
+		const header = await screen.findByRole("button", { name: "Template options (5)" });
+		expect(header).toHaveAccessibleDescription("Your template also clones Alice. Untick to keep one copy.");
+	});
+
+	it("speaks of several repositories in the plural", async () => {
+		const bothRepos = [...projectRepos, "https://github.com/11x-ai/bob-svc"];
+		renderOptions({ github_repos: "[\"Alice\",\"bob-svc\"]" }, bothRepos);
+		expect(await screen.findByText("Your template also clones Alice and Bob. Untick them to keep one copy of each.")).toBeInTheDocument();
+	});
+
+	it("speaks of several repositories in the plural when the session cannot start", async () => {
+		mocks.workerWorkingFolder = true;
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		const bothRepos = [...projectRepos, "https://github.com/11x-ai/bob-svc"];
+		renderOptions({ github_repos: "[\"Alice\",\"bob-svc\"]" }, bothRepos, "~/work/{repo}");
+		expect(await screen.findByText("Your template also clones Alice and Bob into the working folder, so AO cannot start there. Untick them.")).toBeInTheDocument();
+	});
+
 	it("stays hidden until the connection's mode is known", async () => {
 		mocks.orgCoder = { data: undefined, isLoading: true, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos);

@@ -96,17 +96,18 @@ export function CoderTemplateOptions({
 	}, [all, onChange, overrides, settled]);
 	const collapsible = parameters.length > COLLAPSE_AFTER;
 	const [open, setOpen] = useState(false);
+	const collapsedWarningId = `${useId()}-duplicate-clone`;
 	if (isError && parameters.length === 0) {
 		return <p className={onboardingFieldErrorClass} role="alert">{t("coder.templateOptions.loadFailed")}</p>;
 	}
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
 	const blocksWorkingFolder = coderWorkerWorkingFolder === true && (projectWorkingDirectory ?? "").trim() !== "";
-	const duplicateWarning = (labels: readonly string[]) => (
-		<TemplateOptionWarning startFails={blocksWorkingFolder}>
+	const duplicateWarning = (labels: readonly string[], id: string) => (
+		<TemplateOptionWarning id={id} startFails={blocksWorkingFolder}>
 			{t(
 				blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
-				{ repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+				{ count: labels.length, repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
 			)}
 		</TemplateOptionWarning>
 	);
@@ -122,6 +123,7 @@ export function CoderTemplateOptions({
 						type="button"
 						className="flex w-fit items-center gap-1 font-medium text-foreground"
 						aria-expanded={expanded}
+						aria-describedby={collapsedDuplicates.length > 0 ? collapsedWarningId : undefined}
 						onClick={() => setOpen((value) => !value)}
 					>
 						{expanded
@@ -133,7 +135,7 @@ export function CoderTemplateOptions({
 					<span className="font-medium text-foreground">{t("coder.templateOptions.title")}</span>
 				)}
 				{collapsedDuplicates.length > 0 ? (
-					duplicateWarning(collapsedDuplicates)
+					duplicateWarning(collapsedDuplicates, collapsedWarningId)
 				) : null}
 				<p className={onboardingFieldHintClass}>{t("coder.templateOptions.subtitle")}</p>
 			</div>
@@ -146,7 +148,9 @@ export function CoderTemplateOptions({
 							value={effectiveParameterValue(parameter, overrides)}
 							disabled={disabled}
 							problem={parameter.name in overrides ? valueProblem(parameter) : undefined}
-							warning={duplicates?.has(parameter.name) ? duplicateWarning(duplicates.get(parameter.name) ?? []) : undefined}
+							warning={duplicates?.has(parameter.name)
+								? (warningId) => duplicateWarning(duplicates.get(parameter.name) ?? [], warningId)
+								: undefined}
 							onChange={(value) => {
 								edited.current = true;
 								onChange(withParameterValue(overrides, parameter, value));
@@ -170,9 +174,11 @@ function valueProblem(parameter: CloudCpCoderTemplateParameter): string | undefi
  * muted helper text behind a warning icon rather than as a red field error;
  * only one that means the session will fail to start keeps the warning color.
  */
-function TemplateOptionWarning({ startFails, children }: { startFails: boolean; children: ReactNode }) {
+function TemplateOptionWarning({ id, startFails, children }: { id: string; startFails: boolean; children: ReactNode }) {
+	// A polite status, and the field's description, so a screen reader hears it
+	// when it appears and again on reaching the option.
 	return (
-		<p className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
+		<p id={id} role="status" className={cn(onboardingFieldHintClass, "flex items-start gap-1.5", startFails ? "text-warning" : "text-muted-foreground")}>
 			<TriangleAlert aria-hidden="true" className="mt-1 size-3 shrink-0 text-warning" />
 			<span className="min-w-0">{children}</span>
 		</p>
@@ -192,8 +198,8 @@ function TemplateParameterField({
 	disabled?: boolean;
 	/** Coder's error about the current value, shown under the field. */
 	problem?: string;
-	/** A heads-up about the current value that does not block saving. */
-	warning?: ReactNode;
+	/** A heads-up about the current value that does not block saving, rendered with the id the field is described by. */
+	warning?: (id: string) => ReactNode;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -212,9 +218,10 @@ function TemplateParameterField({
 		</Label>
 	);
 	const problemId = `${id}-problem`;
+	const warningId = `${id}-warning`;
 	const hint = description ? <p id={hintId} className={onboardingFieldHintClass}>{description}</p> : null;
 	const problemText = problem ? <p id={problemId} className={onboardingFieldErrorClass} role="alert">{problem}</p> : null;
-	const describedBy = [description ? hintId : "", problem ? problemId : ""].filter(Boolean).join(" ") || undefined;
+	const describedBy = [description ? hintId : "", warning ? warningId : "", problem ? problemId : ""].filter(Boolean).join(" ") || undefined;
 
 	if (parameter.type === "bool") {
 		return (
@@ -312,7 +319,7 @@ function TemplateParameterField({
 			{heading}
 			{hint}
 			{control}
-			{warning ?? null}
+			{warning ? warning(warningId) : null}
 			{problemText}
 		</div>
 	);
