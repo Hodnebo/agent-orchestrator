@@ -25,6 +25,28 @@ func readWorkingDirectory() string {
 	return strings.TrimSpace(os.Getenv(worker.WorkingDirectoryEnv))
 }
 
+// readCheckoutDirectory reads the project's working-folder checkout a
+// dedicated-user worker clones into (worker.CheckoutDirectoryEnv) and removes
+// it from the process environment; AO_WORKSPACE_DIR names the same folder.
+func readCheckoutDirectory() string {
+	defer func() { _ = os.Unsetenv(worker.CheckoutDirectoryEnv) }()
+	return strings.TrimSpace(os.Getenv(worker.CheckoutDirectoryEnv))
+}
+
+// resolveCheckoutDirectory checks the project's working folder is AO's own
+// before the session checks the repository out there (see
+// worker.ResolveOwnedCheckoutDirectory). A folder the template created stops
+// the startup: AO never falls back to another folder for it.
+func resolveCheckoutDirectory(logger *slog.Logger, dir string) error {
+	if err := worker.ResolveOwnedCheckoutDirectory(dir, os.Getenv(worker.UserHomeEnv)); err != nil {
+		logger.Error("working folder: the project's working folder cannot be used", "workspace", dir, "error", err)
+		return err
+	}
+	logger.Info("working folder: checking the repository out in the project's working folder", "workspace", dir)
+	_ = os.Setenv("AO_WORKSPACE_DIR", dir)
+	return nil
+}
+
 // resolveConfiguredWorkspace settles the session on the connection's working
 // directory. An adopted checkout gets the same process-scoped git setup as a
 // reused one; a directory AO clones into is treated like its own checkout.
@@ -221,6 +243,24 @@ func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
 // could not be prepared: the Coder connection's working directory, or the
 // repository checkout itself.
 func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
+	if errors.Is(err, worker.ErrWorkingDirectoryOccupied) {
+		folder := strings.TrimPrefix(err.Error(), worker.ErrWorkingDirectoryOccupied.Error()+": ")
+		return worker.WorkspaceStartupEvent{
+			Status: worker.WorkspaceStartupFailed,
+			Code:   domain.WorkspaceStartupErrorWorkingDirectoryOccupied,
+			Message: folder + " already exists (created by your Coder template). " +
+				"Untick it in the project's Template options, or turn on 'Run the agent as the workspace user' to reuse it.",
+		}
+	}
+	if errors.Is(err, worker.ErrCheckoutDirectoryUnusable) {
+		return worker.WorkspaceStartupEvent{
+			Status: worker.WorkspaceStartupFailed,
+			Code:   domain.WorkspaceStartupErrorWorkingDirectory,
+			Message: "AO couldn't use this project's working folder: " +
+				strings.TrimPrefix(err.Error(), worker.ErrCheckoutDirectoryUnusable.Error()+": ") +
+				". Fix the folder or the project's working folder (Project settings > Repositories), then reopen this session.",
+		}
+	}
 	if errors.Is(err, worker.ErrWorkingDirectoryUnusable) {
 		return worker.WorkspaceStartupEvent{
 			Status: worker.WorkspaceStartupFailed,

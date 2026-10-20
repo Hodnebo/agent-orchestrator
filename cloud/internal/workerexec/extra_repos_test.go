@@ -325,6 +325,22 @@ func TestParentAgentDirectoryIsRefusedWhenUnsafe(t *testing.T) {
 			t.Fatalf("prompt does not explain the fallback:\n%s", note)
 		}
 	})
+	// A dedicated ao-worker user has its own HOME; the workspace login user's
+	// home (where ~/{repo} would put the checkouts) is refused all the same,
+	// while the ~/work folder of ~/work/{repo} is accepted.
+	t.Run("workspace login user's home", func(t *testing.T) {
+		workspace, launch := multiRepoWorkspace(t)
+		launch.AgentStartsIn = domain.ProjectAgentStartsInParent
+		t.Setenv("HOME", t.TempDir())
+		t.Setenv(worker.UserHomeEnv, filepath.Dir(workspace))
+		if got := agentDirectory(launch, workspace); got != workspace {
+			t.Fatalf("agent directory = %s, want the main checkout", got)
+		}
+		t.Setenv(worker.UserHomeEnv, filepath.Dir(filepath.Dir(workspace)))
+		if got := agentDirectory(launch, workspace); got != filepath.Dir(workspace) {
+			t.Fatalf("agent directory = %s, want the folder holding the checkouts", got)
+		}
+	})
 	t.Run("AO worker state", func(t *testing.T) {
 		workspace, launch := multiRepoWorkspace(t)
 		launch.AgentStartsIn = domain.ProjectAgentStartsInParent
