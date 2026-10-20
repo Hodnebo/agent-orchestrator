@@ -52,10 +52,15 @@ const (
 	// Margin is extra time AO waits beyond Budget for the command to start
 	// and the result to arrive.
 	Margin = 20 * time.Second
-	// RecordTTL is how long a finished run is remembered, so a Delete the
-	// reconciler re-issues while the sandbox winds down never runs the
-	// commands a second time.
-	RecordTTL = time.Hour
+	// RecordTTL is how long a run is remembered after it ends, so a Delete
+	// the reconciler re-issues while the sandbox winds down never runs the
+	// commands a second time. A run may end hours after it started (it waits
+	// up to its queue wait and its organization's hold, then takes its
+	// budget), so it is at least the longest of those, the largest budget,
+	// Margin and StaleAfter, and an hour more. The runs live only in this
+	// process's memory: a control-plane restart forgets them.
+	RecordTTL = time.Hour + sandbox.MinCleanupQueueWait + (sandbox.MaxCleanupBudget - sandbox.MinCleanupBudget) +
+		2*sandbox.MaxCleanupBudget + Margin + StaleAfter
 	// InlineWait is how long one Delete waits for a Cleanup run before
 	// handing the sandbox back to the reconciler. Most Cleanup commands
 	// finish within it, so the sandbox is deleted in the same pass and a
@@ -587,6 +592,8 @@ func boundedOutput(output string, steps worker.CleanupRun) string {
 type Run struct {
 	done    chan struct{}
 	started time.Time
+	// ended is when the run ended; it is set before done is closed.
+	ended time.Time
 	// limit is how long the run may take before Delete stops waiting for it.
 	limit time.Duration
 }
@@ -704,7 +711,10 @@ func (t *Tracker) Start(ctx context.Context, key, orgID string, budget, limit ti
 		sandbox.ReportCleanupQueueHold(ctx, hold)
 	}
 	go func() {
-		defer close(run.done)
+		defer func() {
+			run.ended = time.Now()
+			close(run.done)
+		}()
 		if reason, ok := t.acquire(waiter, queueWait); !ok {
 			slog.Warn("project cleanup waited too long for a slot; deleting the sandbox without it",
 				"key", key, "org_id", orgID, "queue_wait", queueWait, "reason", reason)
@@ -885,7 +895,7 @@ func (t *Tracker) prune() {
 		run := value.(*Run)
 		select {
 		case <-run.done:
-			if time.Since(run.started) > RecordTTL {
+			if time.Since(run.ended) > RecordTTL {
 				t.runs.Delete(key)
 			}
 		default:

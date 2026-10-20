@@ -1027,3 +1027,28 @@ func TestCommandSkipsTheCleanupOfASessionWithoutItsWorkingFolder(t *testing.T) {
 		t.Fatalf("reason = %q", got)
 	}
 }
+
+// A run is remembered for RecordTTL after it ends, not after it starts: a run
+// that waited for a slot and took its budget may end hours after it started,
+// and a Delete re-issued then must find it instead of running Cleanup again.
+// RecordTTL outlasts the longest a run may wait and take.
+func TestTrackerRemembersARunForRecordTTLAfterItEnds(t *testing.T) {
+	t.Parallel()
+	if longest := sandbox.CleanupQueueWait(sandbox.MaxCleanupBudget) + sandbox.MaxCleanupBudget + sandbox.MaxCleanupBudget; RecordTTL < longest {
+		t.Fatalf("RecordTTL = %s, shorter than the longest wait and budget %s", RecordTTL, longest)
+	}
+	var tracker Tracker
+	run := tracker.Start(context.Background(), "vm-1", "org-1", Budget, Budget, func() {}, func(string) {})
+	<-run.done
+	// Started long ago, ended just now.
+	run.started = time.Now().Add(-2 * RecordTTL)
+	tracker.prune()
+	if _, ok := tracker.Lookup("vm-1"); !ok {
+		t.Fatal("a run that just ended was forgotten because it started long ago")
+	}
+	run.ended = time.Now().Add(-RecordTTL - time.Second)
+	tracker.prune()
+	if _, ok := tracker.Lookup("vm-1"); ok {
+		t.Fatal("a run that ended more than RecordTTL ago is still remembered")
+	}
+}
