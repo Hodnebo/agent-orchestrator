@@ -67,6 +67,7 @@ function MobileControl() {
 	return <>
 		<button disabled={stay.busy || !stay.supported} onClick={() => stay.set(!stay.on)} aria-pressed={stay.on}>Mobile wake</button>
 		<button disabled={stay.busy || !stay.supported} onClick={() => stay.setLid(!stay.lidOn)} aria-pressed={stay.lidOn}>Lid wake</button>
+		{stay.error ? <span role="alert">{stay.error}</span> : null}
 	</>;
 }
 async function show() {
@@ -165,6 +166,85 @@ describe("shared Stay Awake controls", () => {
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
 		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
 	});
+	it.each(["helper_upgrade_required", "setup_failed"])("uses idle wake when the advertised lid capability already reports %s", async (reason) => {
+		state.capabilities.push({ id: "lid", available: true, reason });
+		await show();
+		expect(coffee()).toHaveAccessibleDescription(/Closed-lid wake is unavailable/);
+		fireEvent.click(coffee());
+		await waitFor(() => expect(state.active).toBe(true));
+		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ lidClosed: false }) });
+		expect(test.post).toHaveBeenCalledTimes(1);
+	});
+	it.each([
+		{ source: "sidebar", reason: "helper_upgrade_required" },
+		{ source: "settings", reason: "helper_upgrade_required" },
+		{ source: "sidebar", reason: "setup_failed" },
+		{ source: "settings", reason: "setup_failed" },
+	])("$source retries idle wake when the first lid start discovers $reason", async ({ source, reason }) => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			if (path === "/api/v1/awake/sessions" && options.body.lidClosed) {
+				state.reason = reason;
+				state.capabilities.find((cap) => cap.id === "lid")!.reason = reason;
+				return { error: "The registered helper could not be set up" };
+			}
+			return post(path, options);
+		});
+		await show();
+		fireEvent.click(source === "sidebar" ? coffee() : screen.getByRole("button", { name: "Mobile wake" }));
+		await waitFor(() => expect(coffee()).toHaveAccessibleDescription(/This Mac is being kept awake\. Click to turn off/));
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		expect(coffee()).toBeEnabled();
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
+		expect(test.post.mock.calls.filter(([path]) => path === "/api/v1/awake/sessions").map(([, options]) => options.body.lidClosed)).toEqual([true, false]);
+		expect(state.sessions.filter((session) => !session.endedAt)).toEqual([expect.objectContaining({ lidClosed: false })]);
+		fireEvent.click(coffee());
+		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
+		expect(coffee()).toHaveAccessibleDescription(/Closed-lid wake is unavailable/);
+	});
+	it.each(["helper_upgrade_required", "setup_failed"])("does not silently downgrade an explicit lid opt-in when setup reports %s", async (reason) => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		test.post.mockImplementation(async () => {
+			state.reason = reason;
+			return { error: "Explicit closed-lid wake failed" };
+		});
+		await show();
+		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Explicit closed-lid wake failed"));
+		expect(test.post).toHaveBeenCalledTimes(1);
+		expect(state.active).toBe(false);
+	});
+	it("does not use helper fallback to bypass a safety pause", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		test.post.mockImplementation(async (path) => {
+			state.paused = true;
+			state.reason = "critical_heat";
+			state.capabilities.find((cap) => cap.id === "lid")!.reason = "helper_upgrade_required";
+			return { error: path === "/api/v1/awake/resume" ? "cannot rearm: critical_heat" : "start stopped" };
+		});
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("critical_heat"));
+		expect(test.post.mock.calls.map(([path]) => path)).toEqual(["/api/v1/awake/sessions", "/api/v1/awake/resume"]);
+		expect(state.active).toBe(false);
+	});
+
+	it("does not report success if the idle fallback also fails", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		test.post.mockImplementation(async (_path, options) => {
+			state.reason = "helper_upgrade_required";
+			return { error: options.body.lidClosed ? "old helper" : "idle wake unavailable" };
+		});
+		await show();
+		fireEvent.click(coffee());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("idle wake unavailable"));
+		expect(test.post).toHaveBeenCalledTimes(2);
+		expect(state.active).toBe(false);
+		expect(coffee()).toHaveAttribute("aria-pressed", "false");
+	});
+
 	it("starts desktop closed-lid wake without mobile access, synchronizes both switches, and stops it", async () => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
 		await show();

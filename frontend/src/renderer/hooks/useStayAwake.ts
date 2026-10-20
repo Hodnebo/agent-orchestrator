@@ -8,6 +8,12 @@ type MobileStatus = components["schemas"]["MobileStatusResponse"];
 type Change = { on: boolean; lidClosed?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
+function lidSetupFailure(state: AwakeState | undefined) {
+	return [state?.reason, awakeCapability(state, "lid")?.reason].find(
+		(reason) => reason === "helper_upgrade_required" || reason === "setup_failed",
+	);
+}
+
 /** The desktop and mobile controls share intent, pending state, and ownership. */
 export function useStayAwake(enabled = true) {
 	const cache = useQueryClient();
@@ -42,7 +48,7 @@ export function useStayAwake(enabled = true) {
 	// safety stop has released the host assertion. Actual wake is separate.
 	const active = !!awake.state?.active || !!mobile.data?.keepAwake?.active;
 	const on = intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled || active);
-	const lidSupported = awakeCapability(awake.state, "lid")?.available ?? false;
+	const lidSupported = (awakeCapability(awake.state, "lid")?.available ?? false) && !lidSetupFailure(awake.state);
 	const lidOn = intent ? intent.on && (intent.lidClosed ?? lidSupported) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed);
 	const lidActive = !!awake.state?.lidActive || !!mobile.data?.keepAwake?.lidActive;
 	// The desktop status reports its lid failure as the overall reason.
@@ -65,7 +71,20 @@ export function useStayAwake(enabled = true) {
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
 			};
 			const start = async (lidClosed = false) => {
-				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed } });
+				const request = (lid: boolean) => awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: lid } });
+				let latest: AwakeState;
+				try {
+					latest = await request(lidClosed);
+				} catch (error) {
+					// Default wake may degrade to idle-only when setup discovers an old
+					// helper. Explicit lid opt-ins and safety stops must still fail.
+					if (!lidClosed || change.lidClosed !== undefined) throw error;
+					await cache.cancelQueries({ queryKey: awakeQueryKey });
+					const failed = await cache.fetchQuery<AwakeState>({ queryKey: awakeQueryKey, staleTime: 0 }).catch(() => undefined);
+					if (!failed || failed.paused || !lidSetupFailure(failed)) throw error;
+					lidClosed = false;
+					latest = await request(false);
+				}
 				// A successful POST writes a lease; the native helper acknowledges it
 				// on its next two-second scan. Keep the shared intent pending until
 				// that acknowledgement instead of flashing an inactive warning. A first
