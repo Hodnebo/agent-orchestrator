@@ -119,6 +119,33 @@ func TestClaudeACPAdapterFailedInstallIsUnavailable(t *testing.T) {
 	}
 }
 
+// A missing npm is looked up again on every call, even within the retry delay
+// of an earlier failed install, so a template that adds npm in the background
+// is seen by the next caller (the Chat start settle) instead of a cached "no
+// npm".
+func TestClaudeACPAdapterLooksForNpmAgain(t *testing.T) {
+	onPath := map[string]string{}
+	var installs atomic.Int32
+	adapter := testAdapter(t.TempDir(), onPath, func(_ context.Context, _, prefix string) error {
+		installs.Add(1)
+		writeExecutable(t, filepath.Join(prefix, "bin", "claude-agent-acp"))
+		return nil
+	})
+	// An earlier install failed moments ago; npm has since gone missing.
+	adapter.failedAt = time.Now()
+	_, err := adapter.ensure(context.Background())
+	if !errors.Is(err, ErrChatAdapterUnavailable) || !strings.Contains(err.Error(), "npm is not installed") {
+		t.Fatalf("err = %v, want unavailable without npm", err)
+	}
+	onPath["npm"] = "/usr/bin/npm"
+	if path, err := adapter.ensure(context.Background()); err != nil || filepath.Base(path) != "claude-agent-acp" {
+		t.Fatalf("ensure after npm appeared = %q, %v", path, err)
+	}
+	if got := installs.Load(); got != 1 {
+		t.Fatalf("installs = %d, want 1", got)
+	}
+}
+
 // A short request deadline reports "installing" but does not cancel the install,
 // so the next request finds the adapter.
 func TestClaudeACPAdapterSlowInstallOutlivesARequestDeadline(t *testing.T) {
