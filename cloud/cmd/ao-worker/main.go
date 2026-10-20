@@ -399,7 +399,9 @@ func run(logger *slog.Logger) error {
 	if defaultBranch := strings.TrimSpace(bootstrap.Launch.DefaultBranch); defaultBranch != "" {
 		compareBase = "origin/" + defaultBranch
 	}
-	sessionCheckouts := worker.SessionRepoCheckouts(workspace, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)
+	// The review panel offers, diffs, reads and writes only the checkouts AO
+	// uses: never the Coder template's own clone of a refused folder.
+	sessionCheckouts := worker.UsedSessionRepoCheckouts(workspace, dataDir, bootstrap.Launch.RepositoryURL, bootstrap.Launch.ExtraRepos)
 	transportSupervisor := workertransport.Supervisor{
 		Control: client, Workspace: workspace, DataDir: dataDir,
 		Repositories: sessionCheckouts[1:], MainRepository: sessionCheckouts[0],
@@ -480,7 +482,7 @@ func run(logger *slog.Logger) error {
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
-		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, bootstrap.Launch, logger)
+		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, dataDir, bootstrap.Launch, logger)
 	}()
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)

@@ -304,6 +304,27 @@ func OwnedRepoFoldersOnly(dataDir string) bool {
 	return err == nil
 }
 
+// UsedSessionRepoCheckouts lists the session's checkouts AO uses
+// (SessionRepoCheckouts), the main repository's first. In a session whose
+// checkouts must be AO's own (OwnedRepoFoldersOnly in dataDir), an additional
+// repository whose folder is not (ForeignRepoFolder: the Coder template's own
+// clone) is left out, as a repository skipped for its folder name is: AO did
+// not check it out there, and never shows, changes or pushes from it. A
+// missing folder is kept: AO checks the repository out there.
+func UsedSessionRepoCheckouts(workspace, dataDir, mainURL string, extras []RepoRef) []RepoCheckout {
+	checkouts := SessionRepoCheckouts(workspace, mainURL, extras)
+	if strings.TrimSpace(dataDir) == "" || !OwnedRepoFoldersOnly(dataDir) {
+		return checkouts
+	}
+	used := []RepoCheckout{checkouts[0]}
+	for _, checkout := range checkouts[1:] {
+		if !ForeignRepoFolder(checkout.Path) {
+			used = append(used, checkout)
+		}
+	}
+	return used
+}
+
 // ForeignRepoFolder reports whether path exists and is not a folder of the
 // worker's own (foreignFolder): one AO never checks a repository out in or
 // runs a Setup or Cleanup step in when its checkouts must be its own.

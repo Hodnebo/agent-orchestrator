@@ -107,7 +107,7 @@ func (b HarnessBuilder) BuildInteractive(
 		)
 	}
 	agentDir := agentDirectory(launch, workspace)
-	extraDirs := additionalDirectories(launch, workspace)
+	extraDirs := additionalDirectories(launch, workspace, b.DataDir)
 	if launch.Harness == "cursor" {
 		if err := removeCursorACPStandingRule(agentDir, launch.SessionID); err != nil {
 			return Command{}, err
@@ -284,10 +284,10 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	case "reviewer":
 	case "orchestrator":
 		if agentDirectory(launch, workspace) != workspace {
-			systemPrompt += "\n\n" + repositoriesPromptNote(launch, workspace)
+			systemPrompt += "\n\n" + repositoriesPromptNote(launch, workspace, b.DataDir)
 		}
 	default:
-		if note := repositoriesPromptNote(launch, workspace); note != "" {
+		if note := repositoriesPromptNote(launch, workspace, b.DataDir); note != "" {
 			systemPrompt += "\n\n" + note
 		}
 	}
@@ -368,7 +368,7 @@ func (b HarnessBuilder) Build(
 		return Command{}, errors.New("turn harness does not match session role context")
 	}
 	agentDir := agentDirectory(b.Launch, workspace)
-	extraDirs := additionalDirectories(b.Launch, workspace)
+	extraDirs := additionalDirectories(b.Launch, workspace, b.DataDir)
 	command := Command{
 		SystemPrompt: b.systemPrompt(b.Launch, workspace),
 		Path:         b.binary(turn.Harness),

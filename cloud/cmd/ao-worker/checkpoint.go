@@ -86,21 +86,11 @@ func siblingCheckoutPaths(launch worker.LaunchContext, workspace, dataDir string
 	return paths
 }
 
-// usedExtraCheckouts lists the additional repositories' checkouts AO uses. In
-// a session whose checkouts must be AO's own (worker.OwnedRepoFoldersOnly), a
-// folder that is not (worker.ForeignRepoFolder: the Coder template's own
-// clone) is left out, as a repository skipped for its folder name is: AO did
-// not check it out there and never changes it.
+// usedExtraCheckouts lists the additional repositories' checkouts AO uses
+// (worker.UsedSessionRepoCheckouts): in a session whose checkouts must be
+// AO's own, the Coder template's own clone is left out.
 func usedExtraCheckouts(launch worker.LaunchContext, workspace, dataDir string) []worker.RepoCheckout {
-	ownedOnly := worker.OwnedRepoFoldersOnly(dataDir)
-	var checkouts []worker.RepoCheckout
-	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
-		if ownedOnly && worker.ForeignRepoFolder(checkout.Path) {
-			continue
-		}
-		checkouts = append(checkouts, checkout)
-	}
-	return checkouts
+	return worker.UsedSessionRepoCheckouts(workspace, dataDir, launch.RepositoryURL, launch.ExtraRepos)[1:]
 }
 
 // checkpoint captures the transcript and uncommitted work once. It is invoked by

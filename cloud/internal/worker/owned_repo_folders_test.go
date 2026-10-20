@@ -188,3 +188,41 @@ func TestCleanupSkipsTheStepsOfARepositoryFolderThatIsNotAOs(t *testing.T) {
 		}
 	}
 }
+
+// The checkouts AO uses leave out, in a session whose checkouts must be AO's
+// own, an additional repository whose folder is the template's own clone; a
+// missing folder (AO checks the repository out there) is kept. Any other
+// session, and a caller without a data directory, uses every checkout.
+func TestUsedSessionRepoCheckouts(t *testing.T) {
+	t.Parallel()
+	extras := []RepoRef{{URL: "https://github.com/acme/billing"}, {URL: "https://github.com/acme/docs"}}
+	names := func(checkouts []RepoCheckout) string {
+		var listed []string
+		for _, checkout := range checkouts {
+			listed = append(listed, checkout.Name)
+		}
+		return strings.Join(listed, ",")
+	}
+	for _, tc := range []struct {
+		name  string
+		owned bool
+		data  bool
+		want  string
+	}{
+		{"owned repo folders", true, true, "web,docs"},
+		{"any other session", false, true, "web,billing,docs"},
+		{"no data directory", true, false, "web,billing,docs"},
+	} {
+		workspace, _ := siblingLayout(t)
+		dataDir := t.TempDir()
+		if _, err := RecordOwnedRepoFolders(dataDir, tc.owned, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !tc.data {
+			dataDir = ""
+		}
+		if got := names(UsedSessionRepoCheckouts(workspace, dataDir, "https://github.com/acme/web", extras)); got != tc.want {
+			t.Errorf("%s: checkouts = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

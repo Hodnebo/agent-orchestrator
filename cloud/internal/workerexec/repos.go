@@ -71,13 +71,15 @@ func parentAgentDirectoryRefusal(workspace string) string {
 // that it must be allowed to read and edit: the additional repositories, when
 // it starts in the main checkout. Starting in the parent folder already covers
 // every checkout. Only checkouts present on disk are listed, so a repository
-// that failed to clone does not break the agent's configuration.
-func additionalDirectories(launch worker.LaunchContext, workspace string) []string {
+// that failed to clone does not break the agent's configuration, and only
+// those AO uses (worker.UsedSessionRepoCheckouts, with the worker's dataDir):
+// never the Coder template's own clone of a folder AO refused.
+func additionalDirectories(launch worker.LaunchContext, workspace, dataDir string) []string {
 	if launch.Kind == "reviewer" || agentDirectory(launch, workspace) != workspace {
 		return nil
 	}
 	var dirs []string
-	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
+	for _, checkout := range worker.UsedSessionRepoCheckouts(workspace, dataDir, launch.RepositoryURL, launch.ExtraRepos)[1:] {
 		if info, err := os.Stat(checkout.Path); err == nil && info.IsDir() {
 			dirs = append(dirs, checkout.Path)
 		}
@@ -87,10 +89,11 @@ func additionalDirectories(launch worker.LaunchContext, workspace string) []stri
 
 // repositoriesPromptNote tells the agent which repositories the session has,
 // where each is checked out, where it started, and how to open a pull
-// request on each. Paths come from worker.SessionRepoCheckouts, the same
-// paths the worker cloned to.
-func repositoriesPromptNote(launch worker.LaunchContext, workspace string) string {
-	checkouts := worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)
+// request on each. Paths come from worker.UsedSessionRepoCheckouts (with the
+// worker's dataDir), the same paths the worker cloned to: a repository whose
+// folder AO refused (the Coder template's own clone) is not one of them.
+func repositoriesPromptNote(launch worker.LaunchContext, workspace, dataDir string) string {
+	checkouts := worker.UsedSessionRepoCheckouts(workspace, dataDir, launch.RepositoryURL, launch.ExtraRepos)
 	started := agentDirectory(launch, workspace)
 	if len(checkouts) < 2 && started == workspace {
 		return ""
