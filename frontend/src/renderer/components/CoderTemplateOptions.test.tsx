@@ -44,10 +44,11 @@ const PARAMETERS: CloudCpCoderTemplateParameter[] = [
 	{ name: "size", type: "string", mutable: true, required: false, defaultValue: "medium" },
 ];
 
-function Harness({ initial = {}, onChange, repositoryUrls }: {
+function Harness({ initial = {}, onChange, repositoryUrls, projectWorkingDirectory }: {
 	initial?: Record<string, string>;
 	onChange: (next: Record<string, string>) => void;
 	repositoryUrls?: string[];
+	projectWorkingDirectory?: string;
 }) {
 	const [overrides, setOverrides] = useState(initial);
 	return (
@@ -55,6 +56,7 @@ function Harness({ initial = {}, onChange, repositoryUrls }: {
 			orgId="org-1"
 			templateId="tpl-1"
 			repositoryUrls={repositoryUrls}
+			projectWorkingDirectory={projectWorkingDirectory}
 			overrides={overrides}
 			onChange={(next) => {
 				setOverrides(next);
@@ -64,12 +66,12 @@ function Harness({ initial = {}, onChange, repositoryUrls }: {
 	);
 }
 
-function renderOptions(initial?: Record<string, string>, repositoryUrls?: string[]) {
+function renderOptions(initial?: Record<string, string>, repositoryUrls?: string[], projectWorkingDirectory?: string) {
 	const onChange = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={client}>
-			<Harness initial={initial} onChange={onChange} repositoryUrls={repositoryUrls} />
+			<Harness initial={initial} onChange={onChange} repositoryUrls={repositoryUrls} projectWorkingDirectory={projectWorkingDirectory} />
 		</QueryClientProvider>,
 	);
 	return { onChange };
@@ -297,6 +299,13 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("checkbox", { name: "Alice" }));
 		expect(onChange).toHaveBeenLastCalledWith({});
+		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("says the session will not start when the project has a working folder and AO runs as ao-worker", async () => {
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
+		expect(await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).toBeInTheDocument();
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
 	});
 

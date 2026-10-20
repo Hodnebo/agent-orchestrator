@@ -3001,6 +3001,7 @@
 	"coder.templateOptions.titleCount": "Options du modèle ({{total}})",
 	"coder.templateOptions.subtitle": "Les options propres à votre modèle Coder. AO effectue lui-même le checkout des dépôts de ce projet.",
 	"coder.templateOptions.duplicateClone": "Votre modèle clonera aussi {{repos}}, à part de la copie dans laquelle AO travaille. Décochez pour garder une seule copie.",
+	"coder.templateOptions.duplicateCloneWorkingFolder": "Votre modèle clone aussi {{repos}} dans le dossier de travail, donc AO ne peut pas y démarrer. Décochez-le.",
 	"coder.templateOptions.required": "Obligatoire",
 	"coder.templateOptions.loadFailed": "Impossible de charger les options de ce modèle.",
 	"coder.templateOptions.checkFailed": "Impossible de vérifier ces options avec le modèle. Modifiez la dernière valeur changée, puis réessayez.",

@@ -2940,6 +2940,7 @@
 	"coder.templateOptions.titleCount": "Template options ({{total}})",
 	"coder.templateOptions.subtitle": "Your Coder template's own options. AO checks out this project's repositories itself.",
 	"coder.templateOptions.duplicateClone": "Your template will also clone {{repos}}, separate from the copy AO works in. Untick to keep one copy.",
+	"coder.templateOptions.duplicateCloneWorkingFolder": "Your template also clones {{repos}} into the working folder, so AO cannot start there. Untick it.",
 	"coder.templateOptions.required": "Required",
 	"coder.templateOptions.loadFailed": "Couldn't load this template's options.",
 	"coder.templateOptions.checkFailed": "Couldn't check these options with the template. Change the last value you edited and try again.",

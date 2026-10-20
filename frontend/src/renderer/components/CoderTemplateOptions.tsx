@@ -95,9 +95,13 @@ export function CoderTemplateOptions({
 	}
 	if (parameters.length === 0) return null;
 	const expanded = !collapsible || open;
-	const duplicateWarning = (labels: readonly string[]) => t("coder.templateOptions.duplicateClone", {
-		repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels),
-	});
+	// With a project working folder and the ao-worker user, the template's
+	// clone lands where AO checks out, so the session cannot start at all.
+	const blocksWorkingFolder = (projectWorkingDirectory ?? "").trim() !== "";
+	const duplicateWarning = (labels: readonly string[]) => t(
+		blocksWorkingFolder ? "coder.templateOptions.duplicateCloneWorkingFolder" : "coder.templateOptions.duplicateClone",
+		{ repos: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(labels) },
+	);
 	// Collapsed, the fields (and their warnings) are hidden, so the warning
 	// moves up under the header; expanded, it sits under its field instead.
 	const collapsedDuplicates = !expanded && duplicates ? [...new Set([...duplicates.values()].flat())] : [];
