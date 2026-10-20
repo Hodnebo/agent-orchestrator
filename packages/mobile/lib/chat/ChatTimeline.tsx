@@ -28,7 +28,7 @@ import { MascotLamp, Spinning } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
-import { readRenderRef } from "./renderFrameModel";
+import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
@@ -216,9 +216,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 						? Math.abs(contentOffset.y) < 120
 						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
+					notifyRenderViewport();
 				}}
 				scrollEventThrottle={100}
 				onContentSizeChange={() => {
+					notifyRenderViewport();
 					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
 				}}
 				onScrollToIndexFailed={({ index, averageItemLength }) => {

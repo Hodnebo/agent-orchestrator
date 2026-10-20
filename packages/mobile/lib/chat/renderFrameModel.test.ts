@@ -5,6 +5,11 @@ import {
 	RENDER_ZOOM_SCRIPT,
 	RENDER_MIN_HEIGHT,
 	initialRenderHeight,
+	notifyRenderViewport,
+	rememberRenderHeight,
+	rememberedRenderHeight,
+	renderFrameLive,
+	subscribeRenderViewport,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
 	readRenderRef,
@@ -131,5 +136,55 @@ describe("RENDER_ZOOM_SCRIPT", () => {
 		};
 		new Function("document", RENDER_ZOOM_SCRIPT)(document);
 		expect(appended).toEqual([{ name: "viewport", content: expect.stringContaining("user-scalable=yes") }]);
+	});
+});
+
+describe("renderFrameLive", () => {
+	const viewport = 800;
+
+	it("mounts a page in view or within half a screen of it", () => {
+		expect(renderFrameLive(100, 300, viewport, false)).toBe(true);
+		expect(renderFrameLive(viewport + 350, 300, viewport, false)).toBe(true);
+		expect(renderFrameLive(-650, 300, viewport, false)).toBe(true);
+		expect(renderFrameLive(viewport + 450, 300, viewport, false)).toBe(false);
+		expect(renderFrameLive(-800, 300, viewport, false)).toBe(false);
+	});
+
+	it("keeps a mounted page until it is a screen and a half away", () => {
+		expect(renderFrameLive(viewport + 450, 300, viewport, true)).toBe(true);
+		expect(renderFrameLive(viewport + 1150, 300, viewport, true)).toBe(true);
+		expect(renderFrameLive(viewport + 1250, 300, viewport, true)).toBe(false);
+		expect(renderFrameLive(-1550, 300, viewport, true)).toBe(false);
+	});
+
+	it("keeps a page taller than the screen while any part is near", () => {
+		expect(renderFrameLive(-1800, 2000, viewport, false)).toBe(true);
+	});
+});
+
+describe("remembered render heights", () => {
+	it("returns the last height a page reported", () => {
+		rememberRenderHeight("/api/v1/sessions/s/renders/a", 420);
+		rememberRenderHeight("/api/v1/sessions/s/renders/a", 610);
+		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/a")).toBe(610);
+		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/never")).toBeUndefined();
+	});
+
+	it("forgets the oldest page past the cap", () => {
+		rememberRenderHeight("/api/v1/sessions/s/renders/first", 100);
+		for (let index = 0; index < 200; index++) rememberRenderHeight(`/api/v1/sessions/s/renders/p${index}`, 100 + index);
+		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/first")).toBeUndefined();
+		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/p199")).toBe(299);
+	});
+});
+
+describe("render viewport signal", () => {
+	it("tells subscribed frames to re-check, until they unsubscribe", () => {
+		let calls = 0;
+		const unsubscribe = subscribeRenderViewport(() => { calls += 1; });
+		notifyRenderViewport();
+		unsubscribe();
+		notifyRenderViewport();
+		expect(calls).toBe(1);
 	});
 });

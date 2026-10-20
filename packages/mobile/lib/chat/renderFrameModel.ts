@@ -72,6 +72,44 @@ export function initialRenderHeight(render: RenderRef, width: number | undefined
 	return clampRenderHeight(render.heights && width ? measuredRenderHeight(render.heights, width) : render.height);
 }
 
+/**
+ * Whether a frame keeps a live WebView, from where it sits in the window. A
+ * page mounts once it is within half a screen of view and unmounts only past
+ * a screen and a half, so a frame at the edge does not reload as it wobbles.
+ */
+export function renderFrameLive(top: number, height: number, viewportHeight: number, live: boolean): boolean {
+	const margin = viewportHeight * (live ? 1.5 : 0.5);
+	return top + height > -margin && top < viewportHeight + margin;
+}
+
+const MAX_REMEMBERED_HEIGHTS = 200;
+const rememberedHeights = new Map<string, number>();
+
+/** The height a page last reported, so a frame that remounts opens at it. */
+export function rememberedRenderHeight(path: string): number | undefined {
+	return rememberedHeights.get(path);
+}
+
+export function rememberRenderHeight(path: string, height: number): void {
+	rememberedHeights.delete(path);
+	rememberedHeights.set(path, height);
+	// Oldest first: a Map iterates in insertion order.
+	if (rememberedHeights.size > MAX_REMEMBERED_HEIGHTS) rememberedHeights.delete(rememberedHeights.keys().next().value!);
+}
+
+type ViewportListener = () => void;
+const viewportListeners = new Set<ViewportListener>();
+
+/** Frames re-check whether they are in view; the thread calls it as it scrolls. */
+export function notifyRenderViewport(): void {
+	for (const listener of viewportListeners) listener();
+}
+
+export function subscribeRenderViewport(listener: ViewportListener): () => void {
+	viewportListeners.add(listener);
+	return () => viewportListeners.delete(listener);
+}
+
 export type RenderTheme = { appearance: "light" | "dark"; variables: Record<string, string> };
 
 // Fixed categorical series for agent pages only, as desktop hands them.

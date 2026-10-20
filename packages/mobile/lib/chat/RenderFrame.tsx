@@ -1,6 +1,6 @@
 import * as Linking from "expo-linking";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { authHeaders, httpBase } from "../config";
@@ -17,9 +17,13 @@ import {
 	initialRenderHeight,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
+	rememberRenderHeight,
+	rememberedRenderHeight,
+	renderFrameLive,
 	renderTheme,
 	renderThemeFragment,
 	renderThemeScript,
+	subscribeRenderViewport,
 	type RenderDisplayMode,
 	type RenderRef,
 	type RenderTheme,
@@ -59,16 +63,18 @@ function RenderDocument({ path, displayMode, onHeight, onFailed }: {
 	// The fragment only seeds first paint; a theme change is posted instead.
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
 	const fullscreen = displayMode === "fullscreen";
+	// A stable source: a new object each render would make the WebView re-check it.
+	const source = useMemo(() => uri && config ? { uri, headers: authHeaders(config) } : undefined, [uri, config]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [theme]);
 
-	if (!uri || !config) return null;
+	if (!uri || !source) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
 			ref={web}
-			source={{ uri, headers: authHeaders(config) }}
+			source={source}
 			injectedJavaScript={fullscreen ? `${RENDER_ZOOM_SCRIPT}\n${RENDER_BRIDGE_SCRIPT}` : RENDER_BRIDGE_SCRIPT}
 			onMessage={(event) => {
 				const message = readRenderBridgeMessage(event.nativeEvent.data);
@@ -121,16 +127,35 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 	</Modal>;
 }
 
-/** An agent's HTML page inline in its turn, as desktop shows it; a tap expands it. */
-export function RenderFrame({ render }: { render: RenderRef }) {
+/**
+ * An agent's HTML page inline in its turn, as desktop shows it; a tap expands
+ * it. Only a frame in or near view holds a WebView: a page can run to megabytes
+ * of inlined images, and a thread can carry many. Out of range, a placeholder
+ * keeps the page's last height so the thread does not jump when it returns.
+ */
+export const RenderFrame = memo(function RenderFrame({ render }: { render: RenderRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { config } = useApp();
+	const frame = useRef<View>(null);
+	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
-	const [contentHeight, setContentHeight] = useState<number>();
+	const [contentHeight, setContentHeight] = useState(() => rememberedRenderHeight(render.path));
+	const [live, setLive] = useState(false);
 	const [failed, setFailed] = useState(false);
 	const [attempt, setAttempt] = useState(0);
 	const [expanded, setExpanded] = useState(false);
+	const measure = useCallback(() => {
+		frame.current?.measureInWindow((_x, y, _width, height) => {
+			// A cell the list has clipped measures as zero; leave it as it was.
+			if (height > 0) setLive((current) => renderFrameLive(y, height, viewportHeight, current));
+		});
+	}, [viewportHeight]);
+	useEffect(() => subscribeRenderViewport(measure), [measure]);
+	const onHeight = useCallback((height: number) => {
+		rememberRenderHeight(render.path, height);
+		setContentHeight(height);
+	}, [render.path]);
 
 	if (!config || failed) {
 		return <Pressable
@@ -147,8 +172,10 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 	}
 
 	const height = clampRenderHeight(contentHeight ?? initialRenderHeight(render, width));
-	return <View onLayout={(event) => setWidth(Math.round(event.nativeEvent.layout.width))} style={[styles.frame, { height }]}>
-		{width ? <RenderDocument key={attempt} path={render.path} displayMode="inline" onHeight={setContentHeight} onFailed={() => setFailed(true)} /> : null}
+	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
+		{width && live
+			? <RenderDocument key={attempt} path={render.path} displayMode="inline" onHeight={onHeight} onFailed={() => setFailed(true)} />
+			: <View style={styles.placeholder}><Feather name="file-text" size={12} color={t.textFaint} /><Text numberOfLines={1} style={styles.placeholderTitle}>{render.title}</Text></View>}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
 		<Pressable
 			accessibilityRole="button"
@@ -160,12 +187,19 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 		</Pressable>
 		<RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />
 	</View>;
+}, (previous, next) => sameRender(previous.render, next.render));
+
+/** The timeline re-reads each row on every update; the same page must not re-render. */
+function sameRender(a: RenderRef, b: RenderRef): boolean {
+	return a.id === b.id && a.path === b.path && a.title === b.title && a.height === b.height && JSON.stringify(a.heights) === JSON.stringify(b.heights);
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	frame: { marginVertical: space.xs, overflow: "hidden", backgroundColor: t.bgBase },
 	document: { flex: 1 },
 	web: { flex: 1, backgroundColor: t.bgBase },
+	placeholder: { flexDirection: "row", alignItems: "center", gap: space.xs, padding: space.sm },
+	placeholderTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textFaint, fontSize: type.caption1.fontSize },
 	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
 	viewer: { flex: 1, backgroundColor: t.bgBase },
 	viewerHeader: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.xs },
