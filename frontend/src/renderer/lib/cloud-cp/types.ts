@@ -373,6 +373,13 @@ export interface CloudCpCreateSessionRequest {
 	 * from `/me`.
 	 */
 	provider?: string;
+	/**
+	 * Interface the session starts in. Optional: omitted is "tui". The control
+	 * plane honors "chat" only for a harness it starts in Chat and starts any
+	 * other in "tui". An older control plane rejects the field (see
+	 * createCloudSession).
+	 */
+	interfaceMode?: CloudCpInterfaceMode;
 }
 
 export interface CloudCpSessionRepo {

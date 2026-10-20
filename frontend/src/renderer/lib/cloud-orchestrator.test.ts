@@ -84,6 +84,21 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
+	it("starts in the user's default session interface", async () => {
+		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", undefined]] as const) {
+			const queryClient = primeClient({ id: "project-1" });
+			queryClient.setQueryData<Settings>(settingsQueryKey, {
+				cloudControlPlaneUrl: "https://cloud.example.com",
+				defaultSessionMode,
+			} as Settings);
+			cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+			cloudMocks.createSession.mockClear();
+
+			await spawnCloudOrchestrator(queryClient, "project-1");
+			expect(cloudMocks.createSession.mock.calls[0]?.[1]?.interfaceMode).toBe(interfaceMode);
+		}
+	});
+
 	it("leaves the provider to the project and org default on the control plane", async () => {
 		const queryClient = primeClient({ id: "project-1", config: { sandboxProvider: "coder" } });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });

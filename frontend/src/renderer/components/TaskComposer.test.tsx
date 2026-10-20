@@ -1192,6 +1192,38 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ reasoningEffort: "high" })));
 	});
 
+	it("starts a cloud task in the default session interface", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		const fallback = h.get.getMockImplementation();
+		h.get.mockImplementation(async (path: string, ...rest: unknown[]) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "codex"] } }
+			: fallback?.(path, ...rest));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+
+		fireEvent.change(task(), { target: { value: "Fix the bug" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }));
+	});
+
+	it("starts a cloud task in the terminal without asking when that is the default", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		const onCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={onCreated} /></Wrap>);
+
+		fireEvent.change(task(), { target: { value: "Fix the bug" } });
+		await waitForTaskReady();
+		fireEvent.click(startTask());
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("interfaceMode");
+	});
+
 	it("leaves the sandbox provider to the project and org default on the control plane", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { sandboxProvider: "coder" } });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
