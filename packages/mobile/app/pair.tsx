@@ -2,7 +2,7 @@ import { Feather } from "../lib/icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
 import { pickNormalLens } from "../lib/cameraLens";
@@ -11,6 +11,7 @@ import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
 	describeUnreachableCode,
+	isLocalNetworkHost,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
 } from "../lib/connectionError";
@@ -26,6 +27,9 @@ import { loadAccount } from "../lib/account";
 import { syncAccountHosts, unignoreAccountHost } from "../lib/accountHosts";
 import { probeEndpoint } from "../lib/connectRuntime";
 import { raceEndpoints } from "../lib/race";
+import { createScanGate } from "../lib/scanGate";
+import { mayAwaitLocalNetwork, raceAwaitingLocalNetwork } from "../lib/localNetworkWait";
+import { loadLocalNetworkConfirmed, setLocalNetworkConfirmed } from "../lib/localNetworkStore";
 import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, NumberedStep } from "../lib/ui";
@@ -48,6 +52,35 @@ export default function PairScreen() {
 	const [permission, requestPermission] = useCameraPermissions();
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [busy, setBusy] = useState(false);
+	// Set while a scan keeps trying a LAN address that iOS may be holding behind
+	// its Local Network prompt; shown as progress rather than as an error.
+	const [awaitingLocalNetwork, setAwaitingLocalNetwork] = useState(false);
+	const [gate] = useState(createScanGate);
+	// Answering that prompt sends the app inactive and straight back to active —
+	// the only sign iOS gives that the user has decided.
+	const promptAnsweredAt = useRef<number | null>(null);
+	// Read from the AppState listener, which outlives any one render.
+	const latestPair = useRef<(code: string) => void>(() => {});
+	useEffect(() => {
+		let wasInactive = false;
+		const sub = AppState.addEventListener("change", (state) => {
+			if (state === "inactive") wasInactive = true;
+			else if (state === "active" && wasInactive) {
+				wasInactive = false;
+				promptAnsweredAt.current = Date.now();
+				// Answered after the wait gave up: connect now rather than
+				// leaving the error up until the user finds Try again.
+				const code = gate.promptAnswered();
+				if (code) latestPair.current(code);
+			}
+		});
+		return () => sub.remove();
+	}, [gate]);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
 	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId ? undefined : null);
 	useEffect(() => {
 		if (!repairHostId) {
@@ -74,7 +107,6 @@ export default function PairScreen() {
 			};
 		}, []),
 	);
-	const scanned = useRef(false);
 	const rejected = useRef<string | null>(null);
 	const pendingCode = useRef<string | null>(null);
 
@@ -100,7 +132,7 @@ export default function PairScreen() {
 	}
 
 	async function onScan({ data }: { data: string }) {
-		if (scanned.current || busy || !focused.current) return;
+		if (busy || !focused.current) return;
 		// Cheap reject first: the camera sees every barcode in frame, and only a
 		// code we can actually parse should stop the scanner.
 		const offer = parsePairingCode(data);
@@ -115,7 +147,10 @@ export default function PairScreen() {
 			return;
 		}
 		rejected.current = null;
-		scanned.current = true;
+		if (!gate.sighting(data, Date.now())) return;
+		// Felt the moment the code is read, so nobody has to watch the screen to
+		// know the scan took; success or warning follows when the attempt ends.
+		haptics.tap();
 		await pair(data, offer);
 	}
 
@@ -123,6 +158,7 @@ export default function PairScreen() {
 	// The scanned code is kept so "Try again" can re-run the whole thing rather
 	// than making the user re-scan.
 	async function pair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
+		if (!gate.start()) return;
 		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);
@@ -130,8 +166,22 @@ export default function PairScreen() {
 		// A generic scan of a machine already in the list is also an in-place
 		// refresh. Preserve its human-readable name instead of asking again.
 		const knownHost = repairHost ?? (offer?.hostId ? await findHost(offer.hostId) : null);
+		const localNetworkConfirmed = await loadLocalNetworkConfirmed();
+		promptAnsweredAt.current = null;
+		let awaitedLocalNetwork = false;
 		const result = await pairFromCode(code, {
-			race: (endpoints, expectedHostId) => raceEndpoints(endpoints, expectedHostId, probeEndpoint),
+			race: (endpoints, expectedHostId) => {
+				const once = () => raceEndpoints(endpoints, expectedHostId, probeEndpoint);
+				if (!mayAwaitLocalNetwork(endpoints, Platform.OS, localNetworkConfirmed)) return once();
+				awaitedLocalNetwork = true;
+				return raceAwaitingLocalNetwork(once, {
+					now: Date.now,
+					sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+					stopped: () => !mounted.current,
+					answeredAt: () => promptAnsweredAt.current,
+					onWaiting: () => setAwaitingLocalNetwork(true),
+				});
+			},
 			verify: async (config) => void (await pingServer(config)),
 			chooseName: (suggested) => new Promise<string | null>((resolve) => {
 				router.push(machineNameSheetRoute({ suggested, onSelect: resolve }));
@@ -140,13 +190,17 @@ export default function PairScreen() {
 			setActiveHost,
 		}, { repairHost: knownHost ?? undefined });
 
+		setAwaitingLocalNetwork(false);
 		if (!result.ok) {
 			if (result.reason === "cancelled") {
 				pendingCode.current = null;
-				scanned.current = false;
+				gate.cancelled();
 				setBusy(false);
 				return;
 			}
+			gate.failed(code, Date.now(), {
+				awaitedLocalNetwork: awaitedLocalNetwork && result.reason === "none-reachable",
+			});
 			haptics.warning();
 			if (result.reason === "wrong-machine") {
 				setFailure({
@@ -192,6 +246,8 @@ export default function PairScreen() {
 			return;
 		}
 
+		gate.succeeded();
+		if (isLocalNetworkHost(result.config.host)) void setLocalNetworkConfirmed();
 		// The rest of the app still runs off ServerConfig, so the winning
 		// endpoint is written there as well as into the host list.
 		await saveConfig(result.config);
@@ -211,15 +267,15 @@ export default function PairScreen() {
 		void registerForPush(result.config, { ask: true }).catch((e) => console.warn("[push] registration failed", e));
 	}
 
+	latestPair.current = (code) => void pair(code, parsePairingCode(code));
+
 	function retry() {
 		setFailure(null);
 		rejected.current = null;
 		if (pendingCode.current) {
 			const offer = parsePairingCode(pendingCode.current);
 			void pair(pendingCode.current, offer);
-			return;
 		}
-		scanned.current = false;
 	}
 
 	const back = () => backOr(router);
@@ -281,25 +337,28 @@ export default function PairScreen() {
 				)}
 			</View>
 
+			{awaitingLocalNetwork && !failure ? (
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><ActivityIndicator size="small" color={t.textSecondary} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>Connecting…</Text>
+						<Text style={styles.noticeText}>If asked, allow access to your local network.</Text>
+					</View>
+				</View>
+			) : null}
+
 			{failure ? (
-				<View style={styles.errorBox}>
-					<Feather name="alert-circle" size={iconSize.sm} color={t.red} />
-					<View style={{ flex: 1 }}>
-						<Text style={styles.errorText}>{failure.message}</Text>
-						{failure.showLocalNetworkHint ? (
-							<Text style={[styles.errorText, { marginTop: space.xs }]}>{LOCAL_NETWORK_HINT}</Text>
-						) : null}
-						<View style={styles.errorActions}>
-							{/* Re-arms the scanner; without it a failed scan is a dead end,
-							    since the camera intentionally stops after one attempt. */}
-							<Button title="Try again" variant="ghost" icon="refresh-cw" onPress={retry} />
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><Feather name="alert-circle" size={iconSize.sm} color={t.red} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>{failure.title}</Text>
+						<Text style={styles.noticeText}>{failure.message}</Text>
+						{failure.showLocalNetworkHint ? <Text style={styles.noticeText}>{LOCAL_NETWORK_HINT}</Text> : null}
+						<View style={styles.noticeActions}>
+							{/* Re-runs the scanned code without pointing the camera at it again. */}
+							<NoticeAction icon="refresh-cw" title="Try again" onPress={retry} />
 							{failure.showLocalNetworkHint ? (
-								<Button
-									title="Open settings"
-									variant="ghost"
-									icon="settings"
-									onPress={() => Linking.openSettings()}
-								/>
+								<NoticeAction icon="settings" title="Open settings" onPress={() => void Linking.openSettings()} />
 							) : null}
 						</View>
 					</View>
@@ -317,6 +376,23 @@ export default function PairScreen() {
 				<Text style={styles.manualText}>Enter details manually</Text>
 			</Pressable>
 		</View>
+	);
+}
+
+// Quiet text action, matching "Enter details manually" below it.
+function NoticeAction({ icon, title, onPress }: { icon: "refresh-cw" | "settings"; title: string; onPress: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<Pressable
+			onPress={() => { haptics.tap(); onPress(); }}
+			style={({ pressed }) => [styles.noticeAction, pressed && { opacity: 0.6 }]}
+			accessibilityRole="button"
+			hitSlop={8}
+		>
+			<Feather name={icon} size={iconSize.sm} color={t.textPrimary} />
+			<Text style={styles.noticeActionText}>{title}</Text>
+		</Pressable>
 	);
 }
 
@@ -417,18 +493,22 @@ const makeStyles = (t: Theme) =>
 		maxWidth: 300,
 	},
 
-	errorBox: {
+	// Connecting and failure share one quiet slot under the viewfinder: no fill
+	// or border, aligned with the numbered steps above.
+	notice: {
 		flexDirection: "row",
 		gap: space.sm,
 		alignItems: "flex-start",
-		backgroundColor: t.tintRed,
-		borderRadius: 8, borderCurve: "continuous",
-		padding: space.md,
-		marginHorizontal: space.lg,
-		marginTop: space.md,
+		paddingHorizontal: space.xl,
+		marginTop: space.lg,
 	},
-	errorText: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	errorActions: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.sm },
+	noticeLead: { width: iconSize.sm, height: type.subheadline.lineHeight, alignItems: "center", justifyContent: "center" },
+	noticeBody: { flex: 1, gap: space.xxs },
+	noticeTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	noticeText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	noticeActions: { flexDirection: "row", flexWrap: "wrap", gap: space.lg, marginTop: space.sm },
+	noticeAction: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	noticeActionText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 
 	manual: {
 		flexDirection: "row",
