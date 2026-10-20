@@ -478,9 +478,20 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	// while recovery settings cover the dialog, then is re-attached when it returns.
 	const [bodyHost] = useState(() => document.createElement("div"));
 	useEffect(() => { bodyHost.className = "flex min-h-0 flex-1 flex-col"; }, [bodyHost]);
+	// That portal puts the body outside the Dialog's React tree, so Radix cannot
+	// tell that a popover, menu, or picker a page opens (portalled to <body>)
+	// belongs to the dialog: a press in one reads as outside and would dismiss
+	// the dialog, dropping the pick. React still routes events through portals
+	// along the React tree, so remember each press that starts anywhere in the
+	// body's tree (the page or anything it portals) and keep the dialog open
+	// for exactly that press. A press on the backdrop never passes through here.
+	const bodyPointerDown = useRef<Event | null>(null);
 	return (
 		<>
-		{createPortal(layer.body(), bodyHost)}
+		{createPortal(
+			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			bodyHost,
+		)}
 		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>
 			<Dialog.Portal>
 				<Dialog.Overlay
@@ -504,6 +515,9 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 						target.focus({ preventScroll: true });
 					}}
 					onCloseAutoFocus={restoreFocusOnClose}
+					onPointerDownOutside={(event) => {
+						if (event.detail.originalEvent === bodyPointerDown.current) event.preventDefault();
+					}}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;
 						// In-place edits and login flows take Escape themselves.
