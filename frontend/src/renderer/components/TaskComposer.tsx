@@ -21,12 +21,13 @@ import {
 	useAgentReadinessQuery,
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
-import { useSettings } from "../hooks/useSettings";
+import { settingsQueryKey, useSettings, type Settings } from "../hooks/useSettings";
 import { useOfferedModels } from "../hooks/useOfferedModels";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
+import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -186,7 +187,9 @@ export function TaskComposer({
 			try {
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
-				const { session } = await cloudClient.createSession(cloudOrg.id, {
+				// The control plane resolves the session's interface from the user's
+				// default session interface, as the local daemon does for a task.
+				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
 					harness: input.agent ?? "claude-code",
@@ -194,7 +197,7 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
-				});
+				}, cloudDefaultInterfaceMode(queryClient.getQueryData<Settings>(settingsQueryKey)));
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });

@@ -327,6 +327,22 @@ func (s *Supervisor) stopChat(ctx context.Context) error {
 	}
 }
 
+// FallBackToTUI replaces a Chat start that cannot run with the terminal
+// agent, as a Chat-to-TUI handoff's target start does: it stops the Chat
+// controller and opens the agent terminal with a freshly built command. It is
+// for a session whose Chat controller has not taken a turn yet (it still
+// waits on ChatWorkspaceReady), after the control plane moved the session to
+// the TUI. A session not in Chat is left alone.
+func (s *Supervisor) FallBackToTUI(ctx context.Context) error {
+	if s.iface.Current() != InterfaceChat {
+		return nil
+	}
+	if err := s.stopChat(ctx); err != nil {
+		return err
+	}
+	return s.startInterface(ctx, interfacePayload{TargetInterface: InterfaceTUI})
+}
+
 func (s *Supervisor) startChat(ctx context.Context) error {
 	if s.ChatRunner == nil {
 		return errors.New("chat controller is unavailable for this session")

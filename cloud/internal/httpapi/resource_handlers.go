@@ -104,6 +104,11 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface ("tui" or
+	// "chat"), the desktop's setting, which the control plane resolves the
+	// session's interface from exactly as the local daemon does
+	// (domain.StartInterface). Optional: empty is the TUI default.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -521,11 +526,16 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -695,6 +705,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
+			DefaultInterface:    domain.SessionInterface(request.DefaultInterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,
@@ -716,6 +727,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		"session_id", session.ID,
 		"provider", plan.Provider,
 		"harness", request.Harness,
+		"interface", session.Interface,
 	)
 	s.recordSessionCreateRequested(r, orgID, session.ID, plan.Provider, request.SandboxProviderConnectionID,
 		request.ProjectID, request.Kind, request.Harness, projectSnapshot != nil)

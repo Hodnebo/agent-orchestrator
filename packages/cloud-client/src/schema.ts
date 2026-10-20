@@ -1345,6 +1345,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/interface/chat-start-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The session's current worker reports it cannot start the session's
+         *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
+         *     Claude ACP adapter, which the workspace lacks and the worker could not
+         *     install). A session created in Chat that no interface transition ever
+         *     touched moves to tui: its queued first turn is settled (the terminal
+         *     agent gets the prompt on its command line) and a failed tui-to-chat
+         *     interface transition carries the notice the desktop shows. A session
+         *     the person switched to Chat does not move; the worker then stays on
+         *     Chat. Requires the worker:connect scope. A worker that reports the
+         *     agent.chat-start capability uses it; for one that does not, the
+         *     control plane makes the same move itself at bootstrap and reconnect.
+         *      */
+        post: operations["fallBackWorkerChatStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/terminals/agent": {
         parameters: {
             query?: never;
@@ -2051,6 +2079,8 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
+                /** @description The user's default session interface, as on a session create. The orchestrator starts in chat where its harness can, and the workers it spawns resolve their interface from this default. Optional; omitted is tui. */
+                defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
         CreateGitHubScratchProjectResponse: {
@@ -2558,6 +2588,13 @@ export interface components {
             /** @description Worker-safe failure message, limited by the server to 4 KiB. */
             message: string;
         };
+        WorkerChatStartFallbackInput: {
+            /** @enum {string} */
+            code: "CHAT_ADAPTER_UNAVAILABLE";
+        };
+        WorkerChatStartFallbackResponse: {
+            movedToTui: boolean;
+        };
         WorkerAgentTerminalResponse: {
             /** Format: uuid */
             terminalId: string;
@@ -2688,6 +2725,8 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            /** @description The user's default session interface. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness the control plane starts in Chat (any other starts in tui without an error). An orchestrator's workers resolve from the default it was created with. Optional; omitted is tui. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
@@ -5551,6 +5590,37 @@ export interface operations {
             /** @description The command is no longer claimed or has expired. */
             409: components["responses"]["Error"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    fallBackWorkerChatStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerChatStartFallbackInput"];
+            };
+        };
+        responses: {
+            /** @description Whether the session moved to tui. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerChatStartFallbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["WorkerRoutesDisabled"];
+            /** @description The code is not one the control plane knows. */
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     ensureWorkerAgentTerminal: {

@@ -500,6 +500,7 @@ func New(options Options) *Server {
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
 			router.Get("/worker/session", server.workerSession)
+			router.Post("/worker/interface/chat-start-fallback", server.workerChatStartFallback)
 			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)

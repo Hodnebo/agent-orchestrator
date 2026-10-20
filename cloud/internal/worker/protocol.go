@@ -82,6 +82,31 @@ func (l LaunchContext) ProjectScripts() (postCreate, preRemove []string) {
 		domain.JoinTimedScriptCommands(l.PreRemove, l.PreRemoveTimeoutMinutes)
 }
 
+// Error codes of the interface notice a session moved off Chat at its start
+// carries (POST /worker/interface/chat-start-fallback and the control plane's
+// own move for a worker without CapabilityChatStart).
+const (
+	// ChatStartUnsupported: the session's worker cannot start in Chat.
+	ChatStartUnsupported = "CHAT_START_UNSUPPORTED"
+	// ChatStartAdapterUnavailable: Claude's Chat controller needs the Claude
+	// ACP adapter, which the workspace lacks and the worker could not install
+	// (no npm, or the install failed).
+	ChatStartAdapterUnavailable = "CHAT_ADAPTER_UNAVAILABLE"
+)
+
+// ChatStartFallbackRequest is a worker reporting it cannot start its
+// session's Chat controller, for the reason Code names.
+type ChatStartFallbackRequest struct {
+	Code string `json:"code"`
+}
+
+// ChatStartFallbackResponse says whether the session moved to the TUI. A
+// session the person switched to Chat does not move, and its worker stays on
+// Chat.
+type ChatStartFallbackResponse struct {
+	MovedToTUI bool `json:"movedToTui"`
+}
+
 // RepoRef is one additional repository the worker clones beside the primary
 // repo, optionally at a specific branch.
 type RepoRef struct {

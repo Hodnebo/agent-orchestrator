@@ -142,6 +142,11 @@ func (s *Server) workerBootstrap(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	if err := s.startLaunchInTUIIfChatUnsupported(r, ticket.OrgID, &launch,
+		slices.Contains(input.Capabilities, worker.CapabilityChatStart)); err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	launchContext, err := launchContextFrom(launch, launchCapabilities{
 		resolvesWorkspacePath: slices.Contains(input.Capabilities, worker.CapabilityWorkspacePathPlaceholder),
 		multiRepo:             slices.Contains(input.Capabilities, worker.CapabilityMultiRepo),
@@ -237,6 +242,11 @@ func (s *Server) workerReconnect(w http.ResponseWriter, r *http.Request) {
 	}
 	launch, err := s.store.WorkerLaunchSpec(r.Context(), claims.OrgID, claims.SessionID)
 	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if err := s.startLaunchInTUIIfChatUnsupported(r, claims.OrgID, &launch,
+		headerReportsCapability(r, worker.CapabilityChatStart)); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}

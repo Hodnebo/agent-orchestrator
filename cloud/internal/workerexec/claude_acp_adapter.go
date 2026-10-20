@@ -69,6 +69,26 @@ func WarmClaudeACPAdapter() {
 	go func() { _, _ = defaultClaudeACPAdapter.ensure(context.Background()) }()
 }
 
+// ClaudeACPAdapterStartable reports, without waiting, whether Chat for Claude
+// can run in this workspace: nil when the adapter is installed or its install
+// has started (WarmClaudeACPAdapter), ErrChatAdapterUnavailable when it is
+// missing and cannot be installed (no npm, no home directory, or an install
+// that just failed). A session about to start in Chat checks it so it can
+// start in the terminal instead of in a Chat whose every turn would fail.
+func ClaudeACPAdapterStartable() error {
+	return defaultClaudeACPAdapter.startable()
+}
+
+func (a *claudeACPAdapter) startable() error {
+	probe, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := a.ensure(probe)
+	if errors.Is(err, ErrChatAdapterInstalling) {
+		return nil
+	}
+	return err
+}
+
 func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	if a.path != "" && fileExecutable(a.path) {

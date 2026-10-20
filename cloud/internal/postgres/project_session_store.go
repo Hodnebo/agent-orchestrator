@@ -613,6 +613,30 @@ func (s *Store) CreateGitHubScratchProject(
 	return project, session, err
 }
 
+// sessionDefaultInterfaceKey is the key of ao_sessions.agent_config that holds
+// the user's default session interface the session was created with
+// (domain.CreateSession.DefaultInterface). The workers an orchestrator spawns
+// resolve their interface from it (CreateOrchestratorChild); a session created
+// without one has no key, which reads as the TUI default. It lives beside the
+// agent config, outside domain.ProjectAgentConfig, so project settings never
+// accept it and every reader of the agent config ignores it.
+const sessionDefaultInterfaceKey = "defaultInterface"
+
+// sessionAgentConfigJSON is a new session's agent_config: its agent config
+// and, when the client sent one, its default session interface.
+func sessionAgentConfigJSON(agentConfig domain.ProjectAgentConfig, defaultInterface domain.SessionInterface) ([]byte, error) {
+	encoded, err := json.Marshal(agentConfig)
+	if err != nil || !defaultInterface.Valid() {
+		return encoded, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	fields[sessionDefaultInterfaceKey] = string(defaultInterface)
+	return json.Marshal(fields)
+}
+
 func createSessionTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -628,6 +652,10 @@ func createSessionTx(
 	if input.DeniedCommands == nil {
 		input.DeniedCommands = []string{}
 	}
+	// The idempotency payload keeps its historical shape, an interface that
+	// always reads tui unless one was requested; the interface the session
+	// starts in is resolved below, once the harness is known.
+	requestedInterface := input.Interface
 	if !input.Interface.Valid() {
 		input.Interface = domain.SessionInterfaceTUI
 	}
@@ -743,7 +771,8 @@ func createSessionTx(
 		return domain.Session{}, ErrInvalid
 	}
 	input.Harness, input.Model = harness, agentConfig.Model
-	agentConfigJSON, err := json.Marshal(agentConfig)
+	input.Interface = domain.StartInterface(input.Kind, requestedInterface, input.DefaultInterface, input.Harness)
+	agentConfigJSON, err := sessionAgentConfigJSON(agentConfig, input.DefaultInterface)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -844,10 +873,19 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
+		event, err := appendUserMessageEvent(
 			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
-		); err != nil {
+		)
+		if err != nil {
 			return domain.Session{}, err
+		}
+		// A TUI agent gets the prompt on its command line. The Chat controller
+		// takes work only from the turn queue, so a session that starts in Chat
+		// queues its prompt as the first turn.
+		if session.Interface == domain.SessionInterfaceChat {
+			if err := queueInitialChatTurnTx(ctx, tx, orgID, session.ID, event); err != nil {
+				return domain.Session{}, err
+			}
 		}
 	}
 
