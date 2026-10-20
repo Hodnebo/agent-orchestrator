@@ -60,7 +60,6 @@ it("keeps project settings open while a repository is picked, and saves the pick
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 
 	await userEvent.click(screen.getByRole("button", { name: "Add a repository" }));
-	await userEvent.click(screen.getByRole("combobox", { name: "Additional repository 2" }));
 	// The picker's list is portalled outside the dialog; choosing from it is not an outside click.
 	await userEvent.click(await screen.findByRole("option", { name: "acme/voice-calling-ai" }));
 

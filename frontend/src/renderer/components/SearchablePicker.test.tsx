@@ -146,3 +146,34 @@ it("runs a pinned action below the options and closes the list", async () => {
 	expect(onSelect).toHaveBeenCalledTimes(1);
 	expect(screen.queryByRole("listbox", { name: "Repository" })).not.toBeInTheDocument();
 });
+
+it("can open on mount and reports a dismissal without a choice, but not a choice", async () => {
+	const user = userEvent.setup();
+	const onDismiss = vi.fn();
+	const onChange = vi.fn();
+	const props = {
+		ariaLabel: "Repository",
+		placeholder: "Select a repository",
+		searchPlaceholder: "Search repositories",
+		value: "",
+		onChange,
+		onDismiss,
+		options: [{ value: "one", label: "acme/one" }],
+	};
+	const { unmount } = render(<SearchablePicker {...props} defaultOpen />);
+	expect(screen.getByRole("listbox", { name: "Repository" })).toBeInTheDocument();
+	await user.click(screen.getByRole("option", { name: "acme/one" }));
+	expect(onChange).toHaveBeenCalledWith("one");
+	expect(onDismiss).not.toHaveBeenCalled();
+	unmount();
+
+	render(<SearchablePicker {...props} defaultOpen />);
+	await user.keyboard("{Escape}");
+	expect(onDismiss).toHaveBeenCalledOnce();
+	expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+});
+
+it("does not open on mount while disabled", () => {
+	render(<SearchablePicker ariaLabel="Repository" placeholder="Select" searchPlaceholder="Search" value="" onChange={() => undefined} options={[]} defaultOpen disabled />);
+	expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+});
