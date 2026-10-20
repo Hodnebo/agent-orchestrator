@@ -115,6 +115,9 @@ describe("CloudSessionChatSurface", () => {
 		];
 		const runs = toSnapshot(session, events).items.filter((item) => item.kind === "activity" && item.detail?.event === "workspace.script.run");
 		expect(runs.map((run) => [run.id, run.sequence])).toEqual([["cloud-script-run-start", 0.5], ["cloud-script-run-retry", 6]]);
+		// A first prompt without a turn id shares Setup's turn-less group, so Setup leads it in item order too.
+		const untracked = events.map((event) => event.type === "chat.user_message" ? { ...event, payload: { text: "Reply OK" } } : event);
+		expect(toSnapshot(session, untracked).items.slice(0, 2).map((item) => item.id)).toEqual(["cloud-script-run-start", "cloud-event-1"]);
 	});
 	it("carries a failed setup step's command, user, directory, log and hint", () => {
 		const events: CloudCpClientEvent[] = [{

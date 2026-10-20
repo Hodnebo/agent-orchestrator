@@ -340,7 +340,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const run = runId ? scriptRuns.get(runId) : undefined;
 			if (run && !placedRuns.has(run.runId)) {
 				placedRuns.add(run.runId);
-				items.push({ ...scriptRunActivity(run, event.createdAt), sequence: runSequence(run) });
+				const activity: ConversationActivity = { ...scriptRunActivity(run, event.createdAt), sequence: runSequence(run) };
+				// Moved above the first prompt: insert it there too, so it leads a
+				// prompt with no turn id (both then share one turn-less timeline
+				// group, kept in item order) as well as one with a turn id.
+				const before = activity.sequence < run.firstSequence ? items.findIndex((item) => item.sequence > activity.sequence) : -1;
+				if (before >= 0) items.splice(before, 0, activity);
+				else items.push(activity);
 			}
 			continue;
 		}
