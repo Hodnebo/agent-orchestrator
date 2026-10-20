@@ -750,3 +750,44 @@ func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
 		}
 	}
 }
+
+// A Setup step runs with the time limit its first line sets, which never
+// reaches the shell, and a step over it fails saying so.
+func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
+	previous := scriptStepMinute
+	scriptStepMinute = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepMinute = previous })
+	workspace := t.TempDir()
+	write := "echo ran > out.txt"
+	slow := "sleep 2"
+	if runtime.GOOS == "windows" {
+		write = "echo ran> out.txt"
+		slow = "ping -n 3 127.0.0.1 > NUL"
+	}
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + write}, nil); err != nil {
+		t.Fatalf("a timed step failed: %v", err)
+	}
+	if output, err := os.ReadFile(filepath.Join(workspace, "out.txt")); err != nil || strings.TrimSpace(string(output)) != "ran" {
+		t.Fatalf("the timed step did not run: %q %v", output, err)
+	}
+	// One "minute" is 100ms here: the step stops at its own limit.
+	started := time.Now()
+	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
+	if err == nil || !strings.Contains(err.Error(), "setup step 1 failed: timed out after 1 minute") || time.Since(started) > 1500*time.Millisecond {
+		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
+	}
+	// A long limit leaves the step running past the default one.
+	if err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 30m\n" + slow}, nil); err != nil {
+		t.Fatalf("a step under its own limit failed: %v", err)
+	}
+}
+
+// A start that runs Setup also gets its steps' time limits.
+func TestPostCreateBudgetCoversTheSetupSteps(t *testing.T) {
+	if got := postCreateBudget(10*time.Minute, nil); got != 10*time.Minute {
+		t.Fatalf("no setup = %s", got)
+	}
+	if got := postCreateBudget(10*time.Minute, []string{"npm ci", " ", "# ao-timeout: 90m\nmake"}); got != 110*time.Minute {
+		t.Fatalf("setup budget = %s", got)
+	}
+}

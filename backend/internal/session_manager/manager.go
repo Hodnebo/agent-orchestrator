@@ -6341,29 +6341,72 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
+// scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
+// shorten it.
+var scriptStepMinute = time.Minute
+
+// scriptStepTimeout is the command a Setup or Cleanup step runs and its time
+// limit: the one its first line sets (domain.ScriptStepMinutes), else
+// fallbackMinutes (0 for none).
+func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration) {
+	command, minutes := domain.ScriptStepMinutes(step)
+	if minutes == 0 {
+		minutes = fallbackMinutes
+	}
+	return command, time.Duration(minutes) * scriptStepMinute
+}
+
 // runPostCreate runs each post-create command in the workspace via the platform
-// shell (sh on Unix, cmd on Windows). Each step has its own ten-minute
-// deadline. A non-zero exit aborts the spawn with bounded, redacted output.
+// shell (sh on Unix, cmd on Windows). Each step has its own deadline: the time
+// limit its first line sets (domain.ParseTimedScriptCommand; the marker line
+// itself never reaches the shell), else ten minutes. A non-zero exit aborts the
+// spawn with bounded, redacted output.
 func runPostCreate(ctx context.Context, workspacePath, sourcePath string, commands []string, projectEnv map[string]string) error {
-	for index, command := range commands {
+	for index, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
 		command = strings.TrimSpace(command)
 		if command == "" {
 			continue
 		}
-		stepCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		stepCtx, cancel := context.WithTimeout(ctx, timeout)
 		out := &setupOutput{}
 		env := agentlaunch.MergeEnv(projectEnv, map[string]string{
 			"AO_SOURCE_TREE_PATH": sourcePath,
 			"AO_WORKTREE_PATH":    workspacePath,
 		})
 		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
+		timedOut := errors.Is(stepCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
 		if err != nil {
 			message := agentlaunch.RedactValues(strings.TrimSpace(out.String()), projectEnv)
+			if timedOut {
+				return fmt.Errorf("setup step %d failed: timed out after %s: %s", index+1, stepMinutes(timeout), message)
+			}
 			return fmt.Errorf("setup step %d failed: %w: %s", index+1, err, message)
 		}
 	}
 	return nil
+}
+
+// stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").
+func stepMinutes(timeout time.Duration) string {
+	if minutes := int(timeout / scriptStepMinute); minutes != 1 {
+		return strconv.Itoa(minutes) + " minutes"
+	}
+	return "1 minute"
+}
+
+// postCreateBudget is how much longer than base a start that runs these Setup
+// steps may take: the sum of their time limits, so a long Setup is never cut
+// short by the start's own deadline.
+func postCreateBudget(base time.Duration, commands []string) time.Duration {
+	for _, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
+		if strings.TrimSpace(command) != "" {
+			base += timeout
+		}
+	}
+	return base
 }
 
 // setupOutput retains the last 8 KiB so a noisy installer cannot grow daemon memory.
