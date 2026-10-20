@@ -1,0 +1,16 @@
+{
+  "description": "Precedence for the interface (controller mode) a new session starts in, before the harness check: an explicit request, else Chat for an orchestrator, else the user's default session interface, else tui. The local daemon (backend/internal/session_manager startSessionMode) and the cloud control plane (cloud/internal/domain.StartInterface) are both tested against these cases.",
+  "cases": [
+    {"kind": "worker", "requested": "", "default": "", "want": "tui"},
+    {"kind": "worker", "requested": "", "default": "tui", "want": "tui"},
+    {"kind": "worker", "requested": "", "default": "chat", "want": "chat"},
+    {"kind": "worker", "requested": "", "default": "bogus", "want": "tui"},
+    {"kind": "worker", "requested": "tui", "default": "chat", "want": "tui"},
+    {"kind": "worker", "requested": "chat", "default": "tui", "want": "chat"},
+    {"kind": "orchestrator", "requested": "", "default": "", "want": "chat"},
+    {"kind": "orchestrator", "requested": "", "default": "tui", "want": "chat"},
+    {"kind": "orchestrator", "requested": "", "default": "chat", "want": "chat"},
+    {"kind": "orchestrator", "requested": "tui", "default": "chat", "want": "tui"},
+    {"kind": "orchestrator", "requested": "chat", "default": "tui", "want": "chat"}
+  ]
+}
