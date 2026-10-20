@@ -548,6 +548,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					{error ?? "Could not load this conversation."}
 				</p>
+				{/* The terminal can still carry on from here. */}
+				{interfaceSwitch?.control}
 			</Centered>
 		);
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -76,6 +77,9 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	args = append(args, "acp")
 	var env map[string]string
 	if strings.TrimSpace(cfg.DataDir) != "" {
+		// Earlier builds left each session's standing rules, its full system
+		// prompt, in plugin folders that nothing reads any more.
+		_ = os.RemoveAll(filepath.Join(cfg.DataDir, "cursor", "acp-plugins"))
 		// The preload only speeds Cursor up; any problem launches it without one.
 		if preload, err := writeNetPreload(cfg.DataDir); err == nil && preloadPathUsable(preload) {
 			existing, ok := cfg.Env["NODE_OPTIONS"]

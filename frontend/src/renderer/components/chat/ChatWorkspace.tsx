@@ -3309,7 +3309,7 @@ export function Timeline({
 					// A terminal switch hands the note over as the first prompt; it is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
 				)),
-			)),
+			), localEchos),
 			...localItems,
 		],
 		itemKey,
@@ -4656,16 +4656,20 @@ const itemKey = (item: ConversationItem): string =>
 
 /**
  * The daemon's "Switched" line takes the id of the optimistic one above the same message,
- * so React keeps the node and its label morphs from "Switching…" to "Switched".
+ * so React keeps the node and its label morphs from "Switching…" to "Switched". The line
+ * can arrive before its message does; it then takes the id of the echo still showing.
  */
-function withSwitchMarkerKeys(items: ConversationItem[]): ConversationItem[] {
+function withSwitchMarkerKeys(items: ConversationItem[], echoes: readonly ConversationLocalEcho[]): ConversationItem[] {
 	const nextMessageId = (marker: ConversationItem) => {
 		let next: ConversationMessage | undefined;
 		for (const candidate of items) {
 			if (candidate.kind !== "message" || candidate.role !== "user" || !candidate.clientMessageId) continue;
 			if (candidate.sequence > marker.sequence && (!next || candidate.sequence < next.sequence)) next = candidate;
 		}
-		return next?.clientMessageId;
+		if (next?.clientMessageId || marker.kind !== "activity") return next?.clientMessageId;
+		return echoes.find(({ providerSwitch: sent }) =>
+			sent !== undefined && sent.targetHarness === marker.detail?.targetHarness && marker.sequence > sent.afterSequence,
+		)?.clientMessageId;
 	};
 	const isMarker = (item: ConversationItem) => item.kind === "activity" && item.detail?.event === "provider_switch";
 	// Only the marker nearest before a message was drawn with it (a failed switch, then another, leaves two).
@@ -4972,7 +4976,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 				continue;
 			}
 			groups.push({
-				key: `loose-${item.sequence}`,
+				// A "Switched" line keeps its key from echo to the daemon's row, as its position changes.
+				key: item.id.startsWith("local-switch:") ? item.id : `loose-${item.sequence}`,
 				anchor: item.sequence,
 				items: [item],
 			});

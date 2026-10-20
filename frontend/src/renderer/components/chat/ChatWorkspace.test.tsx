@@ -2121,6 +2121,35 @@ describe("ChatWorkspace timeline", () => {
 		errors.mockRestore();
 	});
 
+	it("keeps the Switched line's node when the daemon's line comes before its message", () => {
+		const localEchos = [{
+			clientMessageId: "m1", text: "hello", createdAt: "2026-08-08T00:00:00Z",
+			providerSwitch: { sourceHarness: "codex", targetHarness: "claude-code", afterSequence: 0 },
+		}];
+		const view = render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace snapshot={{ ...chatFixtureEmpty, latestSequence: 0, items: [] }} localEchos={localEchos} />
+			</QueryClientProvider>,
+		);
+		const before = screen.getByRole("separator");
+		view.rerender(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace
+					snapshot={{
+						...chatFixtureEmpty, latestSequence: 1,
+						items: [{
+							kind: "activity", id: "switch-1", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+							summary: "Switched provider", detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code" },
+							createdAt: "2026-08-08T00:00:00Z",
+						}],
+					}}
+					localEchos={localEchos}
+				/>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("separator")).toBe(before);
+	});
+
 	it("keeps the interface switch in the composer while the agent is stopped", () => {
 		render(
 			<ChatWorkspace

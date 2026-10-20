@@ -186,9 +186,9 @@ in PostHog from earlier events is not deleted retroactively.
 The desktop General Settings page has a **Share error events** control. It
 covers error diagnostics only: the daemon's Sentry capture of 5xx errors and
 panics. Product telemetry, from the desktop and the daemon, answers to the
-environment variables below. While the daemon is still removing what it had
-captured after the control is turned off, the page says cleanup is pending,
-and if that fails, that it failed; reporting stays off while it retries.
+environment variables below. When the control is turned off, the desktop
+drops the events it still holds; while that is under way the page says cleanup
+is pending, and if it fails, that it failed. Reporting stays off meanwhile.
 Set all three variables in the environment used to launch Orchestrator.inc:
 
 ```bash

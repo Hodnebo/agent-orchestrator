@@ -341,3 +341,17 @@ func TestConfigureKeepsInheritedNodeOptions(t *testing.T) {
 		t.Fatalf("second NODE_OPTIONS = %q, want the same preload as %q", again["NODE_OPTIONS"], got)
 	}
 }
+
+func TestConfigureRemovesTheOldPluginFolders(t *testing.T) {
+	data := t.TempDir()
+	old := filepath.Join(data, "cursor", "acp-plugins", "abc", "rules")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: data, SessionID: "s1"}); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "cursor", "acp-plugins")); !os.IsNotExist(err) {
+		t.Fatalf("old plugin folders still there: %v", err)
+	}
+}

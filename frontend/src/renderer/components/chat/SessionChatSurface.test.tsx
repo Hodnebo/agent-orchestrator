@@ -1098,6 +1098,18 @@ describe("SessionChatSurface link routing", () => {
 		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
 	});
 
+	it("offers the interface switch when the conversation cannot be loaded", () => {
+		conversationState.snapshot = undefined;
+		conversationState.error = "Could not load this conversation.";
+		render(
+			<Wrapper client={new QueryClient()}>
+				<SessionChatSurface session={session} interfaceSwitch={{ control: <button type="button">Switch to terminal UI</button> }} />
+			</Wrapper>,
+		);
+		expect(screen.getByText("Could not load this conversation.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
+	});
+
 	it("remounts the chat workspace when switching between chat sessions", () => {
 		const first = { ...session, id: "proj-orchestrator-1", kind: "orchestrator" as const };
 		const second = { ...session, id: "proj-orchestrator-2", kind: "orchestrator" as const };

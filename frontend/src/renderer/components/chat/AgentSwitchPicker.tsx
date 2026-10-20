@@ -310,6 +310,13 @@ export function AgentModelPicker({
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
 		: !agentSwitch.disabled && !oneShot(harness) && agents.some((agent) => agent.id === harness));
+	// A favourite whose model the agent no longer lists cannot be sent. Until
+	// the agent's list loads, it is taken as offered.
+	const offered = (favorite: ModelFavorite) => {
+		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
+		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
+		return models.length === 0 || models.some((model) => names(model).includes(favorite.row) || names(model).includes(favorite.model));
+	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => terminal ? switching && entry.harness !== currentHarness : switching || entry.harness === currentHarness);
@@ -387,7 +394,7 @@ export function AgentModelPicker({
 									key={`${favorite.harness}:${favorite.row}`}
 									active={favorite.harness === shownHarness && favorite.model === chosenModel}
 									radio
-									disabled={!pickable(favorite.harness)}
+									disabled={!pickable(favorite.harness) || !offered(favorite)}
 									onSelect={(event) => { stayOpen(event); pickSetup(favorite); }}
 									className="group/model text-xs text-foreground"
 								>

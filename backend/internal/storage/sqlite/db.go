@@ -1205,8 +1205,8 @@ func quoteSQLiteIdent(name string) string {
 const providerSwitchingVersion = 20261020131539535
 
 // repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
-// provider switching under an earlier number, 0201 or 0216 in this branch's
-// preview builds, to its version. It would otherwise apply the migration again,
+// provider switching under an earlier number in this branch's preview builds
+// to its version. It would otherwise apply the migration again,
 // and those numbers are left for main. The migration's table tells this
 // branch's entry apart from another migration that took the number.
 func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
@@ -1220,8 +1220,28 @@ func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion).Scan(&applied); err != nil || applied != 0 {
 		return err
 	}
-	for _, old := range []int64{201, 216} {
-		res, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion, old)
+	// Earlier builds also used 0196, 0199 and 0200, which main has since
+	// taken. Those count as this migration's only while main's own schema for
+	// that number is absent; goose then applies main's file, as it is missing.
+	for _, old := range []struct {
+		version int64
+		mainHas string
+	}{
+		{version: 201}, {version: 216},
+		{196, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_artifact_versions'`},
+		{199, `SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'continuation'`},
+		{200, `SELECT COUNT(*) FROM pragma_table_info('session_artifact_versions') WHERE name = 'source'`},
+	} {
+		if old.mainHas != "" {
+			var present int
+			if err := db.QueryRow(old.mainHas).Scan(&present); err != nil {
+				return err
+			}
+			if present != 0 {
+				continue
+			}
+		}
+		res, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion, old.version)
 		if err != nil {
 			return err
 		}

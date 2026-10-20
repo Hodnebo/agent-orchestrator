@@ -3455,6 +3455,9 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
+	if !forceFresh {
+		systemPrompt = m.withLegacySwitchHandoff(ctx, rec, systemPrompt)
+	}
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, rec.Harness, systemPrompt)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)

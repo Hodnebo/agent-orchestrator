@@ -116,6 +116,21 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
+	it("greys out a favourite whose model the agent no longer lists", async () => {
+		const user = userEvent.setup();
+		const gone = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
+		toggleModelFavorite(gone);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const row = await screen.findByRole("menuitemradio", { name: /GPT Gone/ });
+			// Codex's list loads with only gpt-x.
+			await vi.waitFor(() => expect(row).toHaveAttribute("aria-disabled", "true"));
+		} finally {
+			toggleModelFavorite(gone);
+		}
+	});
+
 	it("holds another agent as pending when it is picked", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open();
