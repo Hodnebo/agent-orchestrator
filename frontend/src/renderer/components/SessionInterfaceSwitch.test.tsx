@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import type { SessionInterfaceTransition } from "../hooks/useSessionInterfaceTransition";
 import {
 	SessionInterfaceActionGroup,
@@ -512,6 +513,35 @@ describe("a Cloud session that started in the terminal", () => {
 		expect(buttons).toHaveLength(1);
 		fireEvent.click(buttons[0]!);
 		expect(onDismiss).toHaveBeenCalledTimes(1);
+	});
+
+	it("centers in the part of the pane the harness update notice leaves clear", () => {
+		const pane = document.createElement("div");
+		document.body.append(pane);
+		vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(pane);
+		vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(260, 60, 1056, 800));
+		try {
+			const view = render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+				/>,
+			);
+			const status = screen.getByRole("status");
+			expect(status.style.left).toBe("");
+			act(() => publishHarnessUpdateNoticeRect({ left: 1004, top: 72, right: 1304, bottom: 140 }));
+			// The pane reaches 1316px; the notice starts at 1004px, 12px of gap kept.
+			// The browser normalizes the calc(); both still subtract the 324px.
+			expect(status.style.left).toMatch(/^calc\(.*100% - 324px.*\)$/);
+			expect(status.style.maxWidth).toMatch(/^calc\(.*324px.*1\.5rem.*\)$/);
+			act(() => publishHarnessUpdateNoticeRect(null));
+			expect(status.style.left).toBe("");
+			view.unmount();
+		} finally {
+			act(() => publishHarnessUpdateNoticeRect(null));
+			vi.restoreAllMocks();
+			pane.remove();
+		}
 	});
 
 	it("keeps an unrelated failed switch to Chat a failure", () => {

@@ -1,11 +1,18 @@
 import { Check, ChevronRight, Circle, Clock, Loader2, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import { stripAnsi } from "../lib/ansi";
 import { formatScriptDuration, type ScriptRun, type ScriptRunStep } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
 import { CopyButton } from "./chat/CopyButton";
+
+/**
+ * The header and step rows' right padding (px-2.5) plus whatever the panel
+ * needs to keep its timers clear of the harness update notice in the corner.
+ */
+const ROW_PAD_RIGHT = "pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]";
 
 /** Ticks once a second while `active`, for live step and run timers. */
 function useNow(active: boolean): number {
@@ -222,14 +229,14 @@ function StepRow({
 		</>
 	);
 	if (!reached) {
-		return <li className="flex min-h-8 items-center gap-2 px-2.5 py-1" data-status={status} data-testid="script-step">{content}<span aria-hidden="true" className="size-3 shrink-0" /></li>;
+		return <li className={cn("flex min-h-8 items-center gap-2 px-2.5 py-1", ROW_PAD_RIGHT)} data-status={status} data-testid="script-step">{content}<span aria-hidden="true" className="size-3 shrink-0" /></li>;
 	}
 	return (
 		<li className="flex flex-col" data-status={status} data-testid="script-step">
 			<button
 				aria-controls={bodyId}
 				aria-expanded={open}
-				className="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+				className={cn("group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60", ROW_PAD_RIGHT)}
 				onClick={onToggle}
 				type="button"
 			>
@@ -303,6 +310,8 @@ export function ScriptRunPanel({
 		setListToggled(undefined);
 	}
 	const listOpen = !collapsible || (listToggled ?? run.status !== "succeeded");
+	const [panel, setPanel] = useState<HTMLElement | null>(null);
+	const noticeClearance = useHarnessUpdateNoticeClearance(panel);
 	const title = scriptRunTitle(run, t);
 	const announcement = useStepAnnouncement(run, title);
 	const summary = scriptRunStatusText(run, t);
@@ -324,17 +333,19 @@ export function ScriptRunPanel({
 	);
 	return (
 		<section
+			ref={setPanel}
 			aria-label={title}
 			className={cn("flex min-w-0 flex-col overflow-hidden rounded-md border bg-surface/60", run.status === "failed" ? "border-error/40" : "border-border", className)}
 			data-run-status={run.status}
 			data-testid="script-run-panel"
+			style={noticeClearance ? { "--script-run-notice-clearance": `${noticeClearance}px` } as CSSProperties : undefined}
 		>
 			<div aria-atomic="true" aria-live="polite" className="sr-only" data-testid="script-run-announcer" role="status">{announcement}</div>
 			{collapsible ? (
 				<button
 					aria-controls={listId}
 					aria-expanded={listOpen}
-					className="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+					className={cn("group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60", ROW_PAD_RIGHT)}
 					onClick={() => setListToggled(!listOpen)}
 					type="button"
 				>
@@ -342,7 +353,7 @@ export function ScriptRunPanel({
 					<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 text-muted-foreground/60 transition-transform group-hover/script-run:text-muted-foreground", listOpen && "rotate-90")} />
 				</button>
 			) : (
-				<div className="flex min-h-8 items-center gap-2 px-2.5 py-1.5">{header}</div>
+				<div className={cn("flex min-h-8 items-center gap-2 px-2.5 py-1.5", ROW_PAD_RIGHT)}>{header}</div>
 			)}
 			{listOpen ? (
 				<ol className="flex flex-col divide-y divide-border border-t border-border" id={listId}>
