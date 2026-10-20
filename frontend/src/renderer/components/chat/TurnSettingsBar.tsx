@@ -261,7 +261,6 @@ export function TurnSettingsBar({
 					{nativeModelMenu && onChange ? (
 						<ModelEffortPicker
 							models={harness === "claude-code" ? displayModels.filter((model) => model.id !== "default") : displayModels}
-							groupClaude={harness === "claude-code"}
 							settings={settings}
 							onChange={onChange}
 							disabled={optionDisabled}
@@ -431,7 +430,6 @@ function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 
 function ModelEffortPicker({
 	models,
-	groupClaude,
 	settings,
 	onChange,
 	disabled,
@@ -450,7 +448,6 @@ function ModelEffortPicker({
 	onChangeConfigOption,
 }: {
 	models: ChatModel[];
-	groupClaude?: boolean;
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
 	disabled?: boolean;
@@ -469,11 +466,7 @@ function ModelEffortPicker({
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
 	const { t } = useTranslation();
-	// The same list as the provider's model option renders, so both menus label and group alike.
-	const modelOption = useMemo<ChatConfigOption>(() => ({
-		id: "model", name: "Model", category: "model", type: "select", currentValue: settings.model,
-		choices: models.map((model) => ({ value: model.id, name: model.displayName })),
-	}), [models, settings.model]);
+	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
 	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
 	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
@@ -510,13 +503,21 @@ function ModelEffortPicker({
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
-						<ConfigModelChoices
-							option={modelOption}
-							groupClaude={groupClaude}
-							onChange={(choice) => {
-								if ("value" in choice) onChange({ ...settings, model: choice.value, reasoningEffort: undefined });
-							}}
-						/>
+						<ModelMenuChoices models={catalog}>
+							{(matches, searchActiveID, optionID) => matches.map((model) => (
+								<OptionMenuItem
+									key={model.id}
+									id={optionID?.(model.id)}
+									active={model.id === settings.model}
+									searchActive={model.id === searchActiveID}
+									radio
+									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
+								>
+									{model.displayName}
+								</OptionMenuItem>
+							))}
+						</ModelMenuChoices>
 					</OptionMenuSubContent>
 				</OptionMenuSub>
 

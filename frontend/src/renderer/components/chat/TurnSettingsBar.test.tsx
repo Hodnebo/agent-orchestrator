@@ -1021,24 +1021,6 @@ describe("native model selection", () => {
 		expect(onChange).toHaveBeenCalledWith({ model: "default", reasoningEffort: "high" });
 	});
 
-	it("groups Claude models like the provider-option menu", async () => {
-		const user = userEvent.setup();
-		render(<TurnSettingsBar harness="claude-code" onChange={vi.fn()} settings={{ model: "claude-sonnet-5-5" }} models={[
-			{ id: "claude-fable-5-1", displayName: "Claude Fable 5.1", default: false },
-			{ id: "claude-haiku-4-5", displayName: "Claude Haiku 4.5", default: false },
-			{ id: "claude-opus-4-8", displayName: "Claude Opus 4.8", default: false },
-			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
-			{ id: "claude-opus-5-5", displayName: "Claude Opus 5.5", default: false },
-			{ id: "claude-sonnet-5-5", displayName: "Claude Sonnet 5.5", default: false },
-		]} />);
-		await user.click(screen.getByRole("button", { name: "Model and reasoning effort for the next turn" }));
-		await user.keyboard("{ArrowDown}{ArrowRight}");
-		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Fable 5.1", "Opus 5.5", "Sonnet 5.5", "Haiku 4.5"]);
-		await user.click(screen.getByRole("menuitem", { name: /Other models/ }));
-		expect(screen.getByRole("menuitemradio", { name: "Opus 5" })).toBeInTheDocument();
-		expect(screen.getByRole("menuitemradio", { name: "Opus 4.8" })).toBeInTheDocument();
-	});
-
 	it("lets a saved effort be cleared when the model offers no effort levels", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();

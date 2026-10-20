@@ -141,22 +141,30 @@ describe("CloudSessionChatSurface", () => {
 		);
 	});
 
-	it("lists Claude models from the new-task catalog, as local Chat does", async () => {
+	it("offers Claude models the way local Chat does: catalog list, model and effort options", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
-		cloudMocks.listChatModels.mockResolvedValue({ models: [{ id: "opus", displayName: "Opus", default: true }], model: "opus" });
+		cloudMocks.listChatModels.mockResolvedValue({ model: "opus", models: [
+			{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Best for complex tasks", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "claude-opus-5", displayName: "Claude Opus 5", default: false },
+		] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(agentModelsQueryKey("claude-code", ""), { models: [
 			{ id: "claude-opus-5", label: "Claude Opus 5" },
-			{ id: "claude-opus-5-5", label: "Claude Opus 5.5", efforts: ["low", "high"] },
+			{ id: "claude-opus-5-5", label: "Claude Opus 5.5" },
 		] });
 		render(
 			<QueryClientProvider client={queryClient}>
 				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
 			</QueryClientProvider>,
 		);
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings.model).toBe("claude-opus-5-5"));
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].models.map((model: { id: string }) => model.id)).toEqual(["claude-opus-5", "claude-opus-5-5"]);
-		expect(cloudMocks.chatProps.mock.lastCall?.[0].models[1].efforts).toEqual(["low", "high"]);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")?.currentValue).toBe("opus"));
+		expect(props().models.map((model: { id: string }) => model.id)).toEqual(["claude-opus-5", "claude-opus-5-5"]);
+		expect(props().configOptions.find((option: { id: string }) => option.id === "effort")).toMatchObject({ currentValue: "high", choices: [{ value: "low" }, { value: "high" }] });
+		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
+		await props().onSend("go", [], "model-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
 	});
 
 	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {
