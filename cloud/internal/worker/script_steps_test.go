@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -228,6 +229,11 @@ func TestStampScriptStepOutputAt(t *testing.T) {
 	huge := int64(48 * time.Hour / time.Millisecond)
 	if capped := StampScriptStepOutputAt(ScriptStepEvent{Status: ScriptStepRunning, OutputAgeMS: &huge}, received); capped.OutputAt != "2026-10-19T12:00:00.000Z" {
 		t.Fatalf("capped = %q", capped.OutputAt)
+	}
+	// An age that would overflow a Duration is capped, not wrapped into the future.
+	overflow := int64(math.MaxInt64)
+	if capped := StampScriptStepOutputAt(ScriptStepEvent{Status: ScriptStepRunning, OutputAgeMS: &overflow}, received); capped.OutputAt != "2026-10-19T12:00:00.000Z" {
+		t.Fatalf("overflowing age = %q", capped.OutputAt)
 	}
 }
 

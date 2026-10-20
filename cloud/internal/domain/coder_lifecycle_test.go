@@ -72,7 +72,7 @@ func TestValidateCoderWorkingDirectory(t *testing.T) {
 	}
 	for _, value := range []string{
 		"work/{repo}", "~", "~/", "/", "$HOME", "~/../etc", "/srv/./app", "~/work/{name}", "~/work/$USER",
-		"~/work/`id`", "/srv/app\n", strings.Repeat("a", MaxCoderWorkingDirectoryLength+1), "${HOME}/work",
+		"~/work/`id`", "~/.ssh/{repo}", "~/.aws/x", "/srv/.config/app", "/srv/app\n", strings.Repeat("a", MaxCoderWorkingDirectoryLength+1), "${HOME}/work",
 	} {
 		if err := ValidateCoderWorkingDirectory(value); err == nil {
 			t.Errorf("%q accepted", value)

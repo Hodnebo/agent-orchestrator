@@ -139,7 +139,8 @@ func StampScriptStepOutputAt(event ScriptStepEvent, receivedAt time.Time) Script
 	if event.Status != ScriptStepRunning || age == nil || *age < 0 {
 		return event
 	}
-	event.OutputAt = scriptTimestamp(receivedAt.Add(-min(time.Duration(*age)*time.Millisecond, maxScriptStepOutputAge)))
+	// Capped in milliseconds first: a huge age would overflow the Duration.
+	event.OutputAt = scriptTimestamp(receivedAt.Add(-time.Duration(min(*age, maxScriptStepOutputAge.Milliseconds())) * time.Millisecond))
 	return event
 }
 

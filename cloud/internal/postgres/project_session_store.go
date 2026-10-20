@@ -1158,7 +1158,7 @@ const sessionSelect = `
 			-- gone is not.
 			WHEN EXISTS (
 				SELECT 1 FROM ao_worker_connections live
-				WHERE live.session_id = session.id AND live.disconnected_at IS NULL
+				WHERE live.org_id = session.org_id AND live.session_id = session.id AND live.disconnected_at IS NULL
 			) AND COALESCE((
 				SELECT recent.type = '` + worker.ScriptStepEventType + `'
 					AND recent.payload->>'phase' = '` + worker.ScriptPhaseSetup + `'

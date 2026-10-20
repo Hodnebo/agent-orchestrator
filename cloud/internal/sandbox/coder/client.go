@@ -2027,17 +2027,22 @@ func checkoutDirectoryScript(workerUser, directory string, siblings []string, ho
 			}
 			script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
 				"  { sudo -n mkdir " + quoted + " &&\n" +
-				"    sudo -n chown " + owner + " " + quoted + mode + "; } ||\n" +
+				"    sudo -n chown -h " + owner + " " + quoted + mode + "; } ||\n" +
 				"    ao_folder_unusable " + shellQuote("could not create "+dir) + "\nfi\n")
 		}
 		if dir != "/root" && (dir == home || folderBelow(dir, home)) {
-			script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || sudo -n chmod o+x " + quoted +
+			// chmod follows a symbolic link, so a linked folder (a template's
+			// ~/src -> /root) is never opened up: it must already be enterable.
+			script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || { [ ! -L " + quoted + " ] && sudo -n chmod o+x " + quoted + "; }" +
 				" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+dir) + "\n")
 		}
 	}
+	// The worker user creates its own checkout folders in the parent it can
+	// write: root never mkdirs then chowns a path an agent could swap for a
+	// symbolic link in between.
 	script.WriteString("ao_checkout_folder() {\n" +
 		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
-		"  sudo -n mkdir \"$1\" && sudo -n chown " + shellQuote(workerUser+":"+workerUser) + " \"$1\"\n}\n")
+		"  sudo -n -u " + user + " mkdir \"$1\"\n}\n")
 	script.WriteString("ao_checkout_folder " + shellQuote(directory) + " || true\n")
 	for _, name := range siblings {
 		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
