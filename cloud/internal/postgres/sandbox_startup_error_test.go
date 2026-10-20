@@ -128,6 +128,9 @@ func TestSandboxStartupErrorLifecycle(t *testing.T) {
 func TestSandboxFailureOpensStartupWindowForUnstartedWorker(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
+	// Arranged and read as the organization, so forced row-level security
+	// shows the rows to a test role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	const owner = "startup-window-test-owner"
 	arm := func(query string) {
 		t.Helper()
@@ -180,6 +183,9 @@ func TestSandboxFailureOpensStartupWindowForUnstartedWorker(t *testing.T) {
 func TestSandboxProviderFailureIsFencedAndClaimed(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
+	// Arranged and read as the organization, so forced row-level security
+	// shows the rows to a test role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	const owner = "provider-failure-test-owner"
 	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running',
 		bootstrap_context = bootstrap_context || '{"kept": "yes"}'::jsonb,
@@ -237,6 +243,9 @@ func TestSandboxProviderFailureIsFencedAndClaimed(t *testing.T) {
 func TestInstalledCleanupCommandsAreFencedAndKeyOnly(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
+	// Arranged and read as the organization, so forced row-level security
+	// shows the rows to a test role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
 	const owner = "installed-cleanup-test-owner"
 	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running',
 		bootstrap_context = bootstrap_context || '{"kept": "yes"}'::jsonb,

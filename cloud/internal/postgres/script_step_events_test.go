@@ -112,8 +112,8 @@ func TestScriptStepEventsAppendToADeletedSession(t *testing.T) {
 // grantee gets the event with them stripped and outputHidden set, on replay
 // and on the event stream alike (both read ListClientEvents).
 func TestScriptOutputIsServedOnlyToMembers(t *testing.T) {
-	_, admin, fixture := openNotificationTestStore(t)
-	store := openRLSStore(t, admin)
+	store, admin, fixture := openNotificationTestStore(t)
+	store = nonBypassStore(t, store, admin)
 	ctx := context.Background()
 	owner := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	exitCode, duration := 3, int64(42)
@@ -200,8 +200,8 @@ func TestScriptOutputIsServedOnlyToMembers(t *testing.T) {
 // app role's forced RLS. A client reading after a deleted event's sequence
 // still gets everything after it.
 func TestScriptStepFinalEventDropsItsLiveUpdates(t *testing.T) {
-	_, admin, fixture := openNotificationTestStore(t)
-	store := openRLSStore(t, admin)
+	store, admin, fixture := openNotificationTestStore(t)
+	store = nonBypassStore(t, store, admin)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	appendStep := func(runID string, step int, status, output string) int64 {

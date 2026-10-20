@@ -14,9 +14,10 @@ import (
 func TestOrchestratorChildOperationsNameASessionItDidNotSpawn(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
-	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator' WHERE id = $1`, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sessions SET kind = 'orchestrator' WHERE id = $1`, fixture.sessionID)
+	// Read and arranged as the organization, so forced row-level security
+	// shows the rows to a test role that does not bypass it.
+	org := orgAdminPool(t, admin, fixture.orgID)
 	child, err := store.CreateOrchestratorChild(ctx, fixture.orgID, fixture.sessionID, uuid.NewString(), 100, domain.CreateSession{
 		Kind: "worker", Harness: "claude-code", DisplayName: "child", Prompt: "go", Provider: "docker",
 	})
@@ -42,13 +43,13 @@ func TestOrchestratorChildOperationsNameASessionItDidNotSpawn(t *testing.T) {
 		t.Fatalf("kill its own child: %v", err)
 	}
 	var desired string
-	if err := admin.QueryRow(ctx, `SELECT desired_state FROM ao_sandboxes WHERE session_id = $1 LIMIT 1`, child.ID).Scan(&desired); err != nil || desired != string(domain.SandboxDesiredDeleted) {
+	if err := org.QueryRow(ctx, `SELECT desired_state FROM ao_sandboxes WHERE session_id = $1 LIMIT 1`, child.ID).Scan(&desired); err != nil || desired != string(domain.SandboxDesiredDeleted) {
 		t.Fatalf("child sandbox desired_state = %q (%v), want deleted", desired, err)
 	}
 	// A child with no sandbox left is already gone: killing it again is not
 	// an error.
-	if _, err := admin.Exec(ctx, `DELETE FROM ao_sandboxes WHERE session_id = $1`, child.ID); err != nil {
-		t.Fatal(err)
+	if tag, err := org.Exec(ctx, `DELETE FROM ao_sandboxes WHERE session_id = $1`, child.ID); err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("delete the child's sandbox: %v (%d rows)", err, tag.RowsAffected())
 	}
 	if err := store.DeleteOrchestratorChild(ctx, fixture.orgID, fixture.sessionID, child.ID); err != nil {
 		t.Fatalf("kill a child with no sandbox left: %v", err)

@@ -825,8 +825,8 @@ func TestPresenceIgnoresViewersAndIsRateLimited(t *testing.T) {
 // always may. Its writes carry the organization's context, so it also passes
 // as a table-owning non-superuser (forced RLS).
 func TestCleanupResumeFollowsThePlan(t *testing.T) {
-	_, admin, fixture := openNotificationTestStore(t)
-	store := openRLSStore(t, admin)
+	store, admin, fixture := openNotificationTestStore(t)
+	store = nonBypassStore(t, store, admin)
 	ctx := context.Background()
 	asOrg := func(query string, args ...any) {
 		t.Helper()
