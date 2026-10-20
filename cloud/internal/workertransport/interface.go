@@ -229,6 +229,15 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 	if input.TargetInterface == InterfaceChat {
 		return s.startChat(ctx)
 	}
+	return s.startTUI(ctx, input, false)
+}
+
+// startTUI starts the terminal agent of a switch to the terminal. While the
+// workspace is not ready, and always when retried is set, the start is
+// reserved (pendingTUIStart) and started by startPendingTUI, which tries a
+// failing start again and then reports it as the session's startup error
+// with a Retry. Otherwise a failed start fails the switch.
+func (s *Supervisor) startTUI(ctx context.Context, input interfacePayload, retried bool) error {
 	// Chat -> TUI closes the old agent terminal record. Obtain the replacement
 	// handle from the control plane before starting the PTY; otherwise the
 	// worker starts a process on the stale bootstrap handle while the renderer
@@ -242,7 +251,7 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 		return errors.New("control plane returned no agent terminal")
 	}
 	s.mu.Lock()
-	if s.holdAgentInput && !s.workspaceReady {
+	if retried || (s.holdAgentInput && !s.workspaceReady) {
 		// The checkout or the project's Setup is still running (or failed and
 		// waits for a retry). The terminal agent runs its task from its command
 		// line as soon as it starts, so it must not start in a workspace that is
@@ -261,6 +270,9 @@ func (s *Supervisor) startInterface(ctx context.Context, input interfacePayload)
 		s.iface.mu.Lock()
 		s.iface.current = InterfaceTUI
 		s.iface.mu.Unlock()
+		if retried {
+			return s.startPendingTUI(ctx)
+		}
 		return nil
 	}
 	s.mu.Unlock()
@@ -527,7 +539,12 @@ func (s *Supervisor) FallBackToTUI(ctx context.Context) error {
 		if err := s.stopChat(ctx); err != nil {
 			return err
 		}
-		return s.startInterface(ctx, interfacePayload{TargetInterface: InterfaceTUI})
+		// The control plane already moved the session to the terminal, so a
+		// start that fails is tried again and then reported with a Retry
+		// (startPendingTUI): the session's task waits in the turn queue for
+		// the terminal's forwarder, and must not wait behind an agent that
+		// silently never starts.
+		return s.startTUI(ctx, interfacePayload{TargetInterface: InterfaceTUI}, true)
 	})
 }
 

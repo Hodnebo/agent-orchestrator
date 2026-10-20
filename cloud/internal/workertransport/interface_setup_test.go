@@ -624,3 +624,26 @@ func TestSessionTaskQueuedForTheTerminalIsDeliveredOnce(t *testing.T) {
 		})
 	}
 }
+
+// The Chat start fallback after Setup whose terminal start keeps failing is
+// reported as the session's startup error, like a switch's start: its task
+// waits in the turn queue, and must not wait behind an agent that silently
+// never starts. Retry starts the agent once.
+func TestChatStartFallbackWhoseTerminalStartFailsIsReportedAndRetried(t *testing.T) {
+	h := newSetupSwitchHarness(t, InterfaceChat)
+	h.supervisor.MarkWorkspaceReady()
+	h.failBuilds.Store(agentStartAttempts)
+	_ = h.supervisor.FallBackToTUI(context.Background())
+	reports := h.waitForReports(t, 1)
+	if reports[0] == nil || !strings.Contains(reports[0].Error(), "credential") {
+		t.Fatalf("reported %v, want the credential failure", reports[0])
+	}
+	if h.agentStarts() != 0 {
+		t.Fatal("the terminal agent started although every start failed")
+	}
+	h.retry(t)
+	h.waitForAgentStarts(t, 1)
+	if reports := h.waitForReports(t, 2); reports[1] != nil {
+		t.Fatalf("after the retry reported %v, want the failure cleared", reports[1])
+	}
+}

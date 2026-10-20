@@ -334,9 +334,9 @@ func checkoutStartupFailure(err error) worker.WorkspaceStartupEvent {
 }
 
 // agentStartFailure is the session startup error for a terminal agent that
-// a switch to the terminal made during Setup could not start once the
-// workspace was ready (Supervisor.AgentStartFailed), with what failed as the
-// detail.
+// could not start once the workspace was ready: the session's own, or one a
+// switch to the terminal (or the Chat-start fallback) started
+// (Supervisor.AgentStartFailed), with what failed as the detail.
 func agentStartFailure(err error) worker.WorkspaceStartupEvent {
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,

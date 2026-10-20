@@ -394,6 +394,10 @@ func run(logger *slog.Logger) error {
 	started := make(chan error, 1)
 	chatWorkspaceReady := make(chan struct{})
 	checkoutRequested := make(chan struct{}, 1)
+	// ownAgentStartFailed is set while the session's own terminal agent could
+	// not start and waits for the session's retry, which also arrives as a
+	// checkout request once the workspace is ready.
+	var ownAgentStartFailed atomic.Bool
 	rehydrateDone := make(chan struct{})
 	compareBase := ""
 	if defaultBranch := strings.TrimSpace(bootstrap.Launch.DefaultBranch); defaultBranch != "" {
@@ -412,7 +416,9 @@ func run(logger *slog.Logger) error {
 		RequestCheckout: func() error {
 			select {
 			case <-rehydrateDone:
-				return nil
+				if !ownAgentStartFailed.Load() {
+					return nil
+				}
 			default:
 			}
 			select {
@@ -679,11 +685,39 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 	go func() {
-		if err := startInteractiveAgent(
-			runCtx, logger, client, bootstrap, workspace, dataDir,
-			pullRequestSocketPath, reviewSocketPath, checkpointSocketPath, &transportSupervisor, rehydrateDone,
-		); err != nil && runCtx.Err() == nil {
-			logger.Error("background coding-agent startup failed", "error", err)
+		// A terminal session's own agent that cannot start is reported as the
+		// session's startup error (agent_start_failed) and started again on its
+		// Retry, as a switch's terminal start is (Supervisor.AgentStartFailed).
+		// Logged only, the session would stay up with no agent: a turn waiting
+		// in the queue for the terminal's forwarder (a Chat session's task
+		// after a switch) would keep it awake and reading active for good,
+		// while the reported error lets it idle.
+		reported := false
+		for {
+			err := startInteractiveAgent(
+				runCtx, logger, client, bootstrap, workspace, dataDir,
+				pullRequestSocketPath, reviewSocketPath, checkpointSocketPath, &transportSupervisor, rehydrateDone,
+			)
+			if runCtx.Err() != nil {
+				return
+			}
+			if err == nil {
+				if reported {
+					reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
+				}
+				return
+			}
+			logger.Error("background coding-agent startup failed; waiting for the session's retry", "error", err)
+			failure := agentStartFailure(err)
+			ownAgentStartFailed.Store(true)
+			retried := awaitStartupRetry(runCtx, checkoutRequested, func() {
+				reportWorkspaceStartup(runCtx, logger, client, failure)
+			})
+			ownAgentStartFailed.Store(false)
+			if !retried {
+				return
+			}
+			reported = true
 		}
 	}()
 	first := <-results
