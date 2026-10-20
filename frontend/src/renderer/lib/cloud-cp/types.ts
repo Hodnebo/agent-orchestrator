@@ -302,7 +302,7 @@ export interface CloudCpProjectCoderConfig {
 	/** Additional repositories every session of the project clones alongside the primary repo. */
 	extraRepos?: CloudCpSessionRepo[];
 	/**
-	 * Prefix for the project's new Coder workspace names (`<prefix>-<short id>`).
+	 * Prefix for the project's new Coder workspace names (`<prefix>-o-<id>` / `<prefix>-w-<word>-<id>`).
 	 * Empty/absent keeps the default `ao`. Must match `^[a-z][a-z0-9-]{0,19}$`
 	 * without a trailing `-` or a `--` run.
 	 */

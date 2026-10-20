@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -813,6 +814,17 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, err
 	}
+	if provider == sandbox.ProviderCoder {
+		// The Coder workspace name is chosen here, the only point that knows
+		// the new session id, from the session's kind and its display name
+		// at creation. It is stored on the immutable profile, so a later
+		// rename of the session never changes it.
+		if resourceProfile, err = sandbox.StampCoderWorkspaceName(
+			resourceProfile, session.Kind, session.DisplayName, session.ID, time.Now(),
+		); err != nil {
+			return domain.Session{}, ErrInvalid
+		}
+	}
 	bootstrapContext, err := patchSandboxJSON(
 		input.BootstrapContext, provider, orgID, session.ID,
 		input.Release, input.SandboxConnectionID, true,
@@ -1127,6 +1139,8 @@ const sessionSelect = `
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceName', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
@@ -1152,7 +1166,7 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1234,6 +1248,7 @@ func scanSession(row scanner, session *domain.Session) error {
 		&coderWorkspace.BaseURL,
 		&coderWorkspace.Owner,
 		&coderWorkspace.NamePrefix,
+		&coderWorkspace.Name,
 		&session.WorkerEpoch,
 		&session.CreatedAt,
 		&session.UpdatedAt,

@@ -67,6 +67,10 @@ const (
 	maxWorkspaceNameLength = 32
 	// workspaceNameIDLength is the session-id suffix length of a prefixed name.
 	workspaceNameIDLength = 12
+	// workspaceNameClockSkew is how far a Coder workspace's created_at may
+	// precede the moment AO chose its name and still be the session's own
+	// (clock skew between the control plane and the Coder server).
+	workspaceNameClockSkew = 5 * time.Minute
 )
 
 // errTerminalNotReady marks a failure to obtain a usable workspace terminal
@@ -111,7 +115,16 @@ type Client struct {
 	parameters            map[string]string
 	workspaceNamePrefix   string
 	expectedWorkspaceName string
-	http                  *http.Client
+	// sessionID is the session a ForSandbox client is bound to, and
+	// workspaceNameIssuedAt when its stored workspace name was chosen (zero
+	// for a session whose name is computed, see sandbox.CoderSessionProfile).
+	sessionID             string
+	workspaceNameIssuedAt time.Time
+	// retryWorkspaceName is the stored name a create retries with when Coder
+	// reports expectedWorkspaceName as taken; empty once used, and for
+	// sessions whose name is computed.
+	retryWorkspaceName string
+	http               *http.Client
 	// Dev-environment options a bring-your-own connection stamps on the
 	// session profile (see sandbox.CoderSessionProfile). The zero values are
 	// the historical behavior: a dedicated ao-worker user, no ready check and
@@ -263,7 +276,13 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.agentName = profile.AgentName
 	sessionClient.parameters = parameters
 	sessionClient.workspaceNamePrefix = profile.WorkspaceNamePrefix
-	sessionClient.expectedWorkspaceName = WorkspaceNameWithPrefix(profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.sessionID = strings.TrimSpace(record.SessionID)
+	sessionClient.expectedWorkspaceName = SessionWorkspaceName(profile.WorkspaceName, profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.workspaceNameIssuedAt = time.Time{}
+	if profile.WorkspaceName != "" && profile.WorkspaceNameIssuedAt != nil {
+		sessionClient.workspaceNameIssuedAt = *profile.WorkspaceNameIssuedAt
+	}
+	sessionClient.retryWorkspaceName = profile.WorkspaceNameRetry
 	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
 	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
 	sessionClient.durableRoot = profile.DurableRoot
@@ -471,6 +490,7 @@ func (c *Client) TemplateParameters(ctx context.Context, templateID string) ([]T
 type workspace struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
+	CreatedAt   time.Time       `json:"created_at"`
 	OwnerName   string          `json:"owner_name"`
 	TemplateID  string          `json:"template_id"`
 	LatestBuild workspaceBuild  `json:"latest_build"`
@@ -581,27 +601,53 @@ func WorkspaceNameWithPrefix(prefix, sessionID string) string {
 	return prefix + "-" + id[:idLength]
 }
 
-// WorkspaceURL is the Coder dashboard page of one AO session's workspace,
-// <baseURL>/@<owner>/<workspace name>, naming the workspace exactly as
-// WorkspaceNameWithPrefix does when AO creates it. It returns "" unless
-// baseURL is an absolute http(s) origin and owner is set, so a malformed
-// record never yields a link.
-func WorkspaceURL(baseURL, owner, prefix, sessionID string) string {
+// SessionWorkspaceName is the Coder workspace name of one AO session: the
+// name stored on its sandbox profile when the session was created (the
+// readable domain.CoderWorkspaceName), or, for a session created before AO
+// stored names, the name WorkspaceNameWithPrefix computes from its prefix and
+// id, so existing workspaces keep being found under their original names.
+func SessionWorkspaceName(storedName, prefix, sessionID string) string {
+	if name := strings.TrimSpace(storedName); name != "" {
+		return name
+	}
+	return WorkspaceNameWithPrefix(prefix, sessionID)
+}
+
+// WorkspaceURL is the Coder dashboard page of one workspace,
+// <baseURL>/@<owner>/<workspace name>; pass a session's SessionWorkspaceName
+// to link the workspace AO creates for it. It returns "" unless baseURL is an
+// absolute http(s) origin and owner and name are set, so a malformed record
+// never yields a link.
+func WorkspaceURL(baseURL, owner, workspaceName string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	owner = strings.TrimSpace(owner)
+	workspaceName = strings.TrimSpace(workspaceName)
 	endpoint, err := url.Parse(baseURL)
 	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
 		(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
 		endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-		owner == "" || strings.TrimSpace(sessionID) == "" {
+		owner == "" || workspaceName == "" {
 		return ""
 	}
-	return baseURL + "/@" + url.PathEscape(owner) + "/" +
-		url.PathEscape(WorkspaceNameWithPrefix(prefix, sessionID))
+	return baseURL + "/@" + url.PathEscape(owner) + "/" + url.PathEscape(workspaceName)
 }
 
+// workspaceName is the workspace name of sessionID: the session-bound name
+// for the session a ForSandbox client serves, otherwise the computed one.
 func (c *Client) workspaceName(sessionID string) string {
+	if c.expectedWorkspaceName != "" && c.sessionID != "" && strings.TrimSpace(sessionID) == c.sessionID {
+		return c.expectedWorkspaceName
+	}
 	return WorkspaceNameWithPrefix(c.workspaceNamePrefix, sessionID)
+}
+
+// predatesWorkspaceName reports a workspace created well before this session
+// chose its stored name: it carries the name but belongs to another session
+// (two sessions whose readable names collide), so AO must never adopt,
+// bootstrap or delete it as this session's.
+func (c *Client) predatesWorkspaceName(view workspace) bool {
+	return !c.workspaceNameIssuedAt.IsZero() && !view.CreatedAt.IsZero() &&
+		view.CreatedAt.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
 }
 
 // Create provisions a Coder workspace from the configured template.
@@ -650,6 +696,13 @@ func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 	}
 	var view workspace
 	if err := c.do(ctx, http.MethodPost, "/api/v2/users/"+url.PathEscape(c.owner)+"/workspaces", body, &view); err != nil {
+		if isConflict(err) && c.retryWorkspaceName != "" && name == c.expectedWorkspaceName {
+			// The reconciler looked the name up first and found no workspace
+			// of this session's, so the name belongs to another workspace.
+			return sandbox.Environment{}, &sandbox.WorkspaceNameTakenError{
+				Name: name, Retry: c.retryWorkspaceName, Err: err,
+			}
+		}
 		return sandbox.Environment{}, err
 	}
 	if err := c.validateWorkspaceIdentity(view, name); err != nil {
@@ -696,6 +749,12 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 		return sandbox.Environment{}, false, err
 	}
 	if normalizeState(view.LatestBuild.Status) == sandbox.StateDeleted {
+		return sandbox.Environment{}, false, nil
+	}
+	if c.predatesWorkspaceName(view) {
+		// Another session's workspace holds this name. Report it absent: a
+		// create then fails on Coder's name conflict instead of adopting it,
+		// and a deletion completes without touching it.
 		return sandbox.Environment{}, false, nil
 	}
 	return c.toEnvironment(view), true, nil
@@ -2011,6 +2070,23 @@ func sanitizePTYOutput(output string) string {
 	return strings.TrimSpace(output)
 }
 
+// apiError is a non-2xx Coder API response other than not-found.
+type apiError struct {
+	status int
+	body   string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("coder: API returned %d: %s", e.status, e.body)
+}
+
+// isConflict reports Coder's 409 Conflict, which a workspace create returns
+// when the owner already has a workspace with that name.
+func isConflict(err error) bool {
+	var api *apiError
+	return errors.As(err, &api) && api.status == http.StatusConflict
+}
+
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
 	var requestBody io.Reader
 	if body != nil {
@@ -2038,7 +2114,7 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return fmt.Errorf("coder: API returned %d: %s", response.StatusCode, strings.TrimSpace(string(snippet)))
+		return &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))

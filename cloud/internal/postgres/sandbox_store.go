@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
@@ -1666,4 +1667,61 @@ func intervalString(d time.Duration) string {
 		seconds = 1
 	}
 	return strconv.FormatInt(seconds, 10) + " seconds"
+}
+
+// UseSandboxCoderWorkspaceRetryName makes a Coder session's retry workspace
+// name its workspace name, after Coder refused to create the workspace because
+// another workspace holds takenName. It is fenced by the reconcile lease and
+// changes the row only while the session has no workspace yet and takenName is
+// still its stored name, so concurrent or repeated calls cannot skip past the
+// one retry. The retry is consumed, so a second conflict fails the create. It
+// returns the new name; ErrConflict means there is no retry to use.
+func (s *Store) UseSandboxCoderWorkspaceRetryName(
+	ctx context.Context,
+	owner, orgID, sessionID, takenName string,
+) (string, error) {
+	var name string
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var profile json.RawMessage
+		err := tx.QueryRow(
+			ctx,
+			`SELECT resource_profile FROM ao_sandboxes
+			WHERE session_id = $1 AND org_id = $2
+				AND reconcile_lease_owner = $3
+				AND reconcile_lease_until > now()
+			FOR UPDATE`,
+			sessionID, orgID, owner,
+		).Scan(&profile)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSandboxLeaseLost
+		}
+		if err != nil {
+			return fmt.Errorf("read sandbox resource profile: %w", err)
+		}
+		updated, from, to, ok, err := sandbox.UseCoderWorkspaceRetryName(profile)
+		if err != nil {
+			return fmt.Errorf("use Coder workspace retry name: %w", err)
+		}
+		if !ok || from != takenName {
+			return ErrConflict
+		}
+		tag, err := tx.Exec(
+			ctx,
+			`UPDATE ao_sandboxes SET resource_profile = $4::jsonb
+			WHERE session_id = $1 AND org_id = $2
+				AND reconcile_lease_owner = $3
+				AND reconcile_lease_until > now()
+				AND COALESCE(provider_environment_id, '') = ''`,
+			sessionID, orgID, owner, updated,
+		)
+		if err != nil {
+			return fmt.Errorf("record Coder workspace retry name: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrConflict
+		}
+		name = to
+		return nil
+	})
+	return name, err
 }

@@ -1344,7 +1344,9 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 	}
 	coderWorkspaceURL := ""
 	if ref := session.BYOCoderWorkspace; ref != nil {
-		coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, ref.NamePrefix, session.ID)
+		if strings.TrimSpace(session.ID) != "" {
+			coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, coder.SessionWorkspaceName(ref.Name, ref.NamePrefix, session.ID))
+		}
 	}
 	return sessionResponse{
 		ID:                 session.ID,
