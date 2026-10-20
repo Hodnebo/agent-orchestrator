@@ -127,6 +127,7 @@
 	"agentSwitch.switching": "切り替え中",
 	"agentSwitch.switchedFromTo": "{{from}} から {{to}} に切り替えました",
 	"agentSwitch.modelsUnavailable": "{{agent}} のモデルを読み込めませんでした: {{error}}",
+	"agentSwitch.terminalOneShot": "{{agent}} はターミナルでは1つのタスクに答えると終了します。続けて使うにはチャットで切り替えてください。",
 	"agentSwitch.modeUnsupported": "{{agent}} はこのモードでは実行できません",
 	"agentSwitch.startsInMode": "{{agent}} は {{mode}} では実行できません。{{target}} で起動します。",
 	"agentSwitch.switchFailed": "エージェントの切り替えに失敗しました",

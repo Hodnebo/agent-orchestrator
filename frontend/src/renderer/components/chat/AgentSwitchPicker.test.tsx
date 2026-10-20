@@ -177,4 +177,16 @@ describe("AgentModelPicker", () => {
 		expect(await screen.findByRole("menuitemradio", { name: "Codex" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "Claude Code" })).not.toBeInTheDocument();
 	});
+
+	it("greys out DeepSeek for a terminal and says why on hover", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open(undefined, true);
+		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		const deepseek = await screen.findByRole("menuitemradio", { name: "DeepSeek" });
+		expect(deepseek).toHaveAttribute("aria-disabled", "true");
+		expect(deepseek).toHaveAttribute("title", expect.stringContaining("exits in a terminal"));
+		fireEvent.click(deepseek);
+		expect(onPendingChange).not.toHaveBeenCalled();
+	});
 });

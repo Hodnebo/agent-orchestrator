@@ -20,7 +20,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { agentModelDisplayLabel, offeredCatalogModels, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
 import { isLaunchableAgent } from "../../lib/agent-select-options";
-import { CHAT_SWITCH_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
+import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
 import { clientForSessionHost } from "../../lib/host-clients";
 import { toggleModelFavorite, useModelFavorites, type ModelFavorite } from "../../lib/model-favorites";
 import {
@@ -307,9 +307,10 @@ export function AgentModelPicker({
 		}
 	};
 	// A terminal's running agent cannot be given another model from here.
+	const oneShot = (harness: string) => terminal && TERMINAL_ONE_SHOT_TARGETS.has(harness);
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
-		: !agentSwitch.disabled && agents.some((agent) => agent.id === harness));
+		: !agentSwitch.disabled && !oneShot(harness) && agents.some((agent) => agent.id === harness));
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !(terminal && entry.harness === currentHarness));
@@ -412,13 +413,17 @@ export function AgentModelPicker({
 													active={agent.id === shownHarness}
 													radio
 													disabled={agent.id !== currentHarness && agentSwitch.disabled}
+													// Greyed rather than disabled, so the reason still shows on hover.
+													aria-disabled={oneShot(agent.id) || undefined}
+													title={oneShot(agent.id) ? t("agentSwitch.terminalOneShot", { agent: agent.label }) : undefined}
 													onSelect={(event) => {
 														// The menu stays open so the model and effort can be set too.
 														event.preventDefault();
+														if (oneShot(agent.id)) return;
 														if (agent.id === currentHarness) keepCurrent();
 														else if (agent.id !== pending?.harness) onPendingChange({ harness: agent.id });
 													}}
-													className="text-xs text-foreground"
+													className={cn("text-xs text-foreground", oneShot(agent.id) && "opacity-50")}
 												>
 													<ProviderMark provider={agent.id} className="mr-2 size-3.5" />
 													<span className="min-w-0 truncate">{agent.label}</span>

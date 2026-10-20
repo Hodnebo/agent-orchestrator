@@ -127,6 +127,7 @@
 	"agentSwitch.switching": "전환 중",
 	"agentSwitch.switchedFromTo": "{{from}}에서 {{to}}(으)로 전환됨",
 	"agentSwitch.modelsUnavailable": "{{agent}} 모델을 불러오지 못했습니다: {{error}}",
+	"agentSwitch.terminalOneShot": "{{agent}}은(는) 터미널에서 작업 하나에만 답하고 종료됩니다. 계속 사용하려면 채팅에서 전환하세요.",
 	"agentSwitch.modeUnsupported": "{{agent}}은(는) 이 모드에서 실행할 수 없습니다",
 	"agentSwitch.startsInMode": "{{agent}}은(는) {{mode}}에서 실행할 수 없습니다. {{target}}(으)로 시작합니다.",
 	"agentSwitch.switchFailed": "에이전트 전환 실패",

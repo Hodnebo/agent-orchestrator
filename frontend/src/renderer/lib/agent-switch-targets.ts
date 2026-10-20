@@ -13,3 +13,6 @@ export const TERMINAL_SWITCH_TARGETS = [
 	"continue", "devin", "muse", "kilocode", "mimo-code", "prime-agent",
 	"auggie", "copilot", "agy", "autohand", "vibe",
 ] as const;
+// Terminal targets that answer one task and exit there. The terminal picker
+// shows them greyed out with the reason; they still switch in Chat.
+export const TERMINAL_ONE_SHOT_TARGETS: ReadonlySet<string> = new Set(["deepseek-harness"]);

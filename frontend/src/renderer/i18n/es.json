@@ -127,6 +127,7 @@
 	"agentSwitch.switching": "Cambiando",
 	"agentSwitch.switchedFromTo": "Cambiado de {{from}} a {{to}}",
 	"agentSwitch.modelsUnavailable": "No se pudieron cargar los modelos de {{agent}}: {{error}}",
+	"agentSwitch.terminalOneShot": "En una terminal, {{agent}} responde una sola tarea y se cierra. Cámbiate a él en el chat para seguir trabajando.",
 	"agentSwitch.modeUnsupported": "{{agent}} no puede ejecutarse en este modo",
 	"agentSwitch.startsInMode": "{{agent}} no puede ejecutarse en {{mode}}. Se iniciará en {{target}}.",
 	"agentSwitch.switchFailed": "No se pudo cambiar de agente",

@@ -127,6 +127,7 @@
 	"agentSwitch.switching": "正在切换",
 	"agentSwitch.switchedFromTo": "已从 {{from}} 切换到 {{to}}",
 	"agentSwitch.modelsUnavailable": "无法加载 {{agent}} 的模型：{{error}}",
+	"agentSwitch.terminalOneShot": "{{agent}} 在终端中只回答一个任务就会退出。请在聊天中切换到它以继续使用。",
 	"agentSwitch.modeUnsupported": "{{agent}} 无法在此模式下运行",
 	"agentSwitch.startsInMode": "{{agent}} 无法在 {{mode}} 下运行，将以 {{target}} 启动。",
 	"agentSwitch.switchFailed": "切换代理失败",
