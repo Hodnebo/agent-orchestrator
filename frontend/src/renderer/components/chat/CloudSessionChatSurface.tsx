@@ -506,14 +506,17 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
+	const startStopped = Boolean(workspaceFailure) && !rerunning;
 	const snapshot = useMemo(() => {
 		const projected = toSnapshot(session, eventsQuery.data ?? []);
-		// While Setup is failed the checklist reports it; its rows return as history once Setup passes.
-		const items = setupFailed
-			? projected.items.filter((item) => item.kind !== "activity" || item.detail?.event !== "workspace.setup")
-			: projected.items;
-		return { ...projected, items, settings };
-	}, [eventsQuery.data, session, settings, setupFailed]);
+		// The checklist reports a failed Setup, as a failed local start does; once a
+		// retry passes, only the Setup that passed stays in the conversation.
+		const items = projected.items.filter((item) => item.kind !== "activity" || item.detail?.event !== "workspace.setup" ||
+			item.detail.setupStatus === "succeeded");
+		// No agent runs until a retry prepares the workspace, as a failed local start reports.
+		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
+		return { ...projected, items, controller, settings };
+	}, [eventsQuery.data, session, settings, startStopped]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -632,6 +635,7 @@ export function CloudSessionChatSurface({
 			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
 			session={chatSession}
+			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
 			resumingAgent={retryStart.isPending}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
