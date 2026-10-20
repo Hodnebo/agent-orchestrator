@@ -442,8 +442,7 @@ type Manager struct {
 	statusVerificationLimit     time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
-	// launchStartWait bounds the wait to see a newly created supervised
-	// launch alive.
+	// launchStartWait bounds the wait to see a new supervised launch alive.
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
@@ -2253,15 +2252,13 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	return merged
 }
 
-// launchOptionsStore is the part of a store that keeps a terminal session's
-// launch choices. It is optional so stores without it launch with none.
+// launchOptionsStore keeps a terminal session's launch choices; optional.
 type launchOptionsStore interface {
 	SessionLaunchOptions(ctx context.Context, id domain.SessionID) (domain.AgentLaunchOptions, error)
 	SetSessionLaunchOptions(ctx context.Context, id domain.SessionID, options domain.AgentLaunchOptions) error
 }
 
-// sessionLaunchOptions reads the session's saved launch choices. A failed read
-// launches the agent without them, which is its plain default.
+// sessionLaunchOptions reads the saved launch choices; none on a failed read.
 func (m *Manager) sessionLaunchOptions(ctx context.Context, id domain.SessionID) domain.AgentLaunchOptions {
 	store, ok := m.store.(launchOptionsStore)
 	if !ok {
@@ -3530,15 +3527,13 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var initialization ports.NativeRestoreInitialization
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
-	// A provider handoff seeds its fresh target with a note for this launch
-	// only: the session keeps the user's original prompt for later restores.
+	// A handoff note is for this launch only; the session keeps the user's prompt.
 	savedPrompt := rec.Metadata.Prompt
 	if promptOverride != nil {
 		rec.Metadata.Prompt = *promptOverride
 	}
-	// A provider handoff starts a new native conversation in a session that
-	// may have run this agent before. Claude Code pins its native id to the AO
-	// session and refuses the id its earlier conversation used, so it gets a new one.
+	// Claude Code pins its native id to the AO session and refuses the id an
+	// earlier conversation used, so a handoff's fresh conversation gets a new one.
 	freshNativeSessionID := ""
 	if provider, ok := agent.(ports.AgentFreshNativeSessionIDProvider); ok && forceFresh && promptOverride != nil {
 		freshNativeSessionID = provider.NewNativeSessionID()

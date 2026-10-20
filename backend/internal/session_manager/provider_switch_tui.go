@@ -12,9 +12,8 @@ import (
 )
 
 // SwitchTUIProvider replaces one terminal provider with another in the same AO
-// session and terminal surface. The target always starts a fresh native thread
-// seeded with bounded AO handoff text; provider-native histories cannot be
-// merged across harnesses safely.
+// session and terminal. The target starts a fresh native thread seeded with the
+// handoff note: native histories cannot be merged across harnesses.
 func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
 	target := request.TargetHarness
 	if err := m.beginAgentOperation(ctx, id, agentOperationProviderSwitch); err != nil {
@@ -69,9 +68,10 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	}
 
 	lastInputAt, releaseInput := m.beginTerminalInputDrain(rec)
-	if releaseInput != nil {
-		defer releaseInput()
+	if releaseInput == nil {
+		releaseInput = func() {}
 	}
+	defer releaseInput()
 	if err := m.prepareSourceHandoff(ctx, rec, domain.SessionInterfaceTransitionDrain, lastInputAt); err != nil {
 		kind := domain.ProviderSwitchRefusalBusy
 		if errors.Is(err, errDrainDecisionPending) {
@@ -82,12 +82,10 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if err := m.stopSourceControllerConclusive(rec); err != nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "AO could not confirm that the source provider stopped: " + err.Error(), Cause: err}
 	}
-	// The source is gone, so held input has nothing left to reach. The target
-	// starts on the same terminal, and its own startup queries must get through.
-	if releaseInput != nil {
-		releaseInput()
-	}
-	// From here on the request's deadline must not cut the switch short: a store
+	// Held input has nothing left to reach, and the target's startup queries
+	// on the same terminal must get through.
+	releaseInput()
+	// The request's deadline must not cut the switch short from here: a store
 	// write failing half way would leave the session with no provider at all.
 	ctx, cancelSwitch := context.WithTimeout(context.WithoutCancel(ctx), tuiSwitchAfterStopLimit)
 	defer cancelSwitch()
@@ -99,16 +97,13 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	}
 
 	source := rec
-	source.Metadata.RuntimeHandleID = ""
-	source.Metadata.RuntimeLaunchID = ""
-	source.Metadata.AgentSessionIDLaunchID = ""
+	source.Metadata.RuntimeHandleID, source.Metadata.RuntimeLaunchID, source.Metadata.AgentSessionIDLaunchID = "", "", ""
 	source.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: m.clock()}
 	source.UpdatedAt = m.clock()
 
-	// From here the source is stopped. Any failure brings it back on its old
-	// native thread, so the user is never left with a blank terminal.
-	// The target's launch choices replace the source's. They are saved before
-	// the target starts, and put back if the source has to be restored.
+	// Any failure from here brings the source back on its old native thread, so
+	// the user is never left with a blank terminal. The target's launch choices
+	// are saved before it starts, and the source's put back if it is restored.
 	launchStore, _ := m.store.(launchOptionsStore)
 	sourceLaunch := m.sessionLaunchOptions(ctx, id)
 	// The picker shows Codex's fast mode off unless it was turned on, so that is how it starts.
@@ -139,26 +134,19 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 
 	targetRecord := source
 	targetRecord.Harness = target
-	targetRecord.Metadata.AgentSessionID = ""
-	targetRecord.Metadata.NativeTranscriptPath = ""
-	targetRecord.Metadata.NativeIdentityObservedAt = time.Time{}
-	targetRecord.Metadata.Model = request.Model
-	targetRecord.Metadata.Effort = request.Effort
-	targetRecord.Metadata.LatestUserPrompt = ""
-	targetRecord.Metadata.LatestAssistantUpdate = ""
-	targetRecord.Metadata.ConversationCheckpointState = domain.ConversationCheckpointEmpty
-	targetRecord.Metadata.ConversationCheckpointGeneration = ""
-	targetRecord.Metadata.ConversationCheckpointNativeID = ""
-	targetRecord.Metadata.ConversationCheckpointTurnID = ""
-	targetRecord.Metadata.ConversationCheckpointUnsettled = false
+	md := &targetRecord.Metadata
+	md.AgentSessionID, md.NativeTranscriptPath, md.NativeIdentityObservedAt = "", "", time.Time{}
+	md.Model, md.Effort, md.LatestUserPrompt, md.LatestAssistantUpdate = request.Model, request.Effort, "", ""
+	md.ConversationCheckpointState, md.ConversationCheckpointGeneration = domain.ConversationCheckpointEmpty, ""
+	md.ConversationCheckpointNativeID, md.ConversationCheckpointTurnID, md.ConversationCheckpointUnsettled = "", "", false
 	targetRecord.UpdatedAt = m.clock()
 	if err := m.store.UpdateSession(ctx, targetRecord); err != nil {
 		return restoreSource(err, "could not publish target provider ownership")
 	}
 	if launchStore != nil {
-		// The note stays saved with them. A relaunch while the target has no native
-		// session to resume (it crashed first, or it is one that records none, such
-		// as deepseek-harness) hands over again instead of replaying the task.
+		// The note stays saved with them, so a relaunch before the target has a
+		// native session (it crashed first, or records none, as deepseek-harness)
+		// hands over again instead of replaying the task.
 		targetLaunch.HandoffNote = request.HandoffNote
 		if err := launchStore.SetSessionLaunchOptions(ctx, id, targetLaunch); err != nil {
 			return restoreSource(err, "could not save the target's launch options")
@@ -171,8 +159,8 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		return restoreSource(err, "target provider failed to start")
 	}
 	if err := m.confirmTUISwitchTargetAlive(ctx, started.Session); err != nil {
-		// The target's terminal outlives it to keep its last output. It has to
-		// go before the source can have the session's terminal back.
+		// The target's terminal outlives it to keep its last output; it must go
+		// before the source can have the session's terminal back.
 		m.destroySpawnRuntimeAfterFailure(ctx, runtimeHandle(started.Session.Metadata))
 		return restoreSource(err, "target provider did not stay running")
 	}
@@ -180,18 +168,14 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	return nil
 }
 
-// tuiSwitchSettingsStore is the part of a store that keeps the chat's saved
-// settings. It is optional, as for a session that has never had a chat.
-type tuiSwitchSettingsStore interface {
-	ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
-	SetConversationSettings(context.Context, string, domain.ConversationSettings, time.Time) error
-}
-
-// adoptTUISwitchSettings gives the chat the target's model and effort. The saved
-// ones belong to the outgoing agent, and the chat would start the target on a
-// model it does not have.
+// adoptTUISwitchSettings gives the chat, if the store keeps one, the target's
+// model and effort: the saved ones belong to the outgoing agent, and the chat
+// would start the target on a model it does not have.
 func (m *Manager) adoptTUISwitchSettings(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) {
-	store, ok := m.store.(tuiSwitchSettingsStore)
+	store, ok := m.store.(interface {
+		ConversationForSession(context.Context, domain.SessionID) (domain.ConversationRecord, error)
+		SetConversationSettings(context.Context, string, domain.ConversationSettings, time.Time) error
+	})
 	if !ok {
 		return
 	}
@@ -210,21 +194,19 @@ func (m *Manager) adoptTUISwitchSettings(ctx context.Context, id domain.SessionI
 	}
 }
 
-// How long a freshly started target is watched before the switch is reported
-// as done. Variables so tests do not have to wait.
+// Variables so tests do not have to wait. tuiSwitchAfterStopLimit bounds all
+// work after the source stops; the settle values say how long a fresh target
+// is watched before the switch is reported as done.
 var (
-	// tuiSwitchAfterStopLimit bounds everything after the source stops: starting
-	// the target, and restoring the source if the target fails.
 	tuiSwitchAfterStopLimit   = 3 * interfaceTransitionStepLimit
 	tuiSwitchTargetSettle     = 1500 * time.Millisecond
 	tuiSwitchTargetSettlePoll = 250 * time.Millisecond
 )
 
-// confirmTUISwitchTargetAlive watches the target for a moment after it starts.
-// An agent that exits straight away (a refused flag or session id, a launcher
-// that gives up) would otherwise be reported as a successful switch over a dead
-// terminal. The error carries the last line the agent printed, which is usually
-// its reason. A runtime that cannot answer does not fail the switch.
+// confirmTUISwitchTargetAlive catches a target that exits straight away (a
+// refused flag or session id, a launcher that gives up), which would otherwise
+// be a successful switch over a dead terminal. The error carries the agent's
+// last line, usually its reason. A runtime that cannot answer does not fail it.
 func (m *Manager) confirmTUISwitchTargetAlive(ctx context.Context, rec domain.SessionRecord) error {
 	inspector, ok := m.runtime.(ports.RuntimeChildInspector)
 	handle := runtimeHandle(rec.Metadata)
@@ -253,11 +235,9 @@ func (m *Manager) confirmTUISwitchTargetAlive(ctx context.Context, rec domain.Se
 	}
 }
 
-// preflightTUISwitchTarget refuses a switch whose target cannot launch while
-// the current agent is still running. Without it the target's missing binary or
-// sign-in is discovered only after the source was stopped, and the user's agent
-// is restarted for nothing. A probe that cannot answer does not block: the
-// launch itself still validates.
+// preflightTUISwitchTarget refuses a target with no binary or sign-in while the
+// source still runs, so the user's agent is not stopped for nothing. A probe
+// that cannot answer does not block: the launch itself still validates.
 func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, target ports.Agent) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

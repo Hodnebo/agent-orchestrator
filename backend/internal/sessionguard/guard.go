@@ -63,8 +63,8 @@ const (
 	// SuppressedBusy means the session is mid-turn on a harness that cannot
 	// safely steer an active turn (coordination writes only).
 	SuppressedBusy
-	// SuppressedInputGated means an exclusive session mutation (for example an
-	// exclusive session operation (for example resume, restore, or kill) closed pane-input admission before
+	// SuppressedInputGated means an exclusive session mutation (for example a
+	// resume, restore, or kill) closed pane-input admission before
 	// this write acquired a lease.
 	SuppressedInputGated
 	// SuppressedStartupPending means a TUI session has not yet received its

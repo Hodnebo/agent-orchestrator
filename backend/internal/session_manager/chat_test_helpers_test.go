@@ -149,11 +149,3 @@ func (a testAgentRegistry) Agent(harness domain.AgentHarness) (ports.Agent, bool
 	agent, ok := a[harness]
 	return agent, ok
 }
-
-// harnessAgents resolves a fixed set of adapters by harness.
-type harnessAgents map[domain.AgentHarness]ports.Agent
-
-func (a harnessAgents) Agent(h domain.AgentHarness) (ports.Agent, bool) {
-	agent, ok := a[h]
-	return agent, ok
-}

@@ -130,10 +130,7 @@ func (m *Manager) exactLaunchAlive(ctx context.Context, handle ports.RuntimeHand
 	if !ok {
 		return false, errors.New("runtime cannot inspect an exact supervised launch")
 	}
-	return inspector.IsExactSupervisedProcessAlive(ctx, handle, ports.SupervisedProcessRef{
-		SessionID: id,
-		LaunchID:  launchID,
-	})
+	return inspector.IsExactSupervisedProcessAlive(ctx, handle, ports.SupervisedProcessRef{SessionID: id, LaunchID: launchID})
 }
 
 // launchPollInterval paces the checks for a supervised launch's liveness.
@@ -173,27 +170,15 @@ func (m *Manager) waitForExactLaunch(ctx context.Context, handle ports.RuntimeHa
 // exactLaunchPreWrite closes the final check-then-write gap: the guard calls
 // it after its durable read and immediately before the runtime write, and a
 // matching row is not enough, the exact launch must still be alive.
-func (m *Manager) exactLaunchPreWrite(
-	id domain.SessionID,
-	harness domain.AgentHarness,
-	handle ports.RuntimeHandle,
-	launchID string,
-	ownershipErr error,
-) func(context.Context, domain.SessionRecord) error {
+func (m *Manager) exactLaunchPreWrite(id domain.SessionID, harness domain.AgentHarness, handle ports.RuntimeHandle, launchID string, ownershipErr error) func(context.Context, domain.SessionRecord) error {
 	return func(ctx context.Context, current domain.SessionRecord) error {
-		if current.ID != id ||
-			current.Harness != harness ||
-			current.Metadata.RuntimeHandleID != handle.ID ||
-			current.Metadata.RuntimeLaunchID != launchID {
+		if current.ID != id || current.Harness != harness || current.Metadata.RuntimeHandleID != handle.ID || current.Metadata.RuntimeLaunchID != launchID {
 			return ownershipErr
 		}
 		alive, err := m.exactLaunchAlive(ctx, handle, id, launchID)
-		if err != nil {
-			return err
+		if err == nil && !alive {
+			err = ownershipErr
 		}
-		if !alive {
-			return ownershipErr
-		}
-		return nil
+		return err
 	}
 }
