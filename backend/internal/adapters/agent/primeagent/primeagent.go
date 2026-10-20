@@ -25,6 +25,9 @@ type Plugin struct {
 	binaryMu       sync.Mutex
 	resolvedBinary string
 	runCommand     primeCommandRunner
+	// extensionFlag remembers, per binary, whether it accepts --extension.
+	extensionMu   sync.Mutex
+	extensionFlag map[string]bool
 }
 
 // New returns a ready-to-register Prime Agent adapter.
@@ -116,7 +119,10 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		return nil, err
 	}
 
-	cmd := []string{binary, "--session-dir", sessions, "--extension", extensionPath}
+	cmd := []string{binary, "--session-dir", sessions}
+	if p.acceptsExtension(ctx, binary) {
+		cmd = append(cmd, "--extension", extensionPath)
+	}
 	resolvedPrompt, err := resolveSystemPrompt(ctx, systemPrompt, systemPromptFile)
 	if err != nil {
 		return nil, err
@@ -239,4 +245,31 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
+}
+
+// acceptsExtension reports whether binary takes --extension. prime-agent 0.10,
+// the Rust rewrite, dropped it and exits at once when given it, so AO's hook
+// extension is passed only to a build whose help lists it. A help that cannot
+// be read keeps the flag, as before.
+func (p *Plugin) acceptsExtension(ctx context.Context, binary string) bool {
+	p.extensionMu.Lock()
+	defer p.extensionMu.Unlock()
+	if accepts, ok := p.extensionFlag[binary]; ok {
+		return accepts
+	}
+	runner := p.runCommand
+	if runner == nil {
+		runner = runPrimeCommand
+	}
+	runCtx, cancel := context.WithTimeout(ctx, primeCommandTimeout)
+	defer cancel()
+	out, err := runner(runCtx, binary, "", nil, "--help")
+	if err != nil && len(out) == 0 {
+		return true
+	}
+	if p.extensionFlag == nil {
+		p.extensionFlag = map[string]bool{}
+	}
+	p.extensionFlag[binary] = strings.Contains(string(out), "--extension")
+	return p.extensionFlag[binary]
 }
