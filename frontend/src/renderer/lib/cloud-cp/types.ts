@@ -83,6 +83,12 @@ export interface CloudCpMeResponse {
 	 */
 	sandboxProviders?: CloudCpSandboxProviders;
 	/**
+	 * Harnesses a session can start in Chat with, as the local daemon's settings
+	 * chatHarnesses. Absent on an older control plane: every harness starts in
+	 * the terminal.
+	 */
+	chatHarnesses?: string[];
+	/**
 	 * The organization the app works in: the one the sign-in token's WorkOS
 	 * organization maps to, else organizations[0]. Absent on an older control
 	 * plane.

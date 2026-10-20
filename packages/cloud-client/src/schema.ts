@@ -1609,6 +1609,8 @@ export interface components {
             organizations: components["schemas"]["OrganizationMembership"][];
             offering?: components["schemas"]["Offering"];
             sandboxProviders?: components["schemas"]["SandboxProviders"];
+            /** @description Harnesses a session can start in, or switch to, Chat with. */
+            chatHarnesses?: string[];
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -2603,7 +2605,7 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description Interface the session starts in. Optional; empty, or a harness without a Chat controller, starts in the terminal (tui). */
+            /** @description Interface the session starts in. Optional; omitted starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. */
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {

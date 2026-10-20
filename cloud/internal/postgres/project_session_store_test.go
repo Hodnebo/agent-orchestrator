@@ -172,18 +172,20 @@ func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 }
 
 // A Chat session launches in Chat and queues its opening prompt as a turn for
-// the Chat controller; a Terminal session gets the prompt on the agent's
-// command line, so it queues no turn.
+// the Chat controller, so its terminal launch carries no prompt (a later switch
+// to the terminal does not run it again, as locally); a Terminal session gets
+// the prompt on the agent's command line and queues no turn.
 func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
-		requested domain.SessionInterface
-		want      domain.SessionInterface
-		turns     int
+		requested    domain.SessionInterface
+		want         domain.SessionInterface
+		turns        int
+		launchPrompt string
 	}{
-		{domain.SessionInterfaceChat, domain.SessionInterfaceChat, 1},
-		{"", domain.SessionInterfaceTUI, 0},
+		{domain.SessionInterfaceChat, domain.SessionInterfaceChat, 1, ""},
+		{"", domain.SessionInterfaceTUI, 0, "hello"},
 	} {
 		session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
 			"create-interface-"+uuid.NewString(), 10, domain.CreateSession{
@@ -201,8 +203,9 @@ func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
 		if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_turns WHERE session_id = $1 AND state = 'queued'`, session.ID).Scan(&turns); err != nil {
 			t.Fatal(err)
 		}
-		if launch.Interface != tc.want || turns != tc.turns {
-			t.Fatalf("requested %q: launch interface = %q, queued turns = %d; want %q, %d", tc.requested, launch.Interface, turns, tc.want, tc.turns)
+		if launch.Interface != tc.want || turns != tc.turns || launch.Prompt != tc.launchPrompt {
+			t.Fatalf("requested %q: launch interface = %q, queued turns = %d, launch prompt = %q; want %q, %d, %q",
+				tc.requested, launch.Interface, turns, launch.Prompt, tc.want, tc.turns, tc.launchPrompt)
 		}
 	}
 }

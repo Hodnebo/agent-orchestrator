@@ -44,8 +44,9 @@ func TestCreateSessionInitialEffort(t *testing.T) {
 	}
 }
 
-// A session starts in the interface the client asks for; a harness without a
-// Chat controller starts in the terminal, and an unknown interface is refused.
+// A session starts in the interface the client asks for. Chat for a harness
+// without a Chat controller is refused as the local daemon refuses it
+// (SESSION_MODE_UNSUPPORTED), and an unknown interface is invalid.
 func TestCreateSessionInterfaceMode(t *testing.T) {
 	for _, tc := range []struct {
 		name, harness, mode string
@@ -54,7 +55,7 @@ func TestCreateSessionInterfaceMode(t *testing.T) {
 	}{
 		{"chat", "claude-code", "chat", domain.SessionInterfaceChat, http.StatusCreated},
 		{"omitted", "claude-code", "", "", http.StatusCreated},
-		{"no chat controller", "aider", "chat", domain.SessionInterfaceTUI, http.StatusCreated},
+		{"no chat controller", "aider", "chat", "", http.StatusConflict},
 		{"unknown", "claude-code", "gui", "", http.StatusUnprocessableEntity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,7 +77,10 @@ func TestCreateSessionInterfaceMode(t *testing.T) {
 				t.Fatalf("captured interface = %q, want %q", store.captured.Interface, tc.want)
 			}
 			if tc.status != http.StatusCreated && store.created {
-				t.Fatal("an unknown interface created a session")
+				t.Fatal("a refused interface created a session")
+			}
+			if tc.status == http.StatusConflict && !strings.Contains(recorder.Body.String(), "SESSION_MODE_UNSUPPORTED") {
+				t.Fatalf("refusal code missing: %s", recorder.Body)
 			}
 		})
 	}

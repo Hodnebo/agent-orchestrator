@@ -105,7 +105,8 @@ type createSessionRequest struct {
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
 	// InterfaceMode is the interface the session starts in: "chat" or "tui".
-	// Empty, or a harness without a Chat controller, starts in the terminal.
+	// Omitted starts in the terminal; Chat needs a harness with a Chat
+	// controller (chatHarnesses).
 	InterfaceMode string `json:"interfaceMode,omitempty"`
 }
 
@@ -528,11 +529,14 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
-	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !s.interfaceTransitionSupported(request.Harness) {
-		request.InterfaceMode = string(domain.SessionInterfaceTUI)
-	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	// As the local daemon does, Chat for a harness without a Chat controller is
+	// refused with the code the desktop offers to retry in the terminal.
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !chatControllerSupported(request.Harness) {
+		writeError(w, r, http.StatusConflict, "SESSION_MODE_UNSUPPORTED", request.Harness+" can't run in Chat in AO Cloud. Start it in the terminal.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
