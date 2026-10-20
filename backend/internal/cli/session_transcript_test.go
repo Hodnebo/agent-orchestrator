@@ -396,6 +396,9 @@ func TestSanitizeText(t *testing.T) {
 	if got != "aredb\t\n" {
 		t.Fatalf("sanitize = %q", got)
 	}
+	if got := sanitizeText("a\x1b"); got != "a" {
+		t.Fatalf("trailing escape survived: %q", got)
+	}
 }
 
 func transcriptSequences(out string) []string {
@@ -486,8 +489,6 @@ func transcriptFixtureServer(t *testing.T) *httptest.Server {
 			},
 		},
 	}
-	// The duplicate-sequence fixture above intentionally repeats sequence 1 so the
-	// renderer is asserted not to invent a third copy. Two rows in, two rows out.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {

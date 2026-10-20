@@ -35,7 +35,7 @@ const (
 
 // ansiPattern matches CSI, OSC, and a single-character escape so color codes
 // never reach the caller's terminal or spend tokens.
-var ansiPattern = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\)|.)`)
+var ansiPattern = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\)|.)?`)
 
 type transcriptRequest struct {
 	enabled bool
