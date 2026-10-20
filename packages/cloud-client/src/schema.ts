@@ -1357,12 +1357,15 @@ export interface paths {
         /** @description The session's current worker reports it cannot start the session's
          *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
          *     Claude ACP adapter, which the workspace lacks and the worker could not
-         *     install). A session created in Chat that no interface transition ever
-         *     touched moves to tui: its queued first turn is settled (the terminal
-         *     agent gets the prompt on its command line) and a failed tui-to-chat
-         *     interface transition carries the notice the desktop shows. A session
-         *     the person switched to Chat does not move; the worker then stays on
-         *     Chat. Requires the worker:connect scope. A worker that reports the
+         *     install in time; CHAT_START_UNSUPPORTED: the worker cannot start
+         *     sessions in Chat). A session created in Chat that never started (no
+         *     interface transition ever touched it, no turn was claimed or settled,
+         *     and the agent never reported its conversation) moves to tui: its
+         *     queued first turn is settled (the terminal agent gets the prompt on its
+         *     command line) and a failed tui-to-chat interface transition carries the
+         *     notice the desktop shows. A session the person switched to Chat, or
+         *     whose Chat already ran, does not move; the worker then stays on Chat.
+         *     Requires the worker:connect scope. A worker that reports the
          *     agent.chat-start capability uses it; for one that does not, the
          *     control plane makes the same move itself at bootstrap and reconnect.
          *      */
@@ -2590,7 +2593,7 @@ export interface components {
         };
         WorkerChatStartFallbackInput: {
             /** @enum {string} */
-            code: "CHAT_ADAPTER_UNAVAILABLE";
+            code: "CHAT_ADAPTER_UNAVAILABLE" | "CHAT_START_UNSUPPORTED";
         };
         WorkerChatStartFallbackResponse: {
             movedToTui: boolean;

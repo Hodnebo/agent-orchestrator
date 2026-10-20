@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -112,5 +116,37 @@ func TestWorkerChatStartFallback(t *testing.T) {
 		if w.Code < 400 || store.calls != 0 {
 			t.Fatalf("%s: status = %d calls = %d, want refused", name, w.Code, store.calls)
 		}
+	}
+}
+
+// The public contract names every code the endpoint accepts.
+func TestChatStartFallbackCodesMatchTheContract(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "cloud", "openapi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(raw)
+	start := strings.Index(contract, "\n    WorkerChatStartFallbackInput:\n")
+	if start < 0 {
+		t.Fatal("WorkerChatStartFallbackInput is not in the contract")
+	}
+	schema := contract[start:]
+	enumAt := strings.Index(schema, "enum: [")
+	if enumAt < 0 {
+		t.Fatal("WorkerChatStartFallbackInput.code has no enum")
+	}
+	line := schema[enumAt+len("enum: [") : enumAt+strings.Index(schema[enumAt:], "]")]
+	var documented []string
+	for _, code := range strings.Split(line, ",") {
+		documented = append(documented, strings.TrimSpace(code))
+	}
+	var accepted []string
+	for code := range chatStartFallbackDetails {
+		accepted = append(accepted, code)
+	}
+	slices.Sort(documented)
+	slices.Sort(accepted)
+	if !slices.Equal(documented, accepted) {
+		t.Fatalf("contract enum = %v, accepted codes = %v", documented, accepted)
 	}
 }
