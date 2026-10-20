@@ -360,7 +360,9 @@ func TestStandaloneProjectRejectsRepoPlaceholderInWorkingFolder(t *testing.T) {
 // {repo} resolved from the main repository; "~/" stays for the workspace to
 // resolve. A {repo} without a repository, or an invalid folder, is refused,
 // and so is one inside a hidden folder, whose parents the bootstrap would let
-// the worker user enter; the checkout's own folder may be hidden.
+// the worker user enter; the checkout's own folder may be hidden, but not
+// directly in the home (a ~/.local owned by ao-worker would hold the login
+// user's ~/.local/bin).
 func TestCoderCheckoutDirectory(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ template, repository, want string }{
@@ -369,7 +371,7 @@ func TestCoderCheckoutDirectory(t *testing.T) {
 		{"/srv/work/{repo}", "git@github.com:acme/Voice_AI.git", "/srv/work/Voice_AI"},
 		{"~/work/fixed", "", "~/work/fixed"},
 		{"~/work/{repo}", "https://github.com/acme/.github", "~/work/.github"},
-		{"~/{repo}", "https://github.com/acme/.github", "~/.github"},
+		{"/home/ubuntu/{repo}", "https://github.com/acme/.github", "/home/ubuntu/.github"},
 	} {
 		got, err := CoderCheckoutDirectory(tc.template, tc.repository)
 		if err != nil || got != tc.want {
@@ -386,6 +388,9 @@ func TestCoderCheckoutDirectory(t *testing.T) {
 		{"$HOME/.aws/x", ""},
 		{"/srv/.config/app", ""},
 		{"~/{repo}/src", "https://github.com/acme/.github"},
+		{"~/{repo}", "https://github.com/acme/.local"},
+		{"$HOME/{repo}", "https://github.com/acme/.github"},
+		{"~/.local", ""},
 	} {
 		if got, err := CoderCheckoutDirectory(tc.template, tc.repository); err == nil {
 			t.Errorf("CoderCheckoutDirectory(%q, %q) = %q, want an error", tc.template, tc.repository, got)

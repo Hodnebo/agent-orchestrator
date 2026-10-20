@@ -526,19 +526,26 @@ func CoderCheckoutDirectoryUnusableMessage(template string, err error) string {
 // folder's parent folders is hidden. The ao-worker bootstrap lets the worker
 // user enter the checkout's parent folders (chmod o+x), and a hidden one
 // (~/.ssh, ~/.aws) holds credentials. The checkout's own folder may be hidden
-// (a {repo} of .github): the bootstrap never opens up a folder that already
-// exists, and the worker refuses one it did not create. Only the ao-worker
+// (a {repo} of .github) below another folder: the bootstrap never opens up a
+// folder that already exists, and the worker refuses one it did not create.
+// Directly in the home it may not: a missing ~/.local would be created owned
+// by ao-worker, and the login user's shell profile puts ~/.local/bin on its
+// PATH. An absolute path's home is only known in the workspace, where
+// ExpandCheckoutDirectory refuses the same folder. Only the ao-worker
 // checkout is checked: a workspace-user session works in the template's own
 // folder and changes no permissions.
 func coderFolderInsideHiddenFolder(value string) bool {
-	rest, ok := strings.CutPrefix(value, "~/")
-	if !ok {
-		rest, ok = strings.CutPrefix(value, "$HOME/")
+	rest, inHome := strings.CutPrefix(value, "~/")
+	if !inHome {
+		rest, inHome = strings.CutPrefix(value, "$HOME/")
 	}
-	if !ok {
+	if !inHome {
 		rest = strings.TrimPrefix(value, "/")
 	}
 	segments := strings.Split(strings.Trim(rest, "/"), "/")
+	if inHome && len(segments) == 1 && strings.HasPrefix(segments[0], ".") {
+		return true
+	}
 	for _, segment := range segments[:len(segments)-1] {
 		if strings.HasPrefix(segment, ".") {
 			return true

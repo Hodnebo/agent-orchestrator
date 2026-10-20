@@ -193,7 +193,10 @@ func TestExpandCheckoutDirectory(t *testing.T) {
 			t.Errorf("ExpandCheckoutDirectory(%q) = %q, %v; want %q", directory, got, err, want)
 		}
 	}
-	for _, directory := range []string{"/alice", "/", "work/alice", "~/", "/srv/./work"} {
+	if got, err := ExpandCheckoutDirectory("~/work/.github", "/home/ubuntu"); err != nil || got != "/home/ubuntu/work/.github" {
+		t.Errorf("a hidden checkout below a home folder = %q, %v", got, err)
+	}
+	for _, directory := range []string{"/alice", "/", "work/alice", "~/", "/srv/./work", "~/.local", "/home/ubuntu/.local"} {
 		if got, err := ExpandCheckoutDirectory(directory, "/home/ubuntu"); err == nil {
 			t.Errorf("ExpandCheckoutDirectory(%q) = %q, want an error", directory, got)
 		}

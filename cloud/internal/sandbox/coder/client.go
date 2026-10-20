@@ -1227,7 +1227,9 @@ func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home st
 // ExpandCheckoutDirectory resolves a session's working-folder checkout (see
 // sandbox.CoderSessionProfile.CheckoutDirectory) against the workspace login
 // user's home. The result is a clean absolute path below the filesystem root
-// that is not the home directory itself.
+// that is not the home directory itself nor a hidden folder directly in it
+// (see domain.ValidateCoderCheckoutDirectory, which can only check a folder
+// written relative to the home).
 func ExpandCheckoutDirectory(directory, home string) (string, error) {
 	directory = strings.TrimSpace(directory)
 	for _, prefix := range []string{"~/", "$HOME/"} {
@@ -1245,6 +1247,9 @@ func ExpandCheckoutDirectory(directory, home string) (string, error) {
 	}
 	if home != "" && directory == path.Clean(home) {
 		return "", errors.New("it is the home directory")
+	}
+	if home != "" && path.Dir(directory) == path.Clean(home) && strings.HasPrefix(path.Base(directory), ".") {
+		return "", errors.New("it is a hidden folder directly in the home directory")
 	}
 	if path.Dir(directory) == "/" {
 		return "", errors.New("it is directly below the filesystem root")
