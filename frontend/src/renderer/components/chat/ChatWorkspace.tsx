@@ -799,8 +799,6 @@ function ChatWorkspaceContent({
 						onRetry: newWorkDisabled ? undefined : onResumeAgent,
 						retrying: resumingAgent,
 						retryError: resumeError,
-						// A cloud worker fails messages sent while its workspace start failed.
-						messagesKept: !session?.cloud,
 					}
 				: undefined,
 		[
@@ -813,7 +811,6 @@ function ChatWorkspaceContent({
 			provisionSteps,
 			resumeError,
 			resumingAgent,
-			session?.cloud,
 			sessionBranch,
 			snapshot.harness,
 			startupState,

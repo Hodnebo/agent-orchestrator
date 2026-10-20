@@ -76,13 +76,13 @@ type SetupEvent struct {
 }
 
 // Summary names the failed step and why, in the local daemon's words
-// ("setup step N failed"), without the command's output.
+// ("The project's Setup script failed at step N (exit status X)"), without the
+// command's output.
 func (e SetupEvent) Summary() string {
-	cause := fmt.Sprintf("exit status %d", e.ExitCode)
 	if e.Status == SetupTimedOut {
-		cause = "timed out after " + ProjectScriptStepTimeout.String()
+		return fmt.Sprintf("The project's Setup script stopped at step %d after %d minutes", e.Step, int(ProjectScriptStepTimeout/time.Minute))
 	}
-	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+	return fmt.Sprintf("The project's Setup script failed at step %d (exit status %d)", e.Step, e.ExitCode)
 }
 
 // Message is the startup error shown when Setup did not succeed: the summary
