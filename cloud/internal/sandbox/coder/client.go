@@ -149,8 +149,11 @@ type Client struct {
 	// checkoutDirectory and checkoutSiblings are a dedicated-worker-user
 	// session's working-folder checkout (sandbox.CoderSessionProfile), for
 	// example ~/work/alice; empty keeps the durable root's repository folder.
-	checkoutDirectory string
-	checkoutSiblings  []string
+	// checkoutDirectoryUnusable is why the project's working folder could not
+	// be the checkout (the session stops with it as a startup error).
+	checkoutDirectory         string
+	checkoutSiblings          []string
+	checkoutDirectoryUnusable string
 	// cleanupWait bounds how long one Delete waits for the project's Cleanup
 	// commands; zero uses the plan's budget (cleanuphook.Plan.Budget).
 	cleanupWait time.Duration
@@ -296,11 +299,13 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.protectSecretFiles = profile.ProtectsSecretFiles()
 	sessionClient.checkoutDirectory = ""
 	sessionClient.checkoutSiblings = nil
+	sessionClient.checkoutDirectoryUnusable = ""
 	if profile.RunsAsWorkspaceUser() {
 		sessionClient.workingDirectory = profile.WorkingDirectory
 	} else {
 		sessionClient.checkoutDirectory = profile.CheckoutDirectory
 		sessionClient.checkoutSiblings = slices.Clone(profile.CheckoutSiblings)
+		sessionClient.checkoutDirectoryUnusable = profile.CheckoutDirectoryUnusable
 	}
 	sessionClient.readyProbe = profile.ReadyProbe
 	sessionClient.readyProbeTimeout = 0
@@ -1133,6 +1138,16 @@ func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, ho
 		resolved.Environment[ProtectSecretFilesEnv] = "1"
 	}
 	if !c.runAsWorkspaceUser {
+		if c.checkoutDirectory == "" && c.checkoutDirectoryUnusable != "" {
+			// The project's working folder could not be resolved to a
+			// checkout when the session was created; starting in the durable
+			// root checkout instead would hide that.
+			return sandbox.WorkerBootstrap{}, &sandbox.StartupError{
+				Code:    sandbox.StartupErrorWorkingDirectoryUnusable,
+				Message: c.checkoutDirectoryUnusable,
+				Err:     errors.New("coder: the project's working folder cannot be the session's checkout"),
+			}
+		}
 		if c.checkoutDirectory != "" {
 			if err := c.addCheckoutDirectory(&resolved, home); err != nil {
 				return sandbox.WorkerBootstrap{}, err

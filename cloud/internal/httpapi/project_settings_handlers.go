@@ -57,7 +57,7 @@ func (s *Server) updateProjectSettings(w http.ResponseWriter, r *http.Request) {
 	if !s.validatePatchedProjectRepos(w, r, orgID, projectID, patch.Config) {
 		return
 	}
-	if !s.validatePatchedWorkingFolder(w, r, orgID, patch.Config) {
+	if !s.validatePatchedWorkingFolder(w, r, orgID, projectID, patch.Config) {
 		return
 	}
 	if parameters, patched := patchedCoderParameters(patch.Config); patched && len(parameters) > 0 {

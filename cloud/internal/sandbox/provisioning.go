@@ -213,6 +213,14 @@ type CoderSessionProfile struct {
 	// CheckoutSiblings are the folder names of the project's additional
 	// repositories, prepared beside CheckoutDirectory.
 	CheckoutSiblings []string `json:"checkoutSiblings,omitempty"`
+	// CheckoutDirectoryUnusable, with the dedicated ao-worker user and no
+	// CheckoutDirectory, is why the project's working folder could not be the
+	// session's checkout when the session was created
+	// (domain.CoderCheckoutDirectoryUnusableMessage): the session stops with
+	// a working_directory_unusable startup error instead of starting in the
+	// durable root checkout. A release that predates the field ignores it and
+	// keeps the durable root checkout.
+	CheckoutDirectoryUnusable string `json:"checkoutDirectoryUnusable,omitempty"`
 }
 
 // ProtectsSecretFiles reports whether the session's coding agent must not
@@ -268,6 +276,9 @@ type CoderSessionOptions struct {
 	// runs as the workspace user.
 	CheckoutDirectory string
 	CheckoutSiblings  []string
+	// CheckoutDirectoryUnusable is why the project's working folder could not
+	// be resolved to a checkout (see CoderSessionProfile.CheckoutDirectoryUnusable).
+	CheckoutDirectoryUnusable string
 }
 
 // CoderDeploymentOverride redirects a session's Coder provisioning to a specific
@@ -465,7 +476,9 @@ func DecodeCoderSessionProfile(raw json.RawMessage) (CoderSessionProfile, error)
 	} else {
 		profile.CheckoutDirectory = ""
 		profile.CheckoutSiblings = nil
+		profile.CheckoutDirectoryUnusable = ""
 	}
+	profile.CheckoutDirectoryUnusable = strings.TrimSpace(profile.CheckoutDirectoryUnusable)
 	profile.WorkingDirectory = strings.TrimSpace(profile.WorkingDirectory)
 	if err := domain.ValidateCoderWorkingDirectory(profile.WorkingDirectory); err != nil {
 		return CoderSessionProfile{}, err
@@ -951,10 +964,16 @@ func addCoderDevEnvironment(coderProfile map[string]any, override *CoderDeployme
 // WorkingDirectory instead, and a session without one keeps the durable root
 // checkout and its historical profile shape.
 func addCoderCheckoutDirectory(coderProfile map[string]any, coder *CoderSessionOptions, override *CoderDeploymentOverride) error {
-	if coder == nil || strings.TrimSpace(coder.CheckoutDirectory) == "" {
+	if coder == nil {
 		return nil
 	}
 	if override != nil && strings.ToLower(strings.TrimSpace(override.WorkerUser)) == CoderWorkerUserWorkspace {
+		return nil
+	}
+	if strings.TrimSpace(coder.CheckoutDirectory) == "" {
+		if unusable := strings.TrimSpace(coder.CheckoutDirectoryUnusable); unusable != "" {
+			coderProfile["checkoutDirectoryUnusable"] = unusable
+		}
 		return nil
 	}
 	directory := strings.TrimSpace(coder.CheckoutDirectory)

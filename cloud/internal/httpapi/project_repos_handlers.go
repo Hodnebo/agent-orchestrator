@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // projectRepositoryAccessStore reads the GitHub App grants behind a project's
@@ -236,16 +237,21 @@ func (s *Server) prepareGitHubProjectRepos(
 	return normalized, true
 }
 
-// validatePatchedWorkingFolder refuses a project working folder outside the
-// durable root of the organization's bring-your-own Coder connection when its
-// sessions run as the dedicated ao-worker user: the agent's checkout there
-// would not survive a workspace restart (domain.CoderWorkingFolderOutsideDurableRoot).
-// Without such a connection the durable root is not known here, and the
-// session's startup checks the folder instead. With
+// validatePatchedWorkingFolder refuses a project working folder its sessions
+// could not check the repository out in when they run as the dedicated
+// ao-worker user (the deployment's Coder, or a bring-your-own connection's
+// default): one outside the durable root of the organization's
+// bring-your-own Coder connection, where the agent's checkout would not
+// survive a workspace restart (domain.CoderWorkingFolderOutsideDurableRoot),
+// and one inside a hidden folder, whose parents the bootstrap would let the
+// ao-worker user enter (domain.CoderCheckoutDirectory). Without a
+// bring-your-own connection the durable root is not known here, and the
+// session's startup checks the folder instead. The workspace user works in
+// the template's own folder, so nothing is checked for it. With
 // AO_CLOUD_CODER_WORKER_WORKING_FOLDER off an ao-worker session ignores the
-// working folder, so nothing is checked. It reports whether the request may
-// continue and writes the error when not.
-func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Request, orgID string, patch json.RawMessage) bool {
+// working folder, so nothing is checked either. It reports whether the
+// request may continue and writes the error when not.
+func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Request, orgID, projectID string, patch json.RawMessage) bool {
 	if !s.provisioning.Coder.WorkerWorkingFolder {
 		return true
 	}
@@ -256,24 +262,42 @@ func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Req
 		strings.TrimSpace(*keys.WorkingDirectory) == "" {
 		return true
 	}
-	config, err := json.Marshal(map[string]string{"workingDirectory": *keys.WorkingDirectory})
+	folder := domain.NormalizeCoderWorkingDirectory(strings.TrimSpace(*keys.WorkingDirectory))
+	config, err := json.Marshal(map[string]string{"workingDirectory": folder})
 	if err != nil {
 		return true
 	}
 	placement, err := s.orgCoderPlacement(r.Context(), principalFrom(r), orgID, config, "")
-	if err != nil || placement.override == nil ||
-		placement.override.WorkerUser == domain.CoderWorkerUserWorkspace {
-		// No readable bring-your-own connection, or the workspace user (whose
-		// working folder is the template's own checkout): nothing to check.
+	if err != nil || (placement.override != nil && placement.override.WorkerUser == domain.CoderWorkerUserWorkspace) {
+		// No readable connection, or the workspace user (whose working folder
+		// is the template's own checkout): nothing to check.
 		return true
 	}
-	if outside, shown := domain.CoderWorkingFolderOutsideDurableRoot(*keys.WorkingDirectory, placement.override.DurableRoot); outside {
-		example := "~/work/{repo}"
-		if strings.HasPrefix(shown, "/") {
-			example = shown + "/work/{repo}"
+	if placement.override != nil {
+		if outside, shown := domain.CoderWorkingFolderOutsideDurableRoot(folder, placement.override.DurableRoot); outside {
+			example := "~/work/{repo}"
+			if strings.HasPrefix(shown, "/") {
+				example = shown + "/work/{repo}"
+			}
+			writeError(w, r, http.StatusUnprocessableEntity, domain.CoderWorkingFolderNotDurableCode,
+				domain.CoderWorkingFolderNotDurableMessage(shown)+" Choose a folder there, for example "+example+".")
+			return false
 		}
-		writeError(w, r, http.StatusUnprocessableEntity, domain.CoderWorkingFolderNotDurableCode,
-			domain.CoderWorkingFolderNotDurableMessage(shown)+" Choose a folder there, for example "+example+".")
+	}
+	// The folder is checked as a session would resolve it, for the project's
+	// main repository; a standalone project's sessions ignore it.
+	project, err := s.store.GetProject(r.Context(), principalFrom(r), orgID, projectID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return false
+	}
+	if strings.TrimSpace(project.RepositoryURL) == "" || worker.IsScratchRepositoryURL(project.RepositoryURL) {
+		return true
+	}
+	if _, err := domain.CoderCheckoutDirectory(folder, project.RepositoryURL); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, domain.WorkspaceStartupErrorWorkingDirectory,
+			strings.TrimSuffix(err.Error(), ".")+": AO checks the repository out there as its own ao-worker user, "+
+				"which must not reach folders such as ~/.ssh. Choose another folder, for example ~/work/{repo}.")
 		return false
 	}
 	return true

@@ -463,18 +463,23 @@ func resolveCoderPlacement(
 // project's main repository (domain.CoderCheckoutDirectory), as the session's
 // checkout folder for a worker that runs as the dedicated ao-worker user. A
 // project without a working folder or without a repository (standalone) keeps
-// the default checkout. The folder was validated when the project saved it.
+// the default checkout. A folder the checkout refuses (for example one inside
+// a hidden folder, which a project saved before that rule, or saved without an
+// ao-worker connection, may still hold) is recorded as the reason instead, so
+// the session stops with a working_directory_unusable startup error rather
+// than quietly starting in the default checkout.
 func (p *coderPlacement) addCheckoutDirectory(projectConfig json.RawMessage, repositoryURL string) {
 	directory := domain.ProjectWorkingDirectory(projectConfig)
 	if directory == "" || strings.TrimSpace(repositoryURL) == "" || worker.IsScratchRepositoryURL(repositoryURL) {
 		return
 	}
-	checkout, err := domain.CoderCheckoutDirectory(directory, repositoryURL)
-	if err != nil {
-		return
-	}
 	if p.options == nil {
 		p.options = &sandbox.CoderSessionOptions{}
+	}
+	checkout, err := domain.CoderCheckoutDirectory(directory, repositoryURL)
+	if err != nil {
+		p.options.CheckoutDirectoryUnusable = domain.CoderCheckoutDirectoryUnusableMessage(directory, err)
+		return
 	}
 	p.options.CheckoutDirectory = checkout
 	p.options.CheckoutSiblings = domain.CoderCheckoutSiblings(projectConfig, checkout)

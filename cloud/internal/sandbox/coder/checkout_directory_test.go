@@ -125,6 +125,43 @@ func TestAOWorkerBootstrapRefusesAWorkingFolderOutsideTheDurableRoot(t *testing.
 	}
 }
 
+// A session whose project working folder could not be its checkout when it
+// was created (for example one inside a hidden folder) stops with a
+// working_directory_unusable startup error before anything is installed,
+// instead of starting in the durable root checkout. The reason reaches the
+// session client from its profile.
+func TestAOWorkerBootstrapRefusesAnUnusableWorkingFolder(t *testing.T) {
+	t.Parallel()
+	const reason = "AO couldn't use this project's working folder (~/.config/{repo}): The working folder must not be inside a hidden folder. " +
+		"Change it in Project settings > Repositories, then start a new session."
+	fake := newDevEnvCoder(t, nil)
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+	base := newTestClient(t, server.URL, nil)
+	provider, err := base.ForSandbox(domain.Sandbox{SessionID: "session-1", ResourceProfile: json.RawMessage(
+		`{"coder":{"baseUrl":"` + server.URL + `","owner":"ao-integration","templateId":"` + testTemplateID +
+			`","durableRoot":"$HOME","checkoutDirectoryUnusable":` + strconvQuote(reason) + `}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := provider.(*Client)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = client.BootstrapWorker(ctx, testWorkspaceID, multiArchBootstrap(sandbox.CoderHomeDurableRoot))
+	var startupErr *sandbox.StartupError
+	if !errors.As(err, &startupErr) || startupErr.Code != sandbox.StartupErrorWorkingDirectoryUnusable || startupErr.Message != reason {
+		t.Fatalf("bootstrap error = %#v", err)
+	}
+	if archive := fake.lastArchive(); archive != nil {
+		t.Fatalf("the worker was installed: %v", archive)
+	}
+}
+
+func strconvQuote(value string) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
+}
+
 // Without a working folder the dedicated-user bootstrap is exactly the
 // historical one: the durable root checkout, group-writable for its siblings.
 func TestAOWorkerBootstrapWithoutWorkingFolderKeepsTheDurableRootCheckout(t *testing.T) {

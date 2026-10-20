@@ -513,6 +513,15 @@ func ValidateCoderCheckoutDirectory(value string) error {
 	return nil
 }
 
+// CoderCheckoutDirectoryUnusableMessage is the startup error a session shows
+// when its project's working folder (template, as saved) cannot be its
+// ao-worker checkout (CoderCheckoutDirectory refused it with err).
+func CoderCheckoutDirectoryUnusableMessage(template string, err error) string {
+	return fmt.Sprintf("AO couldn't use this project's working folder (%s): %s. "+
+		"Change it in Project settings > Repositories, then start a new session.",
+		strings.TrimSpace(template), strings.TrimSuffix(err.Error(), "."))
+}
+
 // coderFolderInsideHiddenFolder reports whether one of a working
 // folder's parent folders is hidden. The ao-worker bootstrap lets the worker
 // user enter the checkout's parent folders (chmod o+x), and a hidden one

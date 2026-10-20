@@ -57,6 +57,28 @@ func TestCoderPlanStampsTheWorkingFolderCheckout(t *testing.T) {
 			}
 		})
 	}
+	// A working folder that could not be resolved to a checkout carries its
+	// reason to the session for an ao-worker session only.
+	unusable := &CoderSessionOptions{CheckoutDirectoryUnusable: "AO couldn't use this project's working folder (~/.config/{repo})."}
+	for _, tc := range []struct {
+		name     string
+		defaults ProvisioningDefaults
+		override *CoderDeploymentOverride
+		want     string
+	}{
+		{"byo ao-worker", byo, &override, unusable.CheckoutDirectoryUnusable},
+		{"deployment coder", deployment, nil, unusable.CheckoutDirectoryUnusable},
+		{"workspace user", byo, &workspaceUser, ""},
+		{"working folder off", flagOff, nil, ""},
+	} {
+		plan, err := tc.defaults.SessionPlanForProviderWithCoder("claude-code", ProviderCoder, unusable, tc.override)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if profile := decodePlanCoderProfile(t, plan); profile.CheckoutDirectoryUnusable != tc.want || profile.CheckoutDirectory != "" {
+			t.Fatalf("%s: profile = %+v, want unusable %q", tc.name, profile, tc.want)
+		}
+	}
 	bad := &CoderSessionOptions{CheckoutDirectory: "~/work/{repo}"}
 	if _, err := byo.SessionPlanForProviderWithCoder("claude-code", ProviderCoder, bad, &override); err == nil {
 		t.Fatal("an unresolved {repo} was stamped")
@@ -87,6 +109,13 @@ func TestDecodeCoderSessionProfileCheckoutDirectory(t *testing.T) {
 	hidden, err := decode(`,"workerUser":"workspace","workingDirectory":"~/.config/{repo}"`)
 	if err != nil || hidden.WorkingDirectory != "~/.config/{repo}" {
 		t.Fatalf("workspace-user profile in a hidden folder = %+v, %v", hidden, err)
+	}
+	if unusable, err := decode(`,"checkoutDirectoryUnusable":" The folder is hidden. "`); err != nil || unusable.CheckoutDirectoryUnusable != "The folder is hidden." {
+		t.Fatalf("an unusable working folder = %+v, %v", unusable, err)
+	}
+	if workspaceUnusable, err := decode(`,"workerUser":"workspace","checkoutDirectoryUnusable":"The folder is hidden."`); err != nil ||
+		workspaceUnusable.CheckoutDirectoryUnusable != "" {
+		t.Fatalf("a workspace-user profile kept an unusable working folder = %+v, %v", workspaceUnusable, err)
 	}
 	if github, err := decode(`,"checkoutDirectory":"~/work/.github"`); err != nil || github.CheckoutDirectory != "~/work/.github" {
 		t.Fatalf("a .github checkout = %+v, %v", github, err)
