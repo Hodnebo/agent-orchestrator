@@ -516,7 +516,16 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 					}}
 					onCloseAutoFocus={restoreFocusOnClose}
 					onPointerDownOutside={(event) => {
-						if (event.detail.originalEvent === bodyPointerDown.current) event.preventDefault();
+						if (event.detail.originalEvent === bodyPointerDown.current) {
+							event.preventDefault();
+							return;
+						}
+						// An open picker or menu takes the first outside click to close
+						// itself, as Escape does; the dialog closes on the next one. A
+						// tooltip is not a popup that holds the click.
+						const openPopup = Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((wrapper) =>
+							!contentRef.current?.contains(wrapper) && wrapper.querySelector('[role="dialog"], [role="menu"], [role="listbox"]'));
+						if (openPopup) event.preventDefault();
 					}}
 					onEscapeKeyDown={(event) => {
 						const target = event.target instanceof Element ? event.target : null;

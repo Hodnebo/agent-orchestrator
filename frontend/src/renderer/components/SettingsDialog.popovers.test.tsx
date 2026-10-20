@@ -89,6 +89,20 @@ it("closes an open picker on Escape before the dialog, then the dialog", async (
 	await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 });
 
+it("closes an open picker on a backdrop click before the dialog, then the dialog", async () => {
+	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-1" });
+	renderSettings();
+	await userEvent.click(await screen.findByRole("combobox", { name: "Additional repository 1" }));
+	expect(await screen.findByRole("listbox")).toBeInTheDocument();
+
+	await userEvent.click(screen.getByTestId("settings-dialog-overlay"));
+	await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+	expect(useUiStore.getState().settingsModal).not.toBeNull();
+
+	await userEvent.click(screen.getByTestId("settings-dialog-overlay"));
+	await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+});
+
 it("still closes on a click on the backdrop", async () => {
 	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-1" });
 	renderSettings();
