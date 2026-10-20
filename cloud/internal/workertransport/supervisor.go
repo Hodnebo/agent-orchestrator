@@ -224,7 +224,9 @@ func (s *Supervisor) MarkWorkspaceReady() {
 // interface command, and reports whether it started the agent. A command it
 // does not start is cleaned up.
 func (s *Supervisor) StartStartupAgent(ctx context.Context, command workerexec.Command) (bool, error) {
-	started := false
+	// Atomic: when ctx ends first, runOnLoop returns while the loop may still
+	// run the command.
+	var started atomic.Bool
 	err := s.runOnLoop(ctx, func(ctx context.Context) error {
 		s.mu.Lock()
 		superseded := s.pendingTUIStart != nil || s.agentStarted || s.agentStarting
@@ -245,10 +247,10 @@ func (s *Supervisor) StartStartupAgent(ctx context.Context, command workerexec.C
 		if err := s.StartAgent(ctx, command, terminal); err != nil {
 			return fmt.Errorf("start interactive coding-agent terminal: %w", err)
 		}
-		started = true
+		started.Store(true)
 		return nil
 	})
-	return started, err
+	return started.Load(), err
 }
 
 // Interface is the committed interface the transport runs ("tui" or "chat").

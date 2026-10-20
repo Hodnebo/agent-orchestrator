@@ -257,3 +257,49 @@ func TestTerminalSessionStartsItsAgentOnceTheWorkspaceIsReady(t *testing.T) {
 		t.Fatal("the started agent's task still holds a drain")
 	}
 }
+
+// blockingAgentTerminalControl holds EnsureAgentTerminal until release closes.
+type blockingAgentTerminalControl struct {
+	supervisorControlStub
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingAgentTerminalControl) EnsureAgentTerminal(ctx context.Context) (worker.AgentTerminalResponse, error) {
+	close(c.entered)
+	<-c.release
+	return c.supervisorControlStub.EnsureAgentTerminal(ctx)
+}
+
+// StartStartupAgent returns when its context ends while the loop may still
+// run its start; reading the result then must not race the loop writing it
+// (run with -race).
+func TestStartStartupAgentResultDoesNotRaceTheLoopWhenItsContextEnds(t *testing.T) {
+	control := &blockingAgentTerminalControl{
+		supervisorControlStub: supervisorControlStub{agentTerminal: "00000000-0000-0000-0000-000000000062"},
+		entered:               make(chan struct{}), release: make(chan struct{}),
+	}
+	s := &Supervisor{
+		Control: control, Workspace: t.TempDir(),
+		terminals: make(map[string]*terminalProcess), iface: InterfaceTransition{current: InterfaceTUI},
+	}
+	defer s.closeAllTerminals()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan bool, 1)
+	go func() {
+		started, _ := s.StartStartupAgent(ctx, workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "sleep 30"}})
+		result <- started
+	}()
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		for !s.runLoopCommands(context.Background()) {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	<-control.entered
+	close(control.release)
+	cancel()
+	<-result
+	<-loopDone
+}
