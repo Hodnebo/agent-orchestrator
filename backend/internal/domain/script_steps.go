@@ -26,7 +26,7 @@ const (
 
 const scriptTimeoutMarker = "# ao-timeout: "
 
-var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\r?\n`)
+var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: (\d{1,4})m\r?\n`)
 
 // ParseTimedScriptCommand splits a step into its time limit in minutes (as
 // written, so possibly out of range) and its command without the marker line;
