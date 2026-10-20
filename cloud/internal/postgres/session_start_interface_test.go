@@ -33,45 +33,66 @@ func initialTurn(t *testing.T, admin *pgxpool.Pool, sessionID string) (state str
 	return state, true, payload["turnId"] == turnID
 }
 
-// A session created in Chat is stored in Chat with its prompt queued as the
-// first turn, which is the only work the Chat controller takes. A TUI session
-// (the default) keeps the prompt on the agent's command line and queues
-// nothing, exactly as before.
+// A session's interface is resolved at create exactly as a local spawn's: an
+// orchestrator starts in Chat, a worker in the default it was created with,
+// and Chat only for a harness that can start in it. A Chat session's prompt is
+// queued as the first turn, the only work the Chat controller takes; a TUI
+// session keeps the prompt on the agent's command line and queues nothing.
 func TestCreateSessionStartInterface(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
 	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
-	create := func(harness string, iface domain.SessionInterface) domain.Session {
+	create := func(kind, harness string, defaultInterface domain.SessionInterface) domain.Session {
 		t.Helper()
+		// A project has one active orchestrator, so each gets its own.
+		projectID := fixture.projectID
+		if kind == "orchestrator" {
+			projectID = uuid.NewString()
+			if _, err := admin.Exec(ctx, `INSERT INTO ao_projects (id, org_id, display_name, repository_url) VALUES ($1, $2, 'P', $3)`,
+				projectID, fixture.orgID, "https://example.test/"+projectID); err != nil {
+				t.Fatal(err)
+			}
+		}
 		session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
-			ProjectID: fixture.projectID, Kind: "worker", Harness: harness, DisplayName: "s", Prompt: "do the work",
-			Provider: "docker", Interface: iface,
+			ProjectID: projectID, Kind: kind, Harness: harness, DisplayName: "s", Prompt: "do the work",
+			Provider: "docker", DefaultInterface: defaultInterface,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return session
 	}
-
-	chat := create("claude-code", domain.SessionInterfaceChat)
-	if chat.Interface != domain.SessionInterfaceChat {
-		t.Fatalf("chat session interface = %q", chat.Interface)
-	}
-	if state, found, linked := initialTurn(t, admin, chat.ID); !found || state != "queued" || !linked {
-		t.Fatalf("chat initial turn: state=%q found=%v linked=%v, want a queued turn the message names", state, found, linked)
-	}
-
-	for name, session := range map[string]domain.Session{
-		"omitted":   create("claude-code", ""),
-		"tui":       create("codex", domain.SessionInterfaceTUI),
-		"cursor":    create("cursor", domain.SessionInterfaceChat),
-		"tui codex": create("codex", ""),
+	for _, tc := range []struct {
+		name, kind, harness string
+		defaultInterface    domain.SessionInterface
+		want                domain.SessionInterface
+	}{
+		{"claude worker, chat default", "worker", "claude-code", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"codex worker, chat default", "worker", "codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
+		{"cursor worker, chat default", "worker", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
+		{"worker, tui default", "worker", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceTUI},
+		{"worker, no default", "worker", "claude-code", "", domain.SessionInterfaceTUI},
+		{"codex orchestrator, no default", "orchestrator", "codex", "", domain.SessionInterfaceChat},
+		{"claude orchestrator, tui default", "orchestrator", "claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
+		{"cursor orchestrator", "orchestrator", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
 	} {
-		if session.Interface != domain.SessionInterfaceTUI {
-			t.Fatalf("%s: interface = %q, want tui", name, session.Interface)
+		session := create(tc.kind, tc.harness, tc.defaultInterface)
+		if session.Interface != tc.want {
+			t.Fatalf("%s: interface = %q, want %q", tc.name, session.Interface, tc.want)
 		}
-		if _, found, _ := initialTurn(t, admin, session.ID); found {
-			t.Fatalf("%s: a TUI session queued its prompt as a turn", name)
+		state, found, linked := initialTurn(t, admin, session.ID)
+		if tc.want == domain.SessionInterfaceChat && (!found || state != "queued" || !linked) {
+			t.Fatalf("%s: initial turn state=%q found=%v linked=%v, want a queued turn the message names", tc.name, state, found, linked)
+		}
+		if tc.want == domain.SessionInterfaceTUI && found {
+			t.Fatalf("%s: a TUI session queued its prompt as a turn", tc.name)
+		}
+		var stored string
+		if err := admin.QueryRow(ctx, `SELECT default_interface FROM ao_sessions WHERE id = $1`, session.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != string(tc.defaultInterface) {
+			t.Fatalf("%s: stored default = %q, want %q", tc.name, stored, tc.defaultInterface)
 		}
 	}
 }
@@ -102,6 +123,9 @@ func TestCreateSessionIdempotencyPayloadUnchangedWithoutInterface(t *testing.T) 
 	if stored["Interface"] != "tui" {
 		t.Fatalf("stored payload Interface = %v, want tui (the pre-change payload)", stored["Interface"])
 	}
+	if _, ok := stored["DefaultInterface"]; ok {
+		t.Fatalf("stored payload carries DefaultInterface: %s", raw)
+	}
 	replay, err := store.CreateSession(ctx, principal, fixture.orgID, key, 100, input)
 	if err != nil || replay.ID != first.ID {
 		t.Fatalf("replay = %q, %v; want %q", replay.ID, err, first.ID)
@@ -113,13 +137,18 @@ func TestCreateSessionIdempotencyPayloadUnchangedWithoutInterface(t *testing.T) 
 	}
 }
 
-// A worker an orchestrator spawns starts in the orchestrator's interface when
-// its harness can start there.
-func TestCreateOrchestratorChildInheritsInterface(t *testing.T) {
+// A worker an orchestrator spawns resolves its interface from the default its
+// orchestrator was created with, as a local spawn resolves from the daemon's
+// default; the orchestrator's own interface (Chat) does not decide it.
+func TestCreateOrchestratorChildResolvesFromTheOrchestratorsDefault(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
-	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator', interface = 'chat' WHERE id = $1`, fixture.sessionID); err != nil {
-		t.Fatal(err)
+	setParent := func(defaultInterface string) {
+		t.Helper()
+		if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator', interface = 'chat', default_interface = $2 WHERE id = $1`,
+			fixture.sessionID, defaultInterface); err != nil {
+			t.Fatal(err)
+		}
 	}
 	spawn := func(harness string) domain.Session {
 		t.Helper()
@@ -131,19 +160,20 @@ func TestCreateOrchestratorChildInheritsInterface(t *testing.T) {
 		}
 		return child
 	}
+	setParent("chat")
 	if child := spawn("codex"); child.Interface != domain.SessionInterfaceChat {
-		t.Fatalf("codex child of a Chat orchestrator = %q, want chat", child.Interface)
+		t.Fatalf("codex child, chat default = %q, want chat", child.Interface)
 	} else if state, found, _ := initialTurn(t, admin, child.ID); !found || state != "queued" {
 		t.Fatalf("chat child initial turn: state=%q found=%v", state, found)
 	}
 	if child := spawn("cursor"); child.Interface != domain.SessionInterfaceTUI {
 		t.Fatalf("cursor child = %q, want tui", child.Interface)
 	}
-	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET interface = 'tui' WHERE id = $1`, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if child := spawn("claude-code"); child.Interface != domain.SessionInterfaceTUI {
-		t.Fatalf("claude child of a TUI orchestrator = %q, want tui", child.Interface)
+	for _, defaultInterface := range []string{"tui", ""} {
+		setParent(defaultInterface)
+		if child := spawn("claude-code"); child.Interface != domain.SessionInterfaceTUI {
+			t.Fatalf("claude child of a Chat orchestrator with default %q = %q, want tui", defaultInterface, child.Interface)
+		}
 	}
 }
 

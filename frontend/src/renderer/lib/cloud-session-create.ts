@@ -3,34 +3,35 @@ import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, 
 import type { Settings } from "../hooks/useSettings";
 
 /**
- * The interface a new cloud session asks to start in: the daemon-owned
- * "Default session interface" (Settings > General), which local spawns apply
- * too. The control plane decides per harness, as the local daemon does: it
- * starts Chat only for a harness that can start there and silently starts any
- * other in the terminal, so the desktop keeps no harness list of its own.
- * "tui" is not sent, which keeps the request an older desktop sent.
+ * The default session interface a new cloud session is created with: the
+ * daemon-owned "Default session interface" (Settings > General), which local
+ * spawns resolve from too. The control plane resolves the session's interface
+ * from it exactly as the local daemon does, per kind and harness, so the
+ * desktop keeps no rule or harness list of its own. "tui" is not sent, which
+ * keeps the request an older desktop sent.
  */
-export function cloudSessionInterfaceMode(
+export function cloudDefaultInterfaceMode(
 	settings: Pick<Settings, "defaultSessionMode"> | undefined,
 ): CloudCpInterfaceMode | undefined {
 	return settings?.defaultSessionMode === "chat" ? "chat" : undefined;
 }
 
 /**
- * Creates a cloud session that starts in interfaceMode. A control plane that
- * predates the field rejects the whole body with 400 invalid_request before
- * creating anything, so the create is sent again without it and the session
- * starts in the terminal, as every session did there.
+ * Creates a cloud session with the user's default session interface. A
+ * control plane that predates the field rejects the whole body with 400
+ * invalid_request before creating anything, so the create is sent again
+ * without it and the session starts in the terminal, as every session did
+ * there.
  */
 export async function createCloudSession(
 	client: Pick<CloudCpClient, "createSession">,
 	orgId: string,
 	body: CloudCpCreateSessionRequest,
-	interfaceMode: CloudCpInterfaceMode | undefined,
+	defaultInterfaceMode: CloudCpInterfaceMode | undefined,
 ): Promise<CloudCpSessionResponse> {
-	if (interfaceMode === undefined) return client.createSession(orgId, body);
+	if (defaultInterfaceMode === undefined) return client.createSession(orgId, body);
 	try {
-		return await client.createSession(orgId, { ...body, interfaceMode });
+		return await client.createSession(orgId, { ...body, defaultInterfaceMode });
 	} catch (error) {
 		if (!(error instanceof CloudCpError) || error.status !== 400 || error.code !== "invalid_request") throw error;
 		return client.createSession(orgId, body);

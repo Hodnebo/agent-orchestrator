@@ -1207,7 +1207,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "chat" }));
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ defaultInterfaceMode: "chat" }));
 	});
 
 	it("starts a cloud task in the terminal without asking when that is the default", async () => {
@@ -1221,7 +1221,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("interfaceMode");
+		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
 
 	it("leaves the sandbox provider to the project and org default on the control plane", async () => {

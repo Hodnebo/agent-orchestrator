@@ -11,8 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
-// createSessionWithInterface posts a session create for harness, adding an
-// interfaceMode field when interfaceMode is not empty.
+// createSessionWithInterface posts a session create for harness, adding a
+// defaultInterfaceMode field when interfaceMode is not empty.
 func createSessionWithInterface(t *testing.T, store *stubAutolinkStore, harness, interfaceMode string) *httptest.ResponseRecorder {
 	t.Helper()
 	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
@@ -23,7 +23,7 @@ func createSessionWithInterface(t *testing.T, store *stubAutolinkStore, harness,
 	}
 	text := strings.Replace(string(body), `"harness":"claude-code"`, `"harness":"`+harness+`"`, 1)
 	if interfaceMode != "" {
-		text = strings.TrimSuffix(text, "}") + `,"interfaceMode":"` + interfaceMode + `"}`
+		text = strings.TrimSuffix(text, "}") + `,"defaultInterfaceMode":"` + interfaceMode + `"}`
 	}
 	req.Body = io.NopCloser(strings.NewReader(text))
 	recorder := httptest.NewRecorder()
@@ -31,32 +31,29 @@ func createSessionWithInterface(t *testing.T, store *stubAutolinkStore, harness,
 	return recorder
 }
 
-// The desktop sends its default session interface on create. Chat is honored
-// for a harness that may start in Chat and silently becomes the TUI for any
-// other; a request without the field (an older desktop) starts in the TUI.
-func TestCreateSessionInterfaceMode(t *testing.T) {
-	cases := []struct {
-		name          string
-		harness       string
-		interfaceMode string
-		want          domain.SessionInterface
+// The desktop sends its default session interface on create; the control
+// plane stores it on the create, where the session's interface is resolved
+// from it (postgres, domain.StartInterface). A request without the field (an
+// older desktop) carries no default.
+func TestCreateSessionDefaultInterfaceMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, interfaceMode string
+		want                         domain.SessionInterface
 	}{
-		{"omitted", "claude-code", "", domain.SessionInterfaceTUI},
+		{"omitted", "claude-code", "", ""},
 		{"tui", "claude-code", "tui", domain.SessionInterfaceTUI},
-		{"claude chat", "claude-code", "chat", domain.SessionInterfaceChat},
-		{"codex chat", "codex", "chat", domain.SessionInterfaceChat},
-		{"cursor chat falls back", "cursor", "chat", domain.SessionInterfaceTUI},
-		{"opencode chat falls back", "opencode", "chat", domain.SessionInterfaceTUI},
-	}
-	for _, tc := range cases {
+		{"chat", "codex", "chat", domain.SessionInterfaceChat},
+		{"chat for a harness that cannot start in it", "cursor", "chat", domain.SessionInterfaceChat},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &stubAutolinkStore{}
 			recorder := createSessionWithInterface(t, store, tc.harness, tc.interfaceMode)
 			if recorder.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want 201; body = %s", recorder.Code, recorder.Body)
 			}
-			if store.captured.Interface != tc.want {
-				t.Fatalf("interface = %q, want %q", store.captured.Interface, tc.want)
+			if store.captured.DefaultInterface != tc.want || store.captured.Interface != "" {
+				t.Fatalf("default = %q interface = %q, want default %q and no explicit request",
+					store.captured.DefaultInterface, store.captured.Interface, tc.want)
 			}
 		})
 	}

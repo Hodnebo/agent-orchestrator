@@ -612,6 +612,15 @@ func (s *Store) CreateGitHubScratchProject(
 	return project, session, err
 }
 
+// defaultInterfaceValue is the stored form of a session's default interface:
+// a valid interface, or empty when the client sent none.
+func defaultInterfaceValue(value domain.SessionInterface) string {
+	if value.Valid() {
+		return string(value)
+	}
+	return ""
+}
+
 func createSessionTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -627,6 +636,10 @@ func createSessionTx(
 	if input.DeniedCommands == nil {
 		input.DeniedCommands = []string{}
 	}
+	// The idempotency payload keeps its historical shape, an interface that
+	// always reads tui unless one was requested; the interface the session
+	// starts in is resolved below, once the harness is known.
+	requestedInterface := input.Interface
 	if !input.Interface.Valid() {
 		input.Interface = domain.SessionInterfaceTUI
 	}
@@ -742,9 +755,7 @@ func createSessionTx(
 		return domain.Session{}, ErrInvalid
 	}
 	input.Harness, input.Model = harness, agentConfig.Model
-	// The project may supply the harness; Chat holds only for one that can
-	// start in it.
-	input.Interface = domain.StartInterface(input.Interface, input.Harness)
+	input.Interface = domain.StartInterface(input.Kind, requestedInterface, input.DefaultInterface, input.Harness)
 	agentConfigJSON, err := json.Marshal(agentConfig)
 	if err != nil {
 		return domain.Session{}, err
@@ -763,10 +774,10 @@ func createSessionTx(
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
-			auto_review_enabled
+			auto_review_enabled, default_interface
 		)
 		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16, $18
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -786,6 +797,7 @@ func createSessionTx(
 		prefix,
 		autoReview,
 		input.Branch,
+		defaultInterfaceValue(input.DefaultInterface),
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)

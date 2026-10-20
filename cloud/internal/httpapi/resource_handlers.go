@@ -104,11 +104,11 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
-	// InterfaceMode is the interface the session starts in: "tui" or "chat",
-	// the desktop's default session interface. Optional: empty is the TUI.
-	// Chat is honored only for a harness that may start in Chat
-	// (domain.HarnessStartsInChat); any other harness starts in the TUI.
-	InterfaceMode string `json:"interfaceMode,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface ("tui" or
+	// "chat"), the desktop's setting, which the control plane resolves the
+	// session's interface from exactly as the local daemon does
+	// (domain.StartInterface). Optional: empty is the TUI default.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -526,7 +526,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
-	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
+	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
@@ -534,8 +534,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
 		return
 	}
-	if request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid() {
-		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "interfaceMode must be tui or chat.")
+	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -705,7 +705,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
-			Interface:           domain.StartInterface(domain.SessionInterface(request.InterfaceMode), request.Harness),
+			DefaultInterface:    domain.SessionInterface(request.DefaultInterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,

@@ -374,12 +374,15 @@ export interface CloudCpCreateSessionRequest {
 	 */
 	provider?: string;
 	/**
-	 * Interface the session starts in. Optional: omitted is "tui". The control
-	 * plane honors "chat" only for a harness it starts in Chat and starts any
-	 * other in "tui". An older control plane rejects the field (see
-	 * createCloudSession).
+	 * The user's default session interface (Settings > General). The control
+	 * plane resolves the session's interface from it exactly as the local
+	 * daemon resolves a spawn's: an orchestrator starts in Chat, a worker in
+	 * this default, and Chat only for a harness that can start there. An
+	 * orchestrator's workers resolve from the default it was created with.
+	 * Optional: omitted is "tui". An older control plane rejects the field
+	 * (see createCloudSession).
 	 */
-	interfaceMode?: CloudCpInterfaceMode;
+	defaultInterfaceMode?: CloudCpInterfaceMode;
 }
 
 export interface CloudCpSessionRepo {

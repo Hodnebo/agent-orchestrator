@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpCreateSessionRequest } from "./cloud-cp";
-import { cloudSessionInterfaceMode, createCloudSession } from "./cloud-session-create";
+import { cloudDefaultInterfaceMode, createCloudSession } from "./cloud-session-create";
 
 const body: CloudCpCreateSessionRequest = {
 	projectId: "project-1",
@@ -11,11 +11,11 @@ const body: CloudCpCreateSessionRequest = {
 	prompt: "do the work",
 };
 
-describe("cloudSessionInterfaceMode", () => {
+describe("cloudDefaultInterfaceMode", () => {
 	it("asks for Chat only when the default session interface is Chat", () => {
-		expect(cloudSessionInterfaceMode({ defaultSessionMode: "chat" })).toBe("chat");
-		expect(cloudSessionInterfaceMode({ defaultSessionMode: "tui" })).toBeUndefined();
-		expect(cloudSessionInterfaceMode(undefined)).toBeUndefined();
+		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "chat" })).toBe("chat");
+		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "tui" })).toBeUndefined();
+		expect(cloudDefaultInterfaceMode(undefined)).toBeUndefined();
 	});
 });
 
@@ -24,14 +24,14 @@ describe("createCloudSession", () => {
 		const createSession = vi.fn().mockResolvedValue({ session: { id: "s1" } });
 		await createCloudSession({ createSession }, "org-1", body, "chat");
 		expect(createSession).toHaveBeenCalledTimes(1);
-		expect(createSession).toHaveBeenCalledWith("org-1", { ...body, interfaceMode: "chat" });
+		expect(createSession).toHaveBeenCalledWith("org-1", { ...body, defaultInterfaceMode: "chat" });
 	});
 
 	it("sends the request an older desktop sent when there is no interface to ask for", async () => {
 		const createSession = vi.fn().mockResolvedValue({ session: { id: "s1" } });
 		await createCloudSession({ createSession }, "org-1", body, undefined);
 		expect(createSession).toHaveBeenCalledWith("org-1", body);
-		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("interfaceMode");
+		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
 
 	it("retries without the field on a control plane that rejects it", async () => {

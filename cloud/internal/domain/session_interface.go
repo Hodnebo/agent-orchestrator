@@ -41,7 +41,7 @@ func (i SessionInterface) Normalized() SessionInterface {
 // chatStartHarnesses are the harnesses a new cloud session may start in Chat.
 // Every other harness starts in the terminal TUI and may still switch to Chat
 // later where interface handoff supports it (cursor). Adding a harness here is
-// the whole change: session create and orchestrator spawn resolve through
+// the whole change: every cloud session create resolves through
 // StartInterface, and the desktop sends the user's default unfiltered.
 var chatStartHarnesses = []string{"claude-code", "codex"}
 
@@ -51,15 +51,35 @@ func HarnessStartsInChat(harness string) bool {
 	return slices.Contains(chatStartHarnesses, harness)
 }
 
-// StartInterface is the interface a new session of harness starts in when
-// requested is asked for: Chat only for a harness that may start in Chat,
-// otherwise the TUI. An unsupported request falls back silently, like the
-// local daemon's default session interface.
-func StartInterface(requested SessionInterface, harness string) SessionInterface {
-	if requested == SessionInterfaceChat && HarnessStartsInChat(harness) {
+// StartInterface is the interface a new session starts in, resolved exactly as
+// the local daemon resolves a spawn's mode (backend session_manager
+// startSessionMode; both are tested against
+// contracts/session-start-interface.json):
+//
+//  1. the interface the caller explicitly requested;
+//  2. Chat for an orchestrator;
+//  3. the user's default session interface (the desktop's setting);
+//  4. TUI.
+//
+// Chat then holds only for a harness that may start in Chat; any other
+// harness starts in the TUI without an error, as the local daemon falls back
+// when Chat is unavailable for a mode it did not explicitly request.
+func StartInterface(kind string, requested, defaultInterface SessionInterface, harness string) SessionInterface {
+	resolved := startPrecedence(kind, requested, defaultInterface)
+	if resolved == SessionInterfaceChat && !HarnessStartsInChat(harness) {
+		return SessionInterfaceTUI
+	}
+	return resolved
+}
+
+func startPrecedence(kind string, requested, defaultInterface SessionInterface) SessionInterface {
+	if requested.Valid() {
+		return requested
+	}
+	if kind == "orchestrator" {
 		return SessionInterfaceChat
 	}
-	return SessionInterfaceTUI
+	return defaultInterface.Normalized()
 }
 
 func (i SessionInterface) Opposite() SessionInterface {

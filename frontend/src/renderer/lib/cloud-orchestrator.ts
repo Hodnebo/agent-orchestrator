@@ -5,7 +5,7 @@ import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { selectActiveOrganization } from "./cloud-offering";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { captureRendererEvent } from "./telemetry";
-import { cloudSessionInterfaceMode, createCloudSession } from "./cloud-session-create";
+import { cloudDefaultInterfaceMode, createCloudSession } from "./cloud-session-create";
 
 // A cloud project has no locally-configured orchestrator agent (that config
 // lives in the local daemon's project settings), so the launchers must not
@@ -93,8 +93,9 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 	try {
 		// No provider: the control plane runs the session on the project's stored
 		// provider (config.sandboxProvider), else the org's default.
-		// It starts in the user's default session interface; the control plane
-		// gates it per harness.
+		// The control plane resolves its interface as the local daemon does (an
+		// orchestrator starts in Chat where its harness can) and keeps the
+		// user's default for the workers it spawns.
 		const { session } = await createCloudSession(client, orgId, {
 			projectId,
 			kind: "orchestrator",
@@ -103,7 +104,7 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 			// Role instructions are standing system configuration assembled by the
 			// worker; do not duplicate them as a visible user message.
 			prompt: "",
-		}, cloudSessionInterfaceMode(settings));
+		}, cloudDefaultInterfaceMode(settings));
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;
 	} catch (error) {

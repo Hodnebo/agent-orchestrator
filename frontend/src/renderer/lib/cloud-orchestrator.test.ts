@@ -84,7 +84,9 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
-	it("starts in the user's default session interface", async () => {
+	// The control plane starts the orchestrator in Chat as the local daemon does
+	// and keeps the default for the workers it spawns.
+	it("is created with the user's default session interface", async () => {
 		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", undefined]] as const) {
 			const queryClient = primeClient({ id: "project-1" });
 			queryClient.setQueryData<Settings>(settingsQueryKey, {
@@ -95,7 +97,7 @@ describe("spawnCloudOrchestrator", () => {
 			cloudMocks.createSession.mockClear();
 
 			await spawnCloudOrchestrator(queryClient, "project-1");
-			expect(cloudMocks.createSession.mock.calls[0]?.[1]?.interfaceMode).toBe(interfaceMode);
+			expect(cloudMocks.createSession.mock.calls[0]?.[1]?.defaultInterfaceMode).toBe(interfaceMode);
 		}
 	});
 

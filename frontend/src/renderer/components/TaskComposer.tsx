@@ -27,7 +27,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
-import { cloudSessionInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
+import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { fallbackEffort } from "../lib/effort";
 import {
@@ -187,8 +187,8 @@ export function TaskComposer({
 			try {
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
-				// The session starts in the user's default session interface, as a
-				// local task does; the control plane gates it per harness.
+				// The control plane resolves the session's interface from the user's
+				// default session interface, as the local daemon does for a task.
 				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
 					projectId: input.projectId,
 					kind: "worker",
@@ -197,7 +197,7 @@ export function TaskComposer({
 					prompt: input.brief,
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
-				}, cloudSessionInterfaceMode(queryClient.getQueryData<Settings>(settingsQueryKey)));
+				}, cloudDefaultInterfaceMode(queryClient.getQueryData<Settings>(settingsQueryKey)));
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });

@@ -2682,8 +2682,8 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description Interface the session starts in, the desktop's default session interface. Optional; omitted is tui. chat holds only for a harness the control plane starts in Chat; any other harness starts in tui without an error. */
-            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness the control plane starts in Chat (any other starts in tui without an error). An orchestrator's workers resolve from the default it was created with. Optional; omitted is tui. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
