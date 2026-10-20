@@ -4990,6 +4990,13 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in, the desktop's default session
+            interface. Optional; omitted is tui. chat holds only for a harness
+            the control plane starts in Chat; any other harness starts in tui
+            without an error.
     UpdateSessionPreferencesInput:
       type: object
       additionalProperties: false
