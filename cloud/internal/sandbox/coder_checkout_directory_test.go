@@ -82,10 +82,20 @@ func TestDecodeCoderSessionProfileCheckoutDirectory(t *testing.T) {
 	if err != nil || workspace.CheckoutDirectory != "" || workspace.WorkingDirectory != "~/work/{repo}" {
 		t.Fatalf("workspace-user profile = %+v, %v", workspace, err)
 	}
+	// A workspace-user session starts in a template folder inside a hidden
+	// one; only the ao-worker checkout refuses its parents being hidden.
+	hidden, err := decode(`,"workerUser":"workspace","workingDirectory":"~/.config/{repo}"`)
+	if err != nil || hidden.WorkingDirectory != "~/.config/{repo}" {
+		t.Fatalf("workspace-user profile in a hidden folder = %+v, %v", hidden, err)
+	}
+	if github, err := decode(`,"checkoutDirectory":"~/work/.github"`); err != nil || github.CheckoutDirectory != "~/work/.github" {
+		t.Fatalf("a .github checkout = %+v, %v", github, err)
+	}
 	for _, extra := range []string{
 		`,"checkoutDirectory":"work/alice"`,
 		`,"checkoutDirectory":"~/work/{repo}"`,
 		`,"checkoutDirectory":"~/work/../alice"`,
+		`,"checkoutDirectory":"~/.ssh/alice"`,
 		`,"checkoutDirectory":"~/work/alice","checkoutSiblings":["../etc"]`,
 		`,"checkoutDirectory":"~/work/alice","checkoutSiblings":[".ao"]`,
 	} {

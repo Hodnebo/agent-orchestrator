@@ -497,8 +497,9 @@ func CoderCheckoutDirectory(template, repositoryURL string) (string, error) {
 }
 
 // ValidateCoderCheckoutDirectory checks a resolved working-folder checkout
-// path: a valid working directory (ValidateCoderWorkingDirectory) with no
-// placeholder left.
+// path for the dedicated ao-worker user: a valid working directory
+// (ValidateCoderWorkingDirectory) with no placeholder left and not inside a
+// hidden folder (coderFolderInsideHiddenFolder).
 func ValidateCoderCheckoutDirectory(value string) error {
 	if err := ValidateCoderWorkingDirectory(value); err != nil {
 		return err
@@ -506,7 +507,35 @@ func ValidateCoderCheckoutDirectory(value string) error {
 	if strings.ContainsAny(value, "{}") {
 		return errors.New("The working folder must not contain a placeholder.")
 	}
+	if coderFolderInsideHiddenFolder(value) {
+		return errors.New("The working folder must not be inside a hidden folder.")
+	}
 	return nil
+}
+
+// coderFolderInsideHiddenFolder reports whether one of a working
+// folder's parent folders is hidden. The ao-worker bootstrap lets the worker
+// user enter the checkout's parent folders (chmod o+x), and a hidden one
+// (~/.ssh, ~/.aws) holds credentials. The checkout's own folder may be hidden
+// (a {repo} of .github): the bootstrap never opens up a folder that already
+// exists, and the worker refuses one it did not create. Only the ao-worker
+// checkout is checked: a workspace-user session works in the template's own
+// folder and changes no permissions.
+func coderFolderInsideHiddenFolder(value string) bool {
+	rest, ok := strings.CutPrefix(value, "~/")
+	if !ok {
+		rest, ok = strings.CutPrefix(value, "$HOME/")
+	}
+	if !ok {
+		rest = strings.TrimPrefix(value, "/")
+	}
+	segments := strings.Split(strings.Trim(rest, "/"), "/")
+	for _, segment := range segments[:len(segments)-1] {
+		if strings.HasPrefix(segment, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // CoderCheckoutSiblings names the folders the project's additional

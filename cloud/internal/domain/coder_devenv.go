@@ -164,11 +164,6 @@ func ValidateCoderWorkingDirectory(value string) error {
 		if segment == ".ao" {
 			return errors.New("The working directory must not be inside AO's own .ao folder.")
 		}
-		// A hidden folder (~/.ssh, ~/.aws) holds credentials; opening it up
-		// for the worker user would expose them.
-		if strings.HasPrefix(segment, ".") {
-			return errors.New("The working directory must not be inside a hidden folder.")
-		}
 	}
 	if strings.ContainsAny(strings.ReplaceAll(rest, CoderWorkingDirectoryRepo, ""), "{}$`\\") {
 		return fmt.Errorf("The working directory may only use %s as a placeholder.", CoderWorkingDirectoryRepo)
