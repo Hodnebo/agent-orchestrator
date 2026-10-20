@@ -920,6 +920,15 @@ func TestCommandSkipsTheCleanupOfASessionWithoutItsWorkingFolder(t *testing.T) {
 	if reason := skipReasonOf(t, "no working folder", command, os.Environ()); reason != skipNoWorkingFolder {
 		t.Fatalf("skipped %q, want %q", reason, skipNoWorkingFolder)
 	}
+	// sudo may print to stderr before the hook's own line, and ao_out
+	// captures both.
+	noisy := filepath.Join(t.TempDir(), worker.CleanupHookFile)
+	writeExecutable(t, noisy, "#!/bin/sh\necho 'sudo: unable to resolve host ws-1: Name or service not known' >&2\n"+
+		"printf '%s\\n' "+shellQuote(worker.CleanupHookSkippedPrefix+worker.CleanupSkipNoWorkingFolder)+"\n", 0o700)
+	command = Command(HookWord(noisy), 10*time.Second, "", Options{Runner: AsLoginUser})
+	if reason := skipReasonOf(t, "no working folder after sudo noise", command, os.Environ()); reason != skipNoWorkingFolder {
+		t.Fatalf("skipped %q after sudo noise, want %q", reason, skipNoWorkingFolder)
+	}
 	if got := SkippedReason(skipNoWorkingFolder); got != "Cleanup did not run: this session never got its working folder." {
 		t.Fatalf("reason = %q", got)
 	}

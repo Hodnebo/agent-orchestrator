@@ -353,8 +353,10 @@ func Command(hook string, budget time.Duration, override string, options Options
 		"  ao_out=$(\"$@\" 2>&1 </dev/null)\n" +
 		"fi\n" +
 		"ao_code=$?\n" +
-		// A hook that runs no Cleanup prints only why (worker.WriteSkippedCleanupHook).
-		"case \"$ao_out\" in " + shellQuote(worker.CleanupHookSkippedPrefix+skipNoWorkingFolder) + ") ao_skip " + skipNoWorkingFolder + " ;; esac\n" +
+		// A hook that runs no Cleanup prints only why (worker.WriteSkippedCleanupHook),
+		// as its last line: sudo may print to stderr first, for example
+		// "sudo: unable to resolve host".
+		"case \"$(printf '%s\\n' \"$ao_out\" | tail -n 1)\" in " + shellQuote(worker.CleanupHookSkippedPrefix+skipNoWorkingFolder) + ") ao_skip " + skipNoWorkingFolder + " ;; esac\n" +
 		"printf '%s\\n' \"$ao_out\" | tail -c " + strconv.Itoa(OutputLimit) + "\n" +
 		"printf '\\n%s:%s\\n' " + Marker + " \"$ao_code\"\n"
 }
