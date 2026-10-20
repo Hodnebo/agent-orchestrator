@@ -15,6 +15,7 @@ vi.mock("./telemetry", () => ({
 import type { CloudCpClient } from "./cloud-cp/client";
 import { CloudCpError } from "./cloud-cp/errors";
 import type { CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
+import { createCloudSession } from "./cloud-session-create";
 import {
 	instrumentCloudClient,
 	noteCloudSession,
@@ -73,9 +74,9 @@ beforeEach(() => {
 describe("cloud funnel telemetry", () => {
 	it("reports a session request, then ready with time-to-ready from the first connected snapshot", async () => {
 		const client = instrumentCloudClient(fakeClient());
-		const { session: created } = await client.createSession("org-1", {
+		const { session: created } = await createCloudSession(client, "org-1", {
 			projectId: "project-1", kind: "worker", harness: "claude-code", displayName: "x", prompt: "secret prompt", provider: "freestyle",
-		});
+		}, "tui");
 		expect(created.id).toBe("session-1");
 		expect(events()).toEqual(["ao.renderer.cloud_session_create_requested"]);
 		expect(JSON.stringify(captured)).not.toContain("secret prompt");
@@ -123,9 +124,11 @@ describe("cloud funnel telemetry", () => {
 		});
 		const client = instrumentCloudClient(fakeClient({ createSession } as unknown as Partial<CloudCpClient>));
 		const body = { projectId: "p", kind: "worker" as const, harness: "claude-code", displayName: "w", prompt: "" };
-		await expect(client.createSession("org-1", { ...body, defaultInterfaceMode: "chat" })).rejects.toBe(rejection);
-		await client.createSession("org-1", body);
+		await createCloudSession(client, "org-1", body, "chat");
+		expect(createSession).toHaveBeenCalledTimes(2);
 		expect(events()).not.toContain("ao.renderer.cloud_session_failed");
+		// One user create is one request, however many calls it takes.
+		expect(events().filter((event) => event === "ao.renderer.cloud_session_create_requested")).toHaveLength(1);
 
 		// The same 400 without the field is a real failure.
 		const invalid = instrumentCloudClient(fakeClient({

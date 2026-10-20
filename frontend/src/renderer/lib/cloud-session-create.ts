@@ -1,6 +1,7 @@
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpClient, CloudCpCreateSessionRequest, CloudCpInterfaceMode, CloudCpSessionResponse } from "./cloud-cp";
 import type { Settings } from "../hooks/useSettings";
+import { reportCloudSessionCreateRequested } from "./cloud-telemetry";
 
 /**
  * The default session interface a new cloud session is created with: the
@@ -22,7 +23,7 @@ export function cloudDefaultInterfaceMode(
  * control plane that predates the field rejects the whole body with 400
  * invalid_request before creating anything, so the create is sent again
  * without it and the session starts in the terminal, as every session did
- * there.
+ * there. The user's request is reported once, not once per call.
  */
 export async function createCloudSession(
 	client: Pick<CloudCpClient, "createSession">,
@@ -30,6 +31,11 @@ export async function createCloudSession(
 	body: CloudCpCreateSessionRequest,
 	defaultInterfaceMode: CloudCpInterfaceMode | undefined,
 ): Promise<CloudCpSessionResponse> {
+	try {
+		reportCloudSessionCreateRequested(body);
+	} catch {
+		// Telemetry must never break the create.
+	}
 	if (defaultInterfaceMode === undefined) return client.createSession(orgId, body);
 	try {
 		return await client.createSession(orgId, { ...body, defaultInterfaceMode });
