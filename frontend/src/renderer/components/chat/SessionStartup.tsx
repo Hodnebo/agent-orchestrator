@@ -24,6 +24,7 @@ export function SessionStartup({
 	onRetry,
 	retrying,
 	retryError,
+	messagesKept = true,
 }: {
 	failed: boolean;
 	steps: readonly SessionProvisionStep[];
@@ -34,6 +35,8 @@ export function SessionStartup({
 	onRetry?: () => void;
 	retrying?: boolean;
 	retryError?: string;
+	/** A failed start keeps the messages sent meanwhile and sends them on retry. */
+	messagesKept?: boolean;
 }) {
 	const { t } = useTranslation();
 	const now = useNowWhile(!failed && steps.some((step) => step.status === "running"));
@@ -85,7 +88,7 @@ export function SessionStartup({
 			{failed ? (
 				<div className="mt-1 flex flex-col items-start gap-2 pl-[18px]">
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
-					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
+					{messagesKept ? <p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p> : null}
 					{onRetry ? (
 						<Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={retrying}>
 							{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}

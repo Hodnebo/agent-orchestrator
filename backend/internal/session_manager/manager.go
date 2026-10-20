@@ -6357,14 +6357,38 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 			"AO_WORKTREE_PATH":    workspacePath,
 		})
 		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
+		timedOut := ctx.Err() == nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			message := agentlaunch.RedactValues(strings.TrimSpace(out.String()), projectEnv)
-			return fmt.Errorf("setup step %d failed: %w: %s", index+1, err, message)
+			return &SetupStepError{Step: index + 1, Err: err, TimedOut: timedOut, Output: message}
 		}
 	}
 	return nil
 }
+
+// SetupStepError is a project Setup command that failed. Its message is the
+// one the user reads, so it names the step, the cause and where to fix it.
+type SetupStepError struct {
+	Step     int
+	Err      error
+	TimedOut bool
+	Output   string
+}
+
+func (e *SetupStepError) Error() string {
+	cause := fmt.Sprintf("failed at step %d (%v)", e.Step, e.Err)
+	if e.TimedOut {
+		cause = fmt.Sprintf("stopped at step %d after 10 minutes", e.Step)
+	}
+	message := "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
+	if e.Output != "" {
+		message += " Output: " + e.Output
+	}
+	return message
+}
+
+func (e *SetupStepError) Unwrap() error { return e.Err }
 
 // setupOutput retains the last 8 KiB so a noisy installer cannot grow daemon memory.
 type setupOutput struct{ tail []byte }

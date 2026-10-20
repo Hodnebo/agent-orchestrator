@@ -2,7 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
+import { cloudStartupProblem, isWorkspaceStartupError } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, TurnSettings } from "../../types/conversation";
@@ -380,6 +382,31 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
+	// A failed checkout or Setup reads the way a failed local Chat start does: the
+	// setup checklist under the opening message, with Retry. Retry asks the running
+	// worker to prepare the workspace again; until it reports, the step runs again.
+	const startupProblem = cloudStartupProblem(session);
+	const workspaceFailure = startupProblem?.phase === "failed" && isWorkspaceStartupError(startupProblem.code) ? startupProblem : undefined;
+	const [retriedFailureAt, setRetriedFailureAt] = useState<string>();
+	const rerunning = retriedFailureAt !== undefined && retriedFailureAt === workspaceFailure?.at;
+	const retryStart = useMutation({
+		mutationFn: () => client.requestWorkspaceCheckout(cloud?.orgId ?? "", session.id),
+		onSuccess: () => {
+			setRetriedFailureAt(workspaceFailure?.at);
+			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+		},
+	});
+	const setupFailed = workspaceFailure?.code === "project_setup_failed";
+	const chatSession: WorkspaceSession = workspaceFailure ? {
+		...session,
+		provisionState: rerunning ? "provisioning" : "failed",
+		provisionSteps: [
+			{ id: "worktree", status: setupFailed ? "done" : "running" },
+			{ id: "setup", status: setupFailed ? "running" : "pending" },
+			{ id: "agent", status: "pending" },
+		],
+		provisionError: [workspaceFailure.message, workspaceFailure.detail && `Output: ${workspaceFailure.detail}`].filter(Boolean).join(" "),
+	} : session;
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
@@ -479,9 +506,14 @@ export function CloudSessionChatSurface({
 		},
 		onSuccess: () => void invalidate(),
 	});
-	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings,
-	}), [eventsQuery.data, session, settings]);
+	const snapshot = useMemo(() => {
+		const projected = toSnapshot(session, eventsQuery.data ?? []);
+		// While Setup is failed the checklist reports it; its rows return as history once Setup passes.
+		const items = setupFailed
+			? projected.items.filter((item) => item.kind !== "activity" || item.detail?.event !== "workspace.setup")
+			: projected.items;
+		return { ...projected, items, settings };
+	}, [eventsQuery.data, session, settings, setupFailed]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -599,7 +631,10 @@ export function CloudSessionChatSurface({
 			steerPending={steer.isPending}
 			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
-			session={session}
+			session={chatSession}
+			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
+			resumingAgent={retryStart.isPending}
+			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}

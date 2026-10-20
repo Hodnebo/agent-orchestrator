@@ -51,6 +51,17 @@ func TestWorkspaceStartupErrorSurvivesHeartbeatsUntilReady(t *testing.T) {
 		t.Fatalf("session startup error = %q %v %q", session.StartupErrorCode, session.StartupErrorAt, session.StartupErrorDetail)
 	}
 
+	// A retry that fails the same way is a newer failure.
+	firstAt := *session.StartupErrorAt
+	if err := store.RecordWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+		domain.WorkspaceStartupErrorProjectSetup, "Setup step 1 failed: exit status 3.", "missing secret"); err != nil {
+		t.Fatalf("record again: %v", err)
+	}
+	if again, err := store.GetSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID); err != nil ||
+		again.StartupErrorAt == nil || !again.StartupErrorAt.After(firstAt) {
+		t.Fatalf("repeated failure at = %v (first %v), err %v", again.StartupErrorAt, firstAt, err)
+	}
+
 	// A stale worker cannot record or clear the session's error.
 	if err := store.ClearWorkspaceStartupError(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch-1); !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("stale clear = %v", err)

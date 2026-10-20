@@ -415,7 +415,13 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
 	m.stopChatBestEffort(cleanupCtx, id)
-	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, cause.Error()); err != nil {
+	// A failed Setup step already explains itself; the spawn stage prefix is noise.
+	message := cause.Error()
+	var setupErr *SetupStepError
+	if errors.As(cause, &setupErr) {
+		message = setupErr.Error()
+	}
+	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, message); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
 	}
 }
