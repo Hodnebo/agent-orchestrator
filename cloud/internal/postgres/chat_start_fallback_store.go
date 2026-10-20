@@ -5,9 +5,6 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-
-	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // FallBackChatStart moves a session created in Chat to the TUI before its
@@ -21,9 +18,7 @@ import (
 // task again in the terminal.
 //
 // In the same transaction the prompt's queued first turn is settled (the TUI
-// agent receives the prompt on its command line instead) unless the worker
-// settles it when its terminal agent starts
-// (worker.CapabilityPromptSettledOnAgentReady), and a failed
+// agent receives the prompt on its command line instead), and a failed
 // TUI-to-Chat transition carrying code and detail is recorded, which the
 // desktop shows as the session's interface notice. It reports whether the
 // session moved.
@@ -31,10 +26,7 @@ func (s *Store) FallBackChatStart(ctx context.Context, orgID, sessionID, code, d
 	var moved bool
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var err error
-		// The control plane moves the session for a worker that predates
-		// worker.CapabilityChatStart, so it also predates the prompt settled
-		// on agent.ready.
-		moved, err = fallBackChatStartTx(ctx, tx, orgID, sessionID, code, detail, true)
+		moved, err = fallBackChatStartTx(ctx, tx, orgID, sessionID, code, detail)
 		return err
 	})
 	return moved, err
@@ -54,17 +46,14 @@ func (s *Store) WorkerFallBackChatStart(
 		if err := requireCurrentWorker(ctx, tx, orgID, sessionID, workerID, epoch); err != nil {
 			return err
 		}
-		settlesOnReady, err := workerHasCapability(ctx, tx, orgID, sessionID, workerID, epoch, worker.CapabilityPromptSettledOnAgentReady)
-		if err != nil {
-			return err
-		}
-		moved, err = fallBackChatStartTx(ctx, tx, orgID, sessionID, code, detail, !settlesOnReady)
+		var err error
+		moved, err = fallBackChatStartTx(ctx, tx, orgID, sessionID, code, detail)
 		return err
 	})
 	return moved, err
 }
 
-func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code, detail string, settlePrompt bool) (bool, error) {
+func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code, detail string) (bool, error) {
 	// Lock the session row first, as StartSessionInterfaceTransition does, and
 	// check the session's history in later statements: their snapshot is taken
 	// after the lock, so a transition committed while this waited is seen
@@ -111,7 +100,7 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 	); err != nil {
 		return false, err
 	}
-	if prompt != "" && settlePrompt {
+	if prompt != "" {
 		if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
 			return false, err
 		}
@@ -130,93 +119,32 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 
 // settleUnclaimedPromptTurn settles the turn a session created in Chat queued
 // for its prompt, while no Chat controller has claimed any turn. The session
-// is moving to the TUI (or its terminal agent just started there), whose agent
-// receives the prompt on its command line (WorkerLaunchSpec keeps it until a
-// turn is claimed); left queued, the terminal's turn forwarder would type the
-// same task into it again. A session whose Chat claimed a turn launches
-// without the prompt, so its queued turns stay for the forwarder.
+// is moving to the TUI, whose agent receives the prompt on its command line
+// (WorkerLaunchSpec keeps it until a turn is claimed); left queued, the
+// terminal's turn forwarder would type the same task into it again. A session
+// whose Chat claimed a turn launches without the prompt, so its queued turns
+// stay for the forwarder.
 func settleUnclaimedPromptTurn(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	// The create records the prompt as the session's first user message.
 	_, err := tx.Exec(ctx,
 		`UPDATE ao_turns turn
 		SET state = 'completed', completed_at = now(), updated_at = now()
-		WHERE turn.org_id = $1 AND turn.session_id = $2 AND `+unclaimedPromptTurnSQL,
+		WHERE turn.org_id = $1 AND turn.session_id = $2
+		  AND turn.state = 'queued' AND turn.attempt_count = 0
+		  AND EXISTS (
+			SELECT 1 FROM ao_sessions session
+			WHERE session.org_id = $1 AND session.id = $2 AND session.prompt <> ''
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM ao_turns claimed
+			WHERE claimed.org_id = $1 AND claimed.session_id = $2 AND claimed.attempt_count > 0
+		  )
+		  AND turn.user_message_sequence = (
+			SELECT min(event.sequence) FROM ao_events event
+			WHERE event.org_id = $1 AND event.session_id = $2
+			  AND event.type = 'chat.user_message'
+		  )`,
 		orgID, sessionID,
 	)
 	return err
-}
-
-// unclaimedPromptTurnSQL is the condition that turn (an ao_turns alias of
-// session $2 in org $1) is the queued turn a session created in Chat made for
-// its prompt, while no turn of the session was ever claimed.
-const unclaimedPromptTurnSQL = `turn.state = 'queued' AND turn.attempt_count = 0
-	  AND EXISTS (
-		SELECT 1 FROM ao_sessions session
-		WHERE session.org_id = $1 AND session.id = $2 AND session.prompt <> ''
-	  )
-	  AND NOT EXISTS (
-		SELECT 1 FROM ao_turns claimed
-		WHERE claimed.org_id = $1 AND claimed.session_id = $2 AND claimed.attempt_count > 0
-	  )
-	  -- The create records the prompt as the session's first user message.
-	  AND turn.user_message_sequence = (
-		SELECT min(event.sequence) FROM ao_events event
-		WHERE event.org_id = $1 AND event.session_id = $2
-		  AND event.type = 'chat.user_message'
-	  )`
-
-// SettleStartedTerminalPromptTurn settles a session's unclaimed prompt turn
-// (settleUnclaimedPromptTurn) once its terminal agent started (agent.ready)
-// while the session is in the TUI: that agent got the prompt on its command
-// line. A worker reporting worker.CapabilityPromptSettledOnAgentReady reports
-// agent.ready before its turn forwarder claims a turn, and its move to the
-// TUI left the turn queued; for an older worker the move settled it already,
-// so this changes nothing.
-func (s *Store) SettleStartedTerminalPromptTurn(ctx context.Context, orgID, sessionID string) error {
-	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		// Locked as a commit locks it, so a concurrent move to Chat is seen.
-		var iface string
-		err := tx.QueryRow(ctx,
-			`SELECT interface FROM ao_sessions WHERE org_id = $1 AND id = $2 FOR UPDATE`,
-			orgID, sessionID,
-		).Scan(&iface)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if iface != string(domain.SessionInterfaceTUI) {
-			return nil
-		}
-		return settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID)
-	})
-}
-
-// workerHasCapability reports whether a worker epoch's connection reported
-// capability. A worker without a connection row reports none.
-func workerHasCapability(ctx context.Context, tx pgx.Tx, orgID, sessionID, workerID string, epoch int64, capability string) (bool, error) {
-	var has bool
-	err := tx.QueryRow(ctx,
-		`SELECT COALESCE((
-			SELECT capabilities ? $5 FROM ao_worker_connections
-			WHERE org_id = $1 AND session_id = $2 AND worker_id = $3 AND epoch = $4
-		), false)`,
-		orgID, sessionID, workerID, epoch, capability,
-	).Scan(&has)
-	return has, err
-}
-
-// liveWorkerHasCapability reports whether the session's live worker (its
-// newest connected epoch) reported capability. No live worker reports none.
-func liveWorkerHasCapability(ctx context.Context, tx pgx.Tx, orgID, sessionID, capability string) (bool, error) {
-	var has bool
-	err := tx.QueryRow(ctx,
-		`SELECT COALESCE((
-			SELECT capabilities ? $3 FROM ao_worker_connections
-			WHERE org_id = $1 AND session_id = $2 AND disconnected_at IS NULL
-			ORDER BY epoch DESC LIMIT 1
-		), false)`,
-		orgID, sessionID, capability,
-	).Scan(&has)
-	return has, err
 }

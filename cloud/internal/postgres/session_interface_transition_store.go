@@ -8,7 +8,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacehandoff"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -116,15 +115,7 @@ func (s *Store) StartSessionInterfaceTransition(
 			return err
 		}
 		if source == domain.SessionInterfaceChat && policy == domain.SessionInterfaceTransitionInterrupt {
-			// The prompt's never-claimed turn is not Chat's work in flight: the
-			// terminal starts with the prompt on its command line. A worker that
-			// settles it on agent.ready keeps it queued until then, so a switch
-			// back to Chat before the terminal agent started still runs it.
-			keepPrompt, err := liveWorkerHasCapability(ctx, tx, orgID, sessionID, worker.CapabilityPromptSettledOnAgentReady)
-			if err != nil {
-				return err
-			}
-			return interruptQueuedChatTurns(ctx, tx, orgID, sessionID, keepPrompt)
+			return interruptQueuedChatTurns(ctx, tx, orgID, sessionID)
 		}
 		return nil
 	})
@@ -136,14 +127,12 @@ func (s *Store) StartSessionInterfaceTransition(
 
 // Stop-now cancels turns that have not reached the Chat controller. The active
 // turn is interrupted by the worker; queued turns must not be claimed by the
-// replacement TUI after the handoff commits. keepPrompt leaves the prompt's
-// unclaimed turn (unclaimedPromptTurnSQL) queued.
-func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID string, keepPrompt bool) error {
-	rows, err := tx.Query(ctx, `UPDATE ao_turns turn
+// replacement TUI after the handoff commits.
+func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	rows, err := tx.Query(ctx, `UPDATE ao_turns
 		SET state = 'completed', completed_at = now(), updated_at = now()
-		WHERE turn.org_id = $1 AND turn.session_id = $2 AND turn.state = 'queued'
-		  AND NOT ($3 AND `+unclaimedPromptTurnSQL+`)
-		RETURNING turn.id, turn.attempt_count`, orgID, sessionID, keepPrompt)
+		WHERE org_id = $1 AND session_id = $2 AND state = 'queued'
+		RETURNING id, attempt_count`, orgID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -823,21 +812,11 @@ func (s *Store) CommitCoordinatedSessionInterface(
 		}
 		// A drain stops a Chat controller that never claimed the session's
 		// first turn without settling it. The terminal starts with the prompt
-		// on its command line, so the prompt's turn is settled: by a worker
-		// that reports worker.CapabilityPromptSettledOnAgentReady when its
-		// terminal agent actually starts (SettleStartedTerminalPromptTurn), as
-		// it may start only after Setup, or never if the session moves back to
-		// Chat first; for an older worker, in the same transaction as the
-		// commit, as a start that falls back to the TUI does.
+		// on its command line, so the prompt's turn is settled in the same
+		// transaction as the commit, as a start that falls back to the TUI does.
 		if interfaceValue == domain.SessionInterfaceTUI {
-			settlesOnReady, err := liveWorkerHasCapability(ctx, tx, orgID, sessionID, worker.CapabilityPromptSettledOnAgentReady)
-			if err != nil {
+			if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
 				return err
-			}
-			if !settlesOnReady {
-				if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
-					return err
-				}
 			}
 		}
 		committed = true

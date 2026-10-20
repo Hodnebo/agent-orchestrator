@@ -459,13 +459,6 @@ func issuedWorkerScopes(ticketScopes []string, launch domain.WorkerLaunch) []str
 
 type workerContextKey struct{}
 
-// terminalPromptSettler is the optional Store capability that settles a
-// session's unclaimed prompt turn once its terminal agent started
-// (postgres.Store.SettleStartedTerminalPromptTurn).
-type terminalPromptSettler interface {
-	SettleStartedTerminalPromptTurn(ctx context.Context, orgID, sessionID string) error
-}
-
 // workerAgentStartedStore is the optional Store capability that says whether
 // a worker epoch started its coding agent (agent.ready, or a claimed turn).
 type workerAgentStartedStore interface {
@@ -1143,17 +1136,6 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			len(ready.Capabilities) > 64 {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The worker.ready payload is invalid.")
 			return
-		}
-		// The terminal agent started with the session's prompt on its command
-		// line; its never-claimed turn is settled now, before the worker's
-		// turn forwarder claims one (see
-		// worker.CapabilityPromptSettledOnAgentReady). The worker sends
-		// agent.ready again when this fails.
-		if settler, ok := s.store.(terminalPromptSettler); ok && input.Type == "agent.ready" {
-			if err := settler.SettleStartedTerminalPromptTurn(r.Context(), claims.OrgID, claims.SessionID); err != nil {
-				s.writeWorkerStoreError(w, r, err)
-				return
-			}
 		}
 		if _, err := s.store.AppendSessionEvent(
 			r.Context(), claims.OrgID, claims.SessionID, input.Type, input.Payload,

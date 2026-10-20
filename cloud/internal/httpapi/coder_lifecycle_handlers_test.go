@@ -3,14 +3,12 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -378,50 +376,5 @@ func TestWorkerEventRefusesARunningSetupStepAfterTheAgentStarted(t *testing.T) {
 		if _, recorded := store.events[worker.ScriptStepEventType]; rec.Code >= 300 || !recorded || len(store.asked) != 1 {
 			t.Fatalf("final step (agent started %v): status = %d, recorded = %v, asked = %v", started, rec.Code, recorded, store.asked)
 		}
-	}
-}
-
-// promptSettleStore records SettleStartedTerminalPromptTurn calls and can
-// fail them.
-type promptSettleStore struct {
-	setupEventStore
-	settled atomic.Int32
-	fail    error
-}
-
-func (s *promptSettleStore) SettleStartedTerminalPromptTurn(context.Context, string, string) error {
-	if s.fail != nil {
-		return s.fail
-	}
-	s.settled.Add(1)
-	return nil
-}
-
-// agent.ready settles the prompt turn the terminal agent got on its command
-// line, before the event is recorded; a failure is refused so the worker
-// sends it again. worker.ready settles nothing.
-func TestWorkerAgentReadySettlesTheStartedTerminalsPromptTurn(t *testing.T) {
-	t.Parallel()
-	ready := func(eventType string) string {
-		return `{"type":"` + eventType + `","payload":{"workerId":"w1","epoch":1,"version":"v1","capabilities":[]}}`
-	}
-	store := &promptSettleStore{}
-	srv := testServer(store)
-	rec := httptest.NewRecorder()
-	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", ready("worker.ready"), "worker:event"))
-	if rec.Code >= 300 || store.settled.Load() != 0 {
-		t.Fatalf("worker.ready: status = %d, settled = %d; body = %s", rec.Code, store.settled.Load(), rec.Body.String())
-	}
-	rec = httptest.NewRecorder()
-	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", ready("agent.ready"), "worker:event"))
-	if rec.Code >= 300 || store.settled.Load() != 1 || store.events["agent.ready"] == nil {
-		t.Fatalf("agent.ready: status = %d, settled = %d; body = %s", rec.Code, store.settled.Load(), rec.Body.String())
-	}
-
-	failing := &promptSettleStore{fail: errors.New("database unavailable")}
-	rec = httptest.NewRecorder()
-	testServer(failing).workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", ready("agent.ready"), "worker:event"))
-	if rec.Code < 500 || failing.events["agent.ready"] != nil {
-		t.Fatalf("failed settle: status = %d, recorded = %s", rec.Code, failing.events["agent.ready"])
 	}
 }

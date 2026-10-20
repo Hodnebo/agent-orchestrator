@@ -424,7 +424,9 @@ func (s *Supervisor) openTUIAgent(ctx context.Context, input interfacePayload, t
 	}
 	s.mu.Unlock()
 	s.flushReadyAgentTerminal()
-	s.reportAgentReady(ctx)
+	if s.AgentReady != nil {
+		s.AgentReady(ctx)
+	}
 	return nil
 }
 

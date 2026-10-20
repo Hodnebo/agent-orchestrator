@@ -50,16 +50,6 @@ const CapabilityMultiRepo = "workspace.multi-repo"
 // worker bootstraps.
 const CapabilityChatStart = "agent.chat-start"
 
-// CapabilityPromptSettledOnAgentReady, in a worker's capabilities, means its
-// terminal agent reports agent.ready on Run's serial loop each time it starts,
-// before its turn forwarder claims a turn, so the control plane settles a
-// session's unclaimed prompt turn then (the agent got the prompt on its
-// command line) rather than when the session moves to the TUI. Until the
-// terminal agent starts the turn stays queued, so a switch back to Chat (or a
-// failed terminal start) still runs the task, once. For a worker that does not
-// report it, the move to the TUI settles the turn.
-const CapabilityPromptSettledOnAgentReady = "agent.prompt-settled-on-ready"
-
 // CapabilitiesHeader carries a worker's capabilities, comma separated, on its
 // requests (the reconnect GET has no body to report them in).
 const CapabilitiesHeader = "AO-Worker-Capabilities"
