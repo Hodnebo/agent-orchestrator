@@ -117,6 +117,7 @@
 	"agentSwitch.thinking": "思考",
 	"agentSwitch.loadingSettings": "設定を読み込み中",
 	"agentSwitch.autoCompact": "自動圧縮",
+	"agentSwitch.autoCompactAuto": "自動",
 	"agentSwitch.autoCompactHint": "Claude Code が会話を自動で圧縮するタイミング。",
 	"agentSwitch.addFavourite": "お気に入りに追加",
 	"agentSwitch.removeFavourite": "お気に入りから削除",

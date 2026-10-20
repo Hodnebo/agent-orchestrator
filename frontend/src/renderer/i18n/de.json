@@ -117,6 +117,7 @@
 	"agentSwitch.thinking": "Denken",
 	"agentSwitch.loadingSettings": "Einstellungen werden geladen",
 	"agentSwitch.autoCompact": "Automatisch komprimieren",
+	"agentSwitch.autoCompactAuto": "Auto",
 	"agentSwitch.autoCompactHint": "Wann Claude Code die Unterhaltung selbst komprimiert.",
 	"agentSwitch.addFavourite": "Zu Favoriten hinzufügen",
 	"agentSwitch.removeFavourite": "Aus Favoriten entfernen",

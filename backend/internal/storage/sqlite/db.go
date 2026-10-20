@@ -1201,6 +1201,37 @@ func quoteSQLiteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+// providerSwitchingVersion is the provider switching migration's version.
+const providerSwitchingVersion = 20261020131539535
+
+// repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
+// provider switching under an earlier number, 0201 or 0216 in this branch's
+// preview builds, to its version. It would otherwise apply the migration again,
+// and those numbers are left for main. The migration's table tells this
+// branch's entry apart from another migration that took the number.
+func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
+	var gooseTable, turnsTable, applied int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_terminal_turns'`).Scan(&turnsTable); err != nil || turnsTable == 0 {
+		return err
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion).Scan(&applied); err != nil || applied != 0 {
+		return err
+	}
+	for _, old := range []int64{201, 216} {
+		res, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion, old)
+		if err != nil {
+			return err
+		}
+		if moved, err := res.RowsAffected(); err != nil || moved > 0 {
+			return err
+		}
+	}
+	return nil
+}
+
 // repairRenumberedChatMigrationHistory preserves databases opened by this
 // feature branch before its Chat migrations moved from 0052-0065 to 0066-0079.
 // The files are byte-for-byte identical after the rename, so recording the new
@@ -1208,30 +1239,6 @@ func quoteSQLiteIdent(name string) string {
 // upgraded schema. Version 0052 now belongs to model usage on main; if that
 // physical schema is absent, release the burned ledger entry so goose can apply
 // the real 0052 migration below.
-// repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
-// provider switching as 0201, its number on the feature branch, to 0216. It
-// would otherwise apply the migration again, and 0201 is left for main.
-func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
-	var gooseTable, turnsTable, applied201, applied216 int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
-		return err
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_terminal_turns'`).Scan(&turnsTable); err != nil || turnsTable == 0 {
-		return err
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 201 AND is_applied = 1`).Scan(&applied201); err != nil {
-		return err
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 216 AND is_applied = 1`).Scan(&applied216); err != nil {
-		return err
-	}
-	if applied201 == 0 || applied216 != 0 {
-		return nil
-	}
-	_, err := db.Exec(`UPDATE goose_db_version SET version_id = 216 WHERE version_id = 201`)
-	return err
-}
-
 func repairRenumberedChatMigrationHistory(db *sql.DB) error {
 	// Probe on a read-only query first. A fresh database (the common import
 	// path and the cli import test) has no goose_db_version table yet, so there

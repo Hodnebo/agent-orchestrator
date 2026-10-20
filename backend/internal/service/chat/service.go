@@ -736,7 +736,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
-	if cfg.ProviderSwitch != nil && cfg.ProviderSwitch.AutoCompactWindow != "" {
+	// A switch to Claude Code sets the window, Auto (empty) included.
+	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
 		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
 	}
 	// Claude Code reads its compaction window when it starts. The map is

@@ -563,7 +563,7 @@ function otherAgentSource(
 	const keep = { harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort, fastMode: fastOn || undefined, autoCompactWindow: pending?.autoCompactWindow };
 	return {
 		// The plain row is only for an agent that lists no models.
-		models: listed.length > 0 ? listed : [{ id: "", label: "Default model" }],
+		models: listed.length > 0 ? listed : [{ id: "", label: t("agentSwitch.defaultModel") }],
 		modelId: chosen,
 		modelLabel: pending?.modelLabel ?? agentLabel(harness),
 		onPickModel: (id) => {
@@ -621,6 +621,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 
 /** One agent's model list, with search on a long one and a star on each row. */
 function ModelRows({ source, harness }: { source: PickerSource; harness: string }) {
+	const { t } = useTranslation();
 	const favorites = useModelFavorites();
 	return (
 		<ModelMenuChoices models={source.models} searchable={source.models.filter((model) => model.id).length > 10}>
@@ -646,7 +647,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							className="group/model text-xs text-foreground"
 						>
 							<span className="min-w-0 truncate">{model.label}</span>
-							{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint}</span> : null}
+							{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint === "default" ? t("agentSwitch.defaultModel") : model.hint}</span> : null}
 							{model.id ? (() => {
 								const starredAs = favorites.find((entry) => entry.harness === harness && (entry.row === model.id || model.aliases?.includes(entry.row)));
 								// Unstarring removes the favourite as it was saved, under whichever id.
@@ -762,7 +763,7 @@ export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompact
 							value === choice.value ? "bg-settings-menu text-foreground" : "text-muted-foreground hover:text-foreground",
 						)}
 					>
-						{choice.label}
+						{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
 					</button>
 				))}
 			</span>

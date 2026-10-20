@@ -52,6 +52,10 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
 		PermissionMode: domain.PermissionMode(req.PermissionMode),
 	})
+	// A message retried after its switch went through just goes to that agent.
+	if req.Message != nil && errors.Is(err, domain.ErrProviderAlreadyActive) {
+		err = nil
+	}
 	var refusal *domain.ProviderSwitchError
 	if errors.As(err, &refusal) {
 		status, category := http.StatusConflict, "conflict"

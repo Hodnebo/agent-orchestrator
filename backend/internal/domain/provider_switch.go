@@ -1,5 +1,7 @@
 package domain
 
+import "errors"
+
 // ProviderSwitchMaxBootstrapChars is the hard upper bound for the text sent to
 // a target provider during a handoff.
 const ProviderSwitchMaxBootstrapChars = 32_000
@@ -52,6 +54,9 @@ type ChatProviderSwitch struct {
 
 // ProviderSwitchError crosses the Chat/TUI dispatch boundary without coupling
 // the session manager to either transport controller.
+// ErrProviderAlreadyActive is the cause of a switch to the agent already running.
+var ErrProviderAlreadyActive = errors.New("target provider is already active")
+
 type ProviderSwitchError struct {
 	Kind   ProviderSwitchRefusalKind
 	Detail string

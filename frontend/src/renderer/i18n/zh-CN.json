@@ -117,6 +117,7 @@
 	"agentSwitch.thinking": "思考",
 	"agentSwitch.loadingSettings": "正在加载设置",
 	"agentSwitch.autoCompact": "自动压缩",
+	"agentSwitch.autoCompactAuto": "自动",
 	"agentSwitch.autoCompactHint": "Claude Code 自动压缩对话的时机。",
 	"agentSwitch.addFavourite": "添加到收藏",
 	"agentSwitch.removeFavourite": "从收藏中移除",

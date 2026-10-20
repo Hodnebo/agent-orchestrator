@@ -383,6 +383,8 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		// across the daemon detach without waiting for the active turn to settle.
 		conv.readOnly = cfg.ReadOnly
 		conv.launchMode = cfg.Permissions
+		// The thread may still be on the fast tier from before the restart.
+		conv.fastTier = true
 		conv.start(cfg.ProviderConversationID, cfg.Model, cfg.Effort)
 		return conv, nil
 	}

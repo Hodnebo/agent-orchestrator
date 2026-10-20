@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var kimiAPIKeyLineRE = regexp.MustCompile(`(?m)^\s*api_key\s*=\s*("([^"]*)"|'([^']*)'|([^\s#]+))`)
@@ -73,7 +74,11 @@ func PrepareACPInstructions(ctx context.Context, workspacePath, systemPrompt str
 	// Kimi Code reads <project>/.kimi-code/AGENTS.md; the older Kimi CLI read
 	// .kimi/AGENTS.md. Both are written, so either finds AO's instructions.
 	for _, dir := range []string{kimiCodeInstructionsDirName, kimiInstructionsDirName} {
-		if err := writeKimiInstructions(ctx, filepath.Join(workspacePath, dir, kimiInstructionsFileName), systemPrompt); err != nil {
+		path := filepath.Join(workspacePath, dir, kimiInstructionsFileName)
+		if gitTracked(ctx, path) {
+			continue // The project's own instructions: AO's block would land in its commits.
+		}
+		if err := writeKimiInstructions(ctx, path, systemPrompt); err != nil {
 			return err
 		}
 	}
@@ -464,4 +469,11 @@ func joinKimiInstructionParts(prefix, block, suffix string) string {
 		b.WriteString(suffix)
 	}
 	return b.String()
+}
+
+// gitTracked reports whether git tracks path. Any failure (no git, no
+// repository) reads as untracked.
+func gitTracked(ctx context.Context, path string) bool {
+	cmd := aoprocess.CommandContext(ctx, "git", "--no-optional-locks", "-C", filepath.Dir(path), "ls-files", "--error-unmatch", "--", filepath.Base(path))
+	return cmd.Run() == nil
 }

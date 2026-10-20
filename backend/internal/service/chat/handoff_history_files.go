@@ -54,6 +54,10 @@ func (s *Service) handoffHistoryFiles(record domain.SessionRecord, turns []domai
 			continue
 		}
 		for _, path := range source.paths {
+			// A chat untouched since the session began is another session's.
+			if info, err := os.Stat(path); err != nil || info.ModTime().Before(record.CreatedAt) {
+				continue
+			}
 			files = append(files, domain.HandoffHistoryFile{Harness: source.harness, Path: path, Read: source.read, RequestsOnly: asked[source.harness]})
 		}
 	}

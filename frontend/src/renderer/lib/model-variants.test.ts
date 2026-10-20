@@ -60,6 +60,7 @@ describe("collapseModelVariants", () => {
 			{ id: "gpt-5.1-codex-max-high", label: "GPT-5.1 Codex Max High" },
 		]);
 		expect(models.map((entry) => entry.id)).toEqual(["gpt-5.1-codex", "gpt-5.1-codex-max"]);
+		expect(models.map((entry) => entry.label)).toEqual(["GPT-5.1 Codex", "GPT-5.1 Codex Max"]);
 		expect(models[0]?.efforts).not.toContain("max");
 		expect(models[1]?.variants.map((variant) => variant.id)).toEqual(["gpt-5.1-codex-max", "gpt-5.1-codex-max-high"]);
 	});

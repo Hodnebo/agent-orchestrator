@@ -92,7 +92,8 @@ function cleanLabel(label: string): string {
 
 function baseLabel(label: string): string {
 	let text = cleanLabel(label);
-	while (LABEL_SUFFIX.test(text)) text = text.replace(LABEL_SUFFIX, "").trim();
+	// "Codex Max" is a model of its own, not Codex at Max effort.
+	while (LABEL_SUFFIX.test(text) && !/codex max$/i.test(text)) text = text.replace(LABEL_SUFFIX, "").trim();
 	return text;
 }
 

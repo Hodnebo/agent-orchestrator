@@ -245,6 +245,10 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
+	// A binary replaced in place may have changed its flags too.
+	p.extensionMu.Lock()
+	p.extensionFlag = nil
+	p.extensionMu.Unlock()
 }
 
 // acceptsExtension reports whether binary's help lists --extension: prime-agent

@@ -117,6 +117,7 @@
 	"agentSwitch.thinking": "사고",
 	"agentSwitch.loadingSettings": "설정 불러오는 중",
 	"agentSwitch.autoCompact": "자동 압축",
+	"agentSwitch.autoCompactAuto": "자동",
 	"agentSwitch.autoCompactHint": "Claude Code가 대화를 스스로 압축하는 시점입니다.",
 	"agentSwitch.addFavourite": "즐겨찾기에 추가",
 	"agentSwitch.removeFavourite": "즐겨찾기에서 삭제",

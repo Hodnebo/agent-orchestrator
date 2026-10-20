@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -55,5 +56,27 @@ func TestHandoffHistoryFilesPointAtAgentsAOHasNoAnswersFor(t *testing.T) {
 	note := domain.BuildHandoffNote(domain.HandoffNoteInput{SourceHarness: domain.HarnessKimi, TargetHarness: domain.HarnessClaudeCode, Turns: []domain.HandoffTurn{{UserRequest: "hi"}}, HistoryFiles: files})
 	if !strings.Contains(note, "## Earlier agents' own history") || !strings.Contains(note, "- kimi: `"+got[domain.HarnessKimi].Path+"`") {
 		t.Fatalf("note does not point at Kimi's history:\n%s", note)
+	}
+}
+
+func TestHandoffHistoryFilesSkipChatsOlderThanTheSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "worktrees", "scratch-1")
+	old := filepath.Join(home, ".factory", "sessions", strings.ReplaceAll(workspace, "/", "-"), "old.jsonl")
+	if err := os.MkdirAll(filepath.Dir(old), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now()
+	if err := os.Chtimes(old, created.Add(-time.Hour), created.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{dataDir: t.TempDir()}
+	record := domain.SessionRecord{Harness: domain.HarnessClaudeCode, CreatedAt: created, Metadata: domain.SessionMetadata{WorkspacePath: workspace}}
+	if files := s.handoffHistoryFiles(record, nil); len(files) != 0 {
+		t.Fatalf("files = %+v, want none: Droid never ran in this session", files)
 	}
 }

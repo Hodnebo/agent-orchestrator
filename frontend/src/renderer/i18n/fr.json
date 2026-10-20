@@ -117,6 +117,7 @@
 	"agentSwitch.thinking": "Réflexion",
 	"agentSwitch.loadingSettings": "Chargement des réglages",
 	"agentSwitch.autoCompact": "Compactage automatique",
+	"agentSwitch.autoCompactAuto": "Auto",
 	"agentSwitch.autoCompactHint": "Quand Claude Code compacte la conversation de lui-même.",
 	"agentSwitch.addFavourite": "Ajouter aux favoris",
 	"agentSwitch.removeFavourite": "Retirer des favoris",

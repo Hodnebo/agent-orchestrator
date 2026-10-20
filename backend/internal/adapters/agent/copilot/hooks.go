@@ -117,9 +117,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return fmt.Errorf("copilot.GetAgentHooks: %w", err)
 	}
 	// A new worktree is untrusted, and Copilot's "Confirm folder trust" dialog
-	// would take every message AO types into its terminal.
-	if err := EnsureWorkspaceTrusted(ctx, cfg.WorkspacePath); err != nil {
-		return fmt.Errorf("copilot.GetAgentHooks: %w", err)
+	// would take every message AO types into its terminal. Trust goes in the
+	// Copilot home the session runs with. It is best-effort: a config AO cannot
+	// write leaves Copilot to ask, which must not fail the spawn.
+	if home := strings.TrimSpace(cfg.Env["COPILOT_HOME"]); home != "" {
+		_ = ensureCopilotFolderTrusted(filepath.Join(home, "config.json"), cfg.WorkspacePath)
+	} else {
+		_ = EnsureWorkspaceTrusted(ctx, cfg.WorkspacePath)
 	}
 	return nil
 }
