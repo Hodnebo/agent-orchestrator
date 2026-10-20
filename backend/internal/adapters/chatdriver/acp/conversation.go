@@ -144,7 +144,7 @@ type conversation struct {
 	onAuthRejected        func()
 	promptResponseFailure func(acpsdk.PromptResponse) error
 	// sessionPromptResponseFailure is promptResponseFailure given the session.
-	sessionPromptResponseFailure func(string, acpsdk.PromptResponse) error
+	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
@@ -776,6 +776,7 @@ func (c *conversation) finishPrompt(
 	c.settlingTurn = turnID
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
+	answered := len(c.messages) > 0 || len(c.tools) > 0
 	c.mu.Unlock()
 	c.settleOpenItems(turnID)
 	interruptedLocally := false
@@ -807,7 +808,7 @@ func (c *conversation) finishPrompt(
 			c.mu.Lock()
 			sessionID := c.sessionID
 			c.mu.Unlock()
-			if failure := c.sessionPromptResponseFailure(sessionID, resp); failure != nil {
+			if failure := c.sessionPromptResponseFailure(sessionID, resp, answered); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}

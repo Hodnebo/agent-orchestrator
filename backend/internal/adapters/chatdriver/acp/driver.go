@@ -122,8 +122,9 @@ type Config struct {
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
 	// SessionPromptResponseFailure is PromptResponseFailure given the provider
-	// session, for a binding that reads the failure from the agent's own record.
-	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse) error
+	// session, for a binding that reads the failure from the agent's own record,
+	// and whether the turn brought any reply text or tool call.
+	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse, answered bool) error
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.

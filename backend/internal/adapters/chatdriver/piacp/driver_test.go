@@ -193,43 +193,33 @@ func TestPiACPFeatureMapping(t *testing.T) {
 	}
 }
 
-func TestPromptResponseFailureReportsATurnWithoutAModelCall(t *testing.T) {
-	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
-	if err := promptResponseFailure(empty, 0, ""); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
-		t.Fatalf("zero-token end_turn = %v, want a reported failure", err)
-	}
-	answered := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{InputTokens: 12, OutputTokens: 3, TotalTokens: 15}}
-	if err := promptResponseFailure(answered, 0, ""); err != nil {
-		t.Fatalf("answered turn = %v, want no failure", err)
-	}
-	for _, response := range []acpsdk.PromptResponse{
-		{StopReason: acpsdk.StopReasonEndTurn},
-		{StopReason: acpsdk.StopReasonCancelled, Usage: &acpsdk.Usage{}},
-	} {
-		if err := promptResponseFailure(response, 0, ""); err != nil {
-			t.Fatalf("%+v = %v, want no failure without zero usage on end_turn", response, err)
-		}
-	}
-}
-
-func TestPromptResponseFailureReadsPiTotalsAsTheSessions(t *testing.T) {
-	totals := sessionTotals{totals: map[string]int{}}
+func TestPiReportsATurnWithoutAModelCall(t *testing.T) {
+	t.Setenv("PI_CODING_AGENT_DIR", t.TempDir())
+	check := buildConfig(nil, nil, nil).SessionPromptResponseFailure
 	turn := func(total int) acpsdk.PromptResponse {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{TotalTokens: total}}
 	}
-	if err := promptResponseFailure(turn(15), totals.swap("s1", turn(15)), ""); err != nil {
-		t.Fatalf("first answered turn = %v, want no failure", err)
+	if err := check("s1", turn(15), true); err != nil {
+		t.Fatalf("answered turn = %v, want no failure", err)
 	}
-	// A later turn that never reached the model leaves the session's total as it was.
-	if err := promptResponseFailure(turn(15), totals.swap("s1", turn(15)), ""); err == nil {
-		t.Fatal("a turn that added no tokens was taken as answered")
+	// A later turn with no reply leaves the session's total as it was.
+	if err := check("s1", turn(15), false); err == nil || !strings.Contains(err.Error(), "Pi did not reach its model") {
+		t.Fatalf("a turn with no reply and no new tokens = %v, want a reported failure", err)
 	}
-	if err := promptResponseFailure(turn(40), totals.swap("s1", turn(40)), ""); err != nil {
+	// Tokens used: the model was reached, though it said nothing.
+	if err := check("s1", turn(40), false); err != nil {
 		t.Fatalf("a turn that used tokens = %v, want no failure", err)
 	}
-	// Another session's totals are its own.
-	if err := promptResponseFailure(turn(15), totals.swap("s2", turn(15)), ""); err != nil {
-		t.Fatalf("another session's first turn = %v, want no failure", err)
+	// After a daemon restart no total is known; a turn with no reply still fails.
+	if err := check("s2", turn(500), false); err == nil {
+		t.Fatal("an unanswered first turn after a restart was taken as answered")
+	}
+	// A provider that reports no usage: an answered turn is fine.
+	if err := check("s3", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, true); err != nil {
+		t.Fatalf("answered turn without usage = %v, want no failure", err)
+	}
+	if err := check("s4", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, false); err != nil {
+		t.Fatalf("cancelled turn = %v, want no failure", err)
 	}
 }
 
@@ -248,19 +238,19 @@ func TestPromptResponseFailureShowsTheModelErrorPiRecorded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(folder, "2026-10-19T02-05-17-807Z_01a151e7.jsonl"), []byte(record), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	recorded := recordedModelError(agentDir, "01a151e7")
+	recorded := recordedModelError([]string{t.TempDir(), agentDir}, "01a151e7")
 	if recorded != "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account." {
 		t.Fatalf("recorded error = %q", recorded)
 	}
 	empty := acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{}}
-	err := promptResponseFailure(empty, 0, recorded)
+	err := promptResponseFailure(empty, recorded)
 	if err == nil || !strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "sign-in") {
 		t.Fatalf("failure = %v, want the model's refusal instead of a sign-in guess", err)
 	}
 	if !strings.Contains(err.Error(), "not supported when using Codex with a ChatGPT account") {
 		t.Fatalf("failure = %q, want the model's own words", err)
 	}
-	if got := recordedModelError(agentDir, "missing"); got != "" {
+	if got := recordedModelError([]string{agentDir}, "missing"); got != "" {
 		t.Fatalf("a session with no record = %q, want none", got)
 	}
 }

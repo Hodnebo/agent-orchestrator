@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,7 @@ func New(plugin piPlugin, log *slog.Logger) ports.ChatDriver {
 
 func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpdriver.Config {
 	totals := &sessionTotals{totals: map[string]int{}}
+	agentDirs := &piAgentDirs{}
 	return acpdriver.Config{
 		Harness: domain.HarnessPi,
 		Capabilities: ports.ChatCapabilities{
@@ -94,6 +96,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 				return acpdriver.Launch{}, fmt.Errorf("pi-acp requires an absolute AO data directory, got %q", cfg.DataDir)
 			}
 			env := cloneEnv(cfg.Env)
+			agentDirs.add(env)
 			// pi-acp 0.17 uses a long-running daemon. A session-private socket
 			// prevents one project's first-start environment (notably
 			// PI_CODING_AGENT_DIR and provider keys) leaking into another.
@@ -109,8 +112,12 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 		ValidateInitialize: validateInitialize,
 		SessionMeta:        sessionMeta,
 		SessionOptions:     sessionOptions,
-		SessionPromptResponseFailure: func(sessionID string, response acpsdk.PromptResponse) error {
-			return promptResponseFailure(response, totals.swap(sessionID, response), recordedModelError(piAgentDir(), sessionID))
+		SessionPromptResponseFailure: func(sessionID string, response acpsdk.PromptResponse, answered bool) error {
+			previous, seen := totals.swap(sessionID, response)
+			if answered || (seen && response.Usage != nil && response.Usage.TotalTokens > previous) {
+				return nil
+			}
+			return promptResponseFailure(response, recordedModelError(agentDirs.list(), sessionID))
 		},
 		// pi-acp can exit during its first handshake while its background
 		// daemon starts; the next start finds the daemon up.
@@ -125,23 +132,51 @@ type sessionTotals struct {
 	totals map[string]int
 }
 
-// swap records response's total for sessionID and returns the one before it.
-func (s *sessionTotals) swap(sessionID string, response acpsdk.PromptResponse) int {
+// swap records response's total for sessionID and returns the one before it,
+// and whether there was one: totals are kept in memory, so not across restarts.
+func (s *sessionTotals) swap(sessionID string, response acpsdk.PromptResponse) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.totals[sessionID]
+	previous, seen := s.totals[sessionID]
 	if response.Usage != nil {
 		s.totals[sessionID] = response.Usage.TotalTokens
 	}
-	return previous
+	return previous, seen
 }
 
-// promptResponseFailure reports a turn Pi ended without reaching its model:
-// pi-acp answers it with end_turn and no new tokens since previous. recorded is
+// piAgentDirs are the Pi folders this driver's sessions launched with, so a
+// session's record is found where its own launch pointed Pi.
+type piAgentDirs struct {
+	mu   sync.Mutex
+	dirs []string
+}
+
+func (d *piAgentDirs) add(env map[string]string) {
+	dir := strings.TrimSpace(env["PI_CODING_AGENT_DIR"])
+	if dir == "" {
+		dir = piAgentDir()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if dir != "" && !slices.Contains(d.dirs, dir) {
+		d.dirs = append(d.dirs, dir)
+	}
+}
+
+func (d *piAgentDirs) list() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.dirs) == 0 {
+		return []string{piAgentDir()}
+	}
+	return slices.Clone(d.dirs)
+}
+
+// promptResponseFailure reports a turn Pi ended with no reply, no tool call and
+// no new tokens: pi-acp's answer when it never reached its model. recorded is
 // the model's error from Pi's own session record, if any.
-func promptResponseFailure(response acpsdk.PromptResponse, previous int, recorded string) error {
-	usage := response.Usage
-	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil || usage.TotalTokens != previous {
+func promptResponseFailure(response acpsdk.PromptResponse, recorded string) error {
+	if response.StopReason != acpsdk.StopReasonEndTurn {
 		return nil
 	}
 	if recorded == "" || strings.Contains(recorded, "No API key") {
@@ -165,11 +200,17 @@ func piAgentDir() string {
 
 // recordedModelError reads the error of the latest failed reply from the tail
 // of Pi's record of sessionID (sessions/<folder>/<time>_<id>.jsonl).
-func recordedModelError(agentDir, sessionID string) string {
-	if agentDir == "" || sessionID == "" || strings.ContainsAny(sessionID, `/\*?[`) {
+func recordedModelError(agentDirs []string, sessionID string) string {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\*?[`) {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(agentDir, "sessions", "*", "*_"+sessionID+".jsonl"))
+	var matches []string
+	for _, dir := range agentDirs {
+		if dir != "" {
+			found, _ := filepath.Glob(filepath.Join(dir, "sessions", "*", "*_"+sessionID+".jsonl"))
+			matches = append(matches, found...)
+		}
+	}
 	if len(matches) == 0 {
 		return ""
 	}

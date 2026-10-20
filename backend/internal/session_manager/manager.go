@@ -3710,9 +3710,13 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			cleanupCtx, cancel := spawnRollbackContext(ctx)
-			_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
-			cancel()
+			// A provider switch (the only caller with a prompt override) brings
+			// the source back itself, so its session must not be ended here.
+			if promptOverride == nil {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
+				cancel()
+			}
 			m.cleanupSystemPromptDir(rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err)
 		}

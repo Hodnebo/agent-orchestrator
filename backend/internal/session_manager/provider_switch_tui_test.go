@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -81,3 +82,36 @@ func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testi
 		t.Fatalf("session prompt = %q, want the task kept", got)
 	}
 }
+
+func TestSwitchTargetThatMissesItsPromptLeavesTheSessionToTheRollback(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override *string
+		ended    int
+	}{
+		{"ordinary relaunch", nil, 1},
+		{"provider switch", ptr("HANDOFF NOTE"), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			rec := mkLive("mer-1")
+			rec.Metadata.Prompt = "TASK"
+			st.sessions[rec.ID] = rec
+			lcm := &fakeLCM{store: st}
+			m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: afterStartAgent{recordingAgent: &recordingAgent{}}},
+				Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{err: errors.New("delivery failed")},
+				Lifecycle: lcm, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			_, err := m.relaunchSessionWithPolicyAndGeneration(context.Background(), "relaunch", rec, st.projects["mer"],
+				ports.WorkspaceInfo{Path: rec.Metadata.WorkspacePath}, nil, true, false, "", domain.SessionInterfaceTransitionHistoryStrict, tc.override)
+			if err == nil || !strings.Contains(err.Error(), "deliver prompt") {
+				t.Fatalf("error = %v, want the delivery failure", err)
+			}
+			if got := lcm.terminated[rec.ID]; got != tc.ended {
+				t.Fatalf("session ended %d times, want %d", got, tc.ended)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
