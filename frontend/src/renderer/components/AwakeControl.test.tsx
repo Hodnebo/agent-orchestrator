@@ -65,7 +65,7 @@ beforeEach(() => {
 function MobileControl() {
 	const stay = useStayAwake();
 	return <>
-		<button disabled={stay.busy || !stay.supported} onClick={() => stay.set(!stay.on, true)} aria-pressed={stay.on}>Mobile wake</button>
+		<button disabled={stay.busy || !stay.supported} onClick={() => stay.set(!stay.on)} aria-pressed={stay.on}>Mobile wake</button>
 		<button disabled={stay.busy || !stay.supported} onClick={() => stay.setLid(!stay.lidOn)} aria-pressed={stay.lidOn}>Lid wake</button>
 	</>;
 }
@@ -158,9 +158,9 @@ describe("shared Stay Awake controls", () => {
 		expect(test.post).not.toHaveBeenCalled();
 	});
 
-	it("falls back to idle-only wake when closed-lid capability is unavailable", async () => {
+	it.each(["sidebar", "settings"])("%s falls back to idle-only wake when closed-lid capability is unavailable", async (source) => {
 		await show();
-		fireEvent.click(coffee());
+		fireEvent.click(source === "sidebar" ? coffee() : screen.getByRole("button", { name: "Mobile wake" }));
 		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ scope: "ao", mode: "indefinite", lidClosed: false }) }));
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "true"));
 		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
@@ -182,12 +182,23 @@ describe("shared Stay Awake controls", () => {
 		expect(state.lidActive).toBe(false);
 		expect(screen.getByRole("button", { name: "Lid wake" })).toHaveAttribute("aria-pressed", "false");
 	});
-	it("keeps the mobile main toggle idle-only even on a lid-capable Mac", async () => {
+	it.each([
+		{ source: "sidebar", enabled: false },
+		{ source: "sidebar", enabled: true },
+		{ source: "settings", enabled: false },
+		{ source: "settings", enabled: true },
+	])("$source enables the same closed-lid wake with mobile access enabled=$enabled", async ({ source, enabled }) => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		mobile.enabled = enabled;
 		await show();
-		fireEvent.click(screen.getByRole("button", { name: "Mobile wake" }));
-		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } }));
-		expect(state.sessions[0].lidClosed).toBe(false);
+		const settingsToggle = screen.getByRole("button", { name: "Mobile wake" });
+		fireEvent.click(source === "sidebar" ? coffee() : settingsToggle);
+		await waitFor(() => expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/));
+		expect(state.sessions[0].lidClosed).toBe(true);
+		expect(test.post).not.toHaveBeenCalledWith("/api/v1/mobile/keep-awake", expect.anything());
+		fireEvent.click(source === "sidebar" ? settingsToggle : coffee());
+		await waitFor(() => expect(screen.getByRole("button", { name: "Mobile wake" })).toHaveAttribute("aria-pressed", "false"));
+		expect(state.active).toBe(false);
 	});
 	it.each(["setup failed", "low_battery", "critical_heat"])("reports a refused closed-lid start without silently falling back (%s)", async (reason) => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
@@ -251,13 +262,17 @@ describe("shared Stay Awake controls", () => {
 		await show();
 		expect(coffee()).toHaveAccessibleDescription(/below 25% battery/);
 	});
-	it("uses a desktop lid lease for the Connect Mobile lid switch while mobile access is off", async () => {
+	it.each([false, true])("settings lid switch uses desktop ownership with mobile access enabled=%s", async (enabled) => {
 		state.capabilities.push({ id: "lid", available: true, reason: "" });
+		mobile.enabled = enabled;
 		await show();
 		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
-		await waitFor(() => expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } }));
-		expect(test.post).toHaveBeenCalledWith("/api/v1/awake/sessions", { body: expect.objectContaining({ lidClosed: true }) });
 		await waitFor(() => expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/));
+		expect(state.sessions[0].lidClosed).toBe(true);
+		expect(test.post).not.toHaveBeenCalledWith("/api/v1/mobile/keep-awake", expect.anything());
+		mobile.enabled = false;
+		await act(async () => { client.setQueryData(mobileStatusQueryKey, structuredClone(mobile)); });
+		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
 		expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
 	});
 	it("turning closed-lid off ends only lid sessions and keeps other owners", async () => {
@@ -468,12 +483,17 @@ describe("shared Stay Awake controls", () => {
 		expect(mobile.keepAwake.lidClosed).toBe(false);
 		expect(coffee()).toHaveAttribute("aria-pressed", "true");
 	});
-	it("keeps lid opt-in on the mobile backend and desktop idle-only while mobile access is on", async () => {
+	it("establishes desktop lid wake before releasing legacy mobile ownership", async () => {
+		state.capabilities.push({ id: "lid", available: true, reason: "" });
 		mobile.enabled = true;
+		mobile.keepAwake.enabled = true;
+		mobile.keepAwake.active = true;
 		await show();
 		fireEvent.click(screen.getByRole("button", { name: "Lid wake" }));
-		await waitFor(() => expect(mobile.keepAwake.lidClosed).toBe(true));
-		expect(state.sessions[0].lidClosed).toBe(false);
+		await waitFor(() => expect(mobile.keepAwake.enabled).toBe(false));
+		expect(state.sessions[0].lidClosed).toBe(true);
+		expect(test.post.mock.calls.map(([path]) => path)).toEqual(["/api/v1/awake/sessions", "/api/v1/mobile/keep-awake"]);
+		expect(coffee()).toHaveAccessibleDescription(/including with the lid closed/);
 	});
 	it("resumes paused wake before starting", async () => {
 		state.paused = true;

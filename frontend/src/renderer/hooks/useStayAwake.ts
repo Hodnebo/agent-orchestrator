@@ -5,7 +5,7 @@ import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { awakeCapability, awakeQueryKey, type AwakeState, useAwake } from "./useAwake";
 
 type MobileStatus = components["schemas"]["MobileStatusResponse"];
-type Change = { on: boolean; lidClosed?: boolean; rememberMobile?: boolean; desktopLidClosed?: boolean };
+type Change = { on: boolean; lidClosed?: boolean };
 const mutationKey = ["stay-awake-toggle"] as const;
 
 /** The desktop and mobile controls share intent, pending state, and ownership. */
@@ -42,7 +42,8 @@ export function useStayAwake(enabled = true) {
 	// safety stop has released the host assertion. Actual wake is separate.
 	const active = !!awake.state?.active || !!mobile.data?.keepAwake?.active;
 	const on = intent?.on ?? (desktopOn || !!mobile.data?.keepAwake?.enabled || active);
-	const lidOn = intent ? intent.on && (intent.desktopLidClosed || (intent.lidClosed ?? false)) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed);
+	const lidSupported = awakeCapability(awake.state, "lid")?.available ?? false;
+	const lidOn = intent ? intent.on && (intent.lidClosed ?? lidSupported) : desktopLid || !!(mobile.data?.keepAwake?.enabled && mobile.data.keepAwake.lidClosed);
 	const lidActive = !!awake.state?.lidActive || !!mobile.data?.keepAwake?.lidActive;
 	// The desktop status reports its lid failure as the overall reason.
 	const lidReason = lidOn && !lidActive
@@ -57,8 +58,8 @@ export function useStayAwake(enabled = true) {
 		mutationFn: async (change: Change) => {
 			// Cancel an older status read before writing the authoritative response.
 			await cache.cancelQueries({ queryKey: mobileStatusQueryKey });
-			const updateMobile = async (on: boolean, lidClosed: boolean) => {
-				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: on, lidClosed } });
+			const releaseMobile = async () => {
+				const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: false, lidClosed: false } });
 				if (error) throw new Error(apiErrorMessage(error));
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
@@ -106,12 +107,12 @@ export function useStayAwake(enabled = true) {
 			if (!change.on) {
 				// Stop all scopes and pause automatic rules, including pre-upgrade owners.
 				// Attempt both releases even if one backend fails.
-				const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(false, false)]);
+				const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), releaseMobile()]);
 				for (const result of results) if (result.status === "rejected") throw result.reason;
 			} else if (change.lidClosed === false) {
 				if (rules.some((r) => r.lidClosed)) {
 					// Automatic lid rules would rearm; pause them and replace with idle-only wake.
-					const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), updateMobile(true, false)]);
+					const results = await Promise.allSettled([awake.actAsync({ kind: "stop" }), releaseMobile()]);
 					for (const result of results) if (result.status === "rejected") throw result.reason;
 					await start();
 				} else if (desktopLid) {
@@ -121,13 +122,17 @@ export function useStayAwake(enabled = true) {
 					const endLid = async () => {
 						for (const s of sessions) if (s.lidClosed) await awake.actAsync({ kind: "end", id: s.id });
 					};
-					const results = await Promise.allSettled([endLid(), updateMobile(true, false)]);
+					const results = await Promise.allSettled([endLid(), releaseMobile()]);
 					for (const result of results) if (result.status === "rejected") throw result.reason;
-				} else await updateMobile(true, false);
+				} else {
+					await ensureDesktop();
+					await releaseMobile();
+				}
 			} else {
-				await ensureDesktop(change.desktopLidClosed);
-				// Mobile opt-ins retain their own lease; sidebar lid wake is desktop-owned.
-				if (change.lidClosed === true || change.rememberMobile) await updateMobile(true, change.lidClosed === true);
+				await ensureDesktop(change.lidClosed ?? lidSupported);
+				// Both controls use desktop ownership and its safety policy. Retire
+				// legacy mobile ownership only after desktop wake has been established.
+				if (mobile.data?.keepAwake?.enabled || mobile.data?.keepAwake?.active || mobile.data?.keepAwake?.lidClosed) await releaseMobile();
 			}
 		},
 	});
@@ -142,18 +147,15 @@ export function useStayAwake(enabled = true) {
 		attention: on && (!active || (lidOn && !lidActive)) && !busy,
 		reason: desktopOn ? reason : undefined,
 		lidOn,
-		set: (on: boolean, rememberMobile = false) => change({ on, rememberMobile }),
-		lidSupported: awakeCapability(awake.state, "lid")?.available ?? false,
+		set: (on: boolean) => change({ on }),
+		lidSupported,
 		lidActive,
-		setWithLid: (on: boolean) => change({ on, desktopLidClosed: true }),
 		lidReason,
 		stopBatteryPercent: awake.state?.settings?.stopBatteryPercent || 10,
-		// Mobile lid leases apply only while mobile access is on; otherwise the
-		// desktop owns closed-lid wake, as it does for the sidebar toggle.
-		setLid: (lidClosed: boolean) => change({ on: true, lidClosed, desktopLidClosed: lidClosed && !mobile.data?.enabled }),
+		setLid: (lidClosed: boolean) => change({ on: true, lidClosed }),
 		busy,
 		error: mutation.error instanceof Error ? mutation.error.message : null,
 		supported: awakeCapability(awake.state, "idle")?.available ?? false,
-		starting: intent?.on === true && (!active || (!!intent.desktopLidClosed && !lidActive)),
+		starting: intent?.on === true && (!active || ((intent.lidClosed ?? lidSupported) && !lidActive)),
 	};
 }

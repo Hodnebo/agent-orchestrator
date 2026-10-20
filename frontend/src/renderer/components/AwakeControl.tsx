@@ -63,7 +63,7 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						aria-busy={stay.starting || undefined}
 						disabled={!stay.supported || stay.busy}
 						data-testid="awake-button"
-						onClick={() => void (stay.lidSupported ? stay.setWithLid(!stay.on) : stay.set(!stay.on))}
+						onClick={() => stay.set(!stay.on)}
 						className={cn(
 							NAV_ROW_HIGHLIGHT_HOST_CLASS,
 							"size-9 rounded-lg border-0 focus-visible:ring-2 focus-visible:ring-ring",

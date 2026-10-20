@@ -767,7 +767,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						stayAwake.set(next, true);
+						stayAwake.set(next);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
