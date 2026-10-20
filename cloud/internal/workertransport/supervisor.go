@@ -134,6 +134,19 @@ type Supervisor struct {
 	// prompt (see mayStartTurn).
 	lastTUISubmitAt   time.Time
 	tuiHandoffClosing bool
+
+	// The worker's own commands (FallBackToTUI) run on Run's serial loop,
+	// like the control plane's interface commands, never beside them.
+	loopOnce     sync.Once
+	loopWake     chan struct{}
+	loopMu       sync.Mutex
+	loopCommands []loopCommand
+}
+
+// loopCommand is a worker-originated command waiting for Run's serial loop.
+type loopCommand struct {
+	run  func(context.Context) error
+	done chan error
 }
 
 // ChatRunner executes the headless Chat controller kind for a session. Run
@@ -257,6 +270,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	for {
+		if s.runLoopCommands(ctx) {
+			continue
+		}
 		request, err := s.Control.ClaimTransport(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -291,7 +307,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		// turn/transport enqueue (NOTIFY), or a short server-side timeout,
 		// instead of busy-polling the claim routes. The claims above remain the
 		// source of truth; WaitForWork is only an accelerant.
-		if err := s.Control.WaitForWork(ctx); err != nil {
+		if err := s.waitForWork(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -305,6 +321,63 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *Supervisor) loopWakeChannel() chan struct{} {
+	s.loopOnce.Do(func() { s.loopWake = make(chan struct{}, 1) })
+	return s.loopWake
+}
+
+// runOnLoop runs command on Run's serial loop, waking the loop from its wait
+// for control plane work, and returns the command's result. It returns
+// ctx's error if ctx ends first.
+func (s *Supervisor) runOnLoop(ctx context.Context, command func(context.Context) error) error {
+	queued := loopCommand{run: command, done: make(chan error, 1)}
+	s.loopMu.Lock()
+	s.loopCommands = append(s.loopCommands, queued)
+	s.loopMu.Unlock()
+	select {
+	case s.loopWakeChannel() <- struct{}{}:
+	default:
+	}
+	select {
+	case err := <-queued.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runLoopCommands runs the queued worker commands in order and reports
+// whether there were any.
+func (s *Supervisor) runLoopCommands(ctx context.Context) bool {
+	s.loopMu.Lock()
+	queued := s.loopCommands
+	s.loopCommands = nil
+	s.loopMu.Unlock()
+	for _, command := range queued {
+		command.done <- command.run(ctx)
+	}
+	return len(queued) > 0
+}
+
+// waitForWork is Control.WaitForWork, cut short when a worker command is
+// queued for the loop (a nil error then).
+func (s *Supervisor) waitForWork(ctx context.Context) error {
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-s.loopWakeChannel():
+			cancel()
+		case <-waitCtx.Done():
+		}
+	}()
+	err := s.Control.WaitForWork(waitCtx)
+	if err != nil && waitCtx.Err() != nil && ctx.Err() == nil {
+		return nil
+	}
+	return err
 }
 
 // ConfigureAgent reserves an agent terminal before its PTY may be started. A
