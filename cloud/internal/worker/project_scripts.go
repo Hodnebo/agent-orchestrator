@@ -509,6 +509,14 @@ func WriteCleanupHook(dataDir string, commands []string, dir string, environment
 		"fi\n")
 	content.WriteString("cd " + shellQuote(dir) + " >\"$ao_state/output\" 2>&1 || { echo 1 >\"$ao_state/status\"; cat \"$ao_state/output\"; exit 1; }\n")
 	values := environment.Map()
+	// Setup steps inherit the worker's HOME; pin it so Cleanup sees the same
+	// home (its ~/.docker, gh and tool config), whichever runner starts the
+	// hook (sudo -H, runuser and the provider's exec each set their own).
+	if home := os.Getenv("HOME"); home != "" {
+		if _, set := values["HOME"]; !set {
+			values["HOME"] = home
+		}
+	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

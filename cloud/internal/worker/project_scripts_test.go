@@ -227,3 +227,25 @@ func TestScriptEnvironmentNamesTheReposRoot(t *testing.T) {
 		t.Fatalf("cleanup hook does not export AO_REPOS_ROOT: %s (%v)", hook, err)
 	}
 }
+
+// Cleanup sees the HOME Setup ran with (the worker's), not the one its runner
+// would set: sudo -H gives the hook owner's account home instead.
+func TestCleanupHookKeepsTheWorkersHome(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is unavailable")
+	}
+	dataDir, workspace, workerHome := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("HOME", workerHome)
+	if err := WriteCleanupHook(dataDir, []string{`echo "home=$HOME" > home-seen`}, workspace, scriptEnvironment(workspace)); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(filepath.Join(dataDir, CleanupHookFile))
+	command.Env = append(os.Environ(), "HOME=/home/someone-else")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("run hook: %v: %s", err, output)
+	}
+	seen, err := os.ReadFile(filepath.Join(workspace, "home-seen"))
+	if err != nil || strings.TrimSpace(string(seen)) != "home="+workerHome {
+		t.Fatalf("Cleanup saw %q (%v), want home=%s", seen, err, workerHome)
+	}
+}
