@@ -71,6 +71,13 @@ export interface CloudCpOffering {
 	 * billed. Absent from older control planes.
 	 */
 	customCoder?: boolean;
+	/**
+	 * A Coder session run as the dedicated ao-worker user checks out in the
+	 * project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Absent
+	 * from older control planes, which is read as off: a working folder then
+	 * applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder?: boolean;
 }
 
 /** GET /me */

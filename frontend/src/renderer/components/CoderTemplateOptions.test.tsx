@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 	hasCoder: true,
 	orgCoder: { data: null, isLoading: false, isError: false } as { data: Record<string, unknown> | null | undefined; isLoading: boolean; isError: boolean },
 	orgCoderOrgIds: [] as (string | undefined)[],
+	workerWorkingFolder: undefined as boolean | undefined,
 }));
 
 vi.mock("../hooks/useCloudCp", () => ({
@@ -26,7 +27,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 		baseUrl: "https://cp.test",
 	}),
 }));
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ hasCoder: mocks.hasCoder }) }));
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ hasCoder: mocks.hasCoder, coderWorkerWorkingFolder: mocks.workerWorkingFolder }),
+}));
 vi.mock("../hooks/useOrgCoderConfig", () => ({
 	useOrgCoderConfig: (_enabled?: boolean, orgId?: string) => {
 		mocks.orgCoderOrgIds.push(orgId);
@@ -293,6 +296,7 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 		await appI18n.changeLanguage("en");
 		mocks.hasCoder = true;
 		mocks.orgCoder = { data: null, isLoading: false, isError: false };
+		mocks.workerWorkingFolder = undefined;
 		mocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [repos] });
 		mocks.evaluateCoderTemplateParameters.mockReset().mockRejectedValue(new CloudCpError("Not found", { status: 404 }));
 	});
@@ -309,10 +313,26 @@ describe("CoderTemplateOptions duplicate clone warning", () => {
 	});
 
 	it("says the session will not start when the project has a working folder and AO runs as ao-worker", async () => {
+		mocks.workerWorkingFolder = true;
 		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
 		renderOptions({ github_repos: "[\"Alice\"]" }, projectRepos, "~/work/{repo}");
 		expect(await screen.findByText("Your template also clones Alice into the working folder, so AO cannot start there. Untick it.")).toBeInTheDocument();
 		expect(screen.queryByText(warning)).not.toBeInTheDocument();
+	});
+
+	it("keeps the two-copies warning while the control plane does not check ao-worker sessions out in the working folder", async () => {
+		mocks.orgCoder = { data: { baseUrl: "https://coder.test", workerUser: "ao-worker", tokenSet: true }, isLoading: false, isError: false };
+		for (const flag of [false, undefined]) {
+			mocks.workerWorkingFolder = flag;
+			const { unmount } = render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<Harness initial={{ github_repos: "[\"Alice\"]" }} onChange={vi.fn()} repositoryUrls={projectRepos} projectWorkingDirectory="~/work/{repo}" />
+				</QueryClientProvider>,
+			);
+			expect(await screen.findByText("Your template will also clone Alice, separate from the copy AO works in. Untick to keep one copy.")).toBeInTheDocument();
+			expect(screen.queryByText(/so AO cannot start there/)).not.toBeInTheDocument();
+			unmount();
+		}
 	});
 
 	it("reads the Coder connection of the project's org", async () => {

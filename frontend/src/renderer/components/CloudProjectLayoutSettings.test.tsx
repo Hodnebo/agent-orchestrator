@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	listRepos: vi.fn(),
 	orgCoderConfig: null as Record<string, unknown> | null,
 	org: { id: "org-1", role: "admin" } as { id: string; role?: string },
+	workerWorkingFolder: undefined as boolean | undefined,
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
@@ -18,7 +19,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 		baseUrl: "https://cloud.test",
 	}),
 }));
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder", hasCoder: true }) }));
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ defaultProvider: "coder", hasCoder: true, coderWorkerWorkingFolder: mocks.workerWorkingFolder }),
+}));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org }) }));
 vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => ({ data: mocks.orgCoderConfig, isLoading: false }) }));
 
@@ -33,6 +36,7 @@ const repository = (id: string, name: string) => ({
 
 beforeEach(() => {
 	mocks.orgCoderConfig = null;
+	mocks.workerWorkingFolder = undefined;
 	mocks.org = { id: "org-1", role: "admin" };
 	mocks.get.mockReset().mockResolvedValue({ project: project({ repos: [{ url: "https://github.com/acme/11x", branch: "develop" }] }) });
 	mocks.patch.mockReset().mockImplementation((_org: string, _id: string, body: { config: Record<string, unknown> }) =>
@@ -169,4 +173,16 @@ it("blocks instructions over 16 KB", async () => {
 	fireEvent.change(await screen.findByLabelText("Worker instructions"), { target: { value: "x".repeat(16 * 1024 + 1) } });
 	expect(screen.getByText("Instructions must be at most 16 KB.")).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
+it("describes the working folder as the workspace user's until the control plane checks ao-worker sessions out there", async () => {
+	mocks.orgCoderConfig = { baseUrl: "https://coder.test", workerUser: "ao-worker" };
+	mocks.get.mockResolvedValue({ project: project({ workingDirectory: "~/work/{repo}" }) });
+	const view = renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText(/Leave empty to use your Coder connection's folder\./)).toBeInTheDocument();
+	view.unmount();
+	mocks.workerWorkingFolder = true;
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText(/Leave empty for the default location\./)).toBeInTheDocument();
+	expect(screen.queryByText(/Leave empty to use your Coder connection's folder/)).not.toBeInTheDocument();
 });

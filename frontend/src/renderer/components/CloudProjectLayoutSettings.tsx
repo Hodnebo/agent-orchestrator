@@ -139,9 +139,11 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const reposChanged = JSON.stringify(filledExtras) !== JSON.stringify(saved.extras);
 	const dirty = reposChanged || startsIn !== saved.startsIn || normalizeWorkingDirectory(workingDirectory) !== saved.workingDirectory;
 	const repos = useCloudGitHubAppRepositories(project.orgId, !standalone);
-	// The working folder is where a Coder session checks the main repository
-	// out (or, run as the workspace user, the folder it adopts); show it for a
-	// bring-your-own Coder org, or while a value is stored so it can be cleared.
+	// The working folder is the folder a session run as the workspace user
+	// adopts, and, once the control plane checks ao-worker sessions out there
+	// (offering.coderWorkerWorkingFolder), where any Coder session checks the
+	// main repository out; show it for a bring-your-own Coder org, or while a
+	// value is stored so it can be cleared.
 	const orgOwnsCoder = useOrgCoderConfig(offering.hasCoder, project.orgId).data != null;
 	const showWorkingDirectory = (orgOwnsCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER) || saved.workingDirectory !== "";
 	// A Setup or Cleanup step runs in its repository's folder, so a repository a
@@ -226,7 +228,9 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 					? <span role="alert" className="text-error">{workingDirectoryMessage(t, workingDirectoryError)}</span>
 					: standalone
 						? t("settings.cloudProject.workingDirectoryHintStandalone", { defaultValue: "Where sessions start in your Coder workspace. Leave empty for the default." })
-						: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty for the default location." })}>
+						: offering.coderWorkerWorkingFolder
+							? t("settings.cloudProject.workingDirectoryHintCheckout", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty for the default location." })
+							: t("settings.cloudProject.workingDirectoryHint", { defaultValue: "Where the main repository is checked out in your Coder workspace; the others go beside it. Leave empty to use your Coder connection's folder." })}>
 				<Input id="cloudProjectWorkingDirectory" className="font-mono" value={workingDirectory} disabled={locked}
 					placeholder={standalone ? t("settings.cloudProject.workingDirectoryPlaceholderStandalone", { defaultValue: "~/work/scratch" }) : t("settings.cloudProject.workingDirectoryPlaceholder", { defaultValue: "~/work/{repo}" })} spellCheck={false} autoCapitalize="off" autoComplete="off"
 					aria-invalid={workingDirectoryInvalid || undefined}

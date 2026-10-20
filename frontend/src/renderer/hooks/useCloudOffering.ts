@@ -50,6 +50,7 @@ const EMPTY: ResolvedCloudOffering = {
 	billingMode: undefined,
 	features: [],
 	customCoder: false,
+	coderWorkerWorkingFolder: false,
 	source: "fallback",
 };
 
