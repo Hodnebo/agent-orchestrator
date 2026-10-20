@@ -83,8 +83,8 @@ describe("ChatWorkspace retry", () => {
 		const loadOlder = vi.fn();
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry, setAutoResume }} hasOlder onLoadOlder={loadOlder} />);
 
-		expect(screen.getByRole("button", { name: action, exact: true })).toBeEnabled();
-		await userEvent.click(screen.getByRole("button", { name: action, exact: true }));
+		expect(screen.getByRole("button", { name: action })).toBeEnabled();
+		await userEvent.click(screen.getByRole("button", { name: action }));
 		if (autoResume) expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
 		else expect(retry).toHaveBeenCalledWith("turn-1");
 		expect(loadOlder).not.toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe("ChatWorkspace retry", () => {
 			? { ...item, origin: "automation" } : item);
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
 
-		expect(screen.queryByRole("button", { name: "Resume", exact: true })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).toBeNull();
 	});
@@ -114,7 +114,7 @@ describe("ChatWorkspace retry", () => {
 		const loadOlder = vi.fn();
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} hasOlder onLoadOlder={loadOlder} />);
 
-		await userEvent.click(screen.getByRole("button", { name: "Resume", exact: true }));
+		await userEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(retry).toHaveBeenCalledWith("turn-1");
 		expect(loadOlder).not.toHaveBeenCalled();
 	});
