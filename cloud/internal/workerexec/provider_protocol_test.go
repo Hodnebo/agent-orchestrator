@@ -152,7 +152,7 @@ func TestCursorACPAcceptEditsOnlyApprovesFileChanges(t *testing.T) {
 			{acp.ToolKindEdit, true}, {acp.ToolKindDelete, true}, {acp.ToolKindMove, true}, {acp.ToolKindExecute, false},
 		} {
 			kind := test.kind
-			option, approved := automaticACPDecision(turn, acp.RequestPermissionRequest{
+			option, approved := automaticACPDecision(turn, "", acp.RequestPermissionRequest{
 				ToolCall: acp.ToolCallUpdate{Kind: &kind}, Options: options,
 			})
 			if approved != test.approve || (approved && option != "allow") {
@@ -173,10 +173,10 @@ func TestCursorACPTrustedSessionAllowsEveryToolCall(t *testing.T) {
 	}
 	execute := acp.ToolKindExecute
 	request := acp.RequestPermissionRequest{ToolCall: acp.ToolCallUpdate{Kind: &execute}, Options: options}
-	if option, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted"}, request); !approved || option != "always" {
+	if option, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted"}, "", request); !approved || option != "always" {
 		t.Fatalf("trusted session = %s/%v, want always", option, approved)
 	}
-	if _, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted", ApprovalMode: "default"}, request); approved {
+	if _, approved := automaticACPDecision(worker.Turn{Harness: "cursor", Mode: "trusted", ApprovalMode: "default"}, "", request); approved {
 		t.Fatal("a turn that chose to ask was approved automatically")
 	}
 }
@@ -224,7 +224,7 @@ func TestClaudeACPApprovalModesUseSessionSetMode(t *testing.T) {
 			defer cancel()
 			if err := configureACPSession(ctx, conn, "session-1", worker.Turn{
 				Harness: "claude-code", Mode: test.mode, ApprovalMode: test.approval,
-			}, nil, modes); err != nil {
+			}, "", nil, modes); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -265,6 +265,77 @@ func TestCursorACPLaunchApprovalFlags(t *testing.T) {
 				t.Fatalf("Cursor launch = %q %v, want cursor-agent %v", path, args, test.want)
 			}
 		})
+	}
+}
+
+// A Cursor project in plan or ask mode runs its Chat turns in that mode.
+// cursor-agent's acp command ignores --mode, so the mode is the ACP session's
+// (session/set_mode, which cursor-agent offers as agent, plan and ask), and
+// the launch never adds --force or --auto-review: a trusted session's turn,
+// or one that picked bypass or auto review, still launches with --trust
+// alone and approves nothing automatically.
+func TestCursorACPRunsTheProjectModeWithoutForce(t *testing.T) {
+	for _, mode := range []string{"plan", "ask"} {
+		for _, approval := range []string{"", "bypass-permissions", "auto", "accept-edits"} {
+			turn := worker.Turn{Harness: "cursor", Mode: "trusted", ApprovalMode: approval}
+			_, args, _, err := acpLaunch(context.Background(), turn, Command{Path: "cursor-agent", CursorMode: mode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"--trust", "acp"}; !reflect.DeepEqual(args, want) {
+				t.Fatalf("%s/%q launch = %v, want %v", mode, approval, args, want)
+			}
+			for _, kind := range []acp.ToolKind{acp.ToolKindEdit, acp.ToolKindExecute} {
+				request := acp.RequestPermissionRequest{ToolCall: acp.ToolCallUpdate{Kind: &kind}, Options: []acp.PermissionOption{
+					{OptionId: "always", Kind: acp.PermissionOptionKindAllowAlways},
+					{OptionId: "allow", Kind: acp.PermissionOptionKindAllowOnce},
+				}}
+				if option, approved := automaticACPDecision(turn, mode, request); approved {
+					t.Fatalf("%s/%q approved %s %s automatically", mode, approval, kind, option)
+				}
+			}
+		}
+	}
+	if _, _, _, err := acpLaunch(context.Background(), worker.Turn{Harness: "cursor", Mode: "trusted"},
+		Command{Path: "cursor-agent", CursorMode: "agent-ish"}); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("unknown Cursor mode = %v, want ErrUnsupportedPolicy", err)
+	}
+
+	cursorModes := &acp.SessionModeState{CurrentModeId: "agent", AvailableModes: []acp.SessionMode{{Id: "agent"}, {Id: "plan"}, {Id: "ask"}}}
+	configure := func(t *testing.T, mode string, modes *acp.SessionModeState) (acp.SessionModeId, bool, error) {
+		t.Helper()
+		clientToAgentR, clientToAgentW := io.Pipe()
+		agentToClientR, agentToClientW := io.Pipe()
+		defer clientToAgentR.Close()
+		defer clientToAgentW.Close()
+		defer agentToClientR.Close()
+		defer agentToClientW.Close()
+		agent := &modeSpyAgent{selected: make(chan acp.SessionModeId, 1)}
+		_ = acp.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
+		conn := acp.NewClientSideConnection(&cloudACPClient{}, clientToAgentW, agentToClientR)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := configureACPSession(ctx, conn, "session-1", worker.Turn{Harness: "cursor", Mode: "trusted"}, mode, nil, modes)
+		select {
+		case got := <-agent.selected:
+			return got, true, err
+		default:
+			return "", false, err
+		}
+	}
+	for _, mode := range []string{"plan", "ask"} {
+		got, set, err := configure(t, mode, cursorModes)
+		if err != nil || !set || string(got) != mode {
+			t.Fatalf("Cursor mode %s: session/set_mode %q (sent %v), err %v", mode, got, set, err)
+		}
+	}
+	if _, set, err := configure(t, "", cursorModes); err != nil || set {
+		t.Fatalf("a Cursor project without a mode set the session mode (%v, %v)", set, err)
+	}
+	// A session that does not offer the mode fails the turn instead of
+	// running it as the full agent.
+	if _, set, err := configure(t, "ask", &acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "agent"}}}); !errors.Is(err, ErrUnsupportedPolicy) || set {
+		t.Fatalf("unoffered Cursor mode = (%v, %v), want ErrUnsupportedPolicy without set_mode", set, err)
 	}
 }
 

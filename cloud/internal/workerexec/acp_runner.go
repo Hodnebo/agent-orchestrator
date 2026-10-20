@@ -109,7 +109,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		return fmt.Errorf("start ACP agent: %w", err)
 	}
 	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
-	client := &cloudACPClient{control: control, turn: turn, publish: publish}
+	client := &cloudACPClient{control: control, turn: turn, cursorMode: command.CursorMode, publish: publish}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -159,7 +159,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			return err
 		}
 	}
-	if err := configureACPSession(ctx, conn, sessionID, turn, configOptions, modes); err != nil {
+	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, configOptions, modes); err != nil {
 		return err
 	}
 	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta)}
@@ -207,8 +207,15 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 		}
 		return adapter, nil, env, nil
 	case "cursor":
+		if err := validateCursorMode(command.CursorMode); err != nil {
+			return "", nil, nil, err
+		}
+		// The project's Cursor mode is not a flag here: cursor-agent's acp
+		// command ignores --mode, so configureACPSession sets it as the ACP
+		// session mode. A restricted mode launches without --force or
+		// --auto-review (cursorACPApprovalMode).
 		args := []string{"--trust"}
-		switch cursorACPApprovalMode(turn) {
+		switch cursorACPApprovalMode(turn, command.CursorMode) {
 		case "auto":
 			args = append(args, "--auto-review")
 		case "bypass-permissions":
@@ -220,7 +227,7 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 	}
 }
 
-func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, options []acp.SessionConfigOption, modes *acp.SessionModeState) error {
+func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, cursorMode string, options []acp.SessionConfigOption, modes *acp.SessionModeState) error {
 	setOption := func(id, value string) error {
 		if value == "" {
 			return nil
@@ -248,6 +255,17 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		}
 		if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: sessionID, ModeId: acp.SessionModeId(mode)}); err != nil {
 			return fmt.Errorf("set Claude approval mode: %w", err)
+		}
+	}
+	if turn.Harness == "cursor" && cursorMode != "" {
+		// The project's plan or ask mode, set on every turn so a restored
+		// conversation runs in it too. A session that does not offer it fails
+		// the turn rather than running it as the full agent.
+		if !acpModeOffered(options, modes, cursorMode) {
+			return fmt.Errorf("%w: ACP session does not offer Cursor mode %q", ErrUnsupportedPolicy, cursorMode)
+		}
+		if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: sessionID, ModeId: acp.SessionModeId(cursorMode)}); err != nil {
+			return fmt.Errorf("set Cursor mode: %w", err)
 		}
 	}
 	return setOption("effort", turn.ReasoningEffort)
@@ -307,9 +325,11 @@ func claudeACPApprovalMode(turn worker.Turn) string {
 // turn without one follows the session mode (trusted bypasses permission
 // prompts, standard accepts edits). A read-only turn approves nothing: it
 // launches without --force and every permission request is cancelled
-// (cloudACPClient.RequestPermission).
-func cursorACPApprovalMode(turn worker.Turn) string {
-	if turn.Mode == "read-only" {
+// (cloudACPClient.RequestPermission). A turn in the project's plan or ask
+// mode (cursorMode) asks for every approval: a restricted mode is never
+// combined with --force, --auto-review or an automatic approval.
+func cursorACPApprovalMode(turn worker.Turn, cursorMode string) string {
+	if turn.Mode == "read-only" || cursorMode != "" {
 		return "default"
 	}
 	if turn.ApprovalMode != "" {
@@ -415,7 +435,9 @@ func acpModeOffered(options []acp.SessionConfigOption, modes *acp.SessionModeSta
 type cloudACPClient struct {
 	control approvalControl
 	turn    worker.Turn
-	publish func(Output) error
+	// cursorMode is the turn's Command.CursorMode.
+	cursorMode string
+	publish    func(Output) error
 	// live gates recording of session updates. LoadSession replays the entire
 	// prior conversation back through SessionUpdate before it returns; recording
 	// that replay would re-emit every earlier turn's assistant text at the head
@@ -442,7 +464,7 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	if ctx.Err() != nil || c.turn.Mode == "read-only" {
 		return cancelled, nil
 	}
-	if selected, ok := automaticACPDecision(c.turn, request); ok {
+	if selected, ok := automaticACPDecision(c.turn, c.cursorMode, request); ok {
 		return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(selected)}, nil
 	}
 	options := make([]map[string]string, 0, len(request.Options))
@@ -500,10 +522,10 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	}
 }
 
-func automaticACPDecision(turn worker.Turn, request acp.RequestPermissionRequest) (acp.PermissionOptionId, bool) {
+func automaticACPDecision(turn worker.Turn, cursorMode string, request acp.RequestPermissionRequest) (acp.PermissionOptionId, bool) {
 	approval := turn.ApprovalMode
 	if turn.Harness == "cursor" {
-		approval = cursorACPApprovalMode(turn)
+		approval = cursorACPApprovalMode(turn, cursorMode)
 	}
 	allow := false
 	if approval == "bypass-permissions" {

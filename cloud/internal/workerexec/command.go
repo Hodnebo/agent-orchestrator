@@ -41,6 +41,11 @@ type Command struct {
 	// WritableRoots are checkouts outside Dir that a Codex Chat turn's
 	// workspace-write sandbox must also let it write (additionalDirectories).
 	WritableRoots []string
+	// CursorMode is the project's Cursor execution mode ("plan" or "ask",
+	// domain.ProjectAgentConfig.Mode) a Cursor Chat turn runs in, empty for
+	// the full agent. Either restricts the agent: the turn then never runs
+	// with --force or --auto-review, and approves nothing automatically.
+	CursorMode string
 }
 
 type CommandBuilder interface {
@@ -406,7 +411,8 @@ func (b HarnessBuilder) Build(
 			command.WritableRoots = extraDirs
 		}
 	case "cursor":
-		command.Args, err = cursorArgs(turn)
+		command.CursorMode = b.Launch.AgentConfig.Mode
+		command.Args, err = cursorArgs(turn, command.CursorMode)
 	default:
 		err = fmt.Errorf("unsupported coding-agent harness %q", turn.Harness)
 	}
@@ -690,15 +696,21 @@ func codexArgs(turn worker.Turn) ([]string, error) {
 	return append(args, "--", turn.Prompt), nil
 }
 
-func cursorArgs(turn worker.Turn) ([]string, error) {
+func cursorArgs(turn worker.Turn, cursorMode string) ([]string, error) {
 	if len(turn.DeniedCommands) > 0 {
 		return nil, fmt.Errorf("%w: Cursor has no exact denied-command primitive", ErrUnsupportedPolicy)
 	}
 	if turn.Mode == "read-only" {
 		return nil, fmt.Errorf("%w: Cursor has no verified read-only mode", ErrUnsupportedPolicy)
 	}
+	if err := validateCursorMode(cursorMode); err != nil {
+		return nil, err
+	}
 	args := []string{"agent", "--print", "--output-format", "stream-json"}
-	if turn.ApprovalMode == "bypass-permissions" || (turn.ApprovalMode == "" && turn.Mode == "trusted") {
+	if cursorMode != "" {
+		// A restricted mode never runs with --force or --auto-review.
+		args = append(args, "--mode", cursorMode)
+	} else if turn.ApprovalMode == "bypass-permissions" || (turn.ApprovalMode == "" && turn.Mode == "trusted") {
 		args = append(args, "--force")
 	} else if turn.ApprovalMode == "auto" {
 		args = append(args, "--auto-review")
@@ -707,6 +719,17 @@ func cursorArgs(turn worker.Turn) ([]string, error) {
 		args = append(args, "--resume", turn.AgentSessionID)
 	}
 	return append(args, turn.Prompt), nil
+}
+
+// validateCursorMode refuses a Cursor execution mode other than the
+// restricted ones a project may set (domain.ProjectAgentConfig.Mode), so an
+// unknown mode never runs as the full agent.
+func validateCursorMode(mode string) error {
+	switch mode {
+	case "", "plan", "ask":
+		return nil
+	}
+	return fmt.Errorf("%w: unknown Cursor mode %q", ErrUnsupportedPolicy, mode)
 }
 
 func validateApprovalMode(turn worker.Turn) error {

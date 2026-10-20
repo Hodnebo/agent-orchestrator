@@ -2,6 +2,7 @@ package workerexec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -161,7 +162,7 @@ func TestCursorArgsStreamsJSONWithForceAndResume(t *testing.T) {
 		Mode:           "trusted",
 		Prompt:         "describe the change",
 		AgentSessionID: "cursor-native-1",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("cursor args: %v", err)
 	}
@@ -175,13 +176,59 @@ func TestCursorArgsStreamsJSONWithForceAndResume(t *testing.T) {
 }
 
 func TestCursorArgsOmitsResumeWithoutNativeConversation(t *testing.T) {
-	got, err := cursorArgs(worker.Turn{Mode: "standard", Prompt: "fresh"})
+	got, err := cursorArgs(worker.Turn{Mode: "standard", Prompt: "fresh"}, "")
 	if err != nil {
 		t.Fatalf("cursor args: %v", err)
 	}
 	want := []string{"agent", "--print", "--output-format", "stream-json", "fresh"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+}
+
+// A Cursor project's plan or ask mode reaches a headless Chat turn as
+// --mode, and a restricted mode never runs with --force or --auto-review,
+// whatever the turn's approval mode. An unknown mode is refused rather than
+// run as the full agent.
+func TestCursorArgsRunTheProjectModeWithoutForce(t *testing.T) {
+	for _, approval := range []string{"", "bypass-permissions", "auto"} {
+		got, err := cursorArgs(worker.Turn{Mode: "trusted", ApprovalMode: approval, Prompt: "explain"}, "ask")
+		if err != nil {
+			t.Fatalf("cursor args: %v", err)
+		}
+		want := []string{"agent", "--print", "--output-format", "stream-json", "--mode", "ask", "explain"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("approval %q: args = %#v, want %#v", approval, got, want)
+		}
+	}
+	if _, err := cursorArgs(worker.Turn{Mode: "trusted", Prompt: "explain"}, "agent-ish"); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("unknown Cursor mode = %v, want ErrUnsupportedPolicy", err)
+	}
+}
+
+// The Chat command of a Cursor session carries the project's Cursor mode,
+// which BuildInteractive passes to the terminal as --mode.
+func TestBuildCarriesTheProjectCursorModeIntoChat(t *testing.T) {
+	builder := HarnessBuilder{
+		Binaries: map[string]string{"cursor": "/bin/echo"}, DataDir: t.TempDir(),
+		Launch: worker.LaunchContext{
+			SessionID: "session-cursor", Kind: "worker", Harness: "cursor",
+			AgentConfig: domain.ProjectAgentConfig{Mode: "plan"},
+		},
+	}
+	command, err := builder.Build(context.Background(), worker.Turn{Harness: "cursor", Mode: "trusted", Prompt: "plan it"},
+		worker.CredentialResponse{Provider: "cursor", CredentialType: "api_key", Secret: "key"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Cleanup != nil {
+		defer command.Cleanup()
+	}
+	if command.CursorMode != "plan" {
+		t.Fatalf("Chat command Cursor mode = %q, want plan", command.CursorMode)
+	}
+	if slices.Contains(command.Args, "--force") || !slices.Contains(command.Args, "--mode") {
+		t.Fatalf("headless Cursor args = %v, want --mode plan without --force", command.Args)
 	}
 }
 
