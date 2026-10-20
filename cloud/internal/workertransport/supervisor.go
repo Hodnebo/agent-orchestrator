@@ -365,6 +365,9 @@ type terminalProcess struct {
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
 	outputID atomic.Int64
+	// input tracks whether the interactive agent takes the turns the worker types
+	// into it (agent terminals only; see agent_input.go).
+	input agentInput
 }
 
 func (s *Supervisor) Run(ctx context.Context) error {
@@ -503,11 +506,17 @@ func (s *Supervisor) queueOnLoop(command func(context.Context) error) <-chan err
 	s.loopMu.Lock()
 	s.loopCommands = append(s.loopCommands, queued)
 	s.loopMu.Unlock()
+	s.wakeLoop()
+	return queued.done
+}
+
+// wakeLoop cuts Run's wait for control plane work short, so the loop runs
+// its worker commands and tries to forward a queued turn again.
+func (s *Supervisor) wakeLoop() {
 	select {
 	case s.loopWakeChannel() <- struct{}{}:
 	default:
 	}
-	return queued.done
 }
 
 // runLoopCommands runs the queued worker commands in order and reports
@@ -649,6 +658,12 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	agentStarted := s.agentStarted
 	s.mu.Unlock()
 	if agentTerminalID == "" || !agentStarted || !workspaceReady {
+		return false, nil
+	}
+	// A live PTY is not yet an agent taking input: a prompt typed while its
+	// TUI boots arrives in one read with its Enter, which the TUI takes as a
+	// paste and leaves unsubmitted. Leave the turn queued until it is ready.
+	if !s.agentInputReady(agentTerminalID) {
 		return false, nil
 	}
 	turn, err := s.Control.ClaimTurn(ctx)
@@ -981,6 +996,12 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 	}
 	// Before the PTY starts, so only what this agent writes is new.
 	var turnEnds *transcriptTail
+	// A worker that re-attaches to an agent still running under dtach sees no
+	// new start-up output: that agent took input long ago.
+	reattached := false
+	if s.persistsAgent(input) {
+		_, reattached = s.persistentAgent().running()
+	}
 	if input.Kind == "agent" && !input.Review {
 		switch s.Harness {
 		case "codex":
@@ -1037,6 +1058,9 @@ func (s *Supervisor) openTerminal(ctx context.Context, input worker.TerminalComm
 		terminal.outputID.Store(input.NextOutputSequence - 1)
 	}
 	s.terminals[input.TerminalID] = terminal
+	if input.Kind == "agent" && !input.Review {
+		terminal.input.start(s.Harness, reattached)
+	}
 	if input.Kind == "agent" {
 		s.tuiStartedAt = time.Now()
 		s.lastTUIInputAt = time.Time{}
@@ -1191,10 +1215,14 @@ func (s *Supervisor) copyTerminalOutput(
 	clearPreviousDisplay bool,
 ) {
 	buffer := make([]byte, 16<<10)
+	var startup bracketedPasteScan
 	for {
 		count, err := terminal.pty.Read(buffer)
 		if count > 0 {
 			s.activity.noteOutput(time.Now())
+			if terminal.input.waiting() && startup.enabled(buffer[:count]) {
+				s.agentInputBecameReady(terminal)
+			}
 			data := append([]byte(nil), buffer[:count]...)
 			if clearPreviousDisplay {
 				// A handoff resumes the conversation in a new PTY but reuses its
