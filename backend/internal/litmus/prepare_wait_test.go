@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -22,13 +23,68 @@ type gatedRunner struct {
 }
 
 func (g *gatedRunner) Run(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+	wait := false
 	g.once.Do(func() {
+		wait = true
 		if g.entered != nil {
 			close(g.entered)
 		}
-		<-g.gate
 	})
+	if wait {
+		<-g.gate
+	}
 	return g.inner.Run(ctx, dir, env, name, args...)
+}
+
+func TestPrepareFinishingAfterBlockedSubmitKeepsRunClosed(t *testing.T) {
+	svc, fake := prepSvc(t, map[string]string{"v24": "v24.21.0"})
+	is(t, "")(svc.Intake(ctx, "s1", prURL))
+	gate := &gatedRunner{inner: fake, gate: make(chan struct{}), entered: make(chan struct{})}
+	svc.runner = gate
+	release := sync.OnceFunc(func() { close(gate.gate) })
+	defer release()
+	type result struct {
+		run Run
+		err error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		run, err := svc.Prepare(ctx, "s1")
+		finished <- result{run, err}
+	}()
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prepare did not reach the paused build")
+	}
+
+	verdict, err := svc.SubmitBlocked(ctx, "s1", "stopped while prepare was in flight")
+	is(t, "")(nil, err)
+	closed, err := svc.store.Get("run_s1")
+	if err != nil || closed.State != RunSubmitted || verdict.Overall != CheckBlocked {
+		t.Fatalf("blocked submit: state %s verdict %s err %v", closed.State, verdict.Overall, err)
+	}
+	path := filepath.Join(svc.store.root, closed.ID, "verdict.md")
+	before, err := os.ReadFile(path)
+	is(t, "")(nil, err)
+	release()
+	select {
+	case got := <-finished:
+		if got.err != nil || !reflect.DeepEqual(got.run, closed) {
+			t.Fatalf("prepare changed the closed run: state %s err %v", got.run.State, got.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prepare did not finish after its build was released")
+	}
+	saved, err := svc.store.Get(closed.ID)
+	if err != nil || !reflect.DeepEqual(saved, closed) {
+		t.Fatalf("prepare overwrote the closed run on disk: state %s err %v", saved.State, err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("prepare changed the blocked verdict: %v", err)
+	}
+	is(t, "TESTING_RUN_CLOSED")(svc.Status(ctx, "s1"))
 }
 
 func TestPrepareRetryWaitsForTheBuildInFlight(t *testing.T) {

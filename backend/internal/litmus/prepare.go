@@ -574,6 +574,9 @@ func (s *Service) prepare(ctx context.Context, run Run, done func()) (Run, error
 		legs = append(legs, leg)
 	}
 	return s.update(run.ID, func(cur *Run) {
+		if cur.State.Closed() { // submit or cleanup may have closed the run while the builds were in flight
+			return
+		}
 		if cur.State == RunIntake { // the tester's time starts when the builds are ready; a repeat prepare does not extend it
 			cur.Deadline = s.clock().Add(RunBudget)
 		}
