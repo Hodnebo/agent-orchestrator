@@ -104,3 +104,41 @@ func TestRunningSetupReadsAsActive(t *testing.T) {
 		}
 	})
 }
+
+// A worker epoch's coding agent started once that epoch appended agent.ready;
+// another worker's or epoch's agent.ready, or none, does not count, and only
+// the session's newest agent.ready is read.
+func TestWorkerAgentStarted(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	started := func(workerID string, epoch int64) bool {
+		t.Helper()
+		got, err := store.WorkerAgentStarted(ctx, fixture.orgID, fixture.sessionID, workerID, epoch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if started(fixture.workerID, fixture.epoch) {
+		t.Fatal("started before any agent.ready")
+	}
+	ready := func(workerID string, epoch int64) {
+		t.Helper()
+		payload := fmt.Sprintf(`{"workerId":%q,"epoch":%d,"version":"test","capabilities":[]}`, workerID, epoch)
+		if _, err := store.AppendSessionEvent(ctx, fixture.orgID, fixture.sessionID, "agent.ready", json.RawMessage(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ready("worker-old", fixture.epoch-1)
+	if started(fixture.workerID, fixture.epoch) {
+		t.Fatal("an earlier epoch's agent.ready counted for this one")
+	}
+	ready(fixture.workerID, fixture.epoch)
+	if !started(fixture.workerID, fixture.epoch) || started(fixture.workerID, fixture.epoch+1) || started("worker-other", fixture.epoch) {
+		t.Fatal("only this worker epoch's agent.ready counts")
+	}
+	// Under another organization the session is not visible.
+	if got, err := store.WorkerAgentStarted(ctx, "00000000-0000-0000-0000-000000000000", fixture.sessionID, fixture.workerID, fixture.epoch); err != nil || got {
+		t.Fatalf("another organization: started = %v, err = %v", got, err)
+	}
+}

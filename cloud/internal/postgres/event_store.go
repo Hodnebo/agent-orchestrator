@@ -210,6 +210,34 @@ func loadIdempotentMessage(
 	), event)
 }
 
+// WorkerAgentStarted reports whether the session's worker epoch (workerID)
+// reported its coding agent started (agent.ready). Its agent.ready is the
+// session's newest one, as a superseded epoch can report nothing, so only the
+// newest is read.
+func (s *Store) WorkerAgentStarted(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error) {
+	var started bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var payload []byte
+		err := tx.QueryRow(ctx,
+			`SELECT payload FROM ao_events
+			WHERE org_id = $1 AND session_id = $2 AND type = 'agent.ready'
+			ORDER BY sequence DESC
+			LIMIT 1`,
+			orgID, sessionID,
+		).Scan(&payload)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var ready worker.ReadyEvent
+		started = json.Unmarshal(payload, &ready) == nil && ready.WorkerID == workerID && ready.Epoch == epoch
+		return nil
+	})
+	return started, err
+}
+
 // AppendSessionEvent records a control-plane or worker event on a session
 // stream. Unlike a user message it does not open a turn, and it is allowed on a
 // terminated session so lifecycle history stays complete.

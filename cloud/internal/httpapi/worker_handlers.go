@@ -462,6 +462,12 @@ func issuedWorkerScopes(ticketScopes []string, launch domain.WorkerLaunch) []str
 
 type workerContextKey struct{}
 
+// workerAgentStartedStore is the optional Store capability that says whether
+// a worker epoch reported its coding agent started (agent.ready).
+type workerAgentStartedStore interface {
+	WorkerAgentStarted(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error)
+}
+
 // workerAuth authenticates a live worker. A valid signature is not enough: the
 // claimed epoch must still be the session's current one, so a worker that a
 // recreate replaced is rejected even while its token is unexpired.
@@ -1196,6 +1202,26 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 			!worker.ValidScriptStepEvent(step) || step.Phase != worker.ScriptPhaseSetup {
 			writeError(w, r, http.StatusBadRequest, "INVALID_EVENT_PAYLOAD", "The script step payload is invalid.")
 			return
+		}
+		// A worker runs Setup before its coding agent starts and never again
+		// in the same epoch, so a running step from an epoch that reported
+		// agent.ready is not the worker's (the agent can reach the worker's
+		// credential): it would keep the session reading as working. A step's
+		// final event is still taken, as one sent just before the agent
+		// started may land just after.
+		if step.Status == worker.ScriptStepRunning {
+			if started, ok := s.store.(workerAgentStartedStore); ok {
+				agentStarted, err := started.WorkerAgentStarted(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+				if err != nil {
+					s.writeWorkerStoreError(w, r, err)
+					return
+				}
+				if agentStarted {
+					writeError(w, r, http.StatusConflict, "AGENT_ALREADY_STARTED",
+						"This worker's coding agent already started, so its Setup is no longer running.")
+					return
+				}
+			}
 		}
 		// When the step last wrote output, by this control plane's clock.
 		step = worker.StampScriptStepOutputAt(step, time.Now())

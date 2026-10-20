@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -331,5 +332,49 @@ func TestLaunchContextCarriesProjectScripts(t *testing.T) {
 	}, launchCapabilities{resolvesWorkspacePath: true, multiRepo: true})
 	if err != nil || launch.PostCreate != nil || launch.PreRemove != nil {
 		t.Fatalf("malformed scripts: launch = %+v, err = %v", launch, err)
+	}
+}
+
+// agentStartedStore is a setupEventStore whose worker epoch reported (or not)
+// its coding agent started.
+type agentStartedStore struct {
+	setupEventStore
+	started bool
+	asked   []string
+}
+
+func (s *agentStartedStore) WorkerAgentStarted(_ context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error) {
+	s.asked = append(s.asked, fmt.Sprintf("%s/%s/%s/%d", orgID, sessionID, workerID, epoch))
+	return s.started, nil
+}
+
+// A worker runs Setup before its coding agent starts, so once its epoch
+// reported agent.ready a running Setup step from it is refused: it would keep
+// the session reading as working. A step's final event is still taken.
+func TestWorkerEventRefusesARunningSetupStepAfterTheAgentStarted(t *testing.T) {
+	t.Parallel()
+	running := `{"type":"workspace.script.step","payload":{"phase":"setup","runId":"r","step":1,"total":1,"command":"c","repository":"","status":"running","output":"","outputTruncated":false}}`
+	finished := `{"type":"workspace.script.step","payload":{"phase":"setup","runId":"r","step":1,"total":1,"command":"c","repository":"","status":"succeeded","exitCode":0,"durationMs":5,"output":"","outputTruncated":false}}`
+	for _, started := range []bool{false, true} {
+		store := &agentStartedStore{started: started}
+		srv := testServer(store)
+		rec := httptest.NewRecorder()
+		srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", running, "worker:event"))
+		_, recorded := store.events[worker.ScriptStepEventType]
+		if started {
+			if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "AGENT_ALREADY_STARTED") || recorded {
+				t.Fatalf("after agent.ready: status = %d, recorded = %v; body = %s", rec.Code, recorded, rec.Body.String())
+			}
+		} else if rec.Code >= 300 || !recorded {
+			t.Fatalf("before agent.ready: status = %d, recorded = %v; body = %s", rec.Code, recorded, rec.Body.String())
+		}
+		if len(store.asked) != 1 || store.asked[0] != testOrgID+"/"+testOrchestratorID+"/w1/1" {
+			t.Fatalf("asked = %v, want the request's own worker epoch", store.asked)
+		}
+		rec = httptest.NewRecorder()
+		srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events", finished, "worker:event"))
+		if _, recorded := store.events[worker.ScriptStepEventType]; rec.Code >= 300 || !recorded || len(store.asked) != 1 {
+			t.Fatalf("final step (agent started %v): status = %d, recorded = %v, asked = %v", started, rec.Code, recorded, store.asked)
+		}
 	}
 }
