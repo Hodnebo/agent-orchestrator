@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
@@ -84,7 +85,7 @@ func TestSettleClaudeChatStart(t *testing.T) {
 		{name: "codex chat", launch: worker.LaunchContext{Harness: "codex", Interface: "chat"}, ensure: failedInstall},
 		{name: "claude terminal", launch: worker.LaunchContext{Harness: "claude-code", Interface: "tui"}, ensure: failedInstall},
 		{name: "adapter installed", launch: claudeChat, ensure: func(context.Context) error { return nil }},
-		{name: "still installing past the wait", launch: claudeChat, ensure: func(context.Context) error { return workerexec.ErrChatAdapterInstalling }},
+		{name: "still installing past the wait moves to the terminal", launch: claudeChat, ensure: func(context.Context) error { return workerexec.ErrChatAdapterInstalling }, moved: true, want: true, wantAsked: true, wantSwitch: true},
 		{name: "install failed moves to the terminal", launch: claudeChat, ensure: failedInstall, moved: true, want: true, wantAsked: true, wantSwitch: true},
 		{name: "a session switched to chat stays", launch: claudeChat, ensure: failedInstall, wantAsked: true},
 		{name: "an older control plane keeps chat", launch: claudeChat, ensure: failedInstall, moveErr: errors.New("404"), wantAsked: true},
@@ -113,5 +114,31 @@ func TestSettleClaudeChatStart(t *testing.T) {
 				t.Fatalf("settle = %v (asked %v, switched %v), want %v (%v, %v)", got, asked, switched, tc.want, tc.wantAsked, tc.wantSwitch)
 			}
 		})
+	}
+}
+
+// A session never waits on npm: the settle gives the adapter's install at
+// most claudeChatAdapterWait (about 15 seconds) once the workspace is ready.
+func TestSettleClaudeChatStartWaitsBriefly(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if claudeChatAdapterWait > 20*time.Second {
+		t.Fatalf("claudeChatAdapterWait = %v, want a short window", claudeChatAdapterWait)
+	}
+	var waited time.Duration
+	settleClaudeChatStart(context.Background(), logger, worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, chatAdapterSettle{
+		firstStart: true,
+		ensure: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("the adapter wait has no deadline")
+			}
+			waited = time.Until(deadline)
+			return nil
+		},
+		fallBack:    func(context.Context, string) (bool, error) { t.Fatal("fell back"); return false, nil },
+		switchToTUI: func(context.Context) error { t.Fatal("switched"); return nil },
+	})
+	if waited <= 0 || waited > claudeChatAdapterWait {
+		t.Fatalf("waited up to %v, want at most %v", waited, claudeChatAdapterWait)
 	}
 }

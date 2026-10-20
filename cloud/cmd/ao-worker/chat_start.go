@@ -39,8 +39,8 @@ type chatStartChecks struct {
 // The check waits for nothing. It runs only once the harness itself is
 // installed: a template that installs its tools in the background may add
 // npm along with the harness, and until then the adapter's install is not
-// known to be impossible. An install that starts and then fails is settled
-// later, once the workspace is ready (settleClaudeChatStart).
+// known to be impossible. An install that fails, or does not finish soon
+// after the workspace is ready, is settled then (settleClaudeChatStart).
 func startInterface(ctx context.Context, logger *slog.Logger, launch worker.LaunchContext, checks chatStartChecks) string {
 	committed := strings.TrimSpace(launch.Interface)
 	if committed == "" {
@@ -69,10 +69,11 @@ func startInterface(ctx context.Context, logger *slog.Logger, launch worker.Laun
 }
 
 // claudeChatAdapterWait bounds how long a Claude session that starts in Chat
-// waits, once its workspace is ready, for the Claude ACP adapter's install
-// (workerexec allows the install four minutes). Past it the session stays in
-// Chat and its first turn waits for the adapter itself.
-const claudeChatAdapterWait = 5 * time.Minute
+// waits, once its workspace is ready, for the Claude ACP adapter: long enough
+// for an install that is already finishing, never long enough to make the
+// person wait on npm. Past it the session starts in the terminal while the
+// install carries on in the background for a later switch to Chat.
+const claudeChatAdapterWait = 15 * time.Second
 
 // chatAdapterSettle is what settleClaudeChatStart asks of the workspace, the
 // control plane and the transport; tests replace them.
@@ -90,10 +91,14 @@ type chatAdapterSettle struct {
 
 // settleClaudeChatStart runs once the workspace is ready and before the Chat
 // controller may take a turn. startInterface settled the case it can see at
-// once (no adapter and no npm); here the adapter's install has had its
-// chance. When the install failed, the session moves to the terminal with the
-// same notice, rather than every Chat turn failing on the missing adapter. It
-// reports whether the session moved.
+// once (no adapter and no npm); here the session starts in Chat only if the
+// adapter is installed or its install finishes within claudeChatAdapterWait.
+// Otherwise (the install failed, or is still running) the session moves to
+// the terminal with an informational notice and its task on the agent's
+// command line, rather than the person waiting on npm or every Chat turn
+// failing on the missing adapter. An install still running carries on in the
+// background, so a later switch to Chat finds the adapter. It reports whether
+// the session moved.
 func settleClaudeChatStart(ctx context.Context, logger *slog.Logger, launch worker.LaunchContext, settle chatAdapterSettle) bool {
 	if !settle.firstStart || launch.Interface != workertransport.InterfaceChat || launch.Harness != "claude-code" {
 		return false
@@ -101,24 +106,25 @@ func settleClaudeChatStart(ctx context.Context, logger *slog.Logger, launch work
 	waitCtx, cancel := context.WithTimeout(ctx, claudeChatAdapterWait)
 	reason := settle.ensure(waitCtx)
 	cancel()
-	if !errors.Is(reason, workerexec.ErrChatAdapterUnavailable) || ctx.Err() != nil {
+	if ctx.Err() != nil || (!errors.Is(reason, workerexec.ErrChatAdapterUnavailable) &&
+		!errors.Is(reason, workerexec.ErrChatAdapterInstalling)) {
 		return false
 	}
 	moved, err := settle.fallBack(ctx, worker.ChatStartAdapterUnavailable)
 	switch {
 	case err != nil:
-		logger.Warn("chat start: the Claude ACP adapter could not be installed and the session could not move to the terminal",
+		logger.Warn("chat start: the Claude ACP adapter is not ready and the session could not move to the terminal",
 			"reason", reason, "error", err)
 		return false
 	case !moved:
-		logger.Warn("chat start: the Claude ACP adapter could not be installed; the session stays in Chat", "reason", reason)
+		logger.Warn("chat start: the Claude ACP adapter is not ready; the session stays in Chat", "reason", reason)
 		return false
 	}
 	if err := settle.switchToTUI(ctx); err != nil {
-		logger.Error("chat start: start the terminal agent after the Claude ACP adapter could not be installed", "error", err)
+		logger.Error("chat start: start the terminal agent while the Claude ACP adapter is not ready", "error", err)
 		return false
 	}
-	logger.Info("chat start: the Claude ACP adapter could not be installed; the session runs in the terminal", "reason", reason)
+	logger.Info("chat start: the Claude ACP adapter is not ready; the session runs in the terminal", "reason", reason)
 	return true
 }
 
