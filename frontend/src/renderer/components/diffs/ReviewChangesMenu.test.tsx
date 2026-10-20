@@ -152,29 +152,38 @@ describe("ReviewChangesMenu", () => {
 		expect(screen.getByRole("button", { name: "Changes to review: 2 commits" })).toBeInTheDocument();
 	});
 
-	it("shows commits 50 at a time in a 7-row scroll box that ends in Show more", async () => {
-		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(120), truncated: true });
+	it("shows commits 6 at a time in a 7-row scroll box that ends in Show more", async () => {
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(20), truncated: true });
 		await openMenu();
 		const commitCount = () => screen.getAllByRole("menuitemcheckbox").length - 1;
-		expect(commitCount()).toBe(50);
+		expect(commitCount()).toBe(6);
 		expect(screen.queryByText("Older commits aren't listed")).not.toBeInTheDocument();
 		const list = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ }).parentElement;
 		expect(list).toHaveClass("max-h-[12.625rem]", "overflow-y-auto");
-		// Scrolling the list reaches Show more, after its last row.
-		const more = screen.getByRole("menuitem", { name: "Show 50 more" });
-		expect(list).toContainElement(more);
+		// Six rows and Show more fill the box; later pages scroll to it.
+		const more = screen.getByRole("menuitem", { name: "Show 6 more" });
 		expect(list?.lastElementChild).toBe(more);
+		expect(more).toHaveClass("justify-center");
 
 		await userEvent.click(more);
-		expect(commitCount()).toBe(100);
+		expect(commitCount()).toBe(12);
 		expect(screen.getByRole("menu")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show 6 more" }));
+		expect(commitCount()).toBe(18);
 
-		await userEvent.click(screen.getByRole("menuitem", { name: "Show 20 more" }));
-		expect(commitCount()).toBe(120);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show 2 more" }));
+		expect(commitCount()).toBe(20);
 		expect(screen.queryByRole("menuitem", { name: /^Show/ })).not.toBeInTheDocument();
 		const older = screen.getByRole("menuitem", { name: "Older commits aren't listed" });
 		expect(older).toHaveAttribute("aria-disabled", "true");
 		expect(list).toContainElement(older);
+	});
+
+	it("lists up to seven commits whole, with no Show more", async () => {
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(7) });
+		await openMenu();
+		expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(8);
+		expect(screen.queryByRole("menuitem", { name: /^Show/ })).not.toBeInTheDocument();
 	});
 
 	it("lines All commits' box up with the commits' boxes, scrollbar or not", async () => {
@@ -188,12 +197,13 @@ describe("ReviewChangesMenu", () => {
 	});
 
 	it("expands the list to a ticked commit beyond the first page", async () => {
-		const rows = commitRows(120);
-		renderMenu({ mode: "view", value: { kind: "commits", shas: [rows[75].sha] } }, { rows });
+		const rows = commitRows(30);
+		renderMenu({ mode: "view", value: { kind: "commits", shas: [rows[15].sha] } }, { rows });
 		await openMenu();
-		expect(screen.getByRole("menuitemcheckbox", { name: /^commit 75/ })).toHaveAttribute("aria-checked", "true");
-		expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(101);
-		expect(screen.getByRole("menuitem", { name: "Show 20 more" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemcheckbox", { name: /^commit 15/ })).toHaveAttribute("aria-checked", "true");
+		// Pages of six up to the ticked commit: 18 commits and All commits.
+		expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(19);
+		expect(screen.getByRole("menuitem", { name: "Show 6 more" })).toBeInTheDocument();
 	});
 
 	it("shows the full subject and SHA in a tooltip when a commit row takes keyboard focus", async () => {

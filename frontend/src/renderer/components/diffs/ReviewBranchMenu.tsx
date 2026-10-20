@@ -96,7 +96,9 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 	const selectedId = rows.find((row) => row.selected)?.id ?? "";
 	// A picked branch further down than the first page stays in reach without paging to it.
 	const selectedIndex = visibleRows.findIndex((row) => row.selected);
-	const shownCount = Math.max(visibleCount, Math.ceil((selectedIndex + 1) / BRANCH_PAGE) * BRANCH_PAGE);
+	const shownCount = visibleRows.length <= REVIEW_MENU_VISIBLE_ROWS
+		? visibleRows.length
+		: Math.max(visibleCount, Math.ceil((selectedIndex + 1) / BRANCH_PAGE) * BRANCH_PAGE);
 
 	return (
 		<DropdownMenu

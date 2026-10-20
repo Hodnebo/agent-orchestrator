@@ -130,28 +130,33 @@ describe("ReviewBranchMenu", () => {
 
 		await openMenu();
 		expect(screen.getByRole("searchbox")).toHaveValue("");
-		expect(screen.getAllByRole("menuitemradio")).toHaveLength(10);
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(6);
 	});
 
-	it("lists 50 branches at a time in a 7-row scroll box that ends in Show more, keeping the picked one in reach", async () => {
-		renderMenu({ rows: manyRows(60) });
+	it("lists 6 branches at a time in a 7-row scroll box that ends in Show more, keeping the picked one in reach", async () => {
+		renderMenu({ rows: manyRows(20) });
 		await openMenu();
-		expect(screen.getAllByRole("menuitemradio")).toHaveLength(50);
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(6);
 		const list = screen.getAllByRole("menuitemradio")[0].parentElement;
 		expect(list).toHaveClass("max-h-[16.125rem]", "overflow-y-auto");
 		// The same Show more as the commits list, at the end of the scroll.
-		const more = screen.getByRole("menuitem", { name: "Show 10 more" });
+		const more = screen.getByRole("menuitem", { name: "Show 6 more" });
 		expect(list?.lastElementChild).toBe(more);
+		expect(more).toHaveClass("justify-center");
 		await userEvent.click(more);
-		expect(screen.getAllByRole("menuitemradio")).toHaveLength(60);
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(12);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show 6 more" }));
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(18);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show 2 more" }));
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(20);
 		expect(screen.queryByRole("menuitem", { name: /^Show \d+ more$/ })).not.toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 
-		const picked = manyRows(60).map((row, index) => ({ ...row, selected: index === 55 }));
-		renderMenu({ rows: picked, trigger: { kind: "branch", name: picked[55].name } });
-		await userEvent.click(screen.getByRole("button", { name: `Branch to review: ${picked[55].name}` }));
-		expect(screen.getAllByRole("menuitemradio")).toHaveLength(60);
-		expect(screen.getByRole("menuitemradio", { name: new RegExp(`^${picked[55].name}`) })).toHaveAttribute("aria-checked", "true");
+		const picked = manyRows(20).map((row, index) => ({ ...row, selected: index === 9 }));
+		renderMenu({ rows: picked, trigger: { kind: "branch", name: picked[9].name } });
+		await userEvent.click(screen.getByRole("button", { name: `Branch to review: ${picked[9].name}` }));
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(12);
+		expect(screen.getByRole("menuitemradio", { name: new RegExp(`^${picked[9].name}`) })).toHaveAttribute("aria-checked", "true");
 	});
 
 	it("shows loading, error with retry, and the cap footer", async () => {

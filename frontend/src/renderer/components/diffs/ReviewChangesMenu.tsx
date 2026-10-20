@@ -18,7 +18,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { REVIEW_MENU_LIST, REVIEW_MENU_LIST_ALIGN, REVIEW_MENU_MORE, REVIEW_MENU_PAGE, REVIEW_MENU_ROW, REVIEW_MENU_TRIGGER } from "./review-menu-styles";
+import { REVIEW_MENU_LIST, REVIEW_MENU_LIST_ALIGN, REVIEW_MENU_MORE, REVIEW_MENU_PAGE, REVIEW_MENU_ROW, REVIEW_MENU_TRIGGER, REVIEW_MENU_VISIBLE_ROWS } from "./review-menu-styles";
 
 /** Working-tree scopes. `combined` is the "Changes" row an older daemon offers instead of `uncommitted`. */
 export type ReviewChangesScope = "uncommitted" | "staged" | "unstaged" | "combined";
@@ -137,7 +137,9 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	// A ticked commit further down than the shown page stays reachable without
 	// paging to it.
 	const lastTickedIndex = commits.rows.reduce((last, row, index) => (ticked.has(row.sha) ? index : last), -1);
-	const shownCount = Math.max(visibleCount, Math.ceil((lastTickedIndex + 1) / COMMIT_PAGE) * COMMIT_PAGE);
+	const shownCount = commits.rows.length <= REVIEW_MENU_VISIBLE_ROWS
+		? commits.rows.length
+		: Math.max(visibleCount, Math.ceil((lastTickedIndex + 1) / COMMIT_PAGE) * COMMIT_PAGE);
 	const shownRows = commits.rows.slice(0, shownCount);
 	const hiddenCount = commits.rows.length - shownRows.length;
 
