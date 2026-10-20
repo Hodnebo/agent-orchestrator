@@ -1,6 +1,6 @@
 import { Plus, X } from "lucide-react";
 import type { TFunction } from "i18next";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudCpGitHubAppRepository } from "../lib/cloud-cp";
 import {
@@ -78,6 +78,8 @@ export function CloudAdditionalReposEditor({
 	// and dismissing it without a choice takes the blank row back out.
 	const [addedIndex, setAddedIndex] = useState<number | null>(null);
 	const addButtonRef = useRef<HTMLButtonElement>(null);
+	const focusTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(focusTimer.current), []);
 	const add = () => {
 		setAddedIndex(value.length);
 		onChange([...value, ""]);
@@ -87,7 +89,8 @@ export function CloudAdditionalReposEditor({
 		if (value[index] !== "") return;
 		onChange(value.filter((_, i) => i !== index));
 		// The picker's trigger goes with the row; keep focus on the add button.
-		setTimeout(() => addButtonRef.current?.focus(), 0);
+		clearTimeout(focusTimer.current);
+		focusTimer.current = setTimeout(() => addButtonRef.current?.focus(), 0);
 	};
 	return (
 		<div className="space-y-2">
@@ -98,7 +101,11 @@ export function CloudAdditionalReposEditor({
 						ariaLabel={t("cloudRepos.additionalRepository", { defaultValue: "Additional repository {{number}}", number: index + 1 })}
 						fixedScroll
 						className="min-w-0 flex-1"
-						disabled={disabled || loading}
+						// Still loading, a row can open: its list says so until the
+						// repositories arrive (a row just added opens straight away).
+						disabled={disabled}
+						loading={loading}
+						loadingText={t("createProject.githubReposLoading", { defaultValue: "Loading repositories..." })}
 						placeholder={loading
 							? t("createProject.githubReposLoading", { defaultValue: "Loading repositories..." })
 							: t("cloudRepos.selectAdditional", { defaultValue: "Select a repository" })}
