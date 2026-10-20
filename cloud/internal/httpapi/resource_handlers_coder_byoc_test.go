@@ -104,9 +104,9 @@ func newBYOCServer(store Store) *Server {
 	})
 }
 
-func byocCreateSessionRequest(t *testing.T) *http.Request {
+func byocCreateSessionRequest(t *testing.T, kind string) *http.Request {
 	t.Helper()
-	body := `{"projectId":"` + byocProjectID + `","kind":"orchestrator","harness":"claude-code","displayName":"org-session","prompt":"do the work","mode":"trusted","provider":"coder"}`
+	body := `{"projectId":"` + byocProjectID + `","kind":"` + kind + `","harness":"claude-code","displayName":"org-session","prompt":"do the work","mode":"trusted","provider":"coder"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/cloud/v1/orgs/"+byocOrgID+"/sessions", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "22222222-2222-2222-2222-222222222222")
@@ -125,7 +125,7 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 	srv := newBYOCServer(store)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+	srv.createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -159,7 +159,7 @@ func TestCreateSessionUsesProjectTemplateWhenOrgHasNone(t *testing.T) {
 	srv := newBYOCServer(store)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+	srv.createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
@@ -181,7 +181,7 @@ func TestCreateSessionRequiresTemplateWhenNeitherOrgNorProjectHasOne(t *testing.
 	srv := newBYOCServer(store)
 
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+	srv.createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body = %s", rec.Code, rec.Body.String())
@@ -199,7 +199,7 @@ func TestCreateSessionRejectsOrgOnlyAgentCredential(t *testing.T) {
 	store := &stubCoderBYOCStore{}
 	srv := newBYOCServer(store)
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+	srv.createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 	if rec.Code != http.StatusUnprocessableEntity || store.created {
 		t.Fatalf("org-only launch: status=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
 	}
@@ -214,7 +214,7 @@ func TestCreateSessionScratchProjectFallsBackWithoutTemplate(t *testing.T) {
 	store := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true, projectConfig: []byte(`{"source":"scratch"}`)}
 	srv := newBYOCServer(store)
 	rec := httptest.NewRecorder()
-	srv.createSession(rec, byocCreateSessionRequest(t))
+	srv.createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("scratch: status = %d, want 201; body = %s", rec.Code, rec.Body.String())
 	}
@@ -224,7 +224,7 @@ func TestCreateSessionScratchProjectFallsBackWithoutTemplate(t *testing.T) {
 
 	regular := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true}
 	rec = httptest.NewRecorder()
-	newBYOCServer(regular).createSession(rec, byocCreateSessionRequest(t))
+	newBYOCServer(regular).createSession(rec, byocCreateSessionRequest(t, "orchestrator"))
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "coder_template_required") {
 		t.Fatalf("regular: status = %d, want 422 coder_template_required; body = %s", rec.Code, rec.Body.String())
 	}

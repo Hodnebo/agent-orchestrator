@@ -528,38 +528,28 @@ type Plan struct {
 // is read back from the stored plan for the session's whole life. Other
 // providers' plans are returned unchanged.
 func (p Plan) ForOrchestrator() (Plan, error) {
-	if p.Provider != ProviderCoder || len(p.ResourceProfile) == 0 {
+	if p.Provider != ProviderCoder {
 		return p, nil
 	}
-	var resource map[string]json.RawMessage
-	if err := json.Unmarshal(p.ResourceProfile, &resource); err != nil {
-		return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
+	var document map[string]any
+	if err := json.Unmarshal(p.ResourceProfile, &document); err != nil {
+		return Plan{}, err
 	}
-	raw, ok := resource["coder"]
+	coder, ok := document["coder"].(map[string]any)
 	if !ok {
-		return p, nil
+		return Plan{}, errors.New("plan has no coder section")
 	}
-	var coder map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &coder); err != nil {
-		return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
+	prefix, _ := coder["workspaceNamePrefix"].(string)
+	prefix = domain.CoderOrchestratorWorkspaceNamePrefix(prefix)
+	if err := domain.ValidateCoderWorkspaceNamePrefix(prefix); err != nil {
+		return Plan{}, err
 	}
-	var prefix string
-	if value, ok := coder["workspaceNamePrefix"]; ok {
-		if err := json.Unmarshal(value, &prefix); err != nil {
-			return Plan{}, fmt.Errorf("orchestrator workspace name: %w", err)
-		}
-	}
-	encoded, err := json.Marshal(domain.CoderOrchestratorWorkspaceNamePrefix(prefix))
+	coder["workspaceNamePrefix"] = prefix
+	resourceProfile, err := json.Marshal(document)
 	if err != nil {
 		return Plan{}, err
 	}
-	coder["workspaceNamePrefix"] = encoded
-	if resource["coder"], err = json.Marshal(coder); err != nil {
-		return Plan{}, err
-	}
-	if p.ResourceProfile, err = json.Marshal(resource); err != nil {
-		return Plan{}, err
-	}
+	p.ResourceProfile = resourceProfile
 	return p, nil
 }
 

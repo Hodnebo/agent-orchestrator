@@ -431,7 +431,7 @@ func (s *Server) createEnvironmentScratchProject(
 		return
 	}
 	plan, connectionID, ok := s.scratchSessionPlan(
-		w, r, principal, request.OrgID, request.Orchestrator.Harness, configJSON,
+		w, r, principal, request.OrgID, request.Orchestrator.Harness, request.DisplayName, configJSON,
 	)
 	if !ok {
 		return

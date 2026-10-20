@@ -527,7 +527,7 @@ func (s *Server) scratchSessionPlan(
 	w http.ResponseWriter,
 	r *http.Request,
 	principal domain.Principal,
-	orgID, harness string,
+	orgID, harness, projectName string,
 	projectConfig json.RawMessage,
 ) (sandbox.Plan, string, bool) {
 	provider := projectProvider(projectConfig)
@@ -550,6 +550,10 @@ func (s *Server) scratchSessionPlan(
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return sandbox.Plan{}, "", false
+		}
+		// The workspace is named after the project, as createSession names it.
+		if placement.override != nil {
+			placement.override.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(projectName)
 		}
 	}
 	plan, err := s.provisioning.SessionPlanForProviderWithCoder(harness, provider, placement.options, placement.override)

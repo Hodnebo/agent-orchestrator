@@ -627,7 +627,7 @@ func (s *Server) createGitHubScratchProject(
 		return
 	}
 	plan, connectionID, ok := s.scratchSessionPlan(
-		w, r, principalFrom(r), orgID, request.Orchestrator.Harness, scratchConfig,
+		w, r, principalFrom(r), orgID, request.Orchestrator.Harness, request.DisplayName, scratchConfig,
 	)
 	if !ok {
 		return

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,14 +61,8 @@ func TestCreateSessionStampsBYOStartupPolicyAndPrefix(t *testing.T) {
 	}
 	for kind, wantPrefix := range map[string]string{"orchestrator": "ahmad-orch", "worker": "ahmad"} {
 		store := &stubCoderBYOCStore{personalCredentialAvailable: true, projectConfig: projectConfig}
-		req := byocCreateSessionRequest(t)
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Body = io.NopCloser(strings.NewReader(strings.Replace(string(body), `"kind":"orchestrator"`, `"kind":"`+kind+`"`, 1)))
 		rec := httptest.NewRecorder()
-		newBYOCServer(store).createSession(rec, req)
+		newBYOCServer(store).createSession(rec, byocCreateSessionRequest(t, kind))
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("%s: status = %d, want 201; body = %s", kind, rec.Code, rec.Body.String())
 		}

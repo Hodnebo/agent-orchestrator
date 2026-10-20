@@ -488,14 +488,15 @@ func scratchPlanRequest(principal domain.Principal) *http.Request {
 }
 
 // A scratch orchestrator runs on the organization's default provider and, for a
-// bring-your-own Coder organization, binds to its connection.
+// bring-your-own Coder organization, binds to its connection; its workspace is
+// named <project>-orch-<id>.
 func TestScratchSessionPlanUsesOrgDefaultAndBYOConnection(t *testing.T) {
 	store := &stubCoderBYOCStore{}
 	s := newBYOCServer(store)
 	principal := domain.Principal{UserID: byocUserID}
 	rec := httptest.NewRecorder()
 	plan, connectionID, ok := s.scratchSessionPlan(
-		rec, scratchPlanRequest(principal), principal, byocOrgID, "claude-code", json.RawMessage(`{"source":"scratch"}`),
+		rec, scratchPlanRequest(principal), principal, byocOrgID, "claude-code", "Todo App", json.RawMessage(`{"source":"scratch"}`),
 	)
 	if !ok {
 		t.Fatalf("scratch plan failed: %d %s", rec.Code, rec.Body.String())
@@ -510,6 +511,10 @@ func TestScratchSessionPlanUsesOrgDefaultAndBYOConnection(t *testing.T) {
 	if profile.BaseURL != byocBaseURL {
 		t.Fatalf("scratch plan base URL = %q, want the org's own Coder", profile.BaseURL)
 	}
+	// The orchestrator's workspace is named after the project and marked -orch.
+	if profile.WorkspaceNamePrefix != "todo-app-orch" {
+		t.Fatalf("scratch orchestrator workspace prefix = %q, want todo-app-orch", profile.WorkspaceNamePrefix)
+	}
 }
 
 // A scratch project cannot pick a template, so when the organization's own
@@ -521,7 +526,7 @@ func TestScratchSessionPlanFallsBackWhenBYOHasNoTemplate(t *testing.T) {
 	principal := domain.Principal{UserID: byocUserID}
 	rec := httptest.NewRecorder()
 	plan, connectionID, ok := s.scratchSessionPlan(
-		rec, scratchPlanRequest(principal), principal, byocOrgID, "claude-code", json.RawMessage(`{"source":"scratch"}`),
+		rec, scratchPlanRequest(principal), principal, byocOrgID, "claude-code", "Todo App", json.RawMessage(`{"source":"scratch"}`),
 	)
 	if !ok {
 		t.Fatalf("scratch plan failed: %d %s", rec.Code, rec.Body.String())
@@ -544,7 +549,7 @@ func TestScratchSessionPlanFollowsOrgDefaultForB2C(t *testing.T) {
 	principal := teamPrincipal("nodeops")
 	rec := httptest.NewRecorder()
 	plan, connectionID, ok := s.scratchSessionPlan(
-		rec, scratchPlanRequest(principal), principal, offeringTeamOrgID, "claude-code", json.RawMessage(`{"source":"scratch"}`),
+		rec, scratchPlanRequest(principal), principal, offeringTeamOrgID, "claude-code", "Todo App", json.RawMessage(`{"source":"scratch"}`),
 	)
 	if !ok || plan.Provider != sandbox.ProviderNodeOps || connectionID != "" {
 		t.Fatalf("ok %v provider %q connection %q (%s), want nodeops", ok, plan.Provider, connectionID, rec.Body.String())
@@ -567,7 +572,7 @@ func TestScratchSessionPlanRejects(t *testing.T) {
 			principal := teamPrincipal(tc.caps...)
 			rec := httptest.NewRecorder()
 			if _, _, ok := s.scratchSessionPlan(
-				rec, scratchPlanRequest(principal), principal, offeringTeamOrgID, "claude-code", json.RawMessage(tc.config),
+				rec, scratchPlanRequest(principal), principal, offeringTeamOrgID, "claude-code", "Todo App", json.RawMessage(tc.config),
 			); ok {
 				t.Fatal("scratch plan succeeded, want a rejection")
 			}
