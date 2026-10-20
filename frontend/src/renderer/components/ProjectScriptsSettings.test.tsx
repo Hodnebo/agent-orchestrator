@@ -107,7 +107,9 @@ it("gives local steps the same time limit field, with no limit by default for Cl
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	const cleanup = screen.getByLabelText("Time limit for step 1, in minutes");
 	expect(cleanup).toHaveValue("");
-	expect(cleanup).not.toHaveAttribute("placeholder", "10");
+	// No limit reads as a word, and the hint says what empty means.
+	expect(cleanup).toHaveAttribute("placeholder", "none");
+	expect(cleanup).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for no limit.");
 	fireEvent.change(cleanup, { target: { value: "5" } });
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(putMock).toHaveBeenCalledOnce());

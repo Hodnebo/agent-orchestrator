@@ -1490,6 +1490,7 @@
 	"settings.project.stepTimeoutUnit": "분",
 	"settings.project.stepTimeoutHint": "제한 시간(분, {{min}}~{{max}}). 비워 두면 {{default}}분입니다.",
 	"settings.project.stepTimeoutNoLimitHint": "제한 시간(분, {{min}}~{{max}}). 비워 두면 제한이 없습니다.",
+	"settings.project.stepTimeoutNoLimitPlaceholder": "없음",
 	"settings.project.stepTimeoutInvalid": "{{phase}} {{number}}단계: 제한 시간은 {{min}}~{{max}} 사이의 정수(분)여야 합니다.",
 	"settings.project.cloudVariables": "사용할 수 있는 변수",
 	"settings.project.cloudVarFolder": "세션의 프로젝트 폴더",

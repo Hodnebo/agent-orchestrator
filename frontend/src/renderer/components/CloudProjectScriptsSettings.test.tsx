@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
@@ -207,6 +207,30 @@ it("reads, edits and saves each step's own time limit in the stored form", async
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2].config.postCreate).toEqual(["# ao-timeout: 90m\nnpm ci", "# ao-timeout: 46m\nmake seed"]);
+});
+
+it("shows a step's time limit hint, with what empty means, on keyboard focus", async () => {
+	renderScripts();
+	const field = await screen.findByLabelText("Time limit for step 1, in minutes");
+	expect(field).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+	expect(field).not.toHaveAttribute("title");
+	act(() => field.focus());
+	expect(await screen.findByRole("tooltip")).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+});
+
+it("does not mark the time limit of an empty step, which saving drops", async () => {
+	renderScripts();
+	fireEvent.change(await screen.findByLabelText("Step 1"), { target: { value: "" } });
+	const field = screen.getByLabelText("Time limit for step 1, in minutes");
+	fireEvent.change(field, { target: { value: "0" } });
+	// Saving keeps no empty step, so its limit cannot block it, and is not marked either.
+	expect(field).not.toHaveAttribute("aria-invalid");
+	expect(screen.queryByRole("alert")).toBeNull();
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+	// Once it has a command, the same limit is marked and keeps the form from saving.
+	fireEvent.change(screen.getByLabelText("Step 1"), { target: { value: "npm ci" } });
+	expect(field).toHaveAttribute("aria-invalid", "true");
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
 
 it("marks an out-of-range time limit at once and keeps the form from saving", async () => {

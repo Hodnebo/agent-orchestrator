@@ -1472,6 +1472,7 @@
 	"settings.project.stepTimeoutUnit": "分钟",
 	"settings.project.stepTimeoutHint": "时间限制（分钟，{{min}} 到 {{max}}）。留空则为 {{default}} 分钟。",
 	"settings.project.stepTimeoutNoLimitHint": "时间限制（分钟，{{min}} 到 {{max}}）。留空则不限时。",
+	"settings.project.stepTimeoutNoLimitPlaceholder": "无",
 	"settings.project.stepTimeoutInvalid": "{{phase}}步骤 {{number}}：时间限制必须是 {{min}} 到 {{max}} 之间的整数分钟。",
 	"settings.project.cloudVariables": "可用的变量",
 	"settings.project.cloudVarFolder": "会话的项目文件夹",

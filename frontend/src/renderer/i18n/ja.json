@@ -1490,6 +1490,7 @@
 	"settings.project.stepTimeoutUnit": "分",
 	"settings.project.stepTimeoutHint": "制限時間 (分、{{min}}〜{{max}})。空欄の場合は {{default}} 分です。",
 	"settings.project.stepTimeoutNoLimitHint": "制限時間 (分、{{min}}〜{{max}})。空欄の場合は制限なしです。",
+	"settings.project.stepTimeoutNoLimitPlaceholder": "なし",
 	"settings.project.stepTimeoutInvalid": "{{phase}} のステップ {{number}}: 制限時間は {{min}}〜{{max}} の整数 (分) で指定してください。",
 	"settings.project.cloudVariables": "使える変数",
 	"settings.project.cloudVarFolder": "セッションのプロジェクトフォルダ",

@@ -1516,6 +1516,7 @@
 	"settings.project.stepTimeoutUnit": "min",
 	"settings.project.stepTimeoutHint": "Limite de tempo em minutos (de {{min}} a {{max}}). Deixe vazio para usar {{default}} minutos.",
 	"settings.project.stepTimeoutNoLimitHint": "Limite de tempo em minutos (de {{min}} a {{max}}). Deixe vazio para não ter limite.",
+	"settings.project.stepTimeoutNoLimitPlaceholder": "sem",
 	"settings.project.stepTimeoutInvalid": "{{phase}}, passo {{number}}: o limite de tempo deve ser um número inteiro de minutos de {{min}} a {{max}}.",
 	"settings.project.cloudVariables": "Variáveis que você pode usar",
 	"settings.project.cloudVarFolder": "a pasta do projeto da sessão",

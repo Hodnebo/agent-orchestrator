@@ -1490,6 +1490,7 @@
 	"settings.project.stepTimeoutUnit": "Min.",
 	"settings.project.stepTimeoutHint": "Zeitlimit in Minuten ({{min}} bis {{max}}). Leer lassen für {{default}} Minuten.",
 	"settings.project.stepTimeoutNoLimitHint": "Zeitlimit in Minuten ({{min}} bis {{max}}). Leer lassen für kein Limit.",
+	"settings.project.stepTimeoutNoLimitPlaceholder": "ohne",
 	"settings.project.stepTimeoutInvalid": "{{phase}}, Schritt {{number}}: Das Zeitlimit muss eine ganze Zahl von {{min}} bis {{max}} Minuten sein.",
 	"settings.project.cloudVariables": "Verfügbare Variablen",
 	"settings.project.cloudVarFolder": "der Projektordner der Sitzung",
