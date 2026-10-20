@@ -1,14 +1,13 @@
-// AO preloads this into pi-acp (BUN_OPTIONS=--preload), which carries it to
-// pi-acp's daemon too. pi-acp bundles an older Pi runtime whose built-in model
-// list predates the models providers serve now. A newer Pi keeps the current
-// list in <agent dir>/models-store.json; this hands those models to the old
-// runtime as custom models, written to AO_PI_MODELS_JSON, and leaves out the
-// built-in models of a provider the store no longer lists. Pi's own files are
-// only read. Any failure leaves pi-acp as it was.
+// AO preloads this into pi-acp and its daemon (BUN_OPTIONS=--preload). pi-acp's
+// bundled Pi predates the models providers serve now; this hands the models a
+// newer Pi lists in <agent dir>/models-store.json to it as custom models
+// (written to AO_PI_MODELS_JSON) and hides built-ins of a provider the store
+// no longer lists. Pi's own files are only read; any failure changes nothing.
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const out = process.env.AO_PI_MODELS_JSON;
+const warn = (error) => console.error("ao: pi-acp models preload:", error instanceof Error ? error.message : error);
 
 // Only the fields the old runtime's models.json schema knows: a file it
 // rejects is ignored whole, the user's own custom models with it.
@@ -19,9 +18,9 @@ function definition(model) {
 		if (model[key] !== undefined) kept[key] = model[key];
 	}
 	if (Array.isArray(model.input)) kept.input = model.input.filter((kind) => kind === "text" || kind === "image");
-	const cost = model.cost;
-	if (cost && ["input", "output", "cacheRead", "cacheWrite"].every((key) => typeof cost[key] === "number")) {
-		kept.cost = { input: cost.input, output: cost.output, cacheRead: cost.cacheRead, cacheWrite: cost.cacheWrite };
+	const costKeys = ["input", "output", "cacheRead", "cacheWrite"];
+	if (model.cost && costKeys.every((key) => typeof model.cost[key] === "number")) {
+		kept.cost = Object.fromEntries(costKeys.map((key) => [key, model.cost[key]]));
 	}
 	if (model.thinkingLevelMap && typeof model.thinkingLevelMap === "object") {
 		kept.thinkingLevelMap = Object.fromEntries(
@@ -59,8 +58,7 @@ function mergedModelsPath(modelsJsonPath) {
 if (out && process.argv[1]) {
 	try {
 		const entry = realpathSync(process.argv[1]);
-		const pi = await import(Bun.resolveSync("@earendil-works/pi-coding-agent", dirname(entry)));
-		const { ModelRegistry, getAgentDir } = pi;
+		const { ModelRegistry, getAgentDir } = await import(Bun.resolveSync("@earendil-works/pi-coding-agent", dirname(entry)));
 		if (ModelRegistry && typeof ModelRegistry.create === "function" && typeof getAgentDir === "function") {
 			const create = ModelRegistry.create;
 			ModelRegistry.create = function (authStorage, modelsJsonPath = join(getAgentDir(), "models.json")) {
@@ -68,7 +66,7 @@ if (out && process.argv[1]) {
 				try {
 					path = mergedModelsPath(modelsJsonPath) ?? modelsJsonPath;
 				} catch (error) {
-					console.error("ao: pi-acp models preload:", error instanceof Error ? error.message : error);
+					warn(error);
 				}
 				return create.call(this, authStorage, path);
 			};
@@ -83,6 +81,6 @@ if (out && process.argv[1]) {
 			}
 		}
 	} catch (error) {
-		console.error("ao: pi-acp models preload:", error instanceof Error ? error.message : error);
+		warn(error);
 	}
 }

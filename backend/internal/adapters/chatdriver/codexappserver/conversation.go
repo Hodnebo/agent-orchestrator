@@ -60,14 +60,10 @@ type conversation struct {
 	events     chan ports.ChatEvent
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
-	// fastTier records that the last turn put the thread on the fast service
-	// tier, and fastTiers holds each model's id for that tier as last listed.
-	// Both are guarded by sendMu.
-	fastTier  bool
-	fastTiers map[string]string
-	// planMode records that the last turn put the thread in plan mode. Guarded
-	// by sendMu.
-	planMode bool
+	// Guarded by sendMu: whether the last turn put the thread on the fast tier
+	// or in plan mode, and each model's fast tier id as last listed.
+	fastTier, planMode bool
+	fastTiers          map[string]string
 
 	mu      sync.Mutex
 	pending map[string]*parkedRequest
@@ -312,8 +308,7 @@ func (c *conversation) emit(ev ports.ChatEvent) {
 	}
 }
 
-// codexFastServiceTier is the id the provider gives its faster tier when a
-// model's own list has not been read yet.
+// codexFastServiceTier is the fast tier's id before a model list is read.
 const codexFastServiceTier = "priority"
 
 // SendTurn delivers one message to the provider.
@@ -345,9 +340,8 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		params["serviceTier"] = nil
 	}
 
-	// Plan mode is one of the provider's collaboration modes. It too sticks to
-	// the thread, so leaving it is sent as the default mode. The mode names the
-	// model it runs on; with none known the thread is left as it is.
+	// Plan mode is a collaboration mode, sticky too, so leaving it sends the
+	// default mode. The mode names its model; with none known nothing is sent.
 	planMode := c.planMode
 	if model := cmp.Or(msg.Settings.Model, c.threadModel); msg.Settings.Plan != c.planMode && model != "" {
 		mode := "default"
@@ -516,8 +510,7 @@ func listModels(ctx context.Context, connection *conn) ([]ports.ChatModel, error
 			if display == "" {
 				display = id
 			}
-			// The provider names its faster tier "Fast" and ids it "priority".
-			// The name is what a user sees, so it is what identifies the tier.
+			// The faster tier is named "Fast" and ids "priority"; the name identifies it.
 			fastTier := ""
 			for _, tier := range entry.ServiceTiers {
 				if strings.EqualFold(tier.Name, "fast") || tier.ID == "fast" {

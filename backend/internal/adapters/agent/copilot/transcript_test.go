@@ -31,23 +31,43 @@ func writeCopilotTranscript(t *testing.T, lines ...string) (path string, payload
 	return path, payload
 }
 
-func TestFinalAssistantMessageReadsTheTurnThatJustEnded(t *testing.T) {
+func TestFinalAssistantMessageReadsTheTurnTheStopEnded(t *testing.T) {
 	shortenCopilotTranscriptWait(t)
-	_, payload := writeCopilotTranscript(t,
-		`{"type":"user.message","data":{"content":"first"}}`,
-		`{"type":"assistant.message","data":{"content":"old answer"}}`,
-		`{"type":"hook.start","data":{"hookType":"agentStop","input":{"timestamp":1791704000000}}}`,
-		`{"type":"user.message","data":{"content":"second"}}`,
-		`{"type":"tool.execution_start","data":{"input":"a tool's input is not an object"}}`,
-		`{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"view"}]}}`,
-		`{"type":"assistant.message","data":{"content":"  new answer\n"}}`,
-		`{"type":"assistant.turn_end","data":{"turnId":"1"}}`,
-		copilotStopLine,
-		`{"type":"user.message","data":{"content":"queued behind the stop"}}`,
-		`{"type":"assistant.message","data":{"content":"a later turn's answer"}}`,
-	)
-	if got := FinalAssistantMessage(payload); got != "new answer" {
-		t.Fatalf("FinalAssistantMessage = %q, want %q", got, "new answer")
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{name: "the turn that just ended", want: "new answer", lines: []string{
+			`{"type":"user.message","data":{"content":"first"}}`,
+			`{"type":"assistant.message","data":{"content":"old answer"}}`,
+			`{"type":"hook.start","data":{"hookType":"agentStop","input":{"timestamp":1791704000000}}}`,
+			`{"type":"user.message","data":{"content":"second"}}`,
+			`{"type":"tool.execution_start","data":{"input":"a tool's input is not an object"}}`,
+			`{"type":"assistant.message","data":{"content":"","toolRequests":[{"name":"view"}]}}`,
+			`{"type":"assistant.message","data":{"content":"  new answer\n"}}`,
+			`{"type":"assistant.turn_end","data":{"turnId":"1"}}`,
+			copilotStopLine,
+			`{"type":"user.message","data":{"content":"queued behind the stop"}}`,
+			`{"type":"assistant.message","data":{"content":"a later turn's answer"}}`,
+		}},
+		{name: "a turn without an answer ignores earlier turns", want: "", lines: []string{
+			`{"type":"user.message","data":{"content":"first"}}`,
+			`{"type":"assistant.message","data":{"content":"old answer"}}`,
+			`{"type":"user.message","data":{"content":"interrupted"}}`,
+			`{"type":"assistant.turn_end","data":{"turnId":"1"}}`,
+			copilotStopLine,
+		}},
+		// A log that never records the hook call still yields the answer once the wait is over.
+		{name: "no stop record", want: "answer", lines: []string{
+			`{"type":"user.message","data":{"content":"only"}}`,
+			`{"type":"assistant.message","data":{"content":"answer"}}`,
+		}},
+	} {
+		_, payload := writeCopilotTranscript(t, tc.lines...)
+		if got := FinalAssistantMessage(payload); got != tc.want {
+			t.Fatalf("%s: FinalAssistantMessage = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -71,33 +91,6 @@ func TestFinalAssistantMessageWaitsForTheLogToCatchUp(t *testing.T) {
 	}()
 	if got := FinalAssistantMessage(payload); got != "late answer" {
 		t.Fatalf("FinalAssistantMessage = %q, want %q", got, "late answer")
-	}
-}
-
-func TestFinalAssistantMessageIgnoresEarlierTurns(t *testing.T) {
-	shortenCopilotTranscriptWait(t)
-	_, payload := writeCopilotTranscript(t,
-		`{"type":"user.message","data":{"content":"first"}}`,
-		`{"type":"assistant.message","data":{"content":"old answer"}}`,
-		`{"type":"user.message","data":{"content":"interrupted"}}`,
-		`{"type":"assistant.turn_end","data":{"turnId":"1"}}`,
-		copilotStopLine,
-	)
-	if got := FinalAssistantMessage(payload); got != "" {
-		t.Fatalf("FinalAssistantMessage = %q, want nothing for a turn without an answer", got)
-	}
-}
-
-// A log that never records the hook call still yields the turn's answer once
-// the wait is over.
-func TestFinalAssistantMessageFallsBackWithoutTheStopRecord(t *testing.T) {
-	shortenCopilotTranscriptWait(t)
-	_, payload := writeCopilotTranscript(t,
-		`{"type":"user.message","data":{"content":"only"}}`,
-		`{"type":"assistant.message","data":{"content":"answer"}}`,
-	)
-	if got := FinalAssistantMessage(payload); got != "answer" {
-		t.Fatalf("FinalAssistantMessage = %q, want %q", got, "answer")
 	}
 }
 

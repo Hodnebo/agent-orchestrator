@@ -379,8 +379,7 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 			"type": "preset", "preset": "claude_code", "append": standing,
 		}
 	}
-	// Sent with the session too, so a choice made after the adapter process
-	// started still reaches the next Claude Code session it opens.
+	// Also per session, so a choice made after the adapter started still applies.
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
 		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
 	}
@@ -425,11 +424,9 @@ func claudeModelName(id string) string {
 func claudeSessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	options := make([]acpdriver.SessionOption, 0, 3)
 	if claudeModelFamily.MatchString(settings.Model) {
-		// A full id saved elsewhere, as a terminal switch does, may not be one
-		// Claude Code offers in chat: it lists the newest of a family by alias. The
-		// alias is found by the model's name, since an alias can name an older
-		// model ("haiku" is Haiku 4.5). One it does not offer at all leaves Claude
-		// Code's own model, which the chat then shows, instead of failing the start.
+		// Claude Code's chat lists a family's newest model by alias, so a full id
+		// (as a terminal switch saves) is matched by name, never by family alias
+		// ("haiku" is Haiku 4.5). One not offered keeps Claude Code's own model.
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model, Optional: true, Name: claudeModelName(settings.Model)})
 	} else if settings.Model != "" {
 		options = append(options, acpdriver.SessionOption{ID: "model", Value: settings.Model})

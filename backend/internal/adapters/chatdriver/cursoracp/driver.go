@@ -76,8 +76,7 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	args = append(args, "acp")
 	var env map[string]string
 	if strings.TrimSpace(cfg.DataDir) != "" {
-		// The preload only speeds Cursor's API calls up; any problem with it
-		// launches Cursor without it.
+		// The preload only speeds Cursor up; any problem launches it without one.
 		if preload, err := writeNetPreload(cfg.DataDir); err == nil && preloadPathUsable(preload) {
 			existing, ok := cfg.Env["NODE_OPTIONS"]
 			if !ok {
@@ -89,10 +88,9 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	return args, env, nil
 }
 
-// sessionPreamble leads the first prompt with AO's standing instructions, which
-// carry a provider switch's handoff note. Cursor's chat reads neither a
-// --plugin-dir rule nor an embedded resource (Cursor Agent 2026.10.01), but it
-// does read text in the prompt.
+// sessionPreamble leads the first prompt with AO's standing instructions (and a
+// switch's handoff note): Cursor's chat reads neither a --plugin-dir rule nor an
+// embedded resource (Cursor Agent 2026.10.01), only prompt text.
 func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	if standing := strings.TrimSpace(cfg.SystemPrompt); standing != "" {
 		return []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock(standing)}
@@ -136,11 +134,10 @@ func permissionOption(
 	return "", false
 }
 
-// sessionOptions turns a chosen model into Cursor's session settings. Cursor
-// names a model plainly and holds its effort, thinking and speed as separate
-// settings, while its command line and its older sessions fold them into the
-// id: "claude-opus-4-8-thinking-high-fast", "claude-opus-4-8[thinking=true,effort=high]".
-// A plain id sets only the model and keeps the settings Cursor saved for it.
+// sessionOptions splits a model id that folds in effort, thinking and speed (the
+// command line's "claude-opus-4-8-thinking-high-fast", an older session's
+// "claude-opus-4-8[thinking=true,effort=high]") into Cursor's separate settings.
+// A plain id sets only the model, keeping the settings Cursor saved for it.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if settings.Model == "" {
 		return nil
@@ -204,9 +201,8 @@ func cursorModelParams(id string) (string, map[string]string) {
 	return cursorChatModelName(strings.Join(tokens[:end], "-")), params
 }
 
-// cursorOlderClaude matches the command line's name for an older Claude model,
-// version first ("claude-4.6-opus"), which Cursor's chat names family first
-// ("claude-opus-4-6").
+// cursorOlderClaude matches the command line's older Claude name, version first
+// ("claude-4.6-opus"), which Cursor's chat names family first ("claude-opus-4-6").
 var cursorOlderClaude = regexp.MustCompile(`^claude-(\d+(?:\.\d+)?)-(opus|sonnet|haiku)$`)
 
 // cursorChatModelName turns a command-line model name into the one Cursor's chat lists.

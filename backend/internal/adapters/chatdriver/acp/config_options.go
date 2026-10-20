@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -297,29 +298,11 @@ func normalizeSessionOptions(
 // modesRepeatAnOption reports legacy session modes whose ids are exactly the
 // choices of a config option the agent already sent.
 func modesRepeatAnOption(options []ports.ChatConfigOption, modes *acpsdk.SessionModeState) bool {
-	if len(modes.AvailableModes) == 0 {
-		return false
-	}
-	for _, option := range options {
-		if len(option.Choices) != len(modes.AvailableModes) {
-			continue
-		}
-		values := make(map[string]bool, len(option.Choices))
-		for _, choice := range option.Choices {
-			values[choice.Value] = true
-		}
-		same := true
-		for _, mode := range modes.AvailableModes {
-			if !values[string(mode.Id)] {
-				same = false
-				break
-			}
-		}
-		if same {
-			return true
-		}
-	}
-	return false
+	return len(modes.AvailableModes) > 0 && slices.ContainsFunc(options, func(option ports.ChatConfigOption) bool {
+		return len(option.Choices) == len(modes.AvailableModes) && !slices.ContainsFunc(modes.AvailableModes, func(mode acpsdk.SessionMode) bool {
+			return !choiceOffered(option.Choices, string(mode.Id))
+		})
+	})
 }
 
 func normalizeSelectChoices(options acpsdk.SessionConfigSelectOptions) []ports.ChatConfigOptionChoice {

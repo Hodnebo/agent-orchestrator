@@ -247,10 +247,8 @@ func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Unlock()
 }
 
-// acceptsExtension reports whether binary takes --extension. prime-agent 0.10,
-// the Rust rewrite, dropped it and exits at once when given it, so AO's hook
-// extension is passed only to a build whose help lists it. A help that cannot
-// be read keeps the flag, as before.
+// acceptsExtension reports whether binary's help lists --extension: prime-agent
+// 0.10 (the Rust rewrite) exits at once when given it. An unreadable help keeps it.
 func (p *Plugin) acceptsExtension(ctx context.Context, binary string) bool {
 	p.extensionMu.Lock()
 	defer p.extensionMu.Unlock()

@@ -213,7 +213,7 @@ func TestPromptResponseFailureReportsATurnWithoutAModelCall(t *testing.T) {
 }
 
 func TestPromptResponseFailureReadsPiTotalsAsTheSessions(t *testing.T) {
-	var totals sessionTotals
+	totals := sessionTotals{totals: map[string]int{}}
 	turn := func(total int) acpsdk.PromptResponse {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn, Usage: &acpsdk.Usage{TotalTokens: total}}
 	}

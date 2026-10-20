@@ -8,14 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
 
-// netPreload makes Cursor reuse its API connections. Cursor's CLI closes the
-// connection after every API call, and opening a session makes about a dozen
-// calls, mostly one after another, so each pays a new TCP and TLS handshake.
-// Measured from a 225ms-RTT link, the preload took a fresh process's first
-// session/new from a 6.9s median to 5.0s. See netpreload.cjs for the
-// mechanism.
+// netPreload makes Cursor reuse its API connections: its CLI closes one after
+// every call, and opening a session makes about a dozen. On a 225ms-RTT link it
+// took a fresh process's first session/new from a 6.9s median to 5.0s.
 //
 //go:embed netpreload.cjs
 var netPreload []byte
@@ -34,20 +33,8 @@ func writeNetPreload(dataDir string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("create Cursor preload directory: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".ao-net-*.cjs")
-	if err != nil {
-		return "", fmt.Errorf("create Cursor preload: %w", err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(netPreload); err != nil {
-		_ = tmp.Close()
+	if err := hookutil.AtomicWriteFile(path, netPreload, 0o600); err != nil {
 		return "", fmt.Errorf("write Cursor preload: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("write Cursor preload: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return "", fmt.Errorf("install Cursor preload: %w", err)
 	}
 	return path, nil
 }
@@ -65,16 +52,14 @@ func removeStaleNetPreloads(dir, keep string) {
 	}
 }
 
-// preloadPathUsable reports whether path survives NODE_OPTIONS parsing. A
-// failed --require stops Node before Cursor starts, so an unusual data dir
-// path skips the preload instead.
+// preloadPathUsable reports whether path survives NODE_OPTIONS parsing: a
+// failed --require would stop Node before Cursor starts.
 func preloadPathUsable(path string) bool {
 	return !strings.ContainsAny(filepath.ToSlash(path), "\"\\\n")
 }
 
-// nodeOptionsWithPreload appends the preload to the NODE_OPTIONS the agent
-// would otherwise inherit. Node reads forward slashes on every platform, and
-// the quotes keep a path with spaces in one argument.
+// nodeOptionsWithPreload appends the preload, quoted and with forward slashes
+// (which Node reads on every platform), to the NODE_OPTIONS the agent inherits.
 func nodeOptionsWithPreload(existing, preload string) string {
 	flag := `--require "` + filepath.ToSlash(preload) + `"`
 	if strings.TrimSpace(existing) == "" {

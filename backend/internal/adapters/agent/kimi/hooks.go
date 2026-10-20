@@ -178,11 +178,9 @@ func seedKimiCredentials(targetHome string) error {
 }
 
 // shareKimiCredentialStore links AO's Kimi home's credentials to the user's
-// own. Kimi's access tokens last minutes and are renewed with a refresh token
-// that rotates, so a copy goes stale, and two copies can each sign the other
-// out. Sharing one store keeps AO's Kimi on the login the user keeps current.
-// It reports false where the user has no Kimi login to share, or links cannot
-// be made (Windows without the privilege), leaving the copy below.
+// own: Kimi rotates its refresh token, so a copy goes stale and two copies can
+// sign each other out. It reports false where the user has no Kimi login or a
+// link cannot be made (Windows without the privilege), leaving the copy below.
 func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 	source := filepath.Join(sourceHome, "credentials")
 	target := filepath.Join(targetHome, "credentials")
@@ -198,8 +196,7 @@ func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
 	if err := os.MkdirAll(targetHome, 0o700); err != nil {
 		return false, fmt.Errorf("create AO Kimi home: %w", err)
 	}
-	// AO's own folder only ever held copies seeded from the user's. It is kept
-	// aside until the link is in place, and restored if it cannot be made.
+	// AO's folder only held seeded copies; it is restored if the link fails.
 	aside := target + ".seeded"
 	_ = os.RemoveAll(aside)
 	if err := os.Rename(target, aside); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -217,8 +214,7 @@ func seedKimiCredential(sourcePath, targetPath string) error {
 	if sameKimiConfigPath(sourcePath, targetPath) {
 		return nil
 	}
-	// A copy is replaced by a newer login: one only seeded once went stale as
-	// soon as Kimi renewed its tokens.
+	// A newer login replaces the copy, which went stale once Kimi renewed it.
 	if target, err := os.Stat(targetPath); err == nil {
 		if source, err := os.Stat(sourcePath); err != nil || !source.ModTime().After(target.ModTime()) {
 			return nil

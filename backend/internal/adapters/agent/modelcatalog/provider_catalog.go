@@ -68,8 +68,7 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		if agentID == "pi" {
 			result.Models = append(result.Models, piInstalledModels(ctx, binary, workingDir, env)...)
 		} else {
-			// Kimchi's chat has no thinking control, so a level picked for it
-			// would not reach it.
+			// Kimchi's chat has no thinking control.
 			for i := range result.Models {
 				result.Models[i].Efforts = nil
 			}
@@ -194,12 +193,10 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 	return models
 }
 
-// piThinkingLevels are the thinking levels a Pi model takes, as effort choices,
-// so a switch to Pi can pick one before Pi runs. Pi's record marks a reasoning
-// model, and its thinkingLevelMap renames levels or sets one it lacks to null;
-// a level it leaves out is taken as it is. Only the levels pi-acp's bundled
-// runtime takes are offered: picking one it does not would fail the switch.
-// Records without the map (OpenCode's cache) name none.
+// piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,
+// so a switch to Pi can pick one before Pi runs. thinkingLevelMap sets a level
+// the model lacks to null; only levels pi-acp's bundled runtime takes are
+// offered. Records without the map (OpenCode's cache) name none.
 func piThinkingLevels(record map[string]any) []string {
 	levels, mapped := record["thinkingLevelMap"].(map[string]any)
 	if reasoning, _ := record["reasoning"].(bool); !reasoning || !mapped {
@@ -313,9 +310,8 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 		paths = []string{path, path + "-wal"}
 	}
 	if agentID == "pi" || agentID == "kimchi" {
-		// Pi and Kimchi rewrite these files on every --list-models with the same
-		// contents. A modification time would make each discovery invalidate the
-		// catalog it just wrote, so every catalog read would discover again.
+		// Pi and Kimchi rewrite these files with the same contents on every
+		// --list-models, so a modification time would invalidate every discovery.
 		return ";" + fingerprintConfigPaths(paths)
 	}
 	var stamp strings.Builder

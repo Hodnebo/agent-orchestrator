@@ -528,9 +528,8 @@ const (
 	standingClose = "</ao-standing-instructions>"
 )
 
-// StandingInstructionsBlock carries AO's standing instructions as prompt text,
-// for an agent that reads them no other way. An agent may replay it joined to
-// the user's first message; history drops it again.
+// StandingInstructionsBlock carries AO's standing instructions as prompt text;
+// history drops it again from a replayed first message.
 func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
 }

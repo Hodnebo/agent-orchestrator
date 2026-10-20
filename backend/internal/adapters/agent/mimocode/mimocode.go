@@ -102,10 +102,9 @@ func validNativeSessionID(id string) bool {
 	return strings.HasPrefix(id, "ses_") && len(id) > len("ses_")
 }
 
-// usesAOAgent reports whether the launch selects AO's agent file, which holds
-// the session's instructions and its permission rules. Bypass goes through
-// that file too: --dangerously-skip-permissions stops at a consent screen on
-// every terminal launch, and all it then does is allow every permission.
+// usesAOAgent reports whether the launch selects AO's agent file (instructions
+// and permission rules). Bypass goes through it too: the CLI's bypass flag stops
+// at a consent screen on every launch.
 func usesAOAgent(mode ports.PermissionMode, inlinePrompt, promptFile string) bool {
 	return mimoAgentPermission(mode) != "" || inlinePrompt != "" || promptFile != ""
 }

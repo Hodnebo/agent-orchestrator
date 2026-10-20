@@ -480,8 +480,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
-		// OpenCode's own list is what it can run; its provider cache, added next,
-		// names every model it knows.
+		// The model command lists what it can run; the provider cache, every model.
 		if listsRunnableModels(agentID) {
 			for _, model := range normalize(models) {
 				base.RunnableModels = append(base.RunnableModels, model.ID)

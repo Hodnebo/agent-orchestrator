@@ -260,15 +260,13 @@ func ResolveCopilotBinary(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("copilot: %w", ports.ErrAgentBinaryNotFound)
 }
 
-// vsCodeCopilotLauncherScript sits beside the `copilot` launcher that VS Code's
-// Copilot Chat extension installs and puts on the PATH of its terminals.
+// vsCodeCopilotLauncherScript sits beside the `copilot` launcher VS Code's
+// Copilot Chat extension puts on its terminals' PATH.
 const vsCodeCopilotLauncherScript = "copilotCLIShim.js"
 
-// isVSCodeCopilotLauncher reports whether path is VS Code's launcher rather
-// than the CLI. The launcher only forwards to a `copilot` it finds elsewhere on
-// PATH. With none installed it stops at "Install GitHub Copilot CLI? [y/N]", so
-// its presence never shows that the CLI is installed, and launching it is never
-// better than launching the CLI it would forward to.
+// isVSCodeCopilotLauncher reports whether path is VS Code's launcher, which only
+// forwards to a `copilot` elsewhere on PATH and, with none, stops at "Install
+// GitHub Copilot CLI? [y/N]". It never shows that the CLI is installed.
 func isVSCodeCopilotLauncher(path string) bool {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved

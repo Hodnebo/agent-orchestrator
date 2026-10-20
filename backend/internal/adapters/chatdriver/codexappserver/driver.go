@@ -576,10 +576,9 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	if transport.Reconnected {
-		// A live host is normally an initialized app-server, but a daemon that
-		// stopped between starting the host and finishing initialize leaves one
-		// that never was, and every later call fails "Not initialized". Initialize
-		// anyway: an initialized app-server refuses it and keeps its state.
+		// A daemon stopped mid-initialize leaves a host whose app-server never
+		// was, failing every call "Not initialized". An initialized one refuses
+		// a second initialize and keeps its state.
 		fresh, err := initializeIfNeeded(ctx, conv.conn)
 		if err != nil {
 			_ = conv.Close()

@@ -20,9 +20,8 @@ type process struct {
 	stdout    io.Reader
 	stop      func() error
 	terminate func() error
-	// quickStop records that the provider gains nothing from the stdin grace
-	// at stop: it answered session/close, or it never exits on stdin closing.
-	// A persistent host then signals it sooner.
+	// quickStop: the provider answered session/close or never exits on stdin
+	// closing, so a persistent host signals it without the stdin grace.
 	quickStop   atomic.Bool
 	reconnected bool
 	gate        *gatedReader

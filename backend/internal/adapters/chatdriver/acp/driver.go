@@ -54,11 +54,10 @@ type Config struct {
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
-	// InstallCheck optionally reports, without starting anything, that the
-	// adapter the chat needs is missing. See ports.ChatInstallChecker.
+	// InstallCheck optionally reports a missing chat adapter without starting
+	// anything. See ports.ChatInstallChecker.
 	InstallCheck func(context.Context) error
-	// RetryStartupExit starts the agent once more when it exits before
-	// answering its first handshake.
+	// RetryStartupExit starts the agent once more if it exits during its first handshake.
 	RetryStartupExit bool
 	Launch           func(context.Context, LaunchConfig) (Launch, error)
 	// ValidateInitialize optionally admits only the tested ACP distribution and
@@ -122,22 +121,18 @@ type Config struct {
 	// PromptResponseFailure lets a provider binding interpret its own structured
 	// terminal metadata after a nominally successful ACP prompt response.
 	PromptResponseFailure func(acpsdk.PromptResponse) error
-	// SessionPromptResponseFailure is PromptResponseFailure for a binding that
-	// needs the provider session the turn ran in, to read why it failed from
-	// the agent's own record (Pi keeps the model's error only there).
+	// SessionPromptResponseFailure is PromptResponseFailure given the provider
+	// session, for a binding that reads the failure from the agent's own record.
 	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse) error
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
 	HistoryNotice func(string) bool
-	// HistoryUserChunkIsMessage marks an agent that replays each user message as
-	// one whole chunk with no message id (pi-acp). Each id-less chunk is then its
-	// own prompt, even when no reply was replayed between two of them.
+	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
+	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
-	// QuickStop marks a provider whose stop gains nothing from waiting: it
-	// keeps its session saved after every turn, or never reacts to stdin
-	// closing. It gets a short session/close wait and is signalled after
-	// providerQuickGrace instead of the full stdin grace.
+	// QuickStop marks a provider whose stop gains nothing from waiting (it never
+	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
@@ -168,8 +163,7 @@ type PermissionPolicy func(
 type SessionOption struct {
 	ID    string
 	Value string
-	// Optional settings are skipped when the session rejects them, such
-	// as a thinking setting on a model that has none.
+	// Optional settings are skipped when the session rejects them.
 	Optional bool
 	// Name finds the choice when the agent lists it under another value, such as
 	// Claude Code offering claude-opus-5-5 as "opus", named "Opus 5.5".
@@ -257,8 +251,7 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	return cloneCapabilities(d.cfg.Capabilities), nil
 }
 
-// CheckChatInstall reports a missing chat adapter; nil when the binding has
-// no cheap check.
+// CheckChatInstall reports a missing chat adapter; nil without a cheap check.
 func (d *Driver) CheckChatInstall(ctx context.Context) error {
 	if d.cfg.InstallCheck == nil {
 		return nil
@@ -653,6 +646,16 @@ func (d *Driver) connect(
 	initializeStarted := time.Now()
 	conv, init, state, err := d.initialize(ctx, cfg, proc)
 	d.logStartStage(cfg.SessionID, "initialize", initializeStarted, err)
+	reopen := func(stage string) (*conversation, acpsdk.InitializeResponse, *persistenthost.ACPState, error) {
+		proc, err := d.openProcess(ctx, cfg, prepareEnv)
+		if err != nil {
+			return nil, acpsdk.InitializeResponse{}, nil, err
+		}
+		started := time.Now()
+		conv, init, state, err := d.initialize(ctx, cfg, proc)
+		d.logStartStage(cfg.SessionID, stage, started, err)
+		return conv, init, state, err
+	}
 	if errors.Is(err, errHostNeverStarted) {
 		// Nothing to recover: stop the host so it does not block every later
 		// start, then start the agent afresh, which reloads the conversation.
@@ -664,19 +667,13 @@ func (d *Driver) connect(
 		if cfg.ReconnectOnly {
 			return nil, acpsdk.InitializeResponse{}, nil, ports.ErrChatHostNotRunning
 		}
-		if proc, err = d.openProcess(ctx, cfg, prepareEnv); err != nil {
-			return nil, acpsdk.InitializeResponse{}, nil, err
-		}
-		conv, init, state, err = d.initialize(ctx, cfg, proc)
-		d.logStartStage(cfg.SessionID, "initialize_replaced", initializeStarted, err)
-		return conv, init, state, err
+		return reopen("initialize_replaced")
 	}
 	if err == nil || !d.cfg.RetryStartupExit || proc.reconnected || !isACPPeerDisconnected(err) {
 		return conv, init, state, err
 	}
-	// The agent exited before answering its first handshake. Some do that on a
-	// cold first start (pi-acp while its background daemon comes up); a second
-	// start finds it running.
+	// Some agents exit during a cold first handshake (pi-acp while its
+	// background daemon comes up); a second start finds it running.
 	d.log.Info("chat: ACP agent exited during its first handshake; starting it once more",
 		"sessionID", cfg.SessionID, "harness", d.cfg.Harness, "error", err)
 	select {
@@ -684,24 +681,16 @@ func (d *Driver) connect(
 	case <-ctx.Done():
 		return nil, acpsdk.InitializeResponse{}, nil, err
 	}
-	if proc, err = d.openProcess(ctx, cfg, prepareEnv); err != nil {
-		return nil, acpsdk.InitializeResponse{}, nil, err
-	}
-	initializeStarted = time.Now()
-	conv, init, state, err = d.initialize(ctx, cfg, proc)
-	d.logStartStage(cfg.SessionID, "initialize_retry", initializeStarted, err)
-	return conv, init, state, err
+	return reopen("initialize_retry")
 }
 
 // errHostNeverStarted is a reattached persistent host that holds no session.
 var errHostNeverStarted = errors.New("persistent ACP host never finished starting")
 
-// startupRetryDelay lets an agent that exited during its first handshake
-// release its host before RetryStartupExit starts it again.
+// startupRetryDelay lets an exited agent release its host before the retry.
 const startupRetryDelay = 500 * time.Millisecond
 
-// isACPPeerDisconnected reports a request the agent never answered because
-// its process went away.
+// isACPPeerDisconnected reports a request unanswered because the agent exited.
 func isACPPeerDisconnected(err error) bool {
 	var requestErr *acpsdk.RequestError
 	if !errors.As(err, &requestErr) {
@@ -737,8 +726,7 @@ func (d *Driver) initialize(
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || state.SessionID == "" {
-			// The host never got as far as a session: its first handshake was cut
-			// short, as by a daemon stopped mid-start. It holds no conversation.
+			// The host's first handshake was cut short (a daemon stopped mid-start).
 			conv.discard()
 			return nil, acpsdk.InitializeResponse{}, nil, errHostNeverStarted
 		}

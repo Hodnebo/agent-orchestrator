@@ -1,12 +1,8 @@
-// Written by Agent Orchestrator and loaded into `cursor-agent acp` through
-// NODE_OPTIONS. It only changes how Cursor's own API calls connect.
-//
-// Cursor bootstraps global-agent, whose replacement HTTP(S) agents declare no
-// keepAlive, so Node sends "Connection: close" and every API call pays a new
-// TCP and TLS handshake. With no proxy configured, global-agent hands each
-// request to Node's keep-alive agent; marking the replacement keep-alive lets
-// those connections be reused. A few TLS connections to the API host are also
-// opened ahead of the first calls, which run in parallel when a session opens.
+// Loaded by AO into `cursor-agent acp` through NODE_OPTIONS; it only changes how
+// Cursor's own API calls connect. Cursor's global-agent replacement agents
+// declare no keepAlive, so Node sends "Connection: close" on every call; with no
+// proxy, marking them keep-alive lets connections be reused. A few TLS sockets
+// to the API host are also opened ahead of a session's first parallel calls.
 "use strict";
 (() => {
   const path = require("node:path");

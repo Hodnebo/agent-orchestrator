@@ -35,10 +35,8 @@ const (
 	startupTimeout   = 10 * time.Second
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
-	// A stopped provider gets providerStdinGrace to exit on stdin closing, then
-	// a terminate signal, and is killed at providerStopDeadline. One that gains
-	// nothing from waiting (its session is closed, or it never exits on stdin
-	// closing) gets providerQuickGrace.
+	// A stopped provider gets providerStdinGrace (providerQuickGrace for a quick
+	// stop) to exit on stdin closing, then SIGTERM, then a kill at the deadline.
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
@@ -147,7 +145,7 @@ type hello struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
 	Action  string `json:"action"`
-	// QuickStop on a shutdown: the provider gains nothing from the stdin grace.
+	// QuickStop on a shutdown: see ShutdownQuick.
 	QuickStop bool `json:"quickStop,omitempty"`
 }
 
@@ -520,9 +518,7 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 }
 
 // ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
-// grace: it answered session/close, so its session is saved, or it never exits
-// on stdin closing. It is signalled sooner. A host from before this field
-// ignores it and waits the full grace.
+// grace (session closed, or deaf to stdin). An older host waits the full grace.
 func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
@@ -698,9 +694,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return
 		case <-time.After(grace):
 		}
-		// Some agents (Cursor) ignore stdin closing and only exit on a signal;
-		// asking them to terminate saves most of the deadline below, which an
-		// agent switch otherwise waits out in full.
+		// Some agents (Cursor) ignore stdin closing and only exit on a signal.
 		_ = terminateProviderProcess(child)
 		// The provider's output can stay open after it exits when a helper it
 		// started inherited the pipe, so its own exit also ends the wait.
@@ -762,9 +756,7 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
-	// quickStop is set before shutdown closes for a provider that gains
-	// nothing from the stdin grace.
-	quickStop atomic.Bool
+	quickStop        atomic.Bool // set before shutdown closes; see ShutdownQuick
 }
 
 type pendingRequest struct {

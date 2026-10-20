@@ -152,9 +152,7 @@ func copyTree(ctx context.Context, source, destination string) error {
 			if relative == "." {
 				return nil
 			}
-			// bin/ is opencode's download cache for language servers and tools,
-			// full of node_modules/.bin symlinks. It is not user data, and
-			// OpenCode 2 downloads what it needs again.
+			// Full of node_modules/.bin symlinks, and OpenCode 2 downloads it again.
 			if relative == legacyToolCacheDir {
 				return filepath.SkipDir
 			}

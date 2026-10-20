@@ -47,7 +47,7 @@ func New(plugin piPlugin, log *slog.Logger) ports.ChatDriver {
 }
 
 func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpdriver.Config {
-	totals := &sessionTotals{}
+	totals := &sessionTotals{totals: map[string]int{}}
 	return acpdriver.Config{
 		Harness: domain.HarnessPi,
 		Capabilities: ports.ChatCapabilities{
@@ -118,8 +118,8 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 	}
 }
 
-// sessionTotals is each Pi session's token total as of its last turn. pi-acp
-// reports a session's totals, not a turn's, so a turn's own use is the change.
+// sessionTotals is each Pi session's token total as of its last turn: pi-acp
+// reports a session's totals, not a turn's.
 type sessionTotals struct {
 	mu     sync.Mutex
 	totals map[string]int
@@ -131,19 +131,14 @@ func (s *sessionTotals) swap(sessionID string, response acpsdk.PromptResponse) i
 	defer s.mu.Unlock()
 	previous := s.totals[sessionID]
 	if response.Usage != nil {
-		if s.totals == nil {
-			s.totals = map[string]int{}
-		}
 		s.totals[sessionID] = response.Usage.TotalTokens
 	}
 	return previous
 }
 
-// promptResponseFailure reports a turn Pi ended without an answer from its
-// model. pi-acp answers such a prompt with end_turn, no message and no tokens
-// used, so the chat would show the turn as done with nothing in it. previous is
-// the session's token total before the turn. Pi keeps the model's error only
-// in its own session record; recorded is that error, if any.
+// promptResponseFailure reports a turn Pi ended without reaching its model:
+// pi-acp answers it with end_turn and no new tokens since previous. recorded is
+// the model's error from Pi's own session record, if any.
 func promptResponseFailure(response acpsdk.PromptResponse, previous int, recorded string) error {
 	usage := response.Usage
 	if response.StopReason != acpsdk.StopReasonEndTurn || usage == nil || usage.TotalTokens != previous {
@@ -168,9 +163,8 @@ func piAgentDir() string {
 	return filepath.Join(home, ".pi", "agent")
 }
 
-// recordedModelError reads the error of the latest failed reply in Pi's record
-// of sessionID (sessions/<folder>/<time>_<id>.jsonl), with a provider's JSON
-// error body reduced to its message. It reads only the end of the record.
+// recordedModelError reads the error of the latest failed reply from the tail
+// of Pi's record of sessionID (sessions/<folder>/<time>_<id>.jsonl).
 func recordedModelError(agentDir, sessionID string) string {
 	if agentDir == "" || sessionID == "" || strings.ContainsAny(sessionID, `/\*?[`) {
 		return ""
@@ -240,16 +234,12 @@ func cloneEnv(in map[string]string) map[string]string {
 	return out
 }
 
-// modelsPreload is loaded into pi-acp to give its bundled Pi the models a newer
-// Pi lists now. See the file for how.
-//
 //go:embed models_preload.mjs
 var modelsPreload []byte
 
 // preloadCurrentModels has pi-acp, and the daemon it starts, load
-// modelsPreload. pi-acp pins a Pi release whose built-in models providers have
-// since retired: a ChatGPT account refuses all of them. Without the preload
-// pi-acp keeps that list.
+// modelsPreload: pi-acp pins a Pi release whose built-in models providers have
+// since retired (a ChatGPT account refuses all of them).
 func preloadCurrentModels(cfg acpdriver.LaunchConfig, env map[string]string) error {
 	dir := filepath.Join(cfg.DataDir, "pi-acp", string(cfg.SessionID))
 	script := filepath.Join(dir, "models-preload.mjs")

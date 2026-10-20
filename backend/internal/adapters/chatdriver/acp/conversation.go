@@ -26,8 +26,7 @@ const (
 	eventBuffer  = 4096
 	approvalWait = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
-	// terminated; an answered close lets the host stop the provider sooner. A
-	// QuickStop provider gets quickSessionCloseWait.
+	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
 	quickSessionCloseWait = 500 * time.Millisecond
 )
@@ -517,9 +516,8 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	if optionsFor != nil {
 		options = optionsFor(settings)
 	}
-	// Each setting the session already has is skipped: some agents take seconds
-	// per change, and a turn would otherwise wait on every one of them. After
-	// session/set_model the list is stale, so everything is sent.
+	// A setting the session already has is skipped (some agents take seconds
+	// per change) unless session/set_model made the list stale.
 	catalogStale := false
 	if legacyModel && settings.Model != "" {
 		// A binding may name the model differently from the turn settings.
@@ -571,8 +569,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
 			return nil
 		}
-		// The models offered do not depend on the model chosen, so an optional one
-		// the session does not list is skipped before it is sent.
+		// The models offered do not depend on the model chosen, so this is final.
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
@@ -674,8 +671,8 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		},
 	})
 	if err != nil {
-		// An optional setting the chosen model lacks is skipped. The catalog cannot
-		// say in advance: session/set_model does not return the new model's options.
+		// An optional setting the chosen model lacks is skipped; session/set_model
+		// does not return the new model's options to check in advance.
 		if option.Optional && isACPInvalidParams(err) {
 			return nil
 		}
@@ -1173,8 +1170,8 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			// The provider may save its session state while answering, so it gets
-			// a bounded wait before it is terminated (gracefully first).
+			// The provider may save its session while answering; an answered close
+			// lets the host stop it sooner.
 			wait := sessionCloseWait
 			if c.proc != nil && c.proc.quickStop.Load() {
 				wait = quickSessionCloseWait

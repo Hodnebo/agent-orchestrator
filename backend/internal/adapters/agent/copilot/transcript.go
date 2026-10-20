@@ -12,14 +12,12 @@ import (
 
 const (
 	copilotTranscriptName = "events.jsonl"
-	// One turn's events sit at the end of the log. A model snapshot line can
-	// run to a few hundred kilobytes, so the window is generous.
+	// A model snapshot line can run to a few hundred kilobytes.
 	copilotTranscriptTailBytes = 4 << 20
 )
 
-// Copilot writes its event log in batches, roughly every 100ms, so the answer
-// is normally not on disk yet when the stop hook starts. Variables so tests do
-// not have to wait.
+// Copilot writes its event log in ~100ms batches, so the answer is normally not
+// on disk yet when the stop hook starts. Variables so tests do not wait.
 var (
 	copilotTranscriptWait = 1500 * time.Millisecond
 	copilotTranscriptPoll = 40 * time.Millisecond
@@ -35,14 +33,10 @@ type copilotTranscriptEvent struct {
 }
 
 // FinalAssistantMessage returns the answer that closed the turn an agentStop
-// hook reports. Copilot's hook input names the session's event log instead of
-// carrying the text, so the answer is read from there: the newest
-// assistant.message of the turn this stop ended. A turn that ended without one
-// yields nothing rather than an earlier turn's answer.
-//
-// The log records the hook call itself, with the same timestamp the hook
-// receives. Once that line is on disk everything before it is too, so the read
-// waits for it, up to copilotTranscriptWait, and then reads whatever is there.
+// hook reports, read from the event log the hook input names: the newest
+// assistant.message of that turn, never an earlier turn's. The log also records
+// the hook call with the hook's timestamp; once that line is on disk all before
+// it is too, so the read waits for it up to copilotTranscriptWait.
 func FinalAssistantMessage(payload []byte) string {
 	var input struct {
 		TranscriptPath string  `json:"transcriptPath"`
@@ -66,8 +60,7 @@ func FinalAssistantMessage(payload []byte) string {
 }
 
 // readCopilotFinalMessage reads the answer of the turn the stop at
-// stopTimestamp ended. settled reports whether the log already holds that
-// stop's own hook record; until it does the text may belong to an earlier turn.
+// stopTimestamp ended. settled reports whether the log holds that stop's record.
 func readCopilotFinalMessage(path string, stopTimestamp float64) (text string, settled bool) {
 	lines := copilotTranscriptTail(path)
 	end := len(lines)

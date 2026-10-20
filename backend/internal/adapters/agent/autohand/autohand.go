@@ -2,12 +2,10 @@
 // interactive sessions, resuming native sessions by id, installing AO's
 // lifecycle hooks into Autohand's config, and reading hook-derived session info.
 //
-// Autohand ("autohand") is an autonomous coding agent with an interactive TUI,
-// a one-shot command mode (`autohand -p <prompt>` / positional prompt) that AO
-// does not use because it exits after one answer, native session resume
+// Autohand ("autohand") is an autonomous coding agent with an interactive TUI
+// (its one-shot `autohand -p` exits after one answer), native session resume
 // (`autohand resume <sessionId>`), and a native hook/lifecycle system whose
-// events (session-start, stop, permission-request, ...) AO maps onto activity
-// states. See hooks.go for hook installation.
+// events AO maps onto activity states. See hooks.go for hook installation.
 package autohand
 
 import (
@@ -71,11 +69,9 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `autohand --model`.")
 }
 
-// GetLaunchCommand builds the argv to start a new interactive Autohand session,
-// scoping the run to the workspace and applying the approval-mode flags, an
-// optional model override, and optional system-prompt override. The prompt is
-// not on the command line: given one there, Autohand runs it in command mode
-// and exits, so AO types it in once the session is ready instead.
+// GetLaunchCommand builds the argv to start a new interactive Autohand session.
+// The prompt is typed in once ready: on the command line Autohand would run it
+// in command mode and exit.
 //
 //	autohand [--path <workspace>] [<approval flags>] [--model <value>] [--sys-prompt <value>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
@@ -109,9 +105,8 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints waits for Autohand's status footer, which it draws once
-// the composer takes input. The composer itself shows a suggested task, so an
-// empty-prompt marker would never match.
+// PromptReadinessHints waits for Autohand's status footer: the composer shows a
+// suggested task, so an empty-prompt marker would never match.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
