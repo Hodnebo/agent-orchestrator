@@ -2,6 +2,7 @@ import { Check, ChevronDown, Loader2, Lock, Plus, Search } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../lib/utils";
+import { LiveStatus } from "./LiveStatus";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 
@@ -115,6 +116,8 @@ export function SearchablePicker({
 					<ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
 				</button>
 			</PopoverTrigger>
+			{/* Mounted with the picker, so the list saying it is loading is heard. */}
+			<LiveStatus text={open && filtered.length === 0 && loading ? loadingText ?? t("common.loading") : ""} />
 			<PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] min-w-56 overflow-hidden p-0 shadow-xl">
 				{searchable ? (
 					<div className="flex h-10 items-center gap-2 border-b border-border px-3">
@@ -140,7 +143,7 @@ export function SearchablePicker({
 					)}
 				>
 					{filtered.length === 0 && loading ? (
-						<p className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground" role="status">
+						<p className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground">
 							<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
 							{loadingText ?? t("common.loading")}
 						</p>
