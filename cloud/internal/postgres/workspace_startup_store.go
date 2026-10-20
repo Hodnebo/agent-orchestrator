@@ -103,6 +103,13 @@ const workspaceStartupErrorCodesSQL = "'" + domain.WorkspaceStartupErrorCheckout
 	domain.WorkspaceStartupErrorWorkingDirectory + "', '" + domain.WorkspaceStartupErrorProjectSetup + "', '" +
 	domain.WorkspaceStartupErrorWorkingDirectoryOccupied + "'"
 
+// workerBusyRecentSQL is how recently the worker's busy mark (last_busy_at,
+// written by MarkSandboxBusy on a busy heartbeat, every 20 seconds while a
+// Setup step runs) must have landed for a session with a failed workspace
+// startup to count as retrying it. Three heartbeats, so one missed mark does
+// not let a running retry be paused.
+const workerBusyRecentSQL = "interval '1 minute'"
+
 // queuedBehindFailedStartupSQL is the condition that turn (an ao_turns
 // alias) is a queued turn of a session whose current workspace startup
 // failed: its worker could not check the repository out or run the project's
@@ -112,9 +119,16 @@ const workspaceStartupErrorCodesSQL = "'" + domain.WorkspaceStartupErrorCheckout
 // session's task) is not work in flight: it does not keep the VM running,
 // hold off idle pause, count as busy for the plan, or make the session read
 // active. Opening the session still wakes it and drives the retry.
+//
+// The startup error stays set until the retry succeeds, and the control plane
+// is not told a retry started (the desktop asks the worker directly), so
+// while the worker's busy mark is recent (workerBusyRecentSQL: a retried
+// Setup is running) the turn counts again: the retry is not paused, stopped
+// or reclaimed for the plan mid-run.
 func queuedBehindFailedStartupSQL(turn, sandbox string) string {
 	return "(" + turn + ".state = 'queued' AND COALESCE(" + sandbox + ".startup_error_code, '') IN (" +
-		workspaceStartupErrorCodesSQL + "))"
+		workspaceStartupErrorCodesSQL + ") AND NOT COALESCE(" + sandbox + ".last_busy_at > now() - " +
+		workerBusyRecentSQL + ", false))"
 }
 
 // truncateTail bounds text to limit bytes on a valid UTF-8 boundary, keeping

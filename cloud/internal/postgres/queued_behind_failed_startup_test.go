@@ -15,7 +15,8 @@ import (
 // retry, but that queued turn is not work in flight: it does not keep the VM
 // alive, hold off idle pause (AO's or the provider's), count as busy for the
 // plan, or make the session read active. A queued turn of a session that is
-// starting normally, or behind a reconciler startup error, still does.
+// starting normally, or behind a reconciler startup error, still does, and so
+// does one whose worker is retrying the failed step (its busy mark is recent).
 func TestQueuedTurnBehindAFailedWorkspaceStartupIsNotWorkInFlight(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
@@ -30,28 +31,33 @@ func TestQueuedTurnBehindAFailedWorkspaceStartupIsNotWorkInFlight(t *testing.T) 
 		t.Fatal(err)
 	}
 	// arrange puts the sandbox back to running and due, with code as its
-	// startup error.
-	arrange := func(t *testing.T, code string) {
+	// startup error and the worker's last busy mark busyAgo ago (none when
+	// zero).
+	arrange := func(t *testing.T, code string, busyAgo time.Duration) {
 		t.Helper()
 		execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running',
 			billed = true, reconcile_after = now() - interval '100 years', reconcile_lease_owner = '', reconcile_lease_until = NULL,
-			interactive_until = NULL, last_interaction_at = NULL, last_busy_at = NULL,
+			interactive_until = NULL, last_interaction_at = NULL,
+			last_busy_at = CASE WHEN $4::bigint = 0 THEN NULL ELSE now() - make_interval(secs => $4::bigint) END,
 			startup_error_code = $3, startup_error_message = $3, startup_error_at = CASE WHEN $3 = '' THEN NULL ELSE now() END
-			WHERE org_id = $1 AND session_id = $2`, fixture.orgID, fixture.sessionID, code)
+			WHERE org_id = $1 AND session_id = $2`, fixture.orgID, fixture.sessionID, code, int64(busyAgo/time.Second))
 	}
 
 	for _, tc := range []struct {
 		name, code string
+		busyAgo    time.Duration
 		inFlight   bool
 	}{
-		{"starting normally", "", true},
-		{"reconciler startup error", "worker_never_started", true},
-		{"Setup failed", domain.WorkspaceStartupErrorProjectSetup, false},
-		{"checkout failed", domain.WorkspaceStartupErrorCheckout, false},
+		{"starting normally", "", 0, true},
+		{"reconciler startup error", "worker_never_started", 0, true},
+		{"Setup failed", domain.WorkspaceStartupErrorProjectSetup, 0, false},
+		{"checkout failed", domain.WorkspaceStartupErrorCheckout, 0, false},
+		{"Setup failed, busy before it failed", domain.WorkspaceStartupErrorProjectSetup, 5 * time.Minute, false},
+		{"Setup retry running", domain.WorkspaceStartupErrorProjectSetup, 10 * time.Second, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The session reads active only while its turn is in flight.
-			arrange(t, tc.code)
+			arrange(t, tc.code, tc.busyAgo)
 			session, err := store.GetSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID, fixture.sessionID)
 			if err != nil {
 				t.Fatal(err)
@@ -104,7 +110,7 @@ func TestQueuedTurnBehindAFailedWorkspaceStartupIsNotWorkInFlight(t *testing.T) 
 			}
 
 			// AO's idle pause pauses it only when it is not.
-			arrange(t, tc.code)
+			arrange(t, tc.code, tc.busyAgo)
 			paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, time.Minute)
 			if err != nil {
 				t.Fatal(err)

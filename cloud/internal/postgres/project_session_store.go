@@ -1148,7 +1148,8 @@ const sessionSelect = `
 					AND turn.state IN ('queued', 'claimed', 'running')
 					-- A task queued behind a failed workspace startup is not
 					-- work in flight (see queuedBehindFailedStartupSQL).
-					AND NOT (turn.state = 'queued' AND COALESCE(sandbox.startup_error_code, '') IN (` + workspaceStartupErrorCodesSQL + `))
+					AND NOT (turn.state = 'queued' AND COALESCE(sandbox.startup_error_code, '') IN (` + workspaceStartupErrorCodesSQL + `)
+						AND NOT COALESCE(sandbox.last_busy_at > now() - ` + workerBusyRecentSQL + `, false))
 			) THEN 'active'
 			-- The project's Setup is running: the agent has not started, but the
 			-- session is busy, not idle (the worker already reports it busy, which
