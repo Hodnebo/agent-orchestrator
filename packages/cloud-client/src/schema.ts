@@ -1345,6 +1345,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/interface/chat-start-fallback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The session's current worker reports it cannot start the session's
+         *     Chat controller (code CHAT_ADAPTER_UNAVAILABLE: Claude's Chat needs the
+         *     Claude ACP adapter, which the workspace lacks and the worker could not
+         *     install). A session created in Chat that no interface transition ever
+         *     touched moves to tui: its queued first turn is settled (the terminal
+         *     agent gets the prompt on its command line) and a failed tui-to-chat
+         *     interface transition carries the notice the desktop shows. A session
+         *     the person switched to Chat does not move; the worker then stays on
+         *     Chat. Requires the worker:connect scope. A worker that reports the
+         *     agent.chat-start capability uses it; for one that does not, the
+         *     control plane makes the same move itself at bootstrap and reconnect.
+         *      */
+        post: operations["fallBackWorkerChatStart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/terminals/agent": {
         parameters: {
             query?: never;
@@ -2553,6 +2581,13 @@ export interface components {
             code: string;
             /** @description Worker-safe failure message, limited by the server to 4 KiB. */
             message: string;
+        };
+        WorkerChatStartFallbackInput: {
+            /** @enum {string} */
+            code: "CHAT_ADAPTER_UNAVAILABLE";
+        };
+        WorkerChatStartFallbackResponse: {
+            movedToTui: boolean;
         };
         WorkerAgentTerminalResponse: {
             /** Format: uuid */
@@ -5549,6 +5584,37 @@ export interface operations {
             /** @description The command is no longer claimed or has expired. */
             409: components["responses"]["Error"];
             422: components["responses"]["ValidationError"];
+        };
+    };
+    fallBackWorkerChatStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerChatStartFallbackInput"];
+            };
+        };
+        responses: {
+            /** @description Whether the session moved to tui. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerChatStartFallbackResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            404: components["responses"]["WorkerRoutesDisabled"];
+            /** @description The code is not one the control plane knows. */
+            422: components["responses"]["Error"];
+            500: components["responses"]["Error"];
         };
     };
     ensureWorkerAgentTerminal: {
