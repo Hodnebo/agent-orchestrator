@@ -142,3 +142,24 @@ func TestSettleClaudeChatStartWaitsBriefly(t *testing.T) {
 		t.Fatalf("waited up to %v, want at most %v", waited, claudeChatAdapterWait)
 	}
 }
+
+type claimedChatRunner bool
+
+func (claimedChatRunner) Run(context.Context) error { return nil }
+func (r claimedChatRunner) ClaimedTurn() bool       { return bool(r) }
+
+// A terminal agent started after this worker's Chat controller claimed a
+// turn (a switch from Chat) does not get the session's task again; before
+// that (a Chat start falling back to the terminal) it does, exactly once.
+func TestWithoutPromptChatRan(t *testing.T) {
+	launch := worker.LaunchContext{Harness: "claude-code", Prompt: "do the work"}
+	if got := withoutPromptChatRan(launch, claimedChatRunner(false)).Prompt; got != "do the work" {
+		t.Fatalf("before any Chat turn: prompt = %q", got)
+	}
+	if got := withoutPromptChatRan(launch, nil).Prompt; got != "do the work" {
+		t.Fatalf("without a Chat controller: prompt = %q", got)
+	}
+	if got := withoutPromptChatRan(launch, claimedChatRunner(true)).Prompt; got != "" {
+		t.Fatalf("after a Chat turn: prompt = %q, want none", got)
+	}
+}

@@ -392,6 +392,34 @@ func TestFallBackChatStartWaitsForASwitchInProgress(t *testing.T) {
 	}
 }
 
+// Once a Chat controller claimed a turn, the session's task already ran in
+// Chat: a worker's launch carries no prompt, so a later switch to the
+// terminal does not run it again. Until then (or when the start fell back to
+// the terminal, which settles the turn unclaimed) the launch keeps it.
+func TestWorkerLaunchSpecDropsThePromptOnceChatClaimedATurn(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	session, err := store.CreateSession(ctx, principal, fixture.orgID, uuid.NewString(), 100, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "s", Prompt: "do the work",
+		Provider: "docker", Interface: domain.SessionInterfaceChat,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+	if err != nil || launch.Prompt != "do the work" {
+		t.Fatalf("before a claim: prompt = %q, err = %v", launch.Prompt, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_turns SET state = 'running', attempt_count = 1 WHERE session_id = $1`, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	launch, err = store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+	if err != nil || launch.Prompt != "" {
+		t.Fatalf("after a claim: prompt = %q, err = %v; want none", launch.Prompt, err)
+	}
+}
+
 // A scratch project's first orchestrator resolves its interface like any
 // orchestrator (Chat where its harness can start there) and keeps the user's
 // default for the workers it spawns. Without a default the create's payload

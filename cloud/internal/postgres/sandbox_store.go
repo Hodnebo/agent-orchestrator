@@ -986,6 +986,10 @@ func (s *Store) RedeemWorkerBootstrapTicket(
 }
 
 // WorkerLaunchSpec returns the durable context a bootstrapped worker needs.
+// Its Prompt is the session's task for a terminal agent's command line, empty
+// once a Chat controller has claimed a turn: the task already ran in Chat
+// (the first turn is the prompt), and a later switch to the terminal must not
+// run it again.
 func (s *Store) WorkerLaunchSpec(
 	ctx context.Context,
 	orgID, sessionID string,
@@ -997,7 +1001,12 @@ func (s *Store) WorkerLaunchSpec(
 			ctx,
 			`SELECT session.id, session.project_id, project.display_name, project.config,
 				session.kind, session.harness, session.agent_config,
-				session.display_name, session.branch, session.prompt,
+				session.display_name, session.branch,
+				CASE WHEN EXISTS (
+					SELECT 1 FROM ao_turns turn
+					WHERE turn.org_id = session.org_id AND turn.session_id = session.id
+					  AND turn.attempt_count > 0
+				) THEN '' ELSE session.prompt END,
 				session.agent_session_id, session.mode,
 				COALESCE(NULLIF(selection.selected_model, ''), session.model),
 				COALESCE(selection.selected_effort, session.reasoning_effort), COALESCE(selection.created_at, to_timestamp(0)), session.denied_commands, session.interface,
