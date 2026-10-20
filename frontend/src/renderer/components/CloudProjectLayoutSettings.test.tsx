@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
+import { appI18n } from "../i18n";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 
 const mocks = vi.hoisted(() => ({
@@ -203,4 +204,18 @@ it("describes the working folder as the workspace user's until the control plane
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 	expect(await screen.findByText(/Leave empty for the default location\./)).toBeInTheDocument();
 	expect(screen.queryByText(/Leave empty to use your Coder connection's folder/)).not.toBeInTheDocument();
+});
+
+it("shows the working folder in the app's language", async () => {
+	mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
+	await appI18n.changeLanguage("de");
+	try {
+		renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+		const field = await screen.findByLabelText("Arbeitsordner");
+		expect(screen.getByText(/Wo das Haupt-Repository in deinem Coder-Workspace ausgecheckt wird/)).toBeInTheDocument();
+		fireEvent.change(field, { target: { value: "~/work/{name}" } });
+		expect(screen.getByRole("alert")).toHaveTextContent("Der Arbeitsordner darf nur {repo} als Platzhalter verwenden.");
+	} finally {
+		await act(() => appI18n.changeLanguage("en"));
+	}
 });
