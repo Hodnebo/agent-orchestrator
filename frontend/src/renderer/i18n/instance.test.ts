@@ -235,7 +235,7 @@ describe("app i18next instance", () => {
 			expect(new Intl.PluralRules(locale).select(count)).toBe("many");
 			for (const base of bases) {
 				const template = catalog[`${base}_many`];
-				expect(instance.t(base as keyof typeof enMessages, { count }), `${locale} ${base}`).toBe(
+				expect(instance.t(base, base, { count }), `${locale} ${base}`).toBe(
 					String(template).replace("{{count}}", String(count)),
 				);
 			}
