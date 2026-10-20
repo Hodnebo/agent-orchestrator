@@ -29,6 +29,7 @@ export function SettingsSaveFooter({ dirty, disabled, error }: { dirty: boolean;
 function SaveFooterError({ error }: { error: string }) {
 	const ref = useRef<HTMLParagraphElement>(null);
 	const [clipped, setClipped] = useState(false);
+	const [open, setOpen] = useState(false);
 	useLayoutEffect(() => {
 		const node = ref.current;
 		if (!node) return;
@@ -39,9 +40,10 @@ function SaveFooterError({ error }: { error: string }) {
 		return () => observer.disconnect();
 	}, [error]);
 	// The tooltip is always mounted, only held shut while the text fits, so the
-	// alert is never remounted (and announced again) when the clamp changes.
+	// alert is never remounted (and announced again) when the clamp changes. It
+	// stays controlled: Radix does not support switching.
 	return <TooltipProvider>
-		<Tooltip open={clipped ? undefined : false}>
+		<Tooltip open={clipped && open} onOpenChange={setOpen}>
 			<TooltipTrigger asChild>
 				<p
 					ref={ref}
