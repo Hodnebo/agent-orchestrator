@@ -320,9 +320,7 @@ func (s *Supervisor) openTUIAgent(ctx context.Context, input interfacePayload, t
 	}
 	s.mu.Unlock()
 	s.flushReadyAgentTerminal()
-	if s.AgentReady != nil {
-		s.AgentReady(ctx)
-	}
+	s.reportAgentReady(ctx)
 	return nil
 }
 

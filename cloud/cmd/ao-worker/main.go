@@ -67,6 +67,7 @@ var workerCapabilities = []string{
 	worker.CapabilityWorkspacePathPlaceholder,
 	worker.CapabilityMultiRepo,
 	worker.CapabilityChatStart,
+	worker.CapabilityPromptSettledOnAgentReady,
 }
 
 func main() {
@@ -433,15 +434,13 @@ func run(logger *slog.Logger) error {
 		// from its command line (the control plane sends none once Chat took it).
 		StartupTask: firstStart && strings.TrimSpace(bootstrap.Launch.Prompt) != "",
 	}
-	// A switch to the terminal starts the terminal agent itself (after the
-	// workspace is ready); it reports that start as a terminal session does.
-	transportSupervisor.AgentReady = func(ctx context.Context) {
-		if err := client.publishEvent(ctx, "agent.ready", map[string]any{
+	// Every start of the terminal agent (the session's own, or a switch to
+	// the terminal after the workspace is ready) reports agent.ready.
+	transportSupervisor.AgentReady = func(ctx context.Context) error {
+		return client.publishEvent(ctx, "agent.ready", map[string]any{
 			"workerId": bootstrap.WorkerID, "epoch": bootstrap.Epoch,
 			"version": workerVersion, "capabilities": workerCapabilities,
-		}); err != nil {
-			logger.Warn("publish agent.ready failed", "error", err)
-		}
+		})
 	}
 	// A Setup step counts as activity for its whole run, however quiet: idle
 	// pause must never stop a long Setup (one step may run for up to two
@@ -1044,14 +1043,7 @@ func startInteractiveAgent(
 	if !started {
 		return nil // An interface switch made during startup took over.
 	}
-	if err := client.publishEvent(ctx, "agent.ready", map[string]any{
-		"workerId":     bootstrap.WorkerID,
-		"epoch":        bootstrap.Epoch,
-		"version":      workerVersion,
-		"capabilities": workerCapabilities,
-	}); err != nil {
-		logger.Warn("publish agent.ready failed", "error", err)
-	}
+	// StartStartupAgent reported agent.ready (Supervisor.AgentReady).
 	return nil
 }
 

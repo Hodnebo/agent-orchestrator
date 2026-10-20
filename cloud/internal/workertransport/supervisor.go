@@ -117,10 +117,14 @@ type Supervisor struct {
 	// worker runs the session's task from its command line. Until it starts,
 	// a drain treats the terminal as busy (see startupTaskWaiting).
 	StartupTask bool
-	// AgentReady, when set, reports that a switch to the terminal started the
-	// terminal agent (the agent.ready event a terminal session's own start
-	// publishes).
-	AgentReady func(context.Context)
+	// AgentReady, when set, reports that the terminal agent started (the
+	// agent.ready event): a terminal session's own start (StartStartupAgent)
+	// or a switch to the terminal. It runs on Run's serial loop before the
+	// turn forwarder may claim a turn, and the control plane then settles the
+	// prompt turn the agent got on its command line
+	// (worker.CapabilityPromptSettledOnAgentReady). One that fails is sent
+	// again before the forwarder claims a turn.
+	AgentReady func(context.Context) error
 
 	persistOnce              sync.Once
 	persist                  *persistentAgent
@@ -149,6 +153,9 @@ type Supervisor struct {
 	// startupTaskAbandoned records that the terminal agent's start failed, so
 	// the StartupTask it carried no longer holds a drain.
 	startupTaskAbandoned bool
+	// agentReadyUnsent records an agent.ready the control plane did not take;
+	// the turn forwarder sends it again before it claims a turn.
+	agentReadyUnsent bool
 
 	// The worker's own commands (FallBackToTUI) run on Run's serial loop,
 	// like the control plane's interface commands, never beside them.
@@ -248,9 +255,43 @@ func (s *Supervisor) StartStartupAgent(ctx context.Context, command workerexec.C
 			return fmt.Errorf("start interactive coding-agent terminal: %w", err)
 		}
 		started.Store(true)
+		s.reportAgentReady(ctx)
 		return nil
 	})
 	return started.Load(), err
+}
+
+// reportAgentReady reports that the terminal agent started (AgentReady),
+// recording a report the control plane did not take for resendAgentReady.
+func (s *Supervisor) reportAgentReady(ctx context.Context) {
+	if s.AgentReady == nil {
+		return
+	}
+	err := s.AgentReady(ctx)
+	s.mu.Lock()
+	s.agentReadyUnsent = err != nil
+	s.mu.Unlock()
+	if err != nil && s.Logger != nil {
+		s.Logger.Warn("publish agent.ready failed; sending it again before the next turn", "error", err)
+	}
+}
+
+// resendAgentReady sends an agent.ready the control plane did not take, and
+// reports an error while it still does not.
+func (s *Supervisor) resendAgentReady(ctx context.Context) error {
+	s.mu.Lock()
+	unsent := s.agentReadyUnsent
+	s.mu.Unlock()
+	if !unsent || s.AgentReady == nil {
+		return nil
+	}
+	if err := s.AgentReady(ctx); err != nil {
+		return fmt.Errorf("publish agent.ready: %w", err)
+	}
+	s.mu.Lock()
+	s.agentReadyUnsent = false
+	s.mu.Unlock()
+	return nil
 }
 
 // Interface is the committed interface the transport runs ("tui" or "chat").
@@ -578,6 +619,12 @@ func (s *Supervisor) forwardTurn(ctx context.Context) (bool, error) {
 	s.mu.Unlock()
 	if agentTerminalID == "" || !agentStarted || !workspaceReady {
 		return false, nil
+	}
+	// The control plane settles the prompt turn the terminal agent got on its
+	// command line when it takes agent.ready; claimed first, the forwarder
+	// would type the task into the agent a second time.
+	if err := s.resendAgentReady(ctx); err != nil {
+		return false, err
 	}
 	turn, err := s.Control.ClaimTurn(ctx)
 	if err != nil || turn == nil {

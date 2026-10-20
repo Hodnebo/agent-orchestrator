@@ -2,6 +2,7 @@ package workertransport
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func newSetupSwitchHarness(t *testing.T, initial string) *setupSwitchHarness {
 				Cleanup: func() { h.cleanups.Add(1) },
 			}, nil
 		},
-		AgentReady: func(context.Context) { h.ready.Add(1) },
+		AgentReady: func(context.Context) error { h.ready.Add(1); return nil },
 	}
 	h.supervisor.HoldAgentInputUntilWorkspaceReady()
 	go func() { h.done <- h.supervisor.Run(ctx) }()
@@ -255,6 +256,48 @@ func TestTerminalSessionStartsItsAgentOnceTheWorkspaceIsReady(t *testing.T) {
 	h.waitForAgentStarts(t, 1)
 	if h.supervisor.startupTaskWaiting() {
 		t.Fatal("the started agent's task still holds a drain")
+	}
+	// Reported on the loop, before the turn forwarder may claim a turn.
+	if got := h.ready.Load(); got != 1 {
+		t.Fatalf("agent.ready reported %d times, want 1", got)
+	}
+}
+
+// The control plane settles the prompt turn the terminal agent got on its
+// command line when it takes agent.ready. While it has not, the turn
+// forwarder claims no turn (it would type the task a second time); it sends
+// agent.ready again first.
+func TestTurnForwarderSendsAFailedAgentReadyBeforeItClaimsATurn(t *testing.T) {
+	control := &supervisorControlStub{agentTerminal: "00000000-0000-0000-0000-000000000063"}
+	var reports atomic.Int32
+	failing := atomic.Bool{}
+	failing.Store(true)
+	s := &Supervisor{
+		Control: control, Workspace: t.TempDir(),
+		terminals: make(map[string]*terminalProcess), iface: InterfaceTransition{current: InterfaceTUI},
+		AgentReady: func(context.Context) error {
+			reports.Add(1)
+			if failing.Load() {
+				return errors.New("control plane unavailable")
+			}
+			return nil
+		},
+	}
+	defer s.closeAllTerminals()
+	if err := s.StartAgent(context.Background(), workerexec.Command{Path: "/bin/sh", Args: []string{"-c", "sleep 30"}},
+		worker.AgentTerminalResponse{TerminalID: control.agentTerminal}); err != nil {
+		t.Fatal(err)
+	}
+	s.reportAgentReady(context.Background())
+	if _, err := s.forwardTurn(context.Background()); err == nil || control.claimTurnCalls != 0 {
+		t.Fatalf("forwardTurn = %v with %d claims, want an error and no claim", err, control.claimTurnCalls)
+	}
+	failing.Store(false)
+	if _, err := s.forwardTurn(context.Background()); err != nil || control.claimTurnCalls != 1 {
+		t.Fatalf("forwardTurn = %v with %d claims, want a claim", err, control.claimTurnCalls)
+	}
+	if _, err := s.forwardTurn(context.Background()); err != nil || reports.Load() != 3 {
+		t.Fatalf("agent.ready sent %d times, want 3 (the first, the failed retry, the retry)", reports.Load())
 	}
 }
 
