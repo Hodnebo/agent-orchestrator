@@ -611,6 +611,8 @@ func TestPutOrgCoderConfigRefusesNonAdminBeforeReadingTheToken(t *testing.T) {
 // Coder connection is refused when it is saved, for a connection that runs
 // the agent as ao-worker: its checkout would not survive a restart. The
 // workspace user keeps any folder (it adopts the template's own checkout).
+// With AO_CLOUD_CODER_WORKER_WORKING_FOLDER off an ao-worker session ignores
+// the working folder, so the folder is saved as it was before the flag.
 func TestUpdateProjectSettingsRefusesAWorkingFolderOutsideTheDurableRoot(t *testing.T) {
 	t.Parallel()
 	connection := func(t *testing.T, durableRoot, workerUser string) []domain.ProviderConnection {
@@ -635,26 +637,33 @@ func TestUpdateProjectSettingsRefusesAWorkingFolderOutsideTheDurableRoot(t *test
 		"absolute root, home path": {"/srv/dev", "", "~/work/{repo}", http.StatusOK, ""},
 		"workspace user":           {"$HOME", domain.CoderWorkerUserWorkspace, "/workspace/{repo}", http.StatusOK, ""},
 	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			store := &adminDevEnvStore{}
-			store.connections = connection(t, tc.durableRoot, tc.workerUser)
-			store.project = domain.Project{ID: devEnvProjectID, OrgID: coderCfgOrgID, Config: json.RawMessage(`{}`)}
-			srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
-			router := chi.NewRouter()
-			router.Patch("/orgs/{orgId}/projects/{projectId}/settings", srv.updateProjectSettings)
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
-				"/orgs/"+coderCfgOrgID+"/projects/"+devEnvProjectID+"/settings",
-				strings.NewReader(`{"config":{"workingDirectory":"`+tc.folder+`"}}`)))
-			if rec.Code != tc.status {
-				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+		for _, flag := range []bool{true, false} {
+			name, tc := name+", working folder flag on", tc
+			if !flag {
+				name, tc.status, tc.message = strings.TrimSuffix(name, "on")+"off", http.StatusOK, ""
 			}
-			if tc.message != "" && (!strings.Contains(rec.Body.String(), domain.CoderWorkingFolderNotDurableCode) ||
-				!strings.Contains(rec.Body.String(), tc.message)) {
-				t.Fatalf("body = %s, want %q", rec.Body.String(), tc.message)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := &adminDevEnvStore{}
+				store.connections = connection(t, tc.durableRoot, tc.workerUser)
+				store.project = domain.Project{ID: devEnvProjectID, OrgID: coderCfgOrgID, Config: json.RawMessage(`{}`)}
+				srv := newCoderTemplatesServer(t, newTestCipher(t), store, nil)
+				srv.provisioning.Coder.WorkerWorkingFolder = flag
+				router := chi.NewRouter()
+				router.Patch("/orgs/{orgId}/projects/{projectId}/settings", srv.updateProjectSettings)
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+					"/orgs/"+coderCfgOrgID+"/projects/"+devEnvProjectID+"/settings",
+					strings.NewReader(`{"config":{"workingDirectory":"`+tc.folder+`"}}`)))
+				if rec.Code != tc.status {
+					t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+				}
+				if tc.message != "" && (!strings.Contains(rec.Body.String(), domain.CoderWorkingFolderNotDurableCode) ||
+					!strings.Contains(rec.Body.String(), tc.message)) {
+					t.Fatalf("body = %s, want %q", rec.Body.String(), tc.message)
+				}
+			})
+		}
 	}
 }
 

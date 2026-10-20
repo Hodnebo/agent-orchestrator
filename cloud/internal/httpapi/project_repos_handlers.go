@@ -241,9 +241,14 @@ func (s *Server) prepareGitHubProjectRepos(
 // sessions run as the dedicated ao-worker user: the agent's checkout there
 // would not survive a workspace restart (domain.CoderWorkingFolderOutsideDurableRoot).
 // Without such a connection the durable root is not known here, and the
-// session's startup checks the folder instead. It reports whether the request
-// may continue and writes the error when not.
+// session's startup checks the folder instead. With
+// AO_CLOUD_CODER_WORKER_WORKING_FOLDER off an ao-worker session ignores the
+// working folder, so nothing is checked. It reports whether the request may
+// continue and writes the error when not.
 func (s *Server) validatePatchedWorkingFolder(w http.ResponseWriter, r *http.Request, orgID string, patch json.RawMessage) bool {
+	if !s.provisioning.Coder.WorkerWorkingFolder {
+		return true
+	}
 	var keys struct {
 		WorkingDirectory *string `json:"workingDirectory"`
 	}
