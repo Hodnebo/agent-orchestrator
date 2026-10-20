@@ -1,8 +1,6 @@
 package httpd
 
 import (
-	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -236,13 +234,10 @@ func setupRoute(req *http.Request) bool {
 // middleware.Timeout, except that the operation may extend the deadline
 // (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
 func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Request, budget time.Duration) {
-	ctx, cancel := context.WithCancelCause(req.Context())
-	defer cancel(nil)
-	timer := time.AfterFunc(budget, func() { cancel(context.DeadlineExceeded) })
-	defer timer.Stop()
-	extend := func(total time.Duration) { timer.Reset(total) }
-	next.ServeHTTP(w, req.WithContext(ports.WithSpawnRequestBudget(ctx, budget, extend)))
-	if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+	ctx, timedOut, release := ports.NewSpawnRequestContext(req.Context(), budget)
+	defer release()
+	next.ServeHTTP(w, req.WithContext(ctx))
+	if timedOut() {
 		w.WriteHeader(http.StatusGatewayTimeout)
 	}
 }
