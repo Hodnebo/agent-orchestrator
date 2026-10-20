@@ -2889,7 +2889,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "Es ließ sich nicht bestätigen, dass der Agent fertig ist, daher wurde der Wechsel abgebrochen. Wechsle erneut, um den aktuellen Durchgang zu stoppen und sofort zu wechseln.",
 	"session.interfaceStartFallbackTitle": "Im Terminal gestartet",
 	"session.interfaceStartFallbackAdapter": "Chat für Claude benötigt den Claude ACP-Adapter, den dieser Workspace noch nicht hat.",
-	"session.interfaceStartFallbackUnsupported": "Der AO-Worker in diesem Workspace kann Sitzungen nicht im Chat starten. Du kannst diese Sitzung zu Chat wechseln.",
+	"session.interfaceStartFallbackUnsupported": "Der AO-Worker in diesem Workspace ist eine ältere Version und kann Chat für Claude nicht einrichten. Du kannst diese Sitzung zu Chat wechseln.",
 	"session.dismissInterfaceNotice": "Meldung zum Oberflächenwechsel schließen",
 	"session.dismissInterfaceNoticeFailed": "Diese Meldung konnte nicht geschlossen werden. Versuche es erneut.",
 	"chat.draft.acceptedMessage": "Der Inhalt wurde angenommen, aber der lokale Entwurf muss noch gelöscht werden.",

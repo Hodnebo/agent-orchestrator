@@ -2889,7 +2889,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "エージェントの完了を確認できなかったため、切り替えを取り消しました。もう一度切り替えると、現在のターンを停止してすぐに切り替えます。",
 	"session.interfaceStartFallbackTitle": "ターミナルで開始しました",
 	"session.interfaceStartFallbackAdapter": "Claude の Chat には Claude ACP アダプターが必要ですが、このワークスペースにはまだありません。",
-	"session.interfaceStartFallbackUnsupported": "このワークスペースの AO ワーカーは Chat でセッションを開始できません。このセッションは Chat に切り替えられます。",
+	"session.interfaceStartFallbackUnsupported": "このワークスペースの AO ワーカーは古いバージョンのため、Claude の Chat を準備できません。このセッションは Chat に切り替えられます。",
 	"session.dismissInterfaceNotice": "インターフェース切り替えのメッセージを閉じる",
 	"session.dismissInterfaceNoticeFailed": "このメッセージを閉じられませんでした。もう一度お試しください。",
 	"chat.draft.acceptedMessage": "内容は受け付けられましたが、ローカルの下書きをまだ削除する必要があります。",

@@ -487,7 +487,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 describe("a Cloud session that started in the terminal", () => {
 	it.each([
 		["CHAT_ADAPTER_UNAVAILABLE", "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet."],
-		["CHAT_START_UNSUPPORTED", "The AO worker in this workspace can't start sessions in Chat. You can switch this session to Chat."],
+		["CHAT_START_UNSUPPORTED", "The AO worker in this workspace is an older version that can't set up Chat for Claude. You can switch this session to Chat."],
 	])("reads as information, not a failed switch (%s)", (errorCode, message) => {
 		const onDismiss = vi.fn();
 		render(

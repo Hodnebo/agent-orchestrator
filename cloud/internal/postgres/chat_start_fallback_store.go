@@ -101,20 +101,7 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 		return false, err
 	}
 	if prompt != "" {
-		// The create recorded the prompt as the session's first user message
-		// and queued it; nothing has claimed it while no Chat controller ran.
-		if _, err := tx.Exec(ctx,
-			`UPDATE ao_turns turn
-			SET state = 'completed', completed_at = now(), updated_at = now()
-			WHERE turn.org_id = $1 AND turn.session_id = $2
-			  AND turn.state = 'queued' AND turn.attempt_count = 0
-			  AND turn.user_message_sequence = (
-				SELECT min(event.sequence) FROM ao_events event
-				WHERE event.org_id = $1 AND event.session_id = $2
-				  AND event.type = 'chat.user_message'
-			  )`,
-			orgID, sessionID,
-		); err != nil {
+		if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
 			return false, err
 		}
 	}
@@ -128,4 +115,36 @@ func fallBackChatStartTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, code,
 		return false, normalizeConstraintError(err)
 	}
 	return true, nil
+}
+
+// settleUnclaimedPromptTurn settles the turn a session created in Chat queued
+// for its prompt, while no Chat controller has claimed any turn. The session
+// is moving to the TUI, whose agent receives the prompt on its command line
+// (WorkerLaunchSpec keeps it until a turn is claimed); left queued, the
+// terminal's turn forwarder would type the same task into it again. A session
+// whose Chat claimed a turn launches without the prompt, so its queued turns
+// stay for the forwarder.
+func settleUnclaimedPromptTurn(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	// The create records the prompt as the session's first user message.
+	_, err := tx.Exec(ctx,
+		`UPDATE ao_turns turn
+		SET state = 'completed', completed_at = now(), updated_at = now()
+		WHERE turn.org_id = $1 AND turn.session_id = $2
+		  AND turn.state = 'queued' AND turn.attempt_count = 0
+		  AND EXISTS (
+			SELECT 1 FROM ao_sessions session
+			WHERE session.org_id = $1 AND session.id = $2 AND session.prompt <> ''
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM ao_turns claimed
+			WHERE claimed.org_id = $1 AND claimed.session_id = $2 AND claimed.attempt_count > 0
+		  )
+		  AND turn.user_message_sequence = (
+			SELECT min(event.sequence) FROM ao_events event
+			WHERE event.org_id = $1 AND event.session_id = $2
+			  AND event.type = 'chat.user_message'
+		  )`,
+		orgID, sessionID,
+	)
+	return err
 }

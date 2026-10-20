@@ -28,6 +28,13 @@ func TestStartInterfaceMatchesTheSharedCases(t *testing.T) {
 			Default   string `json:"default"`
 			Want      string `json:"want"`
 		} `json:"cases"`
+		WithoutDefault struct {
+			Cloud []struct {
+				Kind      string `json:"kind"`
+				Requested string `json:"requested"`
+				Want      string `json:"want"`
+			} `json:"cloud"`
+		} `json:"withoutDefault"`
 	}
 	if err := json.Unmarshal(raw, &fixture); err != nil {
 		t.Fatal(err)
@@ -40,6 +47,17 @@ func TestStartInterfaceMatchesTheSharedCases(t *testing.T) {
 		got := StartInterface(tc.Kind, SessionInterface(tc.Requested), SessionInterface(tc.Default), "claude-code")
 		if string(got) != tc.Want {
 			t.Errorf("StartInterface(%s, requested %q, default %q) = %q, want %q", tc.Kind, tc.Requested, tc.Default, got, tc.Want)
+		}
+	}
+	// A create without a default (an older desktop) starts in the TUI unless
+	// it asked for Chat, an orchestrator too.
+	if len(fixture.WithoutDefault.Cloud) == 0 {
+		t.Fatal("no cloud cases without a default")
+	}
+	for _, tc := range fixture.WithoutDefault.Cloud {
+		got := StartInterface(tc.Kind, SessionInterface(tc.Requested), "", "claude-code")
+		if string(got) != tc.Want {
+			t.Errorf("StartInterface(%s, requested %q, no default) = %q, want %q", tc.Kind, tc.Requested, got, tc.Want)
 		}
 	}
 }

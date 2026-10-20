@@ -1210,7 +1210,7 @@ describe("TaskComposer", () => {
 		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ defaultInterfaceMode: "chat" }));
 	});
 
-	it("starts a cloud task in the terminal without asking when that is the default", async () => {
+	it("sends the terminal default with a cloud task when that is the default", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 		const onCreated = vi.fn();
@@ -1221,7 +1221,7 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
+		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ defaultInterfaceMode: "tui" }));
 	});
 
 	it("leaves the sandbox provider to the project and org default on the control plane", async () => {

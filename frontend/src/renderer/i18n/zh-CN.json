@@ -2871,7 +2871,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "无法确认智能体已完成，因此已取消切换。再次切换即可停止当前轮次并立即切换。",
 	"session.interfaceStartFallbackTitle": "已在终端中启动",
 	"session.interfaceStartFallbackAdapter": "Claude 的 Chat 需要 Claude ACP 适配器，而此工作区尚未安装。",
-	"session.interfaceStartFallbackUnsupported": "此工作区中的 AO worker 无法在 Chat 中启动会话。你可以将此会话切换到 Chat。",
+	"session.interfaceStartFallbackUnsupported": "此工作区中的 AO worker 版本较旧，无法为 Claude 设置 Chat。你可以将此会话切换到 Chat。",
 	"session.dismissInterfaceNotice": "关闭界面切换消息",
 	"session.dismissInterfaceNoticeFailed": "无法关闭此消息。请重试。",
 	"chat.draft.acceptedMessage": "内容已被接受，但仍需清除本地草稿。",

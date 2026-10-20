@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -161,5 +162,32 @@ func TestWithoutPromptChatRan(t *testing.T) {
 	}
 	if got := withoutPromptChatRan(launch, claimedChatRunner(true)).Prompt; got != "" {
 		t.Fatalf("after a Chat turn: prompt = %q, want none", got)
+	}
+}
+
+// A session whose checkout or Setup failed opened its Chat controller with
+// the startup error set (claiming nothing). After a successful retry the
+// adapter wait and fallback run before the error clears, so the task waits for
+// them as on a start that succeeded first time; that start opens the
+// controller only after them.
+func TestStartChatOnceWorkspaceReadySettlesBeforeTheControllerTakesTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		chatOpened bool
+		want       []string
+	}{
+		{"first start succeeded", false, []string{"settle", "open"}},
+		{"retry after a failed start", true, []string{"settle", "clear"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			startChatOnceWorkspaceReady(tc.chatOpened,
+				func() { calls = append(calls, "settle") },
+				func() { calls = append(calls, "clear") },
+				func() { calls = append(calls, "open") })
+			if !reflect.DeepEqual(calls, tc.want) {
+				t.Fatalf("calls = %v, want %v", calls, tc.want)
+			}
+		})
 	}
 }

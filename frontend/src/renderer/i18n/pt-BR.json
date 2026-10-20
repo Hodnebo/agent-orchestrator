@@ -2931,7 +2931,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "Não foi possível confirmar que o agente terminou, então a troca foi cancelada. Troque novamente para interromper o turno atual e trocar agora.",
 	"session.interfaceStartFallbackTitle": "Iniciado no terminal",
 	"session.interfaceStartFallbackAdapter": "O Chat para Claude precisa do adaptador Claude ACP, que este workspace ainda não tem.",
-	"session.interfaceStartFallbackUnsupported": "O worker do AO neste workspace não consegue iniciar sessões no Chat. Você pode trocar esta sessão para o Chat.",
+	"session.interfaceStartFallbackUnsupported": "O worker do AO neste workspace é uma versão antiga que não consegue preparar o Chat para o Claude. Você pode trocar esta sessão para o Chat.",
 	"session.dismissInterfaceNotice": "Dispensar a mensagem de troca de interface",
 	"session.dismissInterfaceNoticeFailed": "Não foi possível dispensar esta mensagem. Tente novamente.",
 	"chat.draft.acceptedMessage": "O conteúdo foi aceito, mas seu rascunho local ainda precisa ser apagado.",

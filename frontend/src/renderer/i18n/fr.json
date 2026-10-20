@@ -2931,7 +2931,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "Impossible de confirmer que l’agent a terminé, le changement a donc été annulé. Relancez le changement pour arrêter le tour en cours et basculer maintenant.",
 	"session.interfaceStartFallbackTitle": "Démarré dans le terminal",
 	"session.interfaceStartFallbackAdapter": "Chat pour Claude nécessite l’adaptateur Claude ACP, que cet espace de travail n’a pas encore.",
-	"session.interfaceStartFallbackUnsupported": "Le worker AO de cet espace de travail ne peut pas démarrer de sessions dans Chat. Vous pouvez basculer cette session vers Chat.",
+	"session.interfaceStartFallbackUnsupported": "Le worker AO de cet espace de travail est une ancienne version qui ne peut pas préparer Chat pour Claude. Vous pouvez basculer cette session vers Chat.",
 	"session.dismissInterfaceNotice": "Fermer le message de changement d’interface",
 	"session.dismissInterfaceNoticeFailed": "Impossible de fermer ce message. Réessayez.",
 	"chat.draft.acceptedMessage": "Le contenu a été accepté, mais son brouillon local doit encore être effacé.",

@@ -2877,7 +2877,7 @@
 	"session.interfaceSwitchDrainUnconfirmed": "Couldn't confirm the agent finished, so the switch was cancelled. Switch again to stop the current turn and switch now.",
 	"session.interfaceStartFallbackTitle": "Started in the terminal",
 	"session.interfaceStartFallbackAdapter": "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet.",
-	"session.interfaceStartFallbackUnsupported": "The AO worker in this workspace can't start sessions in Chat. You can switch this session to Chat.",
+	"session.interfaceStartFallbackUnsupported": "The AO worker in this workspace is an older version that can't set up Chat for Claude. You can switch this session to Chat.",
 	"session.dismissInterfaceNotice": "Dismiss interface switch message",
 	"session.dismissInterfaceNoticeFailed": "Could not dismiss this message. Try again.",
 	"report.subtitle": "Found an issue? Tell us what happened.",

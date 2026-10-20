@@ -36,9 +36,10 @@ func initialTurn(t *testing.T, admin *pgxpool.Pool, sessionID string) (state str
 	return state, true, payload["turnId"] == turnID
 }
 
-// A session's interface is resolved at create exactly as a local spawn's: an
+// A session's interface is resolved at create as a local spawn's: an
 // orchestrator starts in Chat, a worker in the default it was created with,
-// and Chat only for a harness that can start in it. A Chat session's prompt is
+// and Chat only for a harness that can start in it. A create without a default
+// (an older desktop) starts in the TUI, an orchestrator too. A Chat session's prompt is
 // queued as the first turn, the only work the Chat controller takes; a TUI
 // session keeps the prompt on the agent's command line and queues nothing.
 func TestCreateSessionStartInterface(t *testing.T) {
@@ -75,7 +76,8 @@ func TestCreateSessionStartInterface(t *testing.T) {
 		{"cursor worker, chat default", "worker", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
 		{"worker, tui default", "worker", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceTUI},
 		{"worker, no default", "worker", "claude-code", "", domain.SessionInterfaceTUI},
-		{"codex orchestrator, no default", "orchestrator", "codex", "", domain.SessionInterfaceChat},
+		{"codex orchestrator, no default", "orchestrator", "codex", "", domain.SessionInterfaceTUI},
+		{"codex orchestrator, tui default", "orchestrator", "codex", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
 		{"claude orchestrator, tui default", "orchestrator", "claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
 		{"cursor orchestrator", "orchestrator", "cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
 	} {
@@ -269,7 +271,7 @@ func TestFallBackChatStart(t *testing.T) {
 }
 
 // A session created in Chat whose Chat already ran stays in Chat when a later
-// worker (a restart, a reconnect without the chat-start capability, or an
+// worker (a restart, a bootstrap without the chat-start capability, or an
 // adapter install blip) asks to move it: its first turn was claimed or
 // settled, or the agent reported its conversation. Moving it would show a
 // false notice and run its first task again in the terminal.
@@ -421,8 +423,9 @@ func TestWorkerLaunchSpecDropsThePromptOnceChatClaimedATurn(t *testing.T) {
 }
 
 // A scratch project's first orchestrator resolves its interface like any
-// orchestrator (Chat where its harness can start there) and keeps the user's
-// default for the workers it spawns. Without a default the create's payload
+// orchestrator (with a default, Chat where its harness can start there;
+// without one, the TUI) and keeps the user's default for the workers it
+// spawns. Without a default the create's payload
 // carries none (TestLegacyProjectCreateRetriesSurviveConfigNormalization
 // replays a scratch create made before the field).
 func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
@@ -442,7 +445,8 @@ func TestCreateGitHubScratchProjectOrchestratorInterface(t *testing.T) {
 		want             domain.SessionInterface
 	}{
 		{"codex", domain.SessionInterfaceChat, domain.SessionInterfaceChat},
-		{"claude-code", "", domain.SessionInterfaceChat},
+		{"claude-code", "", domain.SessionInterfaceTUI},
+		{"claude-code", domain.SessionInterfaceTUI, domain.SessionInterfaceChat},
 		{"cursor", domain.SessionInterfaceChat, domain.SessionInterfaceTUI},
 	} {
 		repositoryID := time.Now().UnixNano() + int64(index)

@@ -106,8 +106,9 @@ type createSessionRequest struct {
 	Provider string `json:"provider,omitempty"`
 	// DefaultInterfaceMode is the user's default session interface ("tui" or
 	// "chat"), the desktop's setting, which the control plane resolves the
-	// session's interface from exactly as the local daemon does
-	// (domain.StartInterface). Optional: empty is the TUI default.
+	// session's interface from as the local daemon does
+	// (domain.StartInterface). A current desktop always sends it; a create
+	// without it (an older desktop) starts in the TUI, an orchestrator too.
 	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 

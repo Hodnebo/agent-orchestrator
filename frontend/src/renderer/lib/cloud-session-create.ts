@@ -6,14 +6,15 @@ import type { Settings } from "../hooks/useSettings";
  * The default session interface a new cloud session is created with: the
  * daemon-owned "Default session interface" (Settings > General), which local
  * spawns resolve from too. The control plane resolves the session's interface
- * from it exactly as the local daemon does, per kind and harness, so the
- * desktop keeps no rule or harness list of its own. "tui" is not sent, which
- * keeps the request an older desktop sent.
+ * from it as the local daemon does, per kind and harness, so the desktop keeps
+ * no rule or harness list of its own. It is always sent, "tui" included: the
+ * control plane starts a create without it (an older desktop's) in the
+ * terminal, an orchestrator too.
  */
 export function cloudDefaultInterfaceMode(
 	settings: Pick<Settings, "defaultSessionMode"> | undefined,
-): CloudCpInterfaceMode | undefined {
-	return settings?.defaultSessionMode === "chat" ? "chat" : undefined;
+): CloudCpInterfaceMode {
+	return settings?.defaultSessionMode === "chat" ? "chat" : "tui";
 }
 
 /**

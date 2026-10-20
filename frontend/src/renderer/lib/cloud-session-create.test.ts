@@ -12,10 +12,12 @@ const body: CloudCpCreateSessionRequest = {
 };
 
 describe("cloudDefaultInterfaceMode", () => {
-	it("asks for Chat only when the default session interface is Chat", () => {
+	// The control plane starts an orchestrator created without a default in
+	// the terminal, as an older desktop expects, so "tui" is sent too.
+	it("always sends the default session interface", () => {
 		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "chat" })).toBe("chat");
-		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "tui" })).toBeUndefined();
-		expect(cloudDefaultInterfaceMode(undefined)).toBeUndefined();
+		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "tui" })).toBe("tui");
+		expect(cloudDefaultInterfaceMode(undefined)).toBe("tui");
 	});
 });
 
@@ -34,11 +36,12 @@ describe("createCloudSession", () => {
 		expect(createSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
 
-	it("retries without the field on a control plane that rejects it", async () => {
+	it.each(["chat", "tui"] as const)("retries a %s default without the field on a control plane that rejects it", async (mode) => {
 		const createSession = vi.fn()
 			.mockRejectedValueOnce(new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" }))
 			.mockResolvedValueOnce({ session: { id: "s1" } });
-		await expect(createCloudSession({ createSession }, "org-1", body, "chat")).resolves.toEqual({ session: { id: "s1" } });
+		await expect(createCloudSession({ createSession }, "org-1", body, mode)).resolves.toEqual({ session: { id: "s1" } });
+		expect(createSession).toHaveBeenNthCalledWith(1, "org-1", { ...body, defaultInterfaceMode: mode });
 		expect(createSession).toHaveBeenNthCalledWith(2, "org-1", body);
 	});
 

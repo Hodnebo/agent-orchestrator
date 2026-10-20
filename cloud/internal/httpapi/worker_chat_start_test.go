@@ -55,37 +55,97 @@ func reconnectLaunch(t *testing.T, srv *Server, capabilities string) worker.Laun
 	return resp.Launch
 }
 
-// A worker that does not report it can start in Chat gets a session created
-// in Chat moved to the TUI first, so it never strands one waiting on a Chat
-// controller it will not run. A worker that reports it gets Chat.
-func TestWorkerLaunchMovesChatOffAWorkerThatCannotStartIt(t *testing.T) {
-	chatLaunch := domain.WorkerLaunch{SessionID: testOrchestratorID, Kind: "worker", Harness: "codex", Interface: domain.SessionInterfaceChat}
+// bootstrapChatStartStore serves a bootstrap and records Chat-start
+// fallbacks.
+type bootstrapChatStartStore struct {
+	installedCleanupStore
+	moved bool
+	calls int
+	code  string
+}
 
-	older := &chatStartStore{reconnectStore: reconnectStore{launch: chatLaunch}, moved: true}
-	if launch := reconnectLaunch(t, testServer(older), worker.CapabilityMultiRepo); launch.Interface != "tui" {
-		t.Fatalf("older worker launch interface = %q, want tui", launch.Interface)
+func (s *bootstrapChatStartStore) FallBackChatStart(_ context.Context, _, _, code, _ string) (bool, error) {
+	s.calls++
+	s.code = code
+	return s.moved, nil
+}
+
+func (s *bootstrapChatStartStore) WorkerFallBackChatStart(context.Context, string, string, string, int64, string, string) (bool, error) {
+	return false, nil
+}
+
+func bootstrapLaunch(t *testing.T, store *bootstrapChatStartStore, capabilities ...string) worker.LaunchContext {
+	t.Helper()
+	srv := testServer(store)
+	srv.workerTokens = worker.NewTokenManager([]byte(strings.Repeat("k", 32)))
+	body, err := json.Marshal(worker.BootstrapRequest{BootstrapToken: "ticket", Capabilities: capabilities})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if older.calls != 1 || older.code != worker.ChatStartUnsupported || older.detail == "" {
-		t.Fatalf("fallback calls=%d code=%q detail=%q", older.calls, older.code, older.detail)
+	w := httptest.NewRecorder()
+	srv.workerBootstrap(w, httptest.NewRequest(http.MethodPost, "/worker/bootstrap", strings.NewReader(string(body))))
+	if w.Code != http.StatusOK {
+		t.Fatalf("bootstrap status = %d; body = %s", w.Code, w.Body)
+	}
+	var resp worker.BootstrapResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp.Launch
+}
+
+// A bootstrapping worker that does not report it can start in Chat gets a
+// Claude session created in Chat moved to the TUI first: it would start in
+// Chat without setting up the Claude ACP adapter. A worker that reports it
+// gets Chat, and so does a Codex session, which such a worker runs in Chat.
+func TestWorkerBootstrapMovesClaudeChatOffAWorkerThatCannotStartIt(t *testing.T) {
+	launch := func(harness string, iface domain.SessionInterface) domain.WorkerLaunch {
+		return domain.WorkerLaunch{SessionID: testOrchestratorID, Kind: "worker", Harness: harness, Interface: iface}
+	}
+
+	older := &bootstrapChatStartStore{installedCleanupStore: installedCleanupStore{launch: launch("claude-code", domain.SessionInterfaceChat)}, moved: true}
+	if got := bootstrapLaunch(t, older, worker.CapabilityMultiRepo); got.Interface != "tui" {
+		t.Fatalf("older worker launch interface = %q, want tui", got.Interface)
+	}
+	if older.calls != 1 || older.code != worker.ChatStartUnsupported {
+		t.Fatalf("fallback calls=%d code=%q", older.calls, older.code)
 	}
 
 	// A session the person switched to Chat does not move, and keeps Chat.
-	switched := &chatStartStore{reconnectStore: reconnectStore{launch: chatLaunch}}
-	if launch := reconnectLaunch(t, testServer(switched), ""); launch.Interface != "chat" {
-		t.Fatalf("switched session launch interface = %q, want chat", launch.Interface)
+	switched := &bootstrapChatStartStore{installedCleanupStore: installedCleanupStore{launch: launch("claude-code", domain.SessionInterfaceChat)}}
+	if got := bootstrapLaunch(t, switched); got.Interface != "chat" {
+		t.Fatalf("switched session launch interface = %q, want chat", got.Interface)
 	}
 
-	current := &chatStartStore{reconnectStore: reconnectStore{launch: chatLaunch}, moved: true}
-	if launch := reconnectLaunch(t, testServer(current), worker.CapabilityMultiRepo+","+worker.CapabilityChatStart); launch.Interface != "chat" {
-		t.Fatalf("current worker launch interface = %q, want chat", launch.Interface)
-	}
-	if current.calls != 0 {
-		t.Fatal("a worker that can start in Chat was moved off it")
+	current := &bootstrapChatStartStore{installedCleanupStore: installedCleanupStore{launch: launch("claude-code", domain.SessionInterfaceChat)}, moved: true}
+	if got := bootstrapLaunch(t, current, worker.CapabilityMultiRepo, worker.CapabilityChatStart); got.Interface != "chat" || current.calls != 0 {
+		t.Fatalf("current worker launch interface = %q after %d fallbacks, want chat and none", got.Interface, current.calls)
 	}
 
-	tui := &chatStartStore{reconnectStore: reconnectStore{launch: domain.WorkerLaunch{SessionID: testOrchestratorID, Harness: "codex", Interface: domain.SessionInterfaceTUI}}}
-	if reconnectLaunch(t, testServer(tui), ""); tui.calls != 0 {
+	codex := &bootstrapChatStartStore{installedCleanupStore: installedCleanupStore{launch: launch("codex", domain.SessionInterfaceChat)}, moved: true}
+	if got := bootstrapLaunch(t, codex); got.Interface != "chat" || codex.calls != 0 {
+		t.Fatalf("codex launch interface = %q after %d fallbacks, want chat and none", got.Interface, codex.calls)
+	}
+
+	tui := &bootstrapChatStartStore{installedCleanupStore: installedCleanupStore{launch: launch("claude-code", domain.SessionInterfaceTUI)}}
+	if bootstrapLaunch(t, tui); tui.calls != 0 {
 		t.Fatal("a TUI session asked to move")
+	}
+}
+
+// A reconnecting worker may be live (a reopened session refreshing its
+// scripts after a Setup retry) and keeps the interface it started in, so the
+// session is not moved: moving it would settle a first turn the worker, still
+// in Chat, then never runs.
+func TestWorkerReconnectLeavesAChatSessionsInterface(t *testing.T) {
+	store := &chatStartStore{reconnectStore: reconnectStore{launch: domain.WorkerLaunch{
+		SessionID: testOrchestratorID, Kind: "worker", Harness: "claude-code", Interface: domain.SessionInterfaceChat,
+	}}, moved: true}
+	if launch := reconnectLaunch(t, testServer(store), worker.CapabilityMultiRepo); launch.Interface != "chat" {
+		t.Fatalf("reconnect launch interface = %q, want chat", launch.Interface)
+	}
+	if store.calls != 0 {
+		t.Fatalf("reconnect asked to move the session %d times", store.calls)
 	}
 }
 

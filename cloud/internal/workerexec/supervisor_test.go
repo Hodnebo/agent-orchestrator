@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,50 @@ func TestExecuteFailsQueuedChatTurnWhenWorkspaceCheckoutFailed(t *testing.T) {
 	supervisor.SetWorkspaceStartupError("")
 	if supervisor.workspaceStartupError.Load() != nil {
 		t.Fatal("checkout recovery must clear the startup failure before new turns")
+	}
+}
+
+// countingClaims counts the controller's claims and hands out no turn.
+type countingClaims struct {
+	controlStub
+	claims atomic.Int32
+}
+
+func (c *countingClaims) ClaimTurn(context.Context) (*worker.Turn, error) {
+	c.claims.Add(1)
+	return nil, nil
+}
+
+// A Chat controller opened over a failed checkout or Setup claims no turn
+// until the workspace recovers: a claimed turn would fail for good, so a new
+// session's task would never run after the person fixes Setup and reopens it.
+func TestRunClaimsNoTurnWhileTheWorkspaceStartupFailed(t *testing.T) {
+	control := &countingClaims{}
+	supervisor := &Supervisor{
+		Control: control, Builder: builderStub{}, Runner: runnerStub{}, Workspace: t.TempDir(),
+		PollInterval: time.Millisecond,
+	}
+	supervisor.SetWorkspaceStartupError("Setup failed: exit status 1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	if claims := control.claims.Load(); claims != 0 {
+		cancel()
+		<-done
+		t.Fatalf("claimed %d turns while the workspace startup failed, want none", claims)
+	}
+	supervisor.SetWorkspaceStartupError("")
+	deadline := time.Now().Add(5 * time.Second)
+	for control.claims.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if control.claims.Load() == 0 {
+		t.Fatal("no claim after the workspace recovered")
 	}
 }
 

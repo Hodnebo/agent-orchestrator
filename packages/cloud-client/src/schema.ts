@@ -2084,7 +2084,7 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude-code" | "codex" | "cursor";
                 prompt?: string;
-                /** @description The user's default session interface, as on a session create. The orchestrator starts in chat where its harness can, and the workers it spawns resolve their interface from this default. Optional; omitted is tui. */
+                /** @description The user's default session interface, as on a session create. With it the orchestrator starts in chat where its harness can; omitted, it starts in tui. The workers it spawns resolve their interface from the default stored here when the orchestrator is created, not from the user's current default. */
                 defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
             };
         };
@@ -2737,7 +2737,7 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
-            /** @description The user's default session interface. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness the control plane starts in Chat (any other starts in tui without an error). An orchestrator's workers resolve from the default it was created with. Optional; omitted is tui. */
+            /** @description The user's default session interface. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness the control plane starts in Chat (any other starts in tui without an error). Optional, but a current desktop always sends it, tui included; a create without it (from a desktop that predates the field) starts in tui unless it requests chat, an orchestrator too. An orchestrator's workers resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
         UpdateSessionPreferencesInput: {
