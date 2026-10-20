@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toggleModelFavorite } from "../../lib/model-favorites";
+import { useUiStore } from "../../stores/ui-store";
 import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
 
 const unavailableGet = vi.hoisted(() => vi.fn());
@@ -54,6 +55,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 
 describe("AgentModelPicker", () => {
 	beforeEach(() => {
+		useUiStore.setState({ developerMode: true });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		window.localStorage.clear();
 	});
@@ -187,5 +189,14 @@ describe("AgentModelPicker", () => {
 		expect(deepseek).toHaveAttribute("title", expect.stringContaining("exits in a terminal"));
 		fireEvent.click(deepseek);
 		expect(onPendingChange).not.toHaveBeenCalled();
+	});
+
+	it("offers no other agent outside Developer Mode", async () => {
+		useUiStore.setState({ developerMode: false });
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.queryByRole("menuitem", { name: /Agent.*Claude Code/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Model.*Opus/ })).toBeInTheDocument();
 	});
 });

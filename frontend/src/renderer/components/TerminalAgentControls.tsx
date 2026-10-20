@@ -38,8 +38,10 @@ export function TerminalSessionMenu({
 	const [pending, setPending] = useState<PendingAgentSwitch>();
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	// Agent switching ships behind Developer Mode for its first week.
+	const switching = useUiStore((state) => state.developerMode);
 	const agentSwitch = { projectId: session.workspaceId, hostId, pending, onPendingChange: setPending };
-	if (!switchAction && switchControl) return <div className="inline-flex shrink-0 items-center">{switchControl}</div>;
+	if (!switchAction && (switchControl || !switching)) return switchControl ? <div className="inline-flex shrink-0 items-center">{switchControl}</div> : null;
 	const switchNow = () => {
 		if (!pending) return;
 		const { harness: targetHarness, model, fastMode, ultracode, autoCompactWindow } = pending;
@@ -83,7 +85,7 @@ export function TerminalSessionMenu({
 				</TopbarButton>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
-				<AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} />
+				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}
 				{switchAction ? (
 					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>
 						<RoundedInterfaceIcon target="chat" className="size-icon-lg" />
