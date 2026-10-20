@@ -15,6 +15,7 @@ const cloudMocks = vi.hoisted(() => ({
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	resumeSession: vi.fn(),
+	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
@@ -235,6 +236,137 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("shows a failed Setup the way a failed local Chat start does, and Retry asks the worker again", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.requestWorkspaceCheckout.mockResolvedValue({});
+		const startupError = { code: "project_setup_failed", message: "Setup step 1 failed: exit status 1.", detail: "could not reach registry", at: "2026-10-20T10:00:00Z" };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props().session).toMatchObject({
+			provisionState: "failed",
+			provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "running" }, { id: "agent", status: "pending" }],
+			provisionError: "Setup step 1 failed: exit status 1. Output: could not reach registry",
+		});
+		// No agent runs until a retry prepares the workspace, so the composer waits as local's does.
+		expect(props().snapshot.controller.state).toBe("stopped");
+		expect(props().settingsReady).toBe(false);
+		act(() => props().onResumeAgent());
+		await waitFor(() => expect(cloudMocks.requestWorkspaceCheckout).toHaveBeenCalledWith("org-1", session.id));
+		await waitFor(() => expect(props().session.provisionState).toBe("provisioning"));
+		expect(props().snapshot.controller.state).not.toBe("stopped");
+	});
+
+	it("keeps the first prompt queued under a failed Setup's checklist, and Retry waits for a waking worker", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+			const failedRun: CloudCpClientEvent = {
+				sessionId: session.id, sequence: 2, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+				payload: { phase: "setup", runId: "run-1", step: 1, total: 1, status: "failed", exitCode: 1, command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+			};
+			const startupError = { code: "project_setup_failed", message: "The project's Setup script failed at step 1 (exit status 1).", at: "2026-10-20T16:02:02Z" };
+			const failedSession = { ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } };
+			// Nothing works on the prompt until a retry passes, as while Setup runs.
+			expect(toSnapshot(failedSession, [prompt, failedRun]).turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]);
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, failedRun], hasMore: false, nextAfter: 2 });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+			// An idle-paused workspace refuses the request until its worker is back.
+			cloudMocks.requestWorkspaceCheckout.mockReset()
+				.mockRejectedValueOnce(new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" }))
+				.mockResolvedValueOnce({});
+			cloudMocks.chatProps.mockClear();
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudSessionChatSurface session={failedSession} />
+				</QueryClientProvider>,
+			);
+			const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+			await waitFor(() => expect(props().snapshot.turns).toEqual([expect.objectContaining({ id: "turn-1", state: "queued" })]));
+			// The checklist reports the failure, so the failed run is not also a row.
+			expect(props().snapshot.items.filter((item: { detail?: { event?: string } }) => item.detail?.event === "workspace.script.run")).toEqual([]);
+			expect(props().session).toMatchObject({ provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "running" }, { id: "agent", status: "pending" }] });
+			act(() => props().onResumeAgent());
+			await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+			await waitFor(() => expect(cloudMocks.requestWorkspaceCheckout).toHaveBeenCalledTimes(2));
+			await waitFor(() => expect(props().session.provisionState).toBe("provisioning"));
+			expect(props().resumeError).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps only the Setup run that passed once a retry recovers, from step events too", async () => {
+		const run = (sequence: number, runId: string, status: string): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "workspace.script.step", createdAt: "2026-10-20T16:02:01Z",
+			payload: { phase: "setup", runId, step: 1, total: 1, status, ...(status === "running" ? {} : { exitCode: status === "succeeded" ? 0 : 1, durationMs: 10 }), command: "./setup.sh", repository: "", startedAt: "2026-10-20T16:02:01Z" },
+		});
+		const prompt: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Run", turnId: "turn-1" }, createdAt: "2026-10-20T16:01:57Z" };
+		const runs = (items: { kind: string; detail?: { event?: string; scriptRun?: { runId: string } } }[]) =>
+			items.filter((item) => item.detail?.event === "workspace.script.run").map((item) => item.detail?.scriptRun?.runId);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [prompt, run(2, "run-1", "failed"), run(3, "run-2", "succeeded")], hasMore: false, nextAfter: 3 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(runs(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items ?? [])).toEqual(["run-2"]));
+		// The start Setup that passed still leads the first prompt.
+		const items = cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items as { kind: string; role?: string; detail?: { event?: string } }[];
+		expect(items.findIndex((item) => item.detail?.event === "workspace.script.run")).toBeLessThan(items.findIndex((item) => item.kind === "message" && item.role === "user"));
+	});
+
+	it("shows a terminal agent that could not start after Setup as the checklist's agent step", () => {
+		const startupError = { code: "agent_start_failed", message: "The coding agent did not start.", at: "2026-10-20T16:02:02Z" };
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1", startupError } }} />
+			</QueryClientProvider>,
+		);
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].session).toMatchObject({
+			provisionState: "failed",
+			provisionSteps: [{ id: "worktree", status: "done" }, { id: "setup", status: "done" }, { id: "agent", status: "running" }],
+		});
+	});
+
+	it("keeps only the Setup that passed once a retry recovers, as a local start keeps no failed attempts", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "workspace.setup", payload: { status: "succeeded", exitCode: 0, durationMs: 400 }, createdAt: "2026-10-01T00:01:00Z" },
+		], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		const setupRows = () => cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items
+			.filter((item: { detail?: { event?: string } }) => item.detail?.event === "workspace.setup");
+		await waitFor(() => expect(setupRows()).toHaveLength(1));
+		expect(setupRows()[0]).toMatchObject({ detail: { setupStatus: "succeeded" } });
+	});
+
+	it("keeps a failed Setup row when no startup failure reports it", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "workspace.setup", payload: { status: "failed", step: 1, exitCode: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+		], hasMore: false, nextAfter: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudSessionChatSurface session={{ ...session, runtimeConnected: true, cloud: { orgId: "org-1" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toEqual([
+			expect.objectContaining({ detail: expect.objectContaining({ event: "workspace.setup", setupStatus: "failed" }) }),
+		]));
 	});
 
 	it("keeps a read-only Claude session in Plan mode and cannot elevate it to Agent", async () => {
@@ -760,8 +892,10 @@ describe("CloudSessionChatSurface", () => {
 		);
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].session.provisionState).toBe("provisioning"));
 		const props = cloudMocks.chatProps.mock.lastCall?.[0];
-		// The startup checklist in place of a working timer, and nothing to stop.
+		// The startup checklist in place of a working timer, and nothing to stop. It is
+		// the checklist a failed start shows, with Setup running.
 		expect(props.session.provisionSteps).toEqual([
+			{ id: "worktree", status: "done" },
 			{ id: "setup", status: "running", startedAt: expect.any(String) },
 			{ id: "agent", status: "pending" },
 		]);

@@ -24,10 +24,13 @@ import (
 // before the coding agent starts; Cleanup commands run before the session's
 // workspace is permanently deleted.
 const (
-	// ProjectScriptStepTimeout bounds each Setup or Cleanup command that does
-	// not set its own time limit (domain.ScriptStepTimeout), as the local
-	// daemon does.
-	ProjectScriptStepTimeout = time.Duration(domain.DefaultScriptStepTimeoutMinutes) * time.Minute
+	// ProjectSetupStepTimeout bounds each Setup command that does not set its
+	// own time limit (domain.ScriptStepTimeout), as the local daemon does.
+	ProjectSetupStepTimeout = time.Duration(domain.DefaultSetupStepTimeoutMinutes) * time.Minute
+	// ProjectCleanupStepTimeout bounds each Cleanup command that does not set
+	// its own time limit; Cleanup as a whole also has the sandbox provider's
+	// deletion budget.
+	ProjectCleanupStepTimeout = time.Duration(domain.DefaultCleanupStepTimeoutMinutes) * time.Minute
 	// ProjectScriptOutputLimit bounds the command output kept for the worker
 	// log and the session event, as the local daemon does.
 	ProjectScriptOutputLimit = 8 << 10
@@ -98,13 +101,14 @@ type SetupEvent struct {
 }
 
 // Summary names the failed step and why, in the local daemon's words
-// ("setup step N failed"), without the command's output.
+// ("The project's Setup script failed at step N (exit status X)"), without the
+// command's output.
 func (e SetupEvent) Summary() string {
-	cause := fmt.Sprintf("exit status %d", e.ExitCode)
 	if e.Status == SetupTimedOut {
-		cause = "timed out after " + scriptMinutes(domain.ScriptStepTimeout(e.TimeoutMinutes))
+		return fmt.Sprintf("The project's Setup script stopped at step %d after %s", e.Step,
+			scriptMinutes(domain.ScriptStepTimeout(e.TimeoutMinutes, domain.DefaultSetupStepTimeoutMinutes)))
 	}
-	return fmt.Sprintf("Setup step %d failed: %s", e.Step, cause)
+	return fmt.Sprintf("The project's Setup script failed at step %d (exit status %d)", e.Step, e.ExitCode)
 }
 
 // scriptMinutes says a step's time limit in minutes ("1 minute", "30
@@ -124,12 +128,13 @@ func timeoutMinutes(timeout time.Duration) int {
 
 // splitScriptSteps reads a run's step commands, each optionally led by its
 // time limit's marker (domain.TimedScriptCommand): the commands without the
-// marker and their time limits, blank commands dropped.
-func splitScriptSteps(steps []string) ([]string, []time.Duration) {
+// marker and their time limits (defaultMinutes, the kind's default, for a step
+// that sets none), blank commands dropped.
+func splitScriptSteps(steps []string, defaultMinutes int) ([]string, []time.Duration) {
 	commands := make([]string, 0, len(steps))
 	timeouts := make([]time.Duration, 0, len(steps))
 	for _, step := range steps {
-		command, timeout := domain.SplitScriptStepTimeout(step)
+		command, timeout := domain.SplitScriptStepTimeout(step, defaultMinutes)
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
@@ -265,7 +270,7 @@ type SetupRunner struct {
 // Run runs commands in order in dir with `sh -c`, stopping at the first one
 // that fails. Each runs for at most its time limit: the one its timeout marker
 // line sets (domain.TimedScriptCommand, LaunchContext.ProjectScripts), else
-// ProjectScriptStepTimeout. ran is false when there is nothing to run or Setup
+// ProjectSetupStepTimeout. ran is false when there is nothing to run or Setup
 // already succeeded for this session. Only a success is recorded, so a failed
 // Setup runs again when the session is reopened.
 func (r SetupRunner) Run(
@@ -274,7 +279,7 @@ func (r SetupRunner) Run(
 	dir string,
 	environment SessionScriptEnvironment,
 ) (event SetupEvent, ran bool) {
-	commands, timeouts := splitScriptSteps(timedCommands)
+	commands, timeouts := splitScriptSteps(timedCommands, domain.DefaultSetupStepTimeoutMinutes)
 	marker := filepath.Join(r.DataDir, setupDoneFile)
 	if _, err := os.Stat(marker); err == nil {
 		return SetupEvent{}, false
@@ -485,7 +490,7 @@ func (b *tailBuffer) String() string {
 
 // CleanupCommandsScript is the shell script the Cleanup hook runs: each
 // command with `sh -c` in order, each bounded by its time limit (the one its
-// timeout marker line sets, else ProjectScriptStepTimeout) when timeout(1) is
+// timeout marker line sets, else ProjectCleanupStepTimeout) when timeout(1) is
 // available, stopping at the first failure with that command's status. With
 // no commands it does nothing. Around each command it prints a start and an
 // end marker line carrying nonce (NewScriptMarkerNonce), which the control
@@ -493,7 +498,7 @@ func (b *tailBuffer) String() string {
 // status are the same as without them. Each end marker also carries the
 // step's time limit in seconds, so its timeout is told apart from a failure.
 func CleanupCommandsScript(steps []string, nonce string) string {
-	commands, timeouts := splitScriptSteps(steps)
+	commands, timeouts := splitScriptSteps(steps, domain.DefaultCleanupStepTimeoutMinutes)
 	// The step lines it prints name each command, redacted: also of the
 	// values its commands assign to secret-named variables.
 	redactor := newScriptRedactor(nil, assignedSecretValues(commands))

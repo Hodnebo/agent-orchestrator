@@ -62,7 +62,7 @@ func TestSetupStopsAtTheFailingStepAndRetries(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "never-ran")); err == nil {
 		t.Fatal("a step after the failure ran")
 	}
-	if message := event.Message(); !strings.HasPrefix(message, "Setup step 2 failed: exit status 3: ") {
+	if message := event.Message(); !strings.HasPrefix(message, "The project's Setup script failed at step 2 (exit status 3): ") {
 		t.Fatalf("message = %q", message)
 	}
 	if _, ran := (SetupRunner{DataDir: dataDir, FirstStart: true}).Run(context.Background(), commands, workspace, scriptEnvironment(workspace)); !ran {
@@ -70,12 +70,15 @@ func TestSetupStopsAtTheFailingStepAndRetries(t *testing.T) {
 	}
 }
 
-// A step over its deadline is stopped together with what it started.
+// A step over its deadline is stopped together with what it started. Its
+// message names the limit it ran with (StepTimeout's 200ms reads as 1 minute;
+// a step without its own limit says Setup's 30-minute default, see
+// TestSetupTimeoutSummaryNamesTheStepsLimit).
 func TestSetupStepTimeout(t *testing.T) {
 	t.Parallel()
 	event, _ := SetupRunner{DataDir: t.TempDir(), FirstStart: true, StepTimeout: 200 * time.Millisecond}.Run(
 		context.Background(), []string{"sleep 30 & wait"}, t.TempDir(), scriptEnvironment(t.TempDir()))
-	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "timed out") {
+	if event.Status != SetupTimedOut || event.Step != 1 || !strings.Contains(event.Message(), "stopped at step 1 after 1 minute") {
 		t.Fatalf("event = %+v", event)
 	}
 }

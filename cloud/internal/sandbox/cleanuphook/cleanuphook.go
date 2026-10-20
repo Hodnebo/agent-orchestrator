@@ -559,7 +559,7 @@ func recordSkippedSteps(ctx context.Context, steps worker.CleanupRun, reason str
 	}
 	total := len(commands)
 	for index, stored := range commands {
-		plain, timeout := domain.SplitScriptStepTimeout(stored)
+		plain, timeout := domain.SplitScriptStepTimeout(stored, domain.DefaultCleanupStepTimeoutMinutes)
 		repository, command, _ := domain.ParseRepoScriptCommand(plain)
 		sandbox.RecordSessionEvent(ctx, worker.ScriptStepEventType, worker.SanitizeScriptStepEvent(worker.ScriptStepEvent{
 			Phase: worker.ScriptPhaseCleanup, RunID: steps.RunID, Step: index + 1, Total: total,

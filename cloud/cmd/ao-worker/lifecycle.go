@@ -222,10 +222,7 @@ type projectScripts struct {
 // nothing done by the user. Only a request made once the failure is reported
 // retries the step. It reports false when ctx ends first.
 func awaitStartupRetry(ctx context.Context, requests <-chan struct{}, report func()) bool {
-	select {
-	case <-requests:
-	default:
-	}
+	dropPendingReopen(requests)
 	report()
 	select {
 	case <-ctx.Done():
@@ -262,13 +259,16 @@ func refreshProjectScripts(
 	return refreshed
 }
 
-// setupStartupFailure is the session startup error for a failed Setup run:
-// the step and its exit status, with the command's output as the detail.
+// setupStartupFailure is the session startup error for a failed Setup run, in
+// the local daemon's words: the step and its exit status (or time limit), a
+// hint for a cause the output names, and where to fix it. The detail is the
+// step's command, who and where it ran, and its output.
 func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
-	message := event.Summary() + "."
+	message := event.Summary() + ", so the agent did not start."
 	if event.Hint != "" {
 		message += " " + event.Hint
 	}
+	message += " Fix the script in Project settings > Scripts, then try again."
 	detail := event.Output
 	if context := event.Context(); context != "" {
 		detail = context
@@ -279,7 +279,7 @@ func setupStartupFailure(event worker.SetupEvent) worker.WorkspaceStartupEvent {
 	return worker.WorkspaceStartupEvent{
 		Status:  worker.WorkspaceStartupFailed,
 		Code:    domain.WorkspaceStartupErrorProjectSetup,
-		Message: message + " Fix the project's Setup script (Project settings > Scripts), then select Retry on this session.",
+		Message: message,
 		Detail:  detail,
 	}
 }
@@ -353,5 +353,15 @@ func agentStartFailure(err error) worker.WorkspaceStartupEvent {
 func reportWorkspaceStartup(ctx context.Context, logger *slog.Logger, client *client, event worker.WorkspaceStartupEvent) {
 	if err := client.publishEvent(ctx, worker.WorkspaceStartupEventType, event); err != nil {
 		logger.Warn("publish workspace startup outcome", "status", event.Status, "error", err)
+	}
+}
+
+// dropPendingReopen discards a session open saved while a failed start was
+// still running. It came before the failure, so it is not a retry: the start
+// waits for the session to be opened again after the failure is reported.
+func dropPendingReopen(reopen <-chan struct{}) {
+	select {
+	case <-reopen:
+	default:
 	}
 }

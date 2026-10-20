@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+	DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES,
+	DEFAULT_SETUP_STEP_TIMEOUT_MINUTES,
 	parseLocalScriptStep,
 	parseTimedScriptCommand,
 	scriptStepTimeoutMinutes,
@@ -66,25 +68,28 @@ describe("cloud project repositories", () => {
 		const timed = "# ao-timeout: 45m\n(\ncd -- '../11x' || exit 1\nmake up\n)";
 		const steps = parseScriptSteps(["# ao-timeout: 10m\nnpm ci", timed, { command: "make db", timeoutMinutes: 90 }, "# a comment\nls"], main);
 		expect(steps).toEqual([
-			{ command: "npm ci", folder: "" },
+			{ command: "npm ci", folder: "", timeout: "10" },
 			{ command: "make up", folder: "11x", timeout: "45" },
 			{ command: "make db", folder: "", timeout: "90" },
 			{ command: "# a comment\nls", folder: "" },
 		]);
-		// The default limit is stored as the plain command.
-		expect(serializeScriptSteps(steps ?? [])).toEqual(["npm ci", timed, "# ao-timeout: 90m\nmake db", "# a comment\nls"]);
-		expect(timedScriptCommand(10, "x")).toBe("x");
+		// A step without a limit is stored as the plain command; every limit a step sets is kept.
+		expect(serializeScriptSteps(steps ?? [])).toEqual(["# ao-timeout: 10m\nnpm ci", timed, "# ao-timeout: 90m\nmake db", "# a comment\nls"]);
+		expect(serializeScriptSteps([{ command: "npm ci", folder: "", timeout: "" }])).toEqual(["npm ci"]);
+		expect(timedScriptCommand(undefined, "x")).toBe("x");
 		expect(parseTimedScriptCommand("# ao-timeout: 5m\nx")).toEqual({ minutes: 5, command: "x" });
 		expect(parseLocalScriptStep("# ao-timeout: 3m\nnpm ci")).toEqual({ command: "npm ci", folder: "", timeout: "3" });
 		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "3" })).toBe("# ao-timeout: 3m\nnpm ci");
 		expect(serializeLocalScriptStep({ command: "npm ci", folder: "", timeout: "" })).toBe("npm ci");
 	});
 
-	it("keeps a local step's typed 10 minute limit, which is not a local Cleanup step's default", () => {
+	it("keeps a typed limit equal to a default, as Setup and Cleanup defaults differ", () => {
 		expect(serializeLocalScriptStep({ command: "make down", folder: "", timeout: "10" })).toBe("# ao-timeout: 10m\nmake down");
 		expect(parseLocalScriptStep("# ao-timeout: 10m\nmake down")).toEqual({ command: "make down", folder: "", timeout: "10" });
-		// A Cloud step's default is 10 minutes, so there it stays implicit.
-		expect(timedScriptCommand(10, "make down")).toBe("make down");
+		// Setup's 30-minute default typed into a Cloud step stays the step's own limit.
+		expect(timedScriptCommand(DEFAULT_SETUP_STEP_TIMEOUT_MINUTES, "npm ci")).toBe("# ao-timeout: 30m\nnpm ci");
+		expect(timedScriptCommand(DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES, "make down")).toBe("# ao-timeout: 10m\nmake down");
+		expect(parseScriptSteps(["# ao-timeout: 30m\nnpm ci"])).toEqual([{ command: "npm ci", folder: "", timeout: "30" }]);
 	});
 
 	it("accepts a time limit of 1 to 120 whole minutes", () => {

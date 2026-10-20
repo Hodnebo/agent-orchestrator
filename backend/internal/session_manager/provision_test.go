@@ -687,6 +687,18 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 }
 
+func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh-only step")
+	}
+	err := runPostCreate(t.Context(), t.TempDir(), t.TempDir(), []string{"true", "echo could not reach registry; exit 3"}, nil)
+	want := "The project's Setup script failed at step 2 (exit status 3), so the agent did not start. " +
+		"Fix the script in Project settings > Scripts, then try again. Output: could not reach registry"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v\nwant    %s", err, want)
+	}
+}
+
 func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	workspace := t.TempDir()
 	command := "while :; do :; done"
@@ -696,7 +708,8 @@ func TestRunPostCreateStopsLaterStepsAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	err := runPostCreate(ctx, workspace, t.TempDir(), []string{"", command, "echo unexpected > later.txt"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "setup step 2 failed") {
+	var setupErr *SetupStepError
+	if !errors.As(err, &setupErr) || setupErr.Step != 2 || setupErr.TimedOut {
 		t.Fatalf("cancellation error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "later.txt")); !errors.Is(err, os.ErrNotExist) {
@@ -773,7 +786,7 @@ func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
 	// One "minute" is 100ms here: the step stops at its own limit.
 	started := time.Now()
 	err := runPostCreate(context.Background(), workspace, t.TempDir(), []string{"# ao-timeout: 1m\n" + slow}, nil)
-	if err == nil || !strings.Contains(err.Error(), "setup step 1 failed: timed out after 1 minute") || time.Since(started) > 1500*time.Millisecond {
+	if err == nil || !strings.Contains(err.Error(), "The project's Setup script stopped at step 1 after 1 minute, so the agent did not start.") || time.Since(started) > 1500*time.Millisecond {
 		t.Fatalf("err = %v after %s, want the step stopped at its limit", err, time.Since(started))
 	}
 	// A long limit leaves the step running past the default one.
@@ -787,8 +800,13 @@ func TestPostCreateBudgetCoversTheSetupSteps(t *testing.T) {
 	if got := postCreateBudget(10*time.Minute, nil); got != 10*time.Minute {
 		t.Fatalf("no setup = %s", got)
 	}
-	if got := postCreateBudget(10*time.Minute, []string{"npm ci", " ", "# ao-timeout: 90m\nmake"}); got != 110*time.Minute {
+	// A step without its own limit adds Setup's 30-minute default.
+	if got := postCreateBudget(10*time.Minute, []string{"npm ci", " ", "# ao-timeout: 90m\nmake"}); got != 130*time.Minute {
 		t.Fatalf("setup budget = %s", got)
+	}
+	// A typed limit, shorter than the default too, is the step's own.
+	if got := postCreateBudget(10*time.Minute, []string{"# ao-timeout: 5m\nnpm ci", "make"}); got != 45*time.Minute {
+		t.Fatalf("setup budget with a short step = %s", got)
 	}
 }
 
@@ -816,10 +834,10 @@ func TestRESTSpawnBudgetCoversItsSetupSteps(t *testing.T) {
 	var extended time.Duration
 	ctx := ports.WithSpawnRequestBudget(context.Background(), time.Minute, func(total time.Duration) { extended = total })
 	_, _, _, _ = m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
-	if want := 101 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
-		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 10m)", probe.budget, want)
+	if want := 121 * time.Minute; probe.budget < want-time.Minute || probe.budget > want {
+		t.Fatalf("spawn budget = %s, want about %s (1m + 90m + 30m)", probe.budget, want)
 	}
-	if extended != 101*time.Minute+time.Second {
+	if extended != 121*time.Minute+time.Second {
 		t.Fatalf("request deadline extended to %s, want just past the spawn's own", extended)
 	}
 }

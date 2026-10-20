@@ -33,7 +33,7 @@ const WAKE_RETRY_INTERVAL_MS = 1_000;
  * WORKER_UNAVAILABLE until the worker reconnects a moment later; that is the
  * retry starting, not a failure, so it asks again until the worker is back.
  */
-async function requestWorkspaceRetry(
+export async function requestWorkspaceRetry(
 	client: Pick<CloudCpClient, "requestWorkspaceCheckout">,
 	orgId: string,
 	sessionId: string,

@@ -14,7 +14,7 @@ import { aoBridge } from "../lib/bridge";
 import type { CloudCpProject } from "../lib/cloud-cp";
 import { CODER_PROVIDER, FREESTYLE_PROVIDER, canManageBilling, projectSandboxProvider } from "../lib/cloud-offering";
 import {
-	DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES, MAX_SCRIPT_STEP_TIMEOUT_MINUTES, MIN_SCRIPT_STEP_TIMEOUT_MINUTES, gitHubFullName, parseLocalScriptStep,
+	DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES, DEFAULT_SETUP_STEP_TIMEOUT_MINUTES, MAX_SCRIPT_STEP_TIMEOUT_MINUTES, MIN_SCRIPT_STEP_TIMEOUT_MINUTES, gitHubFullName, parseLocalScriptStep,
 	parseScriptSteps, projectAdditionalRepos, repoDirName, scriptStepTimeoutMinutes, serializeLocalScriptStep, serializeScriptSteps, type ScriptStepDraft,
 } from "../lib/cloud-project-repos";
 import { cn } from "../lib/utils";
@@ -144,22 +144,23 @@ const stepTimeoutInvalid = (step: ScriptStepDraft) => step.command.trim() !== ""
  * and what empty means) shows in a tooltip on hover and keyboard focus, beside
  * the field, and is the field's description.
  */
-function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onChange }: {
+function StepTimeoutField({ id, number, value, disabled, invalid, defaultMinutes, onChange }: {
 	id: string;
 	number: number;
 	value: string;
 	disabled: boolean;
 	/** The form will not save this limit (see stepTimeoutInvalid). */
 	invalid: boolean;
-	/** Cleanup of a local project: an empty field means no limit at all. */
-	noDefault: boolean;
+	/** The limit an empty field means; undefined (Cleanup of a local project) is no limit at all. */
+	defaultMinutes: number | undefined;
 	onChange: (value: string) => void;
 }) {
 	const { t } = useTranslation();
+	const noDefault = defaultMinutes === undefined;
 	const hintId = `${id}-hint`;
 	const hint = noDefault
 		? t("settings.project.stepTimeoutNoLimitHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES })
-		: t("settings.project.stepTimeoutHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES, default: DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES });
+		: t("settings.project.stepTimeoutHint", { min: MIN_SCRIPT_STEP_TIMEOUT_MINUTES, max: MAX_SCRIPT_STEP_TIMEOUT_MINUTES, default: defaultMinutes });
 	// "none" in the field stands for no limit, not a number of minutes; the unit
 	// keeps its room so the row does not shift once a number is typed.
 	const showsNoLimit = noDefault && value === "";
@@ -181,12 +182,12 @@ function StepTimeoutField({ id, number, value, disabled, invalid, noDefault, onC
 					onKeyDown={(event) => {
 						if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
 						event.preventDefault();
-						const current = scriptStepTimeoutMinutes(value) ?? (noDefault ? 0 : DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES);
+						const current = scriptStepTimeoutMinutes(value) ?? (defaultMinutes ?? 0);
 						const step = event.shiftKey ? 10 : 1;
 						const next = event.key === "ArrowUp" ? current + step : current - step;
 						onChange(String(Math.min(MAX_SCRIPT_STEP_TIMEOUT_MINUTES, Math.max(MIN_SCRIPT_STEP_TIMEOUT_MINUTES, next))));
 					}}
-					placeholder={noDefault ? t("settings.project.stepTimeoutNoLimitPlaceholder") : String(DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES)}
+					placeholder={noDefault ? t("settings.project.stepTimeoutNoLimitPlaceholder") : String(defaultMinutes)}
 					value={value}
 				/>
 			</TooltipTrigger>
@@ -354,7 +355,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 											disabled={locked}
 											id={`${kind}-step-${index}-timeout`}
 											invalid={stepTimeoutInvalid(step)}
-											noDefault={!cloud && kind === "cleanup"}
+											defaultMinutes={kind === "setup" ? DEFAULT_SETUP_STEP_TIMEOUT_MINUTES : cloud ? DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES : undefined}
 											number={index + 1}
 											value={step.timeout ?? ""}
 											onChange={(timeout) => updateSteps(kind, drafts[kind].map((item, i) => i === index ? { ...item, timeout } : item))}

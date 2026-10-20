@@ -66,10 +66,11 @@ type LaunchContext struct {
 	PreRemove  []string `json:"preRemove,omitempty"`
 	// PostCreateTimeoutMinutes and PreRemoveTimeoutMinutes are each Setup and
 	// Cleanup command's own time limit in minutes, by index; 0 or a missing
-	// entry is domain.DefaultScriptStepTimeoutMinutes. Absent when every step
-	// has the default. A worker that predates per-step limits ignores them and
-	// gives every step the default; a worker given none (an older control
-	// plane) does too.
+	// entry is the kind's default (domain.DefaultSetupStepTimeoutMinutes or
+	// domain.DefaultCleanupStepTimeoutMinutes). Absent when no step sets its
+	// own. A worker that predates per-step limits ignores them and gives every
+	// step its own default; a worker given none (an older control plane) gives
+	// every step the kind's default.
 	PostCreateTimeoutMinutes []int `json:"postCreateTimeoutMinutes,omitempty"`
 	PreRemoveTimeoutMinutes  []int `json:"preRemoveTimeoutMinutes,omitempty"`
 }

@@ -3005,11 +3005,11 @@ components:
           minimum: 1
           maximum: 120
           description: >-
-            The step's own time limit in whole minutes; absent is 10. Accepted
-            on input only: a step with a limit other than 10 is stored as a
-            plain command led by the shell comment line "# ao-timeout: <N>m",
-            so releases that predate per-step limits keep and run it (with 10
-            minutes).
+            The step's own time limit in whole minutes; absent is the default,
+            30 for a Setup step and 10 for a Cleanup step. Accepted on input
+            only: a step with a limit is stored as a plain command led by the
+            shell comment line "# ao-timeout: <N>m", so releases that predate
+            per-step limits keep and run it (with their default limit).
     ProjectScriptCommands:
       type: array
       maxItems: 20
@@ -3024,12 +3024,13 @@ components:
         the same settings a local project has. Setup commands run in order
         with sh -c in the session's working directory after its checkout and
         before the coding agent starts, once per session, each within its
-        time limit (10 minutes unless the step sets timeoutMinutes, 1 to
+        time limit (30 minutes unless the step sets timeoutMinutes, 1 to
         120); a failing step keeps the agent from starting until the session
         is reopened. Cleanup commands run in order before the session's
         workspace is deleted (Coder, Freestyle and Docker), best effort, each
-        within its time limit and the whole run within the sum of them (at
-        least 10 minutes, at most 2 hours). Both see AO_SESSION_ID, AO_SESSION_KIND,
+        within its time limit (10 minutes unless the step sets
+        timeoutMinutes) and the whole run within the sum of them (at least 10
+        minutes, at most 2 hours). Both see AO_SESSION_ID, AO_SESSION_KIND,
         AO_SESSION_BRANCH, AO_WORKSPACE_DIR, AO_WORKTREE_PATH,
         AO_SOURCE_TREE_PATH, AO_REPOSITORY_URL, AO_PROJECT_ID and
         AO_PROJECT_NAME. An empty array clears them. A stored step of the form

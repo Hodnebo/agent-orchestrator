@@ -9,7 +9,8 @@ import (
 )
 
 // A Cleanup run's budget: the sum of its steps' time limits
-// (domain.ScriptStepTimeout) and CleanupStepGrace for each, never below
+// (domain.ScriptStepTimeout: domain.DefaultCleanupStepTimeoutMinutes unless a
+// step sets its own) and CleanupStepGrace for each, never below
 // MinCleanupBudget (what every run had before per-step limits) nor above
 // MaxCleanupBudget, so a deletion is delayed by a bounded time at most.
 const (
@@ -54,7 +55,7 @@ func CleanupBudget(lists ...[]string) time.Duration {
 	for _, commands := range lists {
 		var total time.Duration
 		for _, command := range commands {
-			plain, timeout := domain.SplitScriptStepTimeout(command)
+			plain, timeout := domain.SplitScriptStepTimeout(command, domain.DefaultCleanupStepTimeoutMinutes)
 			if strings.TrimSpace(plain) != "" {
 				total += timeout + CleanupStepGrace
 			}

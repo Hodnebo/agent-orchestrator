@@ -108,7 +108,7 @@ Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failin
 
 Open **Project Settings → Scripts** to edit the **Setup** and **Cleanup** steps. Switching tabs keeps your edits. **Save changes** saves both lists. The scripts run automatically at their workspace lifecycle events.
 
-Setup steps run in order in separate shells. Each step has its own time limit: 10 minutes unless you set one from 1 to 120 minutes for the step in **Project settings > Scripts**. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a total start budget of 10 minutes plus the setup steps' limits, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
+Setup steps run in order in separate shells. Each step has its own time limit: 30 minutes unless you set one from 1 to 120 minutes for the step in **Project settings > Scripts**. There is no separate total setup timeout. Existing session-start and request deadlines can stop setup sooner. New Chat sessions have a total start budget of 10 minutes plus the setup steps' limits, including workspace creation, setup, and agent start. A failed or cancelled step stops launch. Cancellation stops the shell and its child processes before workspace rollback.
 
 The same command list runs on every platform. Use `sh` syntax on macOS/Linux and `cmd` syntax on Windows. Quoting, variables, and command chaining differ. For a project used on multiple platforms, call a script that supports each platform, such as `node scripts/setup.mjs`.
 

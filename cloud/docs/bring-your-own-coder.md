@@ -191,17 +191,20 @@ read-only.
   run once per session, when its workspace is first prepared; a worker restart
   or a workspace stop and start keeps the prepared checkout and does not run
   them again, and a session that started before the project had Setup never
-  runs Setup added later. Each command may run for
-  10 minutes. If one fails or times out, the agent does not start: the session
-  shows "Setup step N failed" with the end of the command's output, and
+  runs Setup added later. Each command may run for its time limit: 30
+  minutes unless you set one for the step (1 to 120 minutes) in **Project
+  settings > Scripts**. If one fails or times out, the agent does not start: the session
+  shows "The project's Setup script failed at step N" with the end of the
+  command's output, and
   reopening the session runs Setup again with the project's current commands,
   so fixing the Setup script and retrying is enough. This matches a local
   project, where a failed setup step stops the launch.
 - **Cleanup** commands run in order before AO deletes the session's workspace,
   in the same directory and environment, as the same user as the agent. They do
-  not run when a workspace is stopped or paused. Cleanup is best effort: it has
-  10 minutes in total, a failed command stops the remaining ones, and the
-  workspace is deleted either way. Like a local project, AO uses the project's
+  not run when a workspace is stopped or paused. Cleanup is best effort: each command
+  has its time limit (10 minutes unless you set one for the step), the whole
+  run has the sum of them (at least 10 minutes, at most 2 hours), a failed
+  command stops the remaining ones, and the workspace is deleted either way. Like a local project, AO uses the project's
   Cleanup as it is when the workspace is deleted, so editing it after a session
   started still applies to that session, and removing the project runs its
   last Cleanup in each of its workspaces. (A Cleanup longer than 12 KB in total
@@ -290,10 +293,10 @@ workspace user.
 - **The session waits a long time, then fails to start.** The template's
   startup scripts or the ready check did not finish in time. Open the workspace
   from the session's top bar and check its build and agent logs in Coder.
-- **"Setup step N failed".** One of the project's Setup commands exited with an
-  error; the session's startup screen shows the end of its output. Fix the
-  command in the project's **Scripts** settings, then click **Retry** or reopen
-  the session.
+- **"The project's Setup script failed at step N".** One of the project's Setup
+  commands exited with an error; the session shows the end of its output. Fix
+  the command in the project's **Scripts** settings, then click **Retry**
+  (**Retry start** in Chat) or reopen the session.
 - **"The working directory can't be used".** Fix the directory in the
   workspace (or the connection's **Working directory**), then reopen the
   session. AO restarts the session's worker to check the directory again, which

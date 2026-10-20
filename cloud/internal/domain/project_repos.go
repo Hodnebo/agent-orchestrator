@@ -212,19 +212,24 @@ func NormalizeProjectRepos(mainURL string, repos []RepoRef) ([]RepoRef, error) {
 }
 
 // Each Setup or Cleanup step runs for at most its time limit, in whole
-// minutes: DefaultScriptStepTimeoutMinutes unless the step sets one from
-// MinScriptStepTimeoutMinutes to MaxScriptStepTimeoutMinutes.
+// minutes: the one the step sets, from MinScriptStepTimeoutMinutes to
+// MaxScriptStepTimeoutMinutes, else its kind's default. A Setup step gets
+// DefaultSetupStepTimeoutMinutes, as the local daemon gives it; a Cleanup step
+// gets DefaultCleanupStepTimeoutMinutes, as Cleanup as a whole also has the
+// sandbox provider's deletion budget.
 const (
-	DefaultScriptStepTimeoutMinutes = 10
-	MinScriptStepTimeoutMinutes     = 1
-	MaxScriptStepTimeoutMinutes     = 120
+	DefaultSetupStepTimeoutMinutes   = 30
+	DefaultCleanupStepTimeoutMinutes = 10
+	MinScriptStepTimeoutMinutes      = 1
+	MaxScriptStepTimeoutMinutes      = 120
 )
 
 // ScriptStepTimeout is the time limit of a step that sets minutes (0, or a
-// value out of range, is the default; a value past the maximum is capped).
-func ScriptStepTimeout(minutes int) time.Duration {
+// value out of range, is defaultMinutes, its kind's default; a value past the
+// maximum is capped).
+func ScriptStepTimeout(minutes, defaultMinutes int) time.Duration {
 	if minutes < MinScriptStepTimeoutMinutes {
-		minutes = DefaultScriptStepTimeoutMinutes
+		minutes = defaultMinutes
 	}
 	return time.Duration(min(minutes, MaxScriptStepTimeoutMinutes)) * time.Minute
 }
@@ -244,11 +249,12 @@ const scriptTimeoutMarker = "# ao-timeout: "
 var scriptTimeoutPattern = regexp.MustCompile(`^# ao-timeout: ([0-9]{1,4})m\r?\n`)
 
 // TimedScriptCommand is the stored form of a step with its own time limit:
-// command after a timeout marker line. A step with the default limit (0 or
-// DefaultScriptStepTimeoutMinutes, or a value that is not a limit) is command
-// unchanged.
+// command after a timeout marker line. A step without one (0, or a value that
+// is not a limit) is command unchanged and runs with its kind's default. A
+// limit equal to a default is kept too: Setup and Cleanup have different
+// defaults, and a typed limit stays the step's own if a default changes.
 func TimedScriptCommand(minutes int, command string) string {
-	if minutes <= 0 || minutes == DefaultScriptStepTimeoutMinutes {
+	if minutes <= 0 {
 		return command
 	}
 	return scriptTimeoutMarker + strconv.Itoa(minutes) + "m\n" + command
@@ -268,16 +274,17 @@ func ParseTimedScriptCommand(stored string) (minutes int, command string, ok boo
 }
 
 // SplitScriptStepTimeout is a step's command without its timeout marker and
-// the time limit it runs with (ScriptStepTimeout).
-func SplitScriptStepTimeout(stored string) (string, time.Duration) {
+// the time limit it runs with (ScriptStepTimeout, with defaultMinutes, its
+// kind's default).
+func SplitScriptStepTimeout(stored string, defaultMinutes int) (string, time.Duration) {
 	minutes, command, _ := ParseTimedScriptCommand(stored)
-	return command, ScriptStepTimeout(minutes)
+	return command, ScriptStepTimeout(minutes, defaultMinutes)
 }
 
 // SplitTimedScriptCommands splits commands that may lead with a timeout
 // marker into the plain commands and each one's time limit in minutes (0 for
-// the default), for a worker's launch context. minutes is nil when every
-// command has the default limit.
+// its kind's default), for a worker's launch context. minutes is nil when no
+// command sets its own limit.
 func SplitTimedScriptCommands(timed []string) (commands []string, minutes []int) {
 	if timed == nil {
 		return nil, nil
@@ -287,7 +294,7 @@ func SplitTimedScriptCommands(timed []string) (commands []string, minutes []int)
 	custom := false
 	for index, stored := range timed {
 		limit, command, _ := ParseTimedScriptCommand(stored)
-		if !ValidScriptStepTimeoutMinutes(limit) || limit == DefaultScriptStepTimeoutMinutes {
+		if !ValidScriptStepTimeoutMinutes(limit) {
 			limit = 0
 		}
 		commands[index], limits[index] = command, limit
@@ -321,8 +328,8 @@ func JoinTimedScriptCommands(commands []string, minutes []int) []string {
 // the canonical URL of the project repository the command runs in; Folder,
 // when set, is that repository's folder beside the main checkout as read back
 // from a stored step. Both empty runs it in the main repository.
-// TimeoutMinutes is the step's own time limit; 0 is the default
-// (DefaultScriptStepTimeoutMinutes).
+// TimeoutMinutes is the step's own time limit; 0 is its kind's default
+// (DefaultSetupStepTimeoutMinutes or DefaultCleanupStepTimeoutMinutes).
 //
 // A step is stored as a plain string either way (see RepoScriptCommand and
 // TimedScriptCommand), so a control plane or desktop release that predates

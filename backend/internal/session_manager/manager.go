@@ -6368,8 +6368,9 @@ func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration)
 // runPostCreate runs each post-create command in the workspace via the platform
 // shell (sh on Unix, cmd on Windows). Each step has its own deadline: the time
 // limit its first line sets (domain.ParseTimedScriptCommand; the marker line
-// itself never reaches the shell), else ten minutes. A non-zero exit aborts the
-// spawn with bounded, redacted output.
+// itself never reaches the shell), else domain.DefaultScriptStepTimeoutMinutes.
+// A non-zero exit aborts the spawn with a SetupStepError carrying bounded,
+// redacted output.
 func runPostCreate(ctx context.Context, workspacePath, sourcePath string, commands []string, projectEnv map[string]string) error {
 	for index, step := range commands {
 		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
@@ -6384,14 +6385,11 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 			"AO_WORKTREE_PATH":    workspacePath,
 		})
 		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
-		timedOut := errors.Is(stepCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		timedOut := ctx.Err() == nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			message := agentlaunch.RedactValues(strings.TrimSpace(out.String()), projectEnv)
-			if timedOut {
-				return fmt.Errorf("setup step %d failed: timed out after %s: %s", index+1, stepMinutes(timeout), message)
-			}
-			return fmt.Errorf("setup step %d failed: %w: %s", index+1, err, message)
+			return &SetupStepError{Step: index + 1, Err: err, TimedOut: timedOut, Timeout: timeout, Output: message}
 		}
 	}
 	return nil
@@ -6423,6 +6421,31 @@ func postCreateBudget(base time.Duration, commands []string) time.Duration {
 	}
 	return base
 }
+
+// SetupStepError is a project Setup command that failed. Its message is the
+// one the user reads, so it names the step, the cause and where to fix it.
+// Timeout is the step's time limit, which a timed-out step names.
+type SetupStepError struct {
+	Step     int
+	Err      error
+	TimedOut bool
+	Timeout  time.Duration
+	Output   string
+}
+
+func (e *SetupStepError) Error() string {
+	cause := fmt.Sprintf("failed at step %d (%v)", e.Step, e.Err)
+	if e.TimedOut {
+		cause = fmt.Sprintf("stopped at step %d after %s", e.Step, stepMinutes(e.Timeout))
+	}
+	message := "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
+	if e.Output != "" {
+		message += " Output: " + e.Output
+	}
+	return message
+}
+
+func (e *SetupStepError) Unwrap() error { return e.Err }
 
 // setupOutput retains the last 8 KiB so a noisy installer cannot grow daemon memory.
 type setupOutput struct{ tail []byte }

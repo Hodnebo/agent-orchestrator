@@ -131,8 +131,14 @@ export function additionalReposProblem(mainUrl: string | undefined, urls: readon
  */
 export type ScriptStepDraft = { command: string; folder: string; timeout?: string };
 
-/** A step's time limit, in whole minutes, mirroring the control plane's domain.ScriptStepTimeout bounds. */
-export const DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES = 10;
+/**
+ * A step's time limit, in whole minutes, mirroring the control plane's
+ * domain.ScriptStepTimeout bounds and defaults: a Setup step without its own
+ * limit runs for 30 minutes (local and Cloud), a Cloud Cleanup step for 10. A
+ * local Cleanup step without one has no limit.
+ */
+export const DEFAULT_SETUP_STEP_TIMEOUT_MINUTES = 30;
+export const DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES = 10;
 export const MIN_SCRIPT_STEP_TIMEOUT_MINUTES = 1;
 export const MAX_SCRIPT_STEP_TIMEOUT_MINUTES = 120;
 
@@ -159,13 +165,13 @@ export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
 	return match ? { folder: match[1] ?? "", command: match[2] ?? "" } : { folder: "", command: stored };
 }
 
-/** The stored step with its own time limit; one with the default (or none) is the command as is. */
+/**
+ * The stored step with its own time limit; one without (undefined) is the
+ * command as is and runs with its kind's default. A typed limit equal to a
+ * default is kept: Setup and Cleanup have different defaults, and the limit
+ * stays the step's own if a default changes.
+ */
 export function timedScriptCommand(minutes: number | undefined, command: string): string {
-	return minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES ? command : withTimeoutMarker(minutes, command);
-}
-
-/** command led by its time limit's marker line; without a limit, command as is. */
-function withTimeoutMarker(minutes: number | undefined, command: string): string {
 	if (minutes === undefined || minutes <= 0) return command;
 	return `# ao-timeout: ${minutes}m\n${command}`;
 }
@@ -191,26 +197,25 @@ export function scriptStepTimeoutMinutes(text: string | undefined): number | und
 
 /**
  * A stored step as the editor holds it, without its repository folder (a local
- * step). Every limit it sets shows, 10 minutes too: a local Cleanup step
- * without one has no limit at all, so 10 is not its default.
+ * step). Every limit it sets shows, a default's value too.
  */
 export function parseLocalScriptStep(stored: string): ScriptStepDraft {
 	const { minutes, command } = parseTimedScriptCommand(stored);
-	return { command, folder: "", ...(minutes === undefined ? {} : { timeout: String(minutes) }) };
+	return { command, folder: "", ...timeoutText(minutes) };
 }
 
 /**
  * The stored form of a local step: its command with the time limit typed for
- * it, 10 minutes included (a local Cleanup step without one runs without a
- * limit, so 10 must be kept).
+ * it, a default's value included (a local Cleanup step without one runs
+ * without a limit).
  */
 export function serializeLocalScriptStep(step: ScriptStepDraft): string {
-	return withTimeoutMarker(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
+	return timedScriptCommand(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
 }
 
-/** A draft's time limit for a stored one: none for the default. */
+/** A draft's time limit for a stored one: none when the step sets none. */
 function timeoutText(minutes: number | undefined): Pick<ScriptStepDraft, "timeout"> {
-	return minutes === undefined || minutes === DEFAULT_SCRIPT_STEP_TIMEOUT_MINUTES ? {} : { timeout: String(minutes) };
+	return minutes === undefined ? {} : { timeout: String(minutes) };
 }
 
 /**

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 )
 
 // A Cleanup run's step events. The control plane runs the Cleanup hook
@@ -31,7 +32,7 @@ import (
 // folder is named relative to the main checkout.
 //
 // A script from before per-step time limits leaves the timeout out; its steps
-// had ProjectScriptStepTimeout.
+// had ProjectCleanupStepTimeout.
 // The nonce is random per script, so a command that prints something that
 // looks like a marker is read as output.
 
@@ -155,7 +156,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 	var ownCommands []string
 	var ownTimeouts []time.Duration
 	if own {
-		ownCommands, ownTimeouts = splitScriptSteps(run.Commands)
+		ownCommands, ownTimeouts = splitScriptSteps(run.Commands, domain.DefaultCleanupStepTimeoutMinutes)
 	}
 	stepTimeout := func(step int) time.Duration {
 		if own && len(ownTimeouts) >= step {
@@ -187,7 +188,7 @@ func CleanupStepEvents(output string, run CleanupRun) []ScriptStepEvent {
 		if timeout > 0 {
 			step.event.TimeoutMinutes = timeoutMinutes(timeout)
 		} else {
-			timeout = ProjectScriptStepTimeout
+			timeout = ProjectCleanupStepTimeout
 		}
 		status := SetupSucceeded
 		switch {
@@ -403,7 +404,7 @@ func cleanupEventsWithoutMarkers(output string, run CleanupRun) []ScriptStepEven
 	switch {
 	case run.ExitCode == 0:
 		event.finish(SetupSucceeded, 0, run.Duration)
-	case run.ExitCode == 124 && run.Duration >= ProjectScriptStepTimeout:
+	case run.ExitCode == 124 && run.Duration >= ProjectCleanupStepTimeout:
 		event.finish(SetupTimedOut, -1, run.Duration)
 	default:
 		event.finish(SetupFailed, run.ExitCode, run.Duration)

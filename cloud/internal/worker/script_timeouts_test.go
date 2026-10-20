@@ -11,7 +11,8 @@ import (
 )
 
 // A Setup step runs with the time limit its marker line sets, without the
-// marker, and its events carry the limit.
+// marker, and its events carry the limit; a step without one has Setup's
+// 30-minute default.
 func TestSetupRunsEachStepWithItsOwnTimeLimit(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -45,7 +46,7 @@ func TestSetupRunsEachStepWithItsOwnTimeLimit(t *testing.T) {
 			limits[published.Step] = published.TimeoutMinutes
 		}
 	}
-	if want := map[int]int{1: 45, 2: 10, 3: 1, 4: 120}; !reflect.DeepEqual(limits, want) {
+	if want := map[int]int{1: 45, 2: 30, 3: 1, 4: 120}; !reflect.DeepEqual(limits, want) {
 		t.Fatalf("limits = %v, want %v (events %+v)", limits, want, events)
 	}
 }
@@ -54,9 +55,9 @@ func TestSetupRunsEachStepWithItsOwnTimeLimit(t *testing.T) {
 func TestSetupTimeoutSummaryNamesTheStepsLimit(t *testing.T) {
 	t.Parallel()
 	for minutes, want := range map[int]string{
-		0:  "Setup step 2 failed: timed out after 10 minutes",
-		1:  "Setup step 2 failed: timed out after 1 minute",
-		90: "Setup step 2 failed: timed out after 90 minutes",
+		0:  "The project's Setup script stopped at step 2 after 30 minutes",
+		1:  "The project's Setup script stopped at step 2 after 1 minute",
+		90: "The project's Setup script stopped at step 2 after 90 minutes",
 	} {
 		event := SetupEvent{Status: SetupTimedOut, Step: 2, ExitCode: -1, TimeoutMinutes: minutes}
 		if got := event.Summary(); got != want {
@@ -65,7 +66,7 @@ func TestSetupTimeoutSummaryNamesTheStepsLimit(t *testing.T) {
 	}
 	event, _ := SetupRunner{DataDir: t.TempDir(), FirstStart: true, StepTimeout: 200 * time.Millisecond}.Run(
 		context.Background(), []string{"# ao-timeout: 30m\nsleep 30"}, t.TempDir(), scriptEnvironment(t.TempDir()))
-	if event.Status != SetupTimedOut || event.TimeoutMinutes != 1 || event.Summary() != "Setup step 1 failed: timed out after 1 minute" {
+	if event.Status != SetupTimedOut || event.TimeoutMinutes != 1 || event.Summary() != "The project's Setup script stopped at step 1 after 1 minute" {
 		t.Fatalf("event = %+v (%q)", event, event.Summary())
 	}
 }

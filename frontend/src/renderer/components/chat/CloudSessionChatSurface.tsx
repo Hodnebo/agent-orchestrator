@@ -2,14 +2,17 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
+import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspace";
+import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
 
@@ -197,7 +200,7 @@ function projectSetupActivity(event: CloudCpClientEvent): ConversationActivity {
 	return {
 		kind: "activity", id: `cloud-project-setup-${event.sequence}`, sequence: event.sequence, revision: 1,
 		activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
-		summary: status === "succeeded" ? "Setup finished" : status === "timed_out" ? "Setup timed out" : "Setup failed",
+		summary: status === "succeeded" ? "Setup passed" : status === "timed_out" ? "Setup timed out" : "Setup failed",
 		detail: {
 			event: "workspace.setup", setupStatus: status, setupStep: step, exitCode, durationMs, output,
 			setupFailure: projectSetupFailure(payload), setupHint: hint,
@@ -221,21 +224,94 @@ function scriptRunActivity(run: ScriptRun, createdAt: string): ConversationActiv
 	};
 }
 
+/** The session's newest Setup run with step events, if any. */
+function latestSetupRun(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): ScriptRun | undefined {
+	return groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) })
+		.filter((run) => run.phase === "setup").at(-1);
+}
+
 /**
  * The startup checklist a Cloud Chat session shows while its project's Setup
  * runs: the worker takes no turn until Setup finishes, so the session's first
  * prompt is waiting on Setup, not being worked on. Undefined once no Setup is
- * running (a worker that sends no step events never shows it).
+ * running (a worker that sends no step events never shows it). It is the
+ * checklist a failed start shows (cloudStartupChecklist), with Setup running.
  */
 export function cloudSetupStartupSteps(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): SessionProvisionStep[] | undefined {
 	if (events.some((event) => event.type === "chat.turn_started")) return undefined;
-	const setup = groupScriptRuns(events, { sessionEnded: cloudSessionScriptsEnded(session.cloud) })
-		.filter((run) => run.phase === "setup").at(-1);
+	const setup = latestSetupRun(session, events);
 	if (setup?.status !== "running") return undefined;
 	return [
+		{ id: "worktree", status: "done" },
 		{ id: "setup", status: "running", startedAt: setup.startedAt },
 		{ id: "agent", status: "pending" },
 	];
+}
+
+/** The workspace startup failure a Cloud Chat session shows as a failed local start: a failed checkout, Setup or agent start. */
+function workspaceStartupFailure(session: WorkspaceSession): Extract<CloudStartupProblem, { phase: "failed" }> | undefined {
+	const problem = cloudStartupProblem(session);
+	return problem?.phase === "failed" && isWorkspaceStartupError(problem.code) ? problem : undefined;
+}
+
+const startupStepOrder = ["worktree", "setup", "agent"] as const;
+
+/**
+ * The startup checklist of a Cloud Chat session, the one a local Chat start
+ * shows: "Setting up" while the project's Setup runs, and the failed start
+ * (the step that failed, the error, Retry) once the checkout, Setup or the
+ * agent's start failed. While a retry runs it reads as setting up again, with
+ * the failed step running, until the worker reports. Undefined when neither.
+ */
+export function cloudStartupChecklist(
+	session: WorkspaceSession,
+	events: readonly CloudCpClientEvent[],
+	failure: Extract<CloudStartupProblem, { phase: "failed" }> | undefined,
+	retrying: boolean,
+): Pick<WorkspaceSession, "provisionState" | "provisionSteps" | "provisionError"> | undefined {
+	if (!failure) {
+		const steps = cloudSetupStartupSteps(session, events);
+		return steps ? { provisionState: "provisioning", provisionSteps: steps } : undefined;
+	}
+	const failedStep = failure.code === "project_setup_failed" ? "setup" : failure.code === "agent_start_failed" ? "agent" : "worktree";
+	const failedIndex = startupStepOrder.indexOf(failedStep);
+	const setup = latestSetupRun(session, events);
+	const setupStartedAt = retrying && failedStep === "setup" && setup?.status === "running" ? setup.startedAt : undefined;
+	return {
+		provisionState: retrying ? "provisioning" : "failed",
+		provisionSteps: startupStepOrder.map((id, index): SessionProvisionStep => ({
+			id,
+			status: index < failedIndex ? "done" : index === failedIndex ? "running" : "pending",
+			...(id === "setup" && setupStartedAt ? { startedAt: setupStartedAt } : {}),
+		})),
+		provisionError: [failure.message, failure.detail && `Output: ${failure.detail}`].filter(Boolean).join(" "),
+	};
+}
+
+/** A Setup row's outcome and where its run started, for the Setup history rule. */
+function setupAttempt(item: ConversationItem): { passed: boolean; failed: boolean; order: number } | undefined {
+	if (item.kind !== "activity") return undefined;
+	if (item.detail?.event === "workspace.setup") {
+		const status = item.detail.setupStatus;
+		return { passed: status === "succeeded", failed: status !== "succeeded", order: item.sequence };
+	}
+	const run = item.detail?.event === "workspace.script.run" ? item.detail.scriptRun : undefined;
+	if (run?.phase !== "setup") return undefined;
+	return { passed: run.status === "succeeded", failed: run.status === "failed" || run.status === "interrupted", order: run.firstSequence };
+}
+
+/**
+ * The conversation without the Setup attempts that did not pass, as a local
+ * start keeps none: while the start is failed the checklist reports the
+ * failure, and once a retry passes only the Setup that passed stays. A failed
+ * Setup with no startup failure reporting it, and no later pass, still shows.
+ */
+export function withoutFailedSetupAttempts(items: ConversationItem[], startFailed: boolean): ConversationItem[] {
+	const lastPassed = Math.max(-1, ...items.map(setupAttempt).filter((attempt) => attempt?.passed).map((attempt) => attempt!.order));
+	return items.filter((item) => {
+		const attempt = setupAttempt(item);
+		return !attempt?.failed || (!startFailed && attempt.order > lastPassed);
+	});
 }
 
 export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent[]): ConversationSnapshot {
@@ -454,9 +530,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
 	// the active request; only later messages should appear in the queue. While
-	// the project's Setup runs it is not: nothing works on it until Setup ends,
-	// and the startup checklist (cloudSetupStartupSteps) shows that instead.
-	if (!orderedTurns.some((turn) => turn.state === "running") && !cloudSetupStartupSteps(session, events)) {
+	// the project's Setup runs, or after the checkout, Setup or the agent's start
+	// failed, it is not: nothing works on it until the workspace is ready, and
+	// the startup checklist (cloudStartupChecklist) shows that instead.
+	if (!orderedTurns.some((turn) => turn.state === "running") && !cloudSetupStartupSteps(session, events) && !workspaceStartupFailure(session)) {
 		const next = orderedTurns.find((turn) => turn.state === "queued");
 		if (next) {
 			next.state = "running";
@@ -521,6 +598,28 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
+	// A failed checkout or Setup reads the way a failed local Chat start does: the
+	// setup checklist under the opening message, with Retry. Retry asks the running
+	// worker to prepare the workspace again; until it reports, the step runs again.
+	const workspaceFailure = workspaceStartupFailure(session);
+	const [retriedFailureAt, setRetriedFailureAt] = useState<string>();
+	const rerunning = retriedFailureAt !== undefined && retriedFailureAt === workspaceFailure?.at;
+	// Ends a retry still waiting for an idle-paused workspace's worker when Chat goes away.
+	const retryAbort = useRef<AbortController | undefined>(undefined);
+	useEffect(() => () => retryAbort.current?.abort(), []);
+	const retryStart = useMutation({
+		mutationFn: () => {
+			retryAbort.current?.abort();
+			const abort = new AbortController();
+			retryAbort.current = abort;
+			return requestWorkspaceRetry(client, cloud?.orgId ?? "", session.id, abort.signal);
+		},
+		onSuccess: () => {
+			setRetriedFailureAt(workspaceFailure?.at);
+			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: ["cloud-session"] });
+		},
+	});
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
 	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
@@ -635,17 +734,24 @@ export function CloudSessionChatSurface({
 	// open) is neither sent nor shown.
 	const shownApprovalMode = settings.approvalMode && approvalModes.includes(settings.approvalMode)
 		? settings.approvalMode : shownDefaultApprovalMode;
-	const snapshot = useMemo(() => ({
-		...toSnapshot(session, eventsQuery.data ?? []), settings: { ...settings, approvalMode: shownApprovalMode },
-	}), [eventsQuery.data, session, settings, shownApprovalMode]);
-	// While Setup runs, the session reads as starting, as a local session's
-	// startup does: the checklist in place of a working timer, and messages
-	// that send in order once the agent starts.
-	const setupStartupSteps = useMemo(() => cloudSetupStartupSteps(session, eventsQuery.data ?? []), [eventsQuery.data, session]);
-	const setupStartupSession = useMemo<WorkspaceSession>(
-		() => setupStartupSteps ? { ...session, provisionState: "provisioning", provisionSteps: setupStartupSteps } : session,
-		[session, setupStartupSteps],
-	);
+	const startFailed = Boolean(workspaceFailure);
+	const startStopped = startFailed && !rerunning;
+	const snapshot = useMemo(() => {
+		const projected = toSnapshot(session, eventsQuery.data ?? []);
+		// A failed Setup is reported by the checklist while the start is failed, as a
+		// failed local start does; once a retry passes, only the Setup that passed stays.
+		const items = withoutFailedSetupAttempts(projected.items, startFailed);
+		// No agent runs until a retry prepares the workspace, as a failed local start reports.
+		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
+		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
+	}, [eventsQuery.data, session, settings, shownApprovalMode, startFailed, startStopped]);
+	// While Setup runs, or once the checkout, Setup or the agent's start failed,
+	// the session reads as a local start does: the startup checklist in place of a
+	// working timer, and messages that send in order once the agent starts.
+	const chatSession = useMemo<WorkspaceSession>(() => {
+		const startup = cloudStartupChecklist(session, eventsQuery.data ?? [], workspaceFailure, rerunning);
+		return startup ? { ...session, ...startup } : session;
+	}, [eventsQuery.data, rerunning, session, workspaceFailure]);
 	const activeTurn = snapshot.turns.find((turn) => turn.state === "running");
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
@@ -773,7 +879,11 @@ export function CloudSessionChatSurface({
 			steerPending={steer.isPending}
 			showSteerButton
 			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
-			session={setupStartupSession}
+			session={chatSession}
+			settingsReady={!startStopped}
+			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
+			resumingAgent={retryStart.isPending}
+			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}

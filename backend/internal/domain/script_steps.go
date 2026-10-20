@@ -19,7 +19,7 @@ import (
 // reordering, and the Settings editor reads and writes local and Cloud steps
 // alike.
 const (
-	DefaultScriptStepTimeoutMinutes = 10
+	DefaultScriptStepTimeoutMinutes = 30
 	MinScriptStepTimeoutMinutes     = 1
 	MaxScriptStepTimeoutMinutes     = 120
 )

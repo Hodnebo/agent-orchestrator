@@ -195,9 +195,9 @@ it("reads, edits and saves each step's own time limit in the stored form", async
 	expect(await screen.findByLabelText("Step 2")).toHaveValue("make seed");
 	const first = screen.getByLabelText("Time limit for step 1, in minutes");
 	const second = screen.getByLabelText("Time limit for step 2, in minutes");
-	// Empty is the default, shown as its placeholder.
+	// Empty is Setup's 30-minute default, shown as its placeholder.
 	expect(first).toHaveValue("");
-	expect(first).toHaveAttribute("placeholder", "10");
+	expect(first).toHaveAttribute("placeholder", "30");
 	expect(second).toHaveValue("45");
 	// Only digits are kept; the arrow keys step by one minute.
 	await userEvent.type(first, "9x0");
@@ -212,13 +212,22 @@ it("reads, edits and saves each step's own time limit in the stored form", async
 it("shows a step's time limit hint, with what empty means, on keyboard focus", async () => {
 	renderScripts();
 	const field = await screen.findByLabelText("Time limit for step 1, in minutes");
-	expect(field).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+	expect(field).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for 30 minutes.");
 	expect(field).not.toHaveAttribute("title");
 	act(() => field.focus());
 	const tooltip = await screen.findByRole("tooltip");
-	expect(tooltip).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
+	expect(tooltip).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 30 minutes.");
 	// Beside the field, so it covers neither the Scripts description above nor the step's command below.
 	expect(tooltip.closest("[data-side]")).toHaveAttribute("data-side", "left");
+});
+
+it("says each kind's default: 30 minutes for a Setup step, 10 for a Cloud Cleanup step", async () => {
+	renderScripts();
+	expect(await screen.findByLabelText("Time limit for step 1, in minutes")).toHaveAttribute("placeholder", "30");
+	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
+	const cleanup = screen.getByLabelText("Time limit for step 1, in minutes");
+	expect(cleanup).toHaveAttribute("placeholder", "10");
+	expect(cleanup).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for 10 minutes.");
 });
 
 it("does not mark the time limit of an empty step, which saving drops", async () => {
@@ -252,7 +261,8 @@ it("marks an out-of-range time limit at once and keeps the form from saving", as
 	fireEvent.change(field, { target: { value: "" } });
 	expect(field).not.toHaveAttribute("aria-invalid");
 	expect(screen.queryByRole("alert")).toBeNull();
-	fireEvent.change(field, { target: { value: "10" } });
+	// A typed default's value is kept as the step's own limit.
+	fireEvent.change(field, { target: { value: "30" } });
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	fireEvent.change(screen.getByLabelText("Time limit for step 1, in minutes"), { target: { value: "0" } });
 	expect(screen.getByRole("alert")).toHaveTextContent("Cleanup step 1");
@@ -260,7 +270,7 @@ it("marks an out-of-range time limit at once and keeps the form from saving", as
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: {
-		postCreate: ["npm ci"],
+		postCreate: ["# ao-timeout: 30m\nnpm ci"],
 		preRemove: ["# ao-timeout: 120m\ndocker compose -p \"ao-$AO_SESSION_ID\" down"],
 	} });
 });
