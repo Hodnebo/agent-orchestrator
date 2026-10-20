@@ -3,6 +3,9 @@ package postgres
 import (
 	"context"
 	"errors"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +214,45 @@ func TestQueuedTurnBehindAFailedWorkspaceStartDoesNotKeepTheSandboxUp(t *testing
 	}
 	if !keepAlive() {
 		t.Fatal("once the workspace is ready the queued message must keep the sandbox up again")
+	}
+}
+
+// The startup error codes the session reads and the turn queries match in SQL
+// are hand-written copies of domain.WorkspaceStartupErrorCodes. A code added
+// there must reach every copy, or a task queued behind that failure keeps its
+// session reading active and its VM awake.
+func TestWorkspaceStartupErrorCodeSQLListsMatchTheDomain(t *testing.T) {
+	want := append([]string(nil), domain.WorkspaceStartupErrorCodes()...)
+	slices.Sort(want)
+	parse := func(t *testing.T, list string) []string {
+		t.Helper()
+		var codes []string
+		for _, item := range strings.Split(list, ",") {
+			item = strings.TrimSpace(item)
+			if len(item) < 2 || item[0] != '\'' || item[len(item)-1] != '\'' {
+				t.Fatalf("SQL list item %q is not a string literal", item)
+			}
+			codes = append(codes, item[1:len(item)-1])
+		}
+		slices.Sort(codes)
+		return codes
+	}
+	inLists := regexp.MustCompile(`startup_error_code, ''\) IN \(([^)]*)\)`)
+	for name, query := range map[string]string{
+		"workspaceStartupErrorCodesSQL": "COALESCE(x.startup_error_code, '') IN (" + workspaceStartupErrorCodesSQL + ")",
+		"sessionSelect":                 sessionSelect,
+		"queuedBehindFailedStartupSQL":  queuedBehindFailedStartupSQL("turn", "sandbox"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			matches := inLists.FindAllStringSubmatch(query, -1)
+			if len(matches) == 0 {
+				t.Fatal("no startup error code list found")
+			}
+			for _, match := range matches {
+				if got := parse(t, match[1]); !slices.Equal(got, want) {
+					t.Fatalf("SQL lists startup error codes %v, want %v", got, want)
+				}
+			}
+		})
 	}
 }
