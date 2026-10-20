@@ -267,7 +267,11 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			for _, entry := range entries {
 				names = append(names, entry.Name())
 			}
-			_, _ = fmt.Fprintf(out, "%s contains: %s\n", filepath.Dir(binary), strings.Join(names, ", "))
+			listing := strings.Join(names, ", ")
+			if listing == "" {
+				listing = "(empty)"
+			}
+			_, _ = fmt.Fprintf(out, "%s contains: %s\n", filepath.Dir(binary), listing)
 		}
 		return errors.New("the update installed, but AO couldn't find its executable. Your current version is unchanged")
 	}
