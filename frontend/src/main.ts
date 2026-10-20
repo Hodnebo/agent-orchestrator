@@ -1,3 +1,5 @@
+import { launchTriageInTerminal, prepareTriage } from "./main/triage-launch";
+import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -282,6 +284,7 @@ app.setPath(
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
 const trustedShellWebContents = new Map<number, WebContents>();
@@ -2505,6 +2508,15 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
+ipcMain.handle("triage.prepare", () => prepareTriage({
+	AO_DATA_DIR: desktopDataDir,
+	AO_RUN_FILE: runFilePath() ?? undefined,
+}));
+ipcMain.handle("triage.launch", (_event, input) => launchTriageInTerminal(input, {
+	AO_DATA_DIR: desktopDataDir,
+	AO_RUN_FILE: runFilePath() ?? undefined,
+}));
+
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
 	await openAllowedAppExternalURL(url, shell);
 });

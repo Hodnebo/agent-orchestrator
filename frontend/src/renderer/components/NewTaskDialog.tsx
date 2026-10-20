@@ -55,6 +55,8 @@ function ProjectOwnerAvatar({ avatar, className }: { avatar: { owner: string; ur
 }
 
 type NewTaskDialogProps = {
+	initialPrompt?: string;
+	displayName?: string;
 	open: boolean;
 	projectId?: string;
 	hostId?: string;
@@ -63,7 +65,7 @@ type NewTaskDialogProps = {
 	onOpenChange: (open: boolean) => void;
 };
 
-export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
+export function NewTaskDialog({ open, projectId, hostId, initialPrompt, displayName, onProjectChange, onCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -179,6 +181,8 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 						{t(selectedProjectId === STANDALONE_WORKSPACE_ID ? "newTask.standaloneDescription" : "newTask.description")}
 					</Dialog.Description>
 					<TaskComposer
+						initialPrompt={initialPrompt}
+						displayName={displayName}
 						projectId={selectedProjectId}
 						hostId={hostId}
 						createLabel={t("newTask.create")}

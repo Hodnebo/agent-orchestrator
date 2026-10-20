@@ -19,6 +19,7 @@ export function GlobalNewTaskDialog() {
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState<string | undefined>(undefined);
 	const [hostId, setHostId] = useState<string | undefined>(undefined);
+	const [prefill, setPrefill] = useState<{ initialPrompt?: string; displayName?: string }>({});
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 
 	useEffect(() => {
@@ -30,6 +31,7 @@ export function GlobalNewTaskDialog() {
 		if (open) return;
 		setProjectId(newTaskRequest.projectId);
 		setHostId(newTaskRequest.hostId);
+		setPrefill({ initialPrompt: newTaskRequest.initialPrompt, displayName: newTaskRequest.displayName });
 		setOpen(true);
 	}, [newTaskRequest, open]);
 
@@ -41,6 +43,7 @@ export function GlobalNewTaskDialog() {
 
 	return (
 		<NewTaskDialog
+			{...prefill}
 			open={open}
 			projectId={projectId}
 			hostId={hostId}
