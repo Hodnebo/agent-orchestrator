@@ -4300,6 +4300,10 @@ const TurnGroup = memo(function TurnGroup({
 	// folding away with the routine work.
 	const noticeRuns = group.outcome ? workedRuns.filter(isNoticeRun) : [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
+	// "Worked for" names the turn's duration only when there is work to fold. With
+	// nothing to fold the time moves to the turn's action row, so a quick answer
+	// still says how long it took.
+	const unfoldedDurationMs = group.outcome && foldedRuns.length === 0 ? group.outcome.durationMs : undefined;
 	// What the live row names: the step the agent is on right now. Items the user acts
 	// on (approvals, questions) are not work, and a provider retry has its own slot.
 	const currentTask = group.live
@@ -4354,6 +4358,7 @@ const TurnGroup = memo(function TurnGroup({
 				queued={queued}
 				newHumanMessageIds={newHumanMessageIds}
 				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
+				durationMs={!endsWithOutcome && run.items[0]?.id === copyableMessageId ? unfoldedDurationMs : undefined}
 				live={group.live}
 				onRollback={
 					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
@@ -4480,6 +4485,7 @@ const TurnGroup = memo(function TurnGroup({
 			    it on its outcome's row instead. */}
 			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
 				<TurnActions
+					durationMs={unfoldedDurationMs}
 					onRollback={() => onRollback(group.turnId as string)}
 					rollbackDisabled={rollbackDisabled}
 				/>
@@ -4493,6 +4499,7 @@ const TurnGroup = memo(function TurnGroup({
 					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={copyableMessage?.createdAt}
+					durationMs={unfoldedDurationMs}
 				/>
 			) : null}
 		</div>
@@ -4535,6 +4542,7 @@ function TimelineItem({
 	queued,
 	newHumanMessageIds,
 	showCopy,
+	durationMs,
 	live,
 	onRollback,
 	rollbackDisabled,
@@ -4570,6 +4578,8 @@ function TimelineItem({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** This is the final assistant response of a turn that has finished. */
 	showCopy?: boolean;
+	/** How long that turn ran, when no "Worked for" fold above the answer says so. */
+	durationMs?: number;
 	live?: boolean;
 	/** Undo this finished turn from the answer that owns its copy action. */
 	onRollback?: () => void;
@@ -4585,6 +4595,7 @@ function TimelineItem({
 				<AssistantMessage
 					message={item}
 					showCopy={showCopy}
+					durationMs={durationMs}
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}

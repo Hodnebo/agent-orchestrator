@@ -385,6 +385,7 @@ export function TurnOutcome({
 	onRollback,
 	rollbackDisabled,
 	timestamp,
+	durationMs,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
@@ -417,12 +418,19 @@ export function TurnOutcome({
 				onRollback={onRollback}
 				rollbackDisabled={rollbackDisabled}
 				timestamp={timestamp}
+				durationMs={durationMs}
 			/>
 		</div>
 	);
 }
 
 interface TurnActionsProps {
+	/**
+	 * How long the turn ran. "Worked for" carries this when the turn has work to
+	 * fold; a turn that went straight to its answer has no fold, so the time leads
+	 * the action row instead and every turn still says how long it took.
+	 */
+	durationMs?: number;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
 	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
@@ -439,14 +447,17 @@ const TURN_ACTION_BUTTON =
 	"flex h-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100";
 
 /**
- * The row a turn closes on: retry, copy, roll back, then the time on hover.
+ * The row a turn closes on: how long it ran (when no fold above says so), retry,
+ * copy, roll back, then the time on hover.
  *
  * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
  * one — so the controls are always in the same place. The negative margin is on the
  * row rather than its first button, so the leading glyph lines up with the text
- * above whichever control comes first.
+ * above whichever control comes first; the duration pads itself back to the text
+ * edge for the same reason.
  */
 export function TurnActions({
+	durationMs,
 	retry,
 	copyText,
 	onRollback,
@@ -459,6 +470,7 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
+				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
 				{retry ? (
 					<button
 						type="button"
@@ -989,10 +1001,13 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
+	durationMs,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
+	/** How long the turn ran, for the action row when no "Worked for" fold carries it. */
+	durationMs?: number;
 	/** The enclosing turn is still active, even if its last text chunk has landed. */
 	live?: boolean;
 	/**
@@ -1021,6 +1036,7 @@ export function AssistantMessage({
 				// visible; only the wall-clock time reveals on hover.
 				<TurnActions
 					className="mt-1"
+					durationMs={durationMs}
 					copyText={showCopy ? message.text : undefined}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
@@ -3279,17 +3295,22 @@ function fileBasename(path: string): string {
 /* turn boundary                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** Turn wall-clock duration; lives on the action row next to rollback, not the Done divider. */
+/**
+ * Turn wall-clock duration: inline after "Worked for", or on its own at the head of
+ * the action row when the turn had no work to fold. On its own it still says what
+ * the number is to a screen reader, since nothing visible does.
+ */
 export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
 	if (durationMs <= 0) return null;
 	return (
 		<span
 			className={cn(
 				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline && "group-hover/row:text-foreground",
-				!inline && "px-1",
+				inline ? "group-hover/row:text-foreground" : "pl-1.5 pr-0.5",
 			)}
+			data-turn-duration={inline ? undefined : ""}
 		>
+			{inline ? null : <span className="sr-only">Worked for </span>}
 			{formatDuration(durationMs)}
 		</span>
 	);

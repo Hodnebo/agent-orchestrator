@@ -1081,9 +1081,49 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
+		// The fold names the time, so the answer's own row does not repeat it.
+		expect(document.querySelector("[data-turn-duration]")).toBeNull();
 
 		await user.click(worked);
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
+	});
+
+	it("puts the turn's duration on the action row when there is no work to fold", () => {
+		const turnId = "turn-straight-to-answer";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 2,
+			turns: [
+				{
+					id: turnId,
+					state: "completed",
+					requestedAt: "2026-08-11T10:01:00Z",
+					startedAt: "2026-08-11T10:01:01Z",
+					completedAt: "2026-08-11T10:02:05Z",
+				},
+			],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "hi",
+					streaming: false, createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message", id: "answer", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Hi! What would you like to work on?",
+					streaming: false, createdAt: "2026-08-11T10:02:05Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
+		const duration = screen.getByText("1m");
+		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
+		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
+		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("keeps a mid-turn steer in order among the work instead of hoisting it with the prompt", () => {
