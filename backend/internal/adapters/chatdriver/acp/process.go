@@ -126,7 +126,9 @@ func persistentTerminate(
 		once.Do(func() {
 			gate.Open()
 			_ = stdin.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// The host's own shutdown can take about 6 s; on a loaded machine 5 s ran
+			// out first and failed a provider switch.
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			result = shutdown(ctx, quickStop.Load())
 		})

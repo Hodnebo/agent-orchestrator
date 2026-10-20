@@ -568,7 +568,8 @@ func (d *Driver) connectSession(
 		stop:          transport.Stdin.Close,
 		terminate: func() error {
 			_ = transport.Stdin.Close()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// As for ACP hosts: the host's own shutdown can take about 6 s.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			return persistenthost.Shutdown(shutdownCtx, dataDir, string(sessionID))
 		},
