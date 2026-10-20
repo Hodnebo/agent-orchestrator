@@ -21,6 +21,7 @@ import {
 	rememberedRenderHeight,
 	renderFrameLive,
 	renderTheme,
+	settledRenderHeight,
 	renderThemeFragment,
 	renderThemeScript,
 	subscribeRenderViewport,
@@ -29,6 +30,9 @@ import {
 	type RenderTheme,
 } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
+import { startRenderHeightStore } from "./renderHeightStore";
+
+startRenderHeightStore();
 
 // A link opens only from a touch the viewer just received, so a page cannot
 // open one on its own by posting to the bridge.
@@ -177,7 +181,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
-	const [contentHeight, setContentHeight] = useState(() => rememberedRenderHeight(render.path));
+	const [contentHeight, setContentHeight] = useState<number>();
 	const [live, setLive] = useState(false);
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
@@ -191,11 +195,23 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	useEffect(() => subscribeRenderViewport(measure), [measure]);
 	// A page that leaves range reloads when it returns, so it is loading again.
 	const { unload } = page;
-	useEffect(() => { if (!live) unload(); }, [live, unload]);
-	const onHeight = useCallback((height: number) => {
-		rememberRenderHeight(render.path, height);
-		setContentHeight(height);
-	}, [render.path]);
+	const measured = useRef<number | undefined>(undefined);
+	useEffect(() => {
+		if (live) return;
+		unload();
+		// Its next page opens at the saved height, as after a relaunch.
+		measured.current = undefined;
+	}, [live, unload]);
+	const onHeight = useCallback((reported: number) => {
+		if (!width) return;
+		// A frame that opened at this device's saved height keeps it unless the
+		// page really differs, so a relaunch neither shifts nor creeps.
+		const saved = measured.current === undefined ? rememberedRenderHeight(render.path, width) : undefined;
+		const next = settledRenderHeight(measured.current ?? saved ?? reported, reported, saved !== undefined);
+		measured.current = next;
+		rememberRenderHeight(render.path, width, next);
+		setContentHeight(next);
+	}, [render.path, width]);
 
 	if (!config || failed) {
 		return <Pressable
@@ -211,7 +227,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		</Pressable>;
 	}
 
-	const height = clampRenderHeight(contentHeight ?? initialRenderHeight(render, width));
+	const height = clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
 		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}

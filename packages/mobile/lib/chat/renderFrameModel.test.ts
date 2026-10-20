@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { darkTheme, lightTheme } from "../theme";
 import {
+	RENDER_BRIDGE_SCRIPT,
 	RENDER_MAX_HEIGHT,
 	RENDER_ZOOM_SCRIPT,
 	RENDER_MIN_HEIGHT,
@@ -9,7 +10,11 @@ import {
 	rememberRenderHeight,
 	rememberedRenderHeight,
 	renderFrameLive,
+	restoreRememberedHeights,
+	serializeRememberedHeights,
+	subscribeRememberedHeights,
 	renderSkeletonLines,
+	settledRenderHeight,
 	subscribeRenderViewport,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
@@ -164,18 +169,68 @@ describe("renderFrameLive", () => {
 });
 
 describe("remembered render heights", () => {
-	it("returns the last height a page reported", () => {
-		rememberRenderHeight("/api/v1/sessions/s/renders/a", 420);
-		rememberRenderHeight("/api/v1/sessions/s/renders/a", 610);
-		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/a")).toBe(610);
-		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/never")).toBeUndefined();
+	const page = (name: string) => `/api/v1/sessions/s/renders/${name}`;
+
+	it("returns the last height a page reported at this frame width", () => {
+		rememberRenderHeight(page("a"), 362, 420);
+		rememberRenderHeight(page("a"), 362, 610);
+		expect(rememberedRenderHeight(page("a"), 362)).toBe(610);
+		expect(rememberedRenderHeight(page("never"), 362)).toBeUndefined();
+	});
+
+	it("does not reuse a height measured at another width, but offers it before layout", () => {
+		rememberRenderHeight(page("rotated"), 362, 500);
+		expect(rememberedRenderHeight(page("rotated"), 800)).toBeUndefined();
+		expect(rememberedRenderHeight(page("rotated"))).toBe(500);
 	});
 
 	it("forgets the oldest page past the cap", () => {
-		rememberRenderHeight("/api/v1/sessions/s/renders/first", 100);
-		for (let index = 0; index < 200; index++) rememberRenderHeight(`/api/v1/sessions/s/renders/p${index}`, 100 + index);
-		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/first")).toBeUndefined();
-		expect(rememberedRenderHeight("/api/v1/sessions/s/renders/p199")).toBe(299);
+		rememberRenderHeight(page("first"), 362, 100);
+		for (let index = 0; index < 200; index++) rememberRenderHeight(page(`p${index}`), 362, 100 + index);
+		expect(rememberedRenderHeight(page("first"), 362)).toBeUndefined();
+		expect(rememberedRenderHeight(page("p199"), 362)).toBe(299);
+	});
+
+	it("tells the saver about changes, but not about a height it already has", () => {
+		let saves = 0;
+		const unsubscribe = subscribeRememberedHeights(() => { saves += 1; });
+		rememberRenderHeight(page("saved"), 362, 300);
+		rememberRenderHeight(page("saved"), 362, 300);
+		rememberRenderHeight(page("saved"), 362, 320);
+		unsubscribe();
+		expect(saves).toBe(2);
+	});
+
+	it("survives a launch: serialized heights restore into a fresh session", async () => {
+		rememberRenderHeight(page("kept"), 362, 444);
+		const saved = serializeRememberedHeights();
+		// A new launch: the module's cache starts empty.
+		vi.resetModules();
+		const launch = await import("./renderFrameModel");
+		expect(launch.rememberedRenderHeight(page("kept"), 362)).toBeUndefined();
+		launch.rememberRenderHeight(page("reported"), 362, 999);
+		launch.restoreRememberedHeights(saved);
+		expect(launch.rememberedRenderHeight(page("kept"), 362)).toBe(444);
+		launch.restoreRememberedHeights(JSON.stringify([[page("reported"), 362, 100]]));
+		// This launch reported 999; an older saved height does not replace it.
+		expect(launch.rememberedRenderHeight(page("reported"), 362)).toBe(999);
+	});
+
+	it("drops restored heights before this launch's when over the cap", async () => {
+		vi.resetModules();
+		const launch = await import("./renderFrameModel");
+		for (let index = 0; index < 200; index++) launch.rememberRenderHeight(page(`now${index}`), 362, 100);
+		launch.restoreRememberedHeights(JSON.stringify([[page("old"), 362, 512]]));
+		expect(launch.rememberedRenderHeight(page("old"), 362)).toBeUndefined();
+		expect(launch.rememberedRenderHeight(page("now0"), 362)).toBe(100);
+	});
+
+	it("skips anything malformed in what was saved", () => {
+		for (const saved of [null, "", "not json", "{}", JSON.stringify([["https://example.com/x", 362, 100], [page("bad-width"), 0, 100], [page("bad-height"), 362, -1], [page("short"), 362]])]) {
+			expect(() => restoreRememberedHeights(saved)).not.toThrow();
+		}
+		expect(rememberedRenderHeight(page("bad-width"))).toBeUndefined();
+		expect(rememberedRenderHeight(page("bad-height"))).toBeUndefined();
 	});
 });
 
@@ -195,5 +250,44 @@ describe("renderSkeletonLines", () => {
 		expect(renderSkeletonLines(80)).toEqual([]);
 		expect(renderSkeletonLines(159)).toEqual([]);
 		expect(renderSkeletonLines(160)).toEqual([0.7, 0.45]);
+	});
+});
+
+describe("RENDER_BRIDGE_SCRIPT height report", () => {
+	function reportedHeight(page: { scrollHeight: number; clientHeight: number; contentHeight: number }): number | undefined {
+		const posted: string[] = [];
+		const window = { ReactNativeWebView: { postMessage: (data: string) => posted.push(data) }, addEventListener: () => {} };
+		const document = {
+			documentElement: { scrollHeight: page.scrollHeight, clientHeight: page.clientHeight, getBoundingClientRect: () => ({ height: page.contentHeight }) },
+			body: null,
+			addEventListener: () => {},
+		};
+		new Function("window", "document", RENDER_BRIDGE_SCRIPT)(window, document);
+		const message = posted.map((data) => readRenderBridgeMessage(data)).find((value) => value?.type === "height");
+		return message?.type === "height" ? message.height : undefined;
+	}
+
+	it("grows a frame the page overflows to the page's full height", () => {
+		expect(reportedHeight({ scrollHeight: 640, clientHeight: 312, contentHeight: 312 })).toBe(640);
+	});
+
+	it("shrinks a frame taller than its page to the content height", () => {
+		expect(reportedHeight({ scrollHeight: 520, clientHeight: 520, contentHeight: 318.2 })).toBe(319);
+	});
+});
+
+describe("settledRenderHeight", () => {
+	it("keeps a saved height through a report that is only measurement noise", () => {
+		expect(settledRenderHeight(321, 324, true)).toBe(321);
+		expect(settledRenderHeight(321, 317, true)).toBe(321);
+	});
+
+	it("takes a report that really differs from the saved height", () => {
+		expect(settledRenderHeight(321, 340, true)).toBe(340);
+		expect(settledRenderHeight(321, 300, true)).toBe(300);
+	});
+
+	it("always takes the first measurement of a page", () => {
+		expect(settledRenderHeight(312, 316, false)).toBe(316);
 	});
 });

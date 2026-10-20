@@ -83,6 +83,23 @@ export function renderFrameLive(top: number, height: number, viewportHeight: num
 }
 
 /**
+ * How far a page's report may differ from a height this device already saved
+ * before it counts as new. A stored page never changes, but a WebView opened at
+ * the saved height measures it a few pixels differently (Android reads taller
+ * each launch), and applying that would shift the thread and creep.
+ */
+const SAVED_HEIGHT_TOLERANCE = 4;
+
+/**
+ * The frame height after a page reports its own. A frame that opened at a
+ * saved height keeps it for a report within the tolerance; otherwise the
+ * report wins.
+ */
+export function settledRenderHeight(current: number, reported: number, openedAtSaved: boolean): number {
+	return openedAtSaved && Math.abs(reported - current) <= SAVED_HEIGHT_TOLERANCE ? current : reported;
+}
+
+/**
  * The caption lines a loading skeleton draws under its content block, as
  * fractions of the frame width. A short frame is all content block: lines
  * squeezed into it would read as the page itself.
@@ -92,18 +109,69 @@ export function renderSkeletonLines(height: number): number[] {
 }
 
 const MAX_REMEMBERED_HEIGHTS = 200;
-const rememberedHeights = new Map<string, number>();
+type RememberedHeight = { width: number; height: number };
+const rememberedHeights = new Map<string, RememberedHeight>();
+const rememberedListeners = new Set<() => void>();
 
-/** The height a page last reported, so a frame that remounts opens at it. */
-export function rememberedRenderHeight(path: string): number | undefined {
-	return rememberedHeights.get(path);
+/**
+ * The height a page last reported on this device, so a frame opens at it
+ * instead of the daemon's estimate. A stored page never changes, so the height
+ * stays right; only another frame width (rotation, a tablet) can change it.
+ * Before the frame has a width, the last height is the best guess there is.
+ */
+export function rememberedRenderHeight(path: string, width?: number): number | undefined {
+	const remembered = rememberedHeights.get(path);
+	if (!remembered || (width !== undefined && remembered.width !== width)) return undefined;
+	return remembered.height;
 }
 
-export function rememberRenderHeight(path: string, height: number): void {
+export function rememberRenderHeight(path: string, width: number, height: number): void {
+	const current = rememberedHeights.get(path);
+	if (current?.width === width && current.height === height) return;
+	setRemembered(path, { width, height });
+	for (const listener of rememberedListeners) listener();
+}
+
+function setRemembered(path: string, value: RememberedHeight): void {
 	rememberedHeights.delete(path);
-	rememberedHeights.set(path, height);
+	rememberedHeights.set(path, value);
 	// Oldest first: a Map iterates in insertion order.
 	if (rememberedHeights.size > MAX_REMEMBERED_HEIGHTS) rememberedHeights.delete(rememberedHeights.keys().next().value!);
+}
+
+/** Called after each change, so the heights can be saved for the next launch. */
+export function subscribeRememberedHeights(listener: () => void): () => void {
+	rememberedListeners.add(listener);
+	return () => rememberedListeners.delete(listener);
+}
+
+/** The remembered heights, oldest first, as saved between launches. */
+export function serializeRememberedHeights(): string {
+	return JSON.stringify([...rememberedHeights].map(([path, { width, height }]) => [path, width, height]));
+}
+
+/**
+ * Brings back heights saved by an earlier launch. One reported in this launch
+ * is newer and wins, and anything malformed is skipped rather than trusted.
+ */
+export function restoreRememberedHeights(saved: string | null): void {
+	if (!saved) return;
+	let entries: unknown;
+	try {
+		entries = JSON.parse(saved);
+	} catch {
+		return;
+	}
+	if (!Array.isArray(entries)) return;
+	const current = [...rememberedHeights];
+	rememberedHeights.clear();
+	for (const entry of entries) {
+		if (!Array.isArray(entry) || entry.length !== 3) continue;
+		const [path, width, height] = entry as unknown[];
+		if (typeof path !== "string" || !RENDER_PATH.test(path) || !isPositiveInteger(width) || typeof height !== "number" || !Number.isFinite(height) || height <= 0) continue;
+		setRemembered(path, { width: width as number, height });
+	}
+	for (const [path, value] of current) setRemembered(path, value);
 }
 
 type ViewportListener = () => void;
