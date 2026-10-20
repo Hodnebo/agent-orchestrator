@@ -659,8 +659,13 @@ func NormalizeProjectRepoSettings(mainURL string, config json.RawMessage) (json.
 		if json.Unmarshal(raw, &directory) != nil {
 			return nil, errors.New("workingDirectory must be a string")
 		}
-		if err := ValidateCoderWorkingDirectory(strings.TrimSpace(directory)); err != nil {
+		normalized := NormalizeCoderWorkingDirectory(directory)
+		if err := ValidateCoderWorkingDirectory(normalized); err != nil {
 			return nil, err
+		}
+		if normalized != directory {
+			values["workingDirectory"], _ = json.Marshal(normalized)
+			changed = true
 		}
 		// A standalone project has no repository to name the folder after; the
 		// worker would ignore such a folder and start in its default one.

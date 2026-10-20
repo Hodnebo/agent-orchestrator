@@ -7,6 +7,7 @@ import {
 	timedScriptCommand,
 	additionalReposProblem,
 	isStandaloneCloudProject,
+	normalizeWorkingDirectory,
 	parseRepoScriptCommand,
 	parseScriptSteps,
 	projectAdditionalRepos,
@@ -86,6 +87,14 @@ describe("cloud project repositories", () => {
 		for (const bad of ["0", "121", "1.5", "-3", "ten"]) expect(scriptStepTimeoutMinutes(bad)).toBeNull();
 	});
 
+	it("normalizes a working folder as the control plane stores it", () => {
+		expect(normalizeWorkingDirectory("/work/{repo}/")).toBe("/work/{repo}");
+		expect(normalizeWorkingDirectory(" ~/work//{repo}/ ")).toBe("~/work/{repo}");
+		expect(normalizeWorkingDirectory("$HOME//src/")).toBe("$HOME/src");
+		expect(normalizeWorkingDirectory("~/")).toBe("~/");
+		expect(normalizeWorkingDirectory("work/")).toBe("work/");
+	});
+
 	it("rejects working folders the control plane rejects", () => {
 		for (const ok of ["", "  ", "~/work/{repo}", "$HOME/work", "/srv/work/{repo}"]) expect(workingDirectoryProblem(ok)).toBeUndefined();
 		expect(workingDirectoryProblem("~")).toBe("form");
@@ -93,6 +102,8 @@ describe("cloud project repositories", () => {
 		expect(workingDirectoryProblem("/")).toBe("form");
 		expect(workingDirectoryProblem("work")).toBe("form");
 		expect(workingDirectoryProblem("~/work/../x")).toBe("segments");
+		expect(workingDirectoryProblem("~/.ao/{repo}")).toBe("aoState");
+		expect(workingDirectoryProblem("/home/coder/.ao/work")).toBe("aoState");
 		expect(workingDirectoryProblem("~/work/{name}")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/work/$USER")).toBe("placeholder");
 		expect(workingDirectoryProblem("~/a\tb")).toBe("characters");

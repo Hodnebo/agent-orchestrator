@@ -411,3 +411,30 @@ func TestCoderCheckoutSiblings(t *testing.T) {
 		}
 	}
 }
+
+// A saved working folder is stored canonical (no repeated or trailing
+// slashes), and a folder inside AO's own .ao state is refused, as are . and ..
+// segments.
+func TestProjectWorkingFolderIsNormalizedAndKeptOutOfAOsState(t *testing.T) {
+	t.Parallel()
+	const mainURL = "https://github.com/acme/alice"
+	for saved, want := range map[string]string{
+		"/work/{repo}/":     "/work/{repo}",
+		" ~/work//{repo}/ ": "~/work/{repo}",
+		"$HOME//src/":       "$HOME/src",
+		"~/work/{repo}":     "~/work/{repo}",
+	} {
+		config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`))
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		if got := ProjectWorkingDirectory(config); got != want || !strings.Contains(string(config), `"workingDirectory":"`+want+`"`) {
+			t.Errorf("%q saved as %s, want %q", saved, config, want)
+		}
+	}
+	for _, saved := range []string{"~/.ao/{repo}", "$HOME/.ao/work", "/home/coder/.ao/x", "~/work/../{repo}", "~/./work", "~//"} {
+		if config, err := NormalizeProjectRepoSettings(mainURL, json.RawMessage(`{"workingDirectory":"`+saved+`"}`)); err == nil {
+			t.Errorf("%q was accepted as %s", saved, config)
+		}
+	}
+}

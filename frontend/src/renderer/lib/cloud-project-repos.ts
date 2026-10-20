@@ -257,7 +257,7 @@ export const MAX_WORKING_DIRECTORY_LENGTH = 512;
  * domain.ValidateCoderWorkingDirectory on the trimmed value; undefined when it
  * is accepted ("" keeps the connection's).
  */
-export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "placeholder" | "standaloneRepo" | undefined {
+export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "aoState" | "placeholder" | "standaloneRepo" | undefined {
 	const directory = value.trim();
 	if (directory === "") return undefined;
 	if ([...directory].length > MAX_WORKING_DIRECTORY_LENGTH) return "length";
@@ -267,10 +267,26 @@ export function workingDirectoryProblem(value: string, options: { standalone?: b
 	const rest = prefix === undefined ? undefined : directory.slice(prefix.length);
 	if (rest === undefined || rest.replace(/^\/+|\/+$/g, "") === "") return "form";
 	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return "segments";
+	// AO's own state (~/.ao, or the durable root's .ao) holds the worker's token.
+	if (rest.split("/").includes(".ao")) return "aoState";
 	if (/[{}$`\\]/.test(rest.split("{repo}").join(""))) return "placeholder";
 	// A standalone project has no repository to name the folder after.
 	if (options.standalone && rest.includes("{repo}")) return "standaloneRepo";
 	return undefined;
+}
+
+/**
+ * A working folder as the control plane stores it
+ * (domain.NormalizeCoderWorkingDirectory): trimmed, without repeated or
+ * trailing slashes after its ~/, $HOME/ or / prefix ("/work/{repo}/" becomes
+ * "/work/{repo}"). Anything else comes back trimmed.
+ */
+export function normalizeWorkingDirectory(value: string): string {
+	const directory = value.trim();
+	const prefix = ["~/", "$HOME/", "/"].find((candidate) => directory.startsWith(candidate));
+	if (prefix === undefined) return directory;
+	const segments = directory.slice(prefix.length).split("/").filter((segment) => segment !== "");
+	return segments.length === 0 ? directory : prefix + segments.join("/");
 }
 
 /** UTF-8 byte length, for the 16 KB rules limit. */

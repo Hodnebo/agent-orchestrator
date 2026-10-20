@@ -15,6 +15,7 @@ import {
 	gitHubFullName,
 	isStandaloneCloudProject,
 	MAX_PROJECT_RULES_BYTES,
+	normalizeWorkingDirectory,
 	projectAdditionalRepos,
 	projectAgentStartsIn,
 	projectConfigText,
@@ -105,6 +106,8 @@ function workingDirectoryMessage(t: TFunction, problem: ReturnType<typeof workin
 			return t("settings.cloudProject.workingDirectoryCharacters", { defaultValue: "The working folder contains invalid characters." });
 		case "segments":
 			return t("settings.cloudProject.workingDirectorySegments", { defaultValue: "The working folder must not contain . or .. segments." });
+		case "aoState":
+			return t("settings.cloudProject.workingDirectoryAOState", { defaultValue: "The working folder must not be inside AO's own .ao folder." });
 		case "standaloneRepo":
 			return t("settings.cloudProject.workingDirectoryStandaloneRepo", { defaultValue: "This project has no repository, so its working folder cannot use {repo}. Name the folder, for example ~/work/scratch." });
 		case "placeholder":
@@ -131,10 +134,10 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 	const [extras, setExtras] = useState<string[]>(() => storedRepos.map((repo) => repo.url));
 	const [startsIn, setStartsIn] = useState<CloudCpAgentStartsIn>(() => projectAgentStartsIn(project.config));
 	const [workingDirectory, setWorkingDirectory] = useState(() => projectConfigText(project.config, "workingDirectory"));
-	const [saved, setSaved] = useState(() => ({ extras: storedRepos.map((repo) => repo.url), startsIn: projectAgentStartsIn(project.config), workingDirectory: projectConfigText(project.config, "workingDirectory").trim() }));
+	const [saved, setSaved] = useState(() => ({ extras: storedRepos.map((repo) => repo.url), startsIn: projectAgentStartsIn(project.config), workingDirectory: normalizeWorkingDirectory(projectConfigText(project.config, "workingDirectory")) }));
 	const filledExtras = extras.filter((url) => url !== "");
 	const reposChanged = JSON.stringify(filledExtras) !== JSON.stringify(saved.extras);
-	const dirty = reposChanged || startsIn !== saved.startsIn || workingDirectory.trim() !== saved.workingDirectory;
+	const dirty = reposChanged || startsIn !== saved.startsIn || normalizeWorkingDirectory(workingDirectory) !== saved.workingDirectory;
 	const repos = useCloudGitHubAppRepositories(project.orgId, !standalone);
 	// The working folder is where a Coder session checks the main repository
 	// out (or, run as the workspace user, the folder it adopts); show it for a
@@ -164,9 +167,14 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 			});
 		}
 		if (startsIn !== saved.startsIn) config.agentStartsIn = startsIn;
-		if (workingDirectory.trim() !== saved.workingDirectory) config.workingDirectory = workingDirectory.trim();
+		// Saved as the control plane stores it, so the field shows what was saved.
+		const normalizedDirectory = normalizeWorkingDirectory(workingDirectory);
+		if (normalizedDirectory !== saved.workingDirectory) config.workingDirectory = normalizedDirectory;
 		mutation.mutate({ config }, {
-			onSuccess: () => setSaved({ extras: filledExtras, startsIn, workingDirectory: workingDirectory.trim() }),
+			onSuccess: () => {
+				setWorkingDirectory(normalizedDirectory);
+				setSaved({ extras: filledExtras, startsIn, workingDirectory: normalizedDirectory });
+			},
 		});
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
