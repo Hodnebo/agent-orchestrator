@@ -433,6 +433,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// A tier sticks to the thread. One AO left it on is undone by the first turn
 	// here; one the user configured is theirs, as on a new thread.
 	conv.fastTier = resp.ServiceTier != nil && conv.configuredServiceTier(ctx) == ""
+	// thread/resume does not report the collaboration mode, and Plan sticks to
+	// the thread across a restart, so the next turn states it.
+	conv.planUnknown = true
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
 }
