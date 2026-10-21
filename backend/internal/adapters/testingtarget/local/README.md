@@ -99,7 +99,12 @@ Typed process.ErrNotRunning identifies missing and zombie processes. These
 descendants are gone; a bare ESRCH/EIO lookup needs another inventory to confirm
 absence. A descendant disappearing before signal delivery is also gone. Events
 during inventory are noted in target.log. Live PID reuse still prevents signals.
-The Electron main and daemon remain required for every live observation.
+The Electron main and daemon remain required for ordinary live observations.
+`target_control` can explicitly stop only the owned daemon. In that state,
+observations require the same Electron birth identity, positive daemon absence,
+an absent private listener and no foreign run file. Restart uses the owned
+Electron's existing daemon-start handler through private attempt files. The
+replacement must pass the same descendant, executable, cwd and run-file checks.
 Logs and retained evidence remain. After absence checks pass, only the owned
 data, Electron profile, fixtures, setup scripts and daemon binary are removed;
 the checkout and normal
@@ -128,3 +133,20 @@ that the marker is absent from API results and logs, captures exactly one target
 window through a private Cua Unix socket, and records cleanup. Inspect that PNG
 before claiming the marker is visible. Evidence stays beneath `~/.ao`; copy
 requested report artifacts out separately. This proof starts no Cua MCP server.
+
+## Target terminal windows
+
+Call `target_control` with `arm_terminal` immediately before the target's native
+terminal trigger. Call `admit_terminal` afterward, within two minutes. Admission
+requires exactly one new Terminal.app window with one tab, the target's private
+state paths in its visible launch command, its native window ID, PID birth time
+and tty processes. Existing windows, ambiguous additions and unrelated commands
+are refused. Baseline inventory does not read existing terminal contents.
+
+Admission selects that terminal for the ordinary observe/click/type/key tools.
+It receives its own Cua binding and window recording in the same attempt journal.
+`read_terminal` retains bounded text from that exact window and tty. `select_app`
+returns observation and input to the owned Electron window. A fresh observation
+is required after switching. The controller records terminal tty process births,
+terminates only those captured processes and closes only the admitted window at
+cleanup. Terminal.app itself and its other windows never become owned.

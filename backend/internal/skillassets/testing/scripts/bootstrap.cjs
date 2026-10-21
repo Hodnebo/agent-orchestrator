@@ -1,5 +1,5 @@
 // This wrapper stays in ignored build output, never in AO frontend source.
-const { app } = require('electron');
+const { app, ipcMain } = require('electron');
 const fs = require('node:fs');
 const { randomBytes } = require('node:crypto');
 
@@ -26,5 +26,33 @@ if (process.env.AO_TARGET_MARKER_ORACLE) {
       });
     });
   });
+}
+// Only the private controller can request the existing daemon start handler.
+// This directory is fresh attempt state, outside the target checkout.
+if (process.env.AO_TESTING_CONTROL_DIR) {
+  const path = require('node:path');
+  const dir = process.env.AO_TESTING_CONTROL_DIR;
+  const handlers = new Map();
+  const original = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (name, handler) => {
+    if (name === 'daemon:start') handlers.set(name, handler);
+    return original(name, handler);
+  };
+  let busy = false;
+  const watcher = fs.watch(dir, async (_event, file) => {
+    if (file !== 'request.json' || busy) return;
+    busy = true;
+    try {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+      if (!/^[a-f0-9]{32}$/.test(request.id) || request.action !== 'restart_daemon') return;
+      const handler = handlers.get('daemon:start');
+      if (!handler) throw new Error('This revision has no daemon:start handler');
+      await handler();
+      fs.writeFileSync(path.join(dir, request.id + '.json'), JSON.stringify({ ok: true }), { mode: 0o600, flag: 'wx' });
+    } catch (error) {
+      console.error('Testing controller daemon start failed: ' + error.message);
+    } finally { busy = false; }
+  });
+  app.on('will-quit', () => watcher.close());
 }
 require('./ao-main.cjs');

@@ -26,6 +26,18 @@ type TestingTargetWorkerContext interface {
 	WorkerContext(ctx context.Context, target domain.TestTargetIdentity) (TestingWorkerContext, error)
 }
 
+// TestingTargetControl is optional target-scoped lifecycle and window admission.
+// Window identities originate in the controller and never in worker arguments.
+type TestingTargetControl interface {
+	Control(context.Context, domain.TestTargetIdentity, string) (TestingControlResult, error)
+}
+
+type TestingControlResult struct {
+	Detail string                     `json:"detail"`
+	Text   string                     `json:"text,omitempty"`
+	Window *domain.TestTargetIdentity `json:"-"`
+}
+
 // TestingWorkerContext contains adapter-resolved paths, never worker input.
 type TestingWorkerContext struct {
 	CheckoutPath  string `json:"checkoutPath"`

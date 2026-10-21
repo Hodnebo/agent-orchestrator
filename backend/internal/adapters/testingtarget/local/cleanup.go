@@ -34,13 +34,13 @@ func (a *Adapter) captureTree(ctx context.Context, s *launch) error {
 	gone := make(map[int]bool)
 	for pid, started := range s.owned {
 		if _, exists := live[pid]; !exists {
-			if !s.closing && (pid == s.target.ElectronPID || pid == s.target.DaemonPID) {
+			if !s.closing && s.requiredPID(pid) {
 				return fmt.Errorf("required target PID %d vanished", pid)
 			}
 			continue
 		}
 		current, err := a.ops.startTime(pid)
-		if err != nil && (s.closing || (pid != s.target.ElectronPID && pid != s.target.DaemonPID)) {
+		if err != nil && (s.closing || !s.requiredPID(pid)) {
 			skipped, checkErr := a.skipVanished(ctx, s, pid, err)
 			if checkErr != nil {
 				return checkErr
@@ -63,7 +63,7 @@ func (a *Adapter) captureTree(ctx context.Context, s *launch) error {
 			}
 			started, err := a.ops.startTime(process.PID)
 			if err != nil {
-				if s.closing || (process.PID != s.target.ElectronPID && process.PID != s.target.DaemonPID) {
+				if s.closing || !s.requiredPID(process.PID) {
 					skipped, checkErr := a.skipVanished(ctx, s, process.PID, err)
 					if checkErr != nil {
 						return checkErr
@@ -177,6 +177,9 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 			}
 		}
 	}
+	if err := a.closeOwnedTerminal(ctx, s); err != nil {
+		problems = append(problems, err)
+	}
 	if len(problems) == 0 {
 		grace, graceCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer graceCancel()
@@ -252,7 +255,7 @@ func (a *Adapter) Stop(ctx context.Context, target domain.TestTargetIdentity) (p
 	} else if info != nil {
 		// A hard stop can leave its own handshake. Remove it only after every
 		// process/window/listener observation proves this launch is gone.
-		if len(leftovers) == 0 && len(problems) == 0 && info.PID == s.target.DaemonPID && info.AppRunID == s.target.LaunchID && info.Port == s.port {
+		if len(leftovers) == 0 && len(problems) == 0 && (info.PID == s.target.DaemonPID || info.PID == s.currentDaemonPID) && info.AppRunID == s.target.LaunchID && info.Port == s.port {
 			if err := os.Remove(filepath.Join(s.root, "running.json")); err != nil {
 				problems = append(problems, err)
 				leftovers = append(leftovers, "run file")
@@ -301,7 +304,7 @@ func removePrivateState(s *launch) error {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup", "app-state.json", "update-settings.json", "target-ao"} {
+	for _, name := range []string{"data", "electron", "fixtures", "daemon", "setup", "control", "app-state.json", "update-settings.json", "target-ao"} {
 		if err := root.RemoveAll(name); err != nil {
 			return err
 		}

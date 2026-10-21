@@ -35,19 +35,23 @@ type processInfo struct {
 }
 
 type operations struct {
-	home         func() (string, error)
-	start        func(string, string, []string, *os.File) (int, error)
-	startTime    func(int) (time.Time, error)
-	processes    func(context.Context) ([]processInfo, error)
-	signal       func(int, syscall.Signal) error
-	windows      func(context.Context, int) ([]string, error)
-	freePort     func() (int, error)
-	listenerGone func(context.Context, int) error
-	tmuxBinary   func(string) (string, error)
-	run          func(context.Context, string, []string, []string) ([]byte, error)
-	client       *http.Client
-	prepare      func(context.Context, string, string, string) error
-	build        func(context.Context, string, string) error
+	home              func() (string, error)
+	start             func(string, string, []string, *os.File) (int, error)
+	startTime         func(int) (time.Time, error)
+	processes         func(context.Context) ([]processInfo, error)
+	signal            func(int, syscall.Signal) error
+	windows           func(context.Context, int) ([]string, error)
+	freePort          func() (int, error)
+	listenerGone      func(context.Context, int) error
+	tmuxBinary        func(string) (string, error)
+	run               func(context.Context, string, []string, []string) ([]byte, error)
+	client            *http.Client
+	prepare           func(context.Context, string, string, string) error
+	build             func(context.Context, string, string) error
+	terminals         func(context.Context) ([]terminalWindow, error)
+	closeTerminal     func(context.Context, terminalWindow) error
+	terminalProcesses func(context.Context, string) ([]int, error)
+	terminalText      func(context.Context, terminalWindow) (string, error)
 }
 
 type launch struct {
@@ -70,7 +74,13 @@ type launch struct {
 	rootInfo  os.FileInfo
 	leaseInfo os.FileInfo
 
-	setupGroup int
+	setupGroup             int
+	daemonDown             bool
+	currentDaemonPID       int
+	currentDaemonStartedAt time.Time
+	terminalArm            []terminalWindow
+	terminalArmedAt        time.Time
+	terminal               *terminalWindow
 }
 
 // Adapter retains launch ownership in memory. It never attaches to an existing
@@ -90,6 +100,7 @@ func New() *Adapter {
 	return &Adapter{
 		launches: make(map[string]*launch),
 		ops: operations{
+			terminals: nativeTerminals, closeTerminal: nativeCloseTerminal, terminalProcesses: nativeTerminalProcesses, terminalText: nativeTerminalText,
 			prepare: prepareTarget, build: buildOwnedDaemon,
 			home: os.UserHomeDir, start: startElectron, startTime: nativeStartTime,
 			processes: processSnapshot, signal: signalProcess, windows: nativeWindows,
@@ -276,6 +287,10 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 		return s.target, err
 	}
 	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
+	if err := os.Mkdir(filepath.Join(s.root, "control"), 0o700); err != nil {
+		s.mu.Unlock()
+		return s.target, err
+	}
 	if err := writeTargetCLI(s); err != nil {
 		s.stopped = true
 		_ = log.Close()
@@ -417,6 +432,7 @@ func targetEnv(inherited []string, s *launch, marker, realProviders bool) []stri
 	}
 	env := strippedEnv(inherited)
 	env = append(env, "AO_DATA_DIR="+s.target.DataDir,
+		"AO_TESTING_CONTROL_DIR="+filepath.Join(s.root, "control"),
 		"AO_DAEMON_COMMAND="+daemonCommand(s.daemon),
 		"AO_RUN_FILE="+filepath.Join(s.root, "running.json"), "AO_PORT="+strconv.Itoa(s.port),
 		"AO_DEV_ELECTRON_DIR="+filepath.Join(s.root, "electron"), "AO_APP_RUN_ID="+s.target.LaunchID,
@@ -470,7 +486,11 @@ func (a *Adapter) ready(ctx context.Context, s *launch) error {
 	if !owned {
 		return errors.New("target daemon is not an Electron descendant")
 	}
-	s.target.DaemonPID, s.target.DaemonStartedAt = info.PID, started
+	s.currentDaemonPID, s.currentDaemonStartedAt = info.PID, started
+	s.daemonDown = false
+	if s.target.DaemonPID == 0 {
+		s.target.DaemonPID, s.target.DaemonStartedAt = info.PID, started
+	}
 	return a.probe(ctx, s)
 }
 
@@ -553,14 +573,18 @@ os.execve(executable, [executable, *sys.argv[1:]], env)
 }
 
 func (a *Adapter) probe(ctx context.Context, s *launch) error {
-	for pid, want := range map[int]time.Time{s.target.ElectronPID: s.target.ElectronStartedAt, s.target.DaemonPID: s.target.DaemonStartedAt} {
+	if s.daemonDown {
+		return a.probeDaemonDown(ctx, s)
+	}
+	daemonPID, daemonStarted := s.runtimeDaemon()
+	for pid, want := range map[int]time.Time{s.target.ElectronPID: s.target.ElectronStartedAt, daemonPID: daemonStarted} {
 		got, err := a.ops.startTime(pid)
 		if err != nil || !got.Equal(want) {
 			return errors.Join(fmt.Errorf("target process identity changed: %d", pid), err)
 		}
 	}
 	info, err := runfile.Read(filepath.Join(s.root, "running.json"))
-	if err != nil || info == nil || info.PID != s.target.DaemonPID || info.Port != s.port || info.AppRunID != s.target.LaunchID || info.Owner != "app" {
+	if err != nil || info == nil || info.PID != daemonPID || info.Port != s.port || info.AppRunID != s.target.LaunchID || info.Owner != "app" {
 		return errors.Join(errors.New("target run file identity changed"), err)
 	}
 	data, err := a.get(ctx, s, "/readyz")
@@ -577,7 +601,7 @@ func (a *Adapter) probe(ctx context.Context, s *launch) error {
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return err
 	}
-	if probe.Status != "ready" || probe.PID != s.target.DaemonPID || probe.ExecutablePath != s.daemon || probe.StartupWorkingDirectory != s.frontend || probe.WorkingDirectory != s.target.DataDir {
+	if probe.Status != "ready" || probe.PID != daemonPID || probe.ExecutablePath != s.daemon || probe.StartupWorkingDirectory != s.frontend || probe.WorkingDirectory != s.target.DataDir {
 		return errors.New("target readiness identity mismatch")
 	}
 	for _, route := range []string{"/api/v1/projects", "/api/v1/sessions"} {
@@ -590,7 +614,7 @@ func (a *Adapter) probe(ctx context.Context, s *launch) error {
 	}
 	// A descendant scan can overlap shutdown. Recheck the two required
 	// processes before admitting an observation from this target.
-	for pid, want := range map[int]time.Time{s.target.ElectronPID: s.target.ElectronStartedAt, s.target.DaemonPID: s.target.DaemonStartedAt} {
+	for pid, want := range map[int]time.Time{s.target.ElectronPID: s.target.ElectronStartedAt, daemonPID: daemonStarted} {
 		got, err := a.ops.startTime(pid)
 		if err != nil || !got.Equal(want) {
 			return errors.Join(fmt.Errorf("target process identity changed: %d", pid), err)
