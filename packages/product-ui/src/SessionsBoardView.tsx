@@ -217,8 +217,11 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 
 export type SessionCardViewProps = {
 		action?: ReactNode;
+	/** Latest session artifacts, shown as evidence below the PRs. */
+	artifacts?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
+	branchLabel?: ReactNode;
 	error?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
@@ -244,8 +247,10 @@ export type SessionCardViewProps = {
 
 export function SessionCardView({
 	action,
+	artifacts,
 	branchAction,
 	branchIcon,
+	branchLabel,
 	error,
 	externalLink,
 	footer,
@@ -274,7 +279,7 @@ export function SessionCardView({
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
 	const renderedStatusLabel =
 		session.statusReadiness === "checking"
 			? translateStatus("session.statusChecking")
@@ -319,7 +324,7 @@ export function SessionCardView({
 				"group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
 				badge.cardClassName ?? "border-border bg-surface",
 				interactive &&
-					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[.pr-link:active]:scale-100",
+					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
 					"animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
 			)}
@@ -350,9 +355,9 @@ export function SessionCardView({
 					) : null}
 				</div>
 				{showBranch && (
-					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground">
+					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						<span className="truncate text-muted-foreground">{branch}</span>
+						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
 					</div>
 				)}
@@ -360,7 +365,7 @@ export function SessionCardView({
 			{prs.length > 0 && (
 				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">
 					{prs.length > 0 && (
-						<div className="flex min-w-0 flex-col gap-y-1 font-mono text-2xs text-muted-foreground">
+						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
 							{groupBoardPullRequests(prs).flatMap((group) => {
 								const compact = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
 								const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
@@ -380,6 +385,7 @@ export function SessionCardView({
 					)}
 				</div>
 			)}
+			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
 			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
 				<div className="flex min-w-0 flex-1">
 					<span
@@ -456,7 +462,7 @@ export const SessionUsageMetricView = forwardRef<
 	<span
 		{...props}
 		className={cn(
-			"inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-2xs text-muted-foreground",
+			"inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-sans text-2xs text-muted-foreground",
 			className,
 		)}
 		ref={ref}
@@ -511,7 +517,7 @@ function BoardPullRequestGroup({
 						>
 			<PullRequestLifecycleIcon state={group.state} />
 			<span className="sr-only">{labels.short}</span>
-			<span className="truncate font-mono text-xs font-medium text-foreground">#{pr.number}</span>
+			<span className="truncate font-sans text-xs font-medium text-foreground">#{pr.number}</span>
 			<span className="sr-only">{statusLabel}</span>
 			{hasComments ? (
 				<div className="-ml-0.5 flex shrink-0 items-center pl-1">
@@ -676,7 +682,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 							direction="right"
 						/>
 						<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
-						<span className="ml-1.5 font-mono text-micro text-passive">{sessions.length}</span>
+						<span className="ml-1.5 font-sans text-micro text-passive">{sessions.length}</span>
 					</button>
 				) : (
 					<div className="min-w-0 flex-1" />

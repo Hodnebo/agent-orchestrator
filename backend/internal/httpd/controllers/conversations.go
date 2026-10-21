@@ -79,6 +79,10 @@ type chatViewService interface {
 	SetChatView(context.Context, domain.SessionID, string, bool) error
 }
 
+type turnAutoResumeService interface {
+	SetTurnAutoResume(context.Context, domain.SessionID, string, bool) error
+}
+
 // ConversationsController owns the Chat routes for a session.
 //
 // Every route dispatches from the session's persisted mode inside the service, so
@@ -92,9 +96,32 @@ type ConversationsController struct {
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats", c.createSideChat)
+	r.Get("/sessions/{sessionId}/conversation/side-chats", c.listSideChats)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.sideSnapshot)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/events", c.streamSideChat)
+	r.Delete("/sessions/{sessionId}/conversation/side-chats/{sideId}", c.closeSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/messages", c.sendSideQuestion)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}", c.editSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", c.retrySideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt", c.interruptSideQuestion)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/recover", c.recoverSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/compact", c.compactSideChat)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve", c.resolveSideApproval)
+	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", c.resolveSideInput)
+	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", c.sideSettings)
+	r.Get("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.getSideDraft)
+	r.Put("/sessions/{sessionId}/conversation/side-chats/{sideId}/draft", c.putSideDraft)
+	r.Post("/side-chats/launch/claim", c.claimSideLaunch)
+	r.Get("/side-chats/launch/state", c.exportSideLaunch)
+	r.Post("/side-chats/launch/state", c.recoverSideLaunch)
+	r.Post("/side-chats/launch/retire", c.retireSideLaunch)
 	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
+	r.Post("/sessions/{sessionId}/conversation/prompt-suggestion", c.promptSuggestion)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
 	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
 	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
@@ -113,6 +140,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)
+	r.Patch("/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume", c.setTurnAutoResume)
 	r.Post("/sessions/{sessionId}/conversation/branches/{branchId}/activate", c.activateBranch)
 	r.Put("/sessions/{sessionId}/conversation/title", c.setTitle)
 	r.Post("/sessions/{sessionId}/conversation/mcp/reload", c.reloadMCPServers)
@@ -374,6 +402,28 @@ func (c *ConversationsController) retryTurn(w http.ResponseWriter, r *http.Reque
 		ProviderTurnID: turn.ProviderTurnID,
 		State:          turn.State,
 	})
+}
+
+func (c *ConversationsController) setTurnAutoResume(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(turnAutoResumeService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodPatch, "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/auto-resume")
+		return
+	}
+	var req SetTurnAutoResumeRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil || req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_AUTO_RESUME_INVALID", "enabled must be a boolean", nil)
+		return
+	}
+	if err := svc.SetTurnAutoResume(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), chi.URLParam(r, "turnId"), *req.Enabled); err != nil {
+		if errors.Is(err, chatsvc.ErrUsageLimitAutoResumeInvalid) || errors.Is(err, chatsvc.ErrUsageLimitResetUnknown) || errors.Is(err, ports.ErrAgentAccountChanged) {
+			envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_AUTO_RESUME_UNAVAILABLE", err.Error(), nil)
+		} else {
+			writeConversationRetryError(w, r, err)
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writeConversationRetryError maps retry refusals to their HTTP meanings.
@@ -768,7 +818,11 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		writeConversationError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, conversationSnapshotResponse(snapshot))
+	response := conversationSnapshotResponse(snapshot)
+	// Excerpt verification is owned by AO, independently of provider capabilities.
+	// Older daemons ignore this request field, so clients must negotiate support.
+	response.SupportsExcerpts = true
+	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
 func optionalPositiveInt64(raw string) (int64, error) {
@@ -826,6 +880,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 		Excerpts:        excerpts,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
+		Continuation:    req.Continuation,
 	})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -974,7 +1029,11 @@ func conversationRequestID(w http.ResponseWriter, r *http.Request) (string, bool
 }
 
 func decodeConversationBody(w http.ResponseWriter, r *http.Request, into any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxConversationBody))
+	return decodeConversationBodyLimit(w, r, into, maxConversationBody)
+}
+
+func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into any, limit int64) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"INVALID_BODY", "could not read request body", nil)
@@ -1007,6 +1066,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 			"CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
 
+	case errors.Is(err, chatsvc.ErrContinuationUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_CONTINUATION_UNAVAILABLE", err.Error(), nil)
+
 	case errors.Is(err, chatsvc.ErrExcerptInvalid):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_EXCERPT_INVALID", err.Error(), nil)
@@ -1014,6 +1077,10 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, chatsvc.ErrExcerptStale):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_EXCERPT_STALE", err.Error(), nil)
+
+	case errors.Is(err, chatsvc.ErrPromptSuggestionStale):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PROMPT_SUGGESTION_STALE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
@@ -1147,6 +1214,7 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 // Items arrive already ordered by sequence, so nothing is re-sorted here.
 func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotResponse {
 	out := ConversationSnapshotResponse{
+		ContinueTurnID:                   chatsvc.ContinuableTurnID(s.Turns),
 		ConversationID:                   s.Conversation.ID,
 		ActiveBranchID:                   s.Conversation.ActiveBranchID,
 		BranchedFromEarlierMessage:       s.BranchedFromEarlierMessage,
@@ -1182,7 +1250,9 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			ProviderTurnID:  turn.ProviderTurnID,
 			RetryOfTurnID:   turn.RetryOfTurnID,
 			HasRetryAttempt: turn.HasRetryAttempt,
+			HasHumanPrompt:  turn.HasHumanPrompt,
 			ErrorMessage:    turn.ErrorMessage,
+			UsageLimit:      usageLimitPayload(turn.UsageLimit),
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
 			CompletedAt:     optionalTimestamp(turn.CompletedAt),
@@ -1208,6 +1278,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			ClientMessageID:   msg.ClientMessageID,
 			Streaming:         msg.Streaming,
 			CreatedAt:         msg.CreatedAt.UTC().Format(time.RFC3339),
+			Continuation:      msg.Continuation,
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence
@@ -1237,6 +1308,13 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 		})
 	}
 	return out
+}
+
+func usageLimitPayload(limit *domain.ConversationUsageLimit) *ConversationUsageLimitResponse {
+	if limit == nil {
+		return nil
+	}
+	return &ConversationUsageLimitResponse{ResetsAt: optionalTimestamp(limit.ResetsAt), AutoResume: limit.AutoResume, ResumeError: limit.ResumeError}
 }
 
 func branchMaterializationPayload(branch domain.ConversationBranch) *ConversationBranchMaterializationResponse {
@@ -1281,6 +1359,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			summary.Name = "Chat excerpt"
 			if block.Excerpt != nil {
 				summary.Text = block.Excerpt.SelectedText
+				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
 				summary.SourceMessageID = block.Excerpt.Reference.MessageID
 				summary.SourceRevision = block.Excerpt.Reference.Revision
 			} else {
@@ -1528,4 +1607,58 @@ func optionalTimestamp(t *time.Time) *string {
 	}
 	formatted := t.UTC().Format(time.RFC3339)
 	return &formatted
+}
+
+type sideChatConversationService interface {
+	SideChatNumbers(string, map[domain.SessionID]int) map[domain.SessionID]int
+	RenameSideChat(context.Context, domain.SessionID, string, string) error
+	CancelQueuedSideQuestion(context.Context, domain.SessionID, string, string) error
+	ListIndependentSideChats(context.Context, domain.SessionID) ([]domain.SideConversation, error)
+	CreateIndependentSideChat(context.Context, domain.SessionID, chatsvc.SideCreateRequest) (domain.SideConversation, error)
+	SideSnapshot(context.Context, domain.SessionID, string, time.Time, int) (domain.SideSnapshot, error)
+	SendSideQuestion(context.Context, domain.SessionID, string, ports.ChatUserMessage) (domain.SideTurn, error)
+	EditQueuedSideQuestion(context.Context, domain.SessionID, string, string, string) error
+	RetrySideQuestion(context.Context, domain.SessionID, string, string) error
+	RetrySideConnection(context.Context, domain.SessionID, string) error
+	UpdateSideSettings(context.Context, domain.SessionID, string, string, string) error
+	SaveSideDraft(context.Context, domain.SessionID, string, string) error
+	SideDraft(context.Context, domain.SessionID, string) (string, error)
+	InterruptSideQuestion(context.Context, domain.SessionID, string) error
+	CompactSideChat(context.Context, domain.SessionID, string) (ports.ChatCompactionResult, error)
+	ResolveSideApproval(context.Context, domain.SessionID, string, string, string) error
+	ResolveSideInput(context.Context, domain.SessionID, string, string, ports.ChatInputResponse) error
+	CloseIndependentSideChat(context.Context, domain.SessionID, string) error
+	ClaimSideChatLaunch(context.Context, string) error
+	ExportSideChatLaunch(context.Context, string) ([]chatsvc.SideRecoveryRecord, error)
+	RecoverSideChatLaunch(context.Context, string, []chatsvc.SideRecoveryRecord) error
+	RetireSideChatLaunch(context.Context, string) error
+	WatchSideChat(context.Context, domain.SessionID, string) (string, <-chan struct{}, func(), error)
+}
+
+func (c *ConversationsController) createSideChat(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/side-chats")
+		return
+	}
+	var req CreateConversationSideChatRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	svc, ok := c.sideService(w, r)
+	if !ok {
+		return
+	}
+
+	var ref *ports.ChatExcerptReference
+	if req.Reference != nil {
+		ref = &ports.ChatExcerptReference{ConversationID: req.Reference.ConversationID,
+			MessageID: req.Reference.MessageID, Revision: req.Reference.Revision, Text: req.Reference.Text}
+	}
+	side, err := svc.CreateIndependentSideChat(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
+		chatsvc.SideCreateRequest{IdempotencyKey: req.IdempotencyKey, ForceNew: req.ForceNew, Label: req.Label, Reference: ref})
+	if err != nil {
+		writeSideChatError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, CreateConversationSideChatResponse{Side: side})
 }

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/cleanuphook"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -66,6 +68,10 @@ const (
 	maxWorkspaceNameLength = 32
 	// workspaceNameIDLength is the session-id suffix length of a prefixed name.
 	workspaceNameIDLength = 12
+	// workspaceNameClockSkew is how far a Coder workspace's created_at may
+	// precede the moment AO chose its name and still be the session's own
+	// (clock skew between the control plane and the Coder server).
+	workspaceNameClockSkew = 5 * time.Minute
 )
 
 // errTerminalNotReady marks a failure to obtain a usable workspace terminal
@@ -110,7 +116,53 @@ type Client struct {
 	parameters            map[string]string
 	workspaceNamePrefix   string
 	expectedWorkspaceName string
-	http                  *http.Client
+	// sessionID is the session a ForSandbox client is bound to, and
+	// workspaceNameIssuedAt when its stored workspace name was chosen (zero
+	// for a session whose name is computed, see sandbox.CoderSessionProfile).
+	sessionID             string
+	workspaceNameIssuedAt time.Time
+	// retryWorkspaceName is the stored name a create retries with when Coder
+	// reports expectedWorkspaceName as taken; empty once used, and for
+	// sessions whose name is computed.
+	retryWorkspaceName string
+	http               *http.Client
+	// Dev-environment options a bring-your-own connection stamps on the
+	// session profile (see sandbox.CoderSessionProfile). The zero values are
+	// the historical behavior: a dedicated ao-worker user, no ready check and
+	// a fresh clone into ~/repository.
+	runAsWorkspaceUser bool
+	readyProbe         string
+	readyProbeTimeout  time.Duration
+	reuseCheckout      bool
+	// readyProbeInterval paces ready-check attempts and readyProbeInlineWindow
+	// bounds how long one bootstrap call keeps polling before handing the
+	// session back to the reconciler as not ready yet.
+	readyProbeInterval     time.Duration
+	readyProbeInlineWindow time.Duration
+	now                    func() time.Time
+	// A bring-your-own connection's working directory and secret-file
+	// protection (see sandbox.CoderSessionProfile). The durable root locates
+	// the Cleanup hook the worker installs.
+	workingDirectory   string
+	protectSecretFiles bool
+	durableRoot        string
+	// checkoutDirectory and checkoutSiblings are a dedicated-worker-user
+	// session's working-folder checkout (sandbox.CoderSessionProfile), for
+	// example ~/work/alice; empty keeps the durable root's repository folder.
+	// checkoutDirectoryUnusable is why the project's working folder could not
+	// be the checkout (the session stops with it as a startup error).
+	checkoutDirectory         string
+	checkoutSiblings          []string
+	checkoutDirectoryUnusable string
+	// cleanupWait bounds how long one Delete waits for the project's Cleanup
+	// commands; zero uses the plan's budget (cleanuphook.Plan.Budget).
+	cleanupWait time.Duration
+	// cleanupInline bounds how long one Delete waits for a Cleanup run before
+	// returning to the reconciler; zero uses cleanupInlineWait.
+	cleanupInline time.Duration
+	// cleanupTracker overrides the process's Cleanup bookkeeping (cleanupRuns)
+	// in tests, whose fakes share one workspace ID.
+	cleanupTracker *cleanuphook.Tracker
 }
 
 var (
@@ -165,6 +217,10 @@ func New(config Config) (*Client, error) {
 		agentName:  strings.TrimSpace(config.AgentName),
 		parameters: parameters,
 		http:       httpClient,
+
+		readyProbeInterval:     defaultReadyProbeInterval,
+		readyProbeInlineWindow: defaultReadyProbeInlineWindow,
+		now:                    time.Now,
 	}, nil
 }
 
@@ -229,7 +285,37 @@ func (c *Client) ForSandbox(record domain.Sandbox) (sandbox.Provider, error) {
 	sessionClient.agentName = profile.AgentName
 	sessionClient.parameters = parameters
 	sessionClient.workspaceNamePrefix = profile.WorkspaceNamePrefix
-	sessionClient.expectedWorkspaceName = WorkspaceNameWithPrefix(profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.sessionID = strings.TrimSpace(record.SessionID)
+	sessionClient.expectedWorkspaceName = SessionWorkspaceName(profile.WorkspaceName, profile.WorkspaceNamePrefix, record.SessionID)
+	sessionClient.workspaceNameIssuedAt = time.Time{}
+	if profile.WorkspaceName != "" && profile.WorkspaceNameIssuedAt != nil {
+		sessionClient.workspaceNameIssuedAt = *profile.WorkspaceNameIssuedAt
+	}
+	sessionClient.retryWorkspaceName = profile.WorkspaceNameRetry
+	sessionClient.runAsWorkspaceUser = profile.RunsAsWorkspaceUser()
+	sessionClient.reuseCheckout = profile.RunsAsWorkspaceUser() && profile.ReuseExistingCheckout
+	sessionClient.durableRoot = profile.DurableRoot
+	sessionClient.workingDirectory = ""
+	sessionClient.protectSecretFiles = profile.ProtectsSecretFiles()
+	sessionClient.checkoutDirectory = ""
+	sessionClient.checkoutSiblings = nil
+	sessionClient.checkoutDirectoryUnusable = ""
+	if profile.RunsAsWorkspaceUser() {
+		sessionClient.workingDirectory = profile.WorkingDirectory
+	} else {
+		sessionClient.checkoutDirectory = profile.CheckoutDirectory
+		sessionClient.checkoutSiblings = slices.Clone(profile.CheckoutSiblings)
+		sessionClient.checkoutDirectoryUnusable = profile.CheckoutDirectoryUnusable
+	}
+	sessionClient.readyProbe = profile.ReadyProbe
+	sessionClient.readyProbeTimeout = 0
+	if profile.ReadyProbe != "" {
+		timeout := profile.ReadyProbeTimeoutSeconds
+		if timeout <= 0 {
+			timeout = domain.DefaultCoderReadyProbeTimeoutSeconds
+		}
+		sessionClient.readyProbeTimeout = time.Duration(timeout) * time.Second
+	}
 	return &sessionClient, nil
 }
 
@@ -328,9 +414,99 @@ func (c *Client) templateVersionParameterNames(ctx context.Context, versionID st
 	return names, nil
 }
 
+// TemplateParameter is one coder_parameter a template's active version
+// declares, in the shape the project form renders: the input type, whether it
+// can change after the workspace is created, and its default and options.
+type TemplateParameter struct {
+	Name         string                    `json:"name"`
+	DisplayName  string                    `json:"displayName"`
+	Description  string                    `json:"description"`
+	Type         string                    `json:"type"`
+	FormType     string                    `json:"formType"`
+	Mutable      bool                      `json:"mutable"`
+	Required     bool                      `json:"required"`
+	DefaultValue string                    `json:"defaultValue"`
+	Options      []TemplateParameterOption `json:"options"`
+	Order        int                       `json:"order"`
+	// Diagnostics are Coder's problems with the parameter's value; only an
+	// evaluation against draft values (EvaluateTemplateParameters) sets them.
+	Diagnostics []TemplateParameterDiagnostic `json:"diagnostics,omitempty"`
+}
+
+// TemplateParameterOption is one choice of an option-backed parameter.
+type TemplateParameterOption struct {
+	Name        string `json:"name"`
+	Value       string `json:"value"`
+	Description string `json:"description"`
+}
+
+// ErrTemplateNotFound reports a template ID the Coder deployment does not
+// know (or the configured user cannot see).
+var ErrTemplateNotFound = errors.New("coder: template not found")
+
+// TemplateParameters returns the rich parameters the template's active
+// version declares, in Coder's order. It reads GET /api/v2/templates/{id} for
+// the active version, then that version's rich-parameters.
+func (c *Client) TemplateParameters(ctx context.Context, templateID string) ([]TemplateParameter, error) {
+	parsed, err := uuid.Parse(strings.TrimSpace(templateID))
+	if err != nil {
+		return nil, errors.New("coder: template ID must be a UUID")
+	}
+	var template struct {
+		ActiveVersionID string `json:"active_version_id"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v2/templates/"+url.PathEscape(parsed.String()), nil, &template); err != nil {
+		if errors.Is(err, sandbox.ErrNotFound) {
+			return nil, ErrTemplateNotFound
+		}
+		return nil, fmt.Errorf("coder: read template: %w", err)
+	}
+	if strings.TrimSpace(template.ActiveVersionID) == "" {
+		return []TemplateParameter{}, nil
+	}
+	var raw []struct {
+		Name         string `json:"name"`
+		DisplayName  string `json:"display_name"`
+		Description  string `json:"description"`
+		Type         string `json:"type"`
+		FormType     string `json:"form_type"`
+		Mutable      bool   `json:"mutable"`
+		Required     bool   `json:"required"`
+		DefaultValue string `json:"default_value"`
+		Options      []struct {
+			Name        string `json:"name"`
+			Value       string `json:"value"`
+			Description string `json:"description"`
+		} `json:"options"`
+	}
+	if err := c.do(ctx, http.MethodGet,
+		"/api/v2/templateversions/"+url.PathEscape(template.ActiveVersionID)+"/rich-parameters", nil, &raw); err != nil {
+		return nil, fmt.Errorf("coder: template version parameters: %w", err)
+	}
+	parameters := make([]TemplateParameter, 0, len(raw))
+	for _, p := range raw {
+		if p.Name == "" {
+			continue
+		}
+		options := make([]TemplateParameterOption, 0, len(p.Options))
+		for _, option := range p.Options {
+			options = append(options, TemplateParameterOption{
+				Name: option.Name, Value: option.Value, Description: option.Description,
+			})
+		}
+		parameters = append(parameters, TemplateParameter{
+			Name: p.Name, DisplayName: p.DisplayName, Description: p.Description,
+			Type: p.Type, FormType: p.FormType, Mutable: p.Mutable, Required: p.Required,
+			DefaultValue: p.DefaultValue, Options: options, Order: len(parameters),
+		})
+	}
+	return parameters, nil
+}
+
 type workspace struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
+	CreatedAt   time.Time       `json:"created_at"`
 	OwnerName   string          `json:"owner_name"`
 	TemplateID  string          `json:"template_id"`
 	LatestBuild workspaceBuild  `json:"latest_build"`
@@ -342,10 +518,21 @@ type workspaceHealth struct {
 }
 
 type workspaceBuild struct {
-	Status    string              `json:"status"`
-	Reason    string              `json:"reason"`
-	Deadline  *time.Time          `json:"deadline"`
-	Resources []workspaceResource `json:"resources"`
+	ID         string              `json:"id"`
+	Status     string              `json:"status"`
+	Transition string              `json:"transition"`
+	Job        workspaceBuildJob   `json:"job"`
+	Reason     string              `json:"reason"`
+	Deadline   *time.Time          `json:"deadline"`
+	Resources  []workspaceResource `json:"resources"`
+}
+
+// workspaceBuildJob is the provisioner job behind a build; its error explains
+// a failed build (a template error, a cloud quota) in the provider's words.
+type workspaceBuildJob struct {
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 type workspaceResource struct {
@@ -359,6 +546,10 @@ type workspaceAgent struct {
 	LifecycleState string          `json:"lifecycle_state"`
 	Architecture   string          `json:"architecture"`
 	Health         workspaceHealth `json:"health"`
+	// ReadyAt is when the agent's startup finished for this build. It anchors
+	// the ready-check timeout, so the budget holds across bootstrap attempts
+	// without AO storing anything.
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
 }
 
 // agentReady reports whether a Coder agent can take a worker bootstrap. The
@@ -426,12 +617,76 @@ func WorkspaceNameWithPrefix(prefix, sessionID string) string {
 	return prefix + "-" + id[:idLength]
 }
 
+// SessionWorkspaceName is the Coder workspace name of one AO session: the
+// name stored on its sandbox profile when the session was created (the
+// readable domain.CoderWorkspaceName), or, for a session created before AO
+// stored names, the name WorkspaceNameWithPrefix computes from its prefix and
+// id, so existing workspaces keep being found under their original names.
+func SessionWorkspaceName(storedName, prefix, sessionID string) string {
+	if name := strings.TrimSpace(storedName); name != "" {
+		return name
+	}
+	return WorkspaceNameWithPrefix(prefix, sessionID)
+}
+
+// WorkspaceURL is the Coder dashboard page of one workspace,
+// <baseURL>/@<owner>/<workspace name>; pass a session's SessionWorkspaceName
+// to link the workspace AO creates for it. It returns "" unless baseURL is an
+// absolute http(s) origin and owner and name are set, so a malformed record
+// never yields a link.
+func WorkspaceURL(baseURL, owner, workspaceName string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	owner = strings.TrimSpace(owner)
+	workspaceName = strings.TrimSpace(workspaceName)
+	endpoint, err := url.Parse(baseURL)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil ||
+		(endpoint.Scheme != "http" && endpoint.Scheme != "https") ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+		owner == "" || workspaceName == "" {
+		return ""
+	}
+	return baseURL + "/@" + url.PathEscape(owner) + "/" + url.PathEscape(workspaceName)
+}
+
+// workspaceName is the workspace name of sessionID: the session-bound name
+// for the session a ForSandbox client serves, otherwise the computed one.
 func (c *Client) workspaceName(sessionID string) string {
+	if c.expectedWorkspaceName != "" && c.sessionID != "" && strings.TrimSpace(sessionID) == c.sessionID {
+		return c.expectedWorkspaceName
+	}
 	return WorkspaceNameWithPrefix(c.workspaceNamePrefix, sessionID)
+}
+
+// predatesWorkspaceName reports a workspace created well before this session
+// chose its stored name: it carries the name but belongs to another session
+// (two sessions whose readable names collide), so AO must never adopt,
+// bootstrap or delete it as this session's. The workspace's created_at is by
+// the Coder server's clock and the name's time by the control plane's, so
+// created_at is first moved onto the control plane's clock by how far the
+// Coder server's clock was off when it answered (its Date header, coderNow,
+// against receivedAt): a bring-your-own Coder whose clock runs minutes behind
+// never makes the session's own workspace look like another's. Without a
+// Date header created_at is taken as is.
+func (c *Client) predatesWorkspaceName(view workspace, coderNow, receivedAt time.Time) bool {
+	if c.workspaceNameIssuedAt.IsZero() || view.CreatedAt.IsZero() {
+		return false
+	}
+	created := view.CreatedAt
+	if !coderNow.IsZero() && !receivedAt.IsZero() {
+		created = created.Add(receivedAt.Sub(coderNow))
+	}
+	return created.Before(c.workspaceNameIssuedAt.Add(-workspaceNameClockSkew))
 }
 
 // Create provisions a Coder workspace from the configured template.
 func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceCreate)
+	environment, err := c.create(ctx, spec)
+	finish(err, c.stageAttrs(string(environment.ID), ""))
+	return environment, err
+}
+
+func (c *Client) create(ctx context.Context, spec sandbox.Spec) (sandbox.Environment, error) {
 	name := strings.TrimSpace(spec.Name)
 	if spec.SessionID != "" {
 		name = c.workspaceName(spec.SessionID)
@@ -469,6 +724,13 @@ func (c *Client) Create(ctx context.Context, spec sandbox.Spec) (sandbox.Environ
 	}
 	var view workspace
 	if err := c.do(ctx, http.MethodPost, "/api/v2/users/"+url.PathEscape(c.owner)+"/workspaces", body, &view); err != nil {
+		if isConflict(err) && c.retryWorkspaceName != "" && name == c.expectedWorkspaceName {
+			// The reconciler looked the name up first and found no workspace
+			// of this session's, so the name belongs to another workspace.
+			return sandbox.Environment{}, &sandbox.WorkspaceNameTakenError{
+				Name: name, Retry: c.retryWorkspaceName, Err: err,
+			}
+		}
 		return sandbox.Environment{}, err
 	}
 	if err := c.validateWorkspaceIdentity(view, name); err != nil {
@@ -504,7 +766,8 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 	var view workspace
 	requestPath := "/api/v2/users/" + url.PathEscape(c.owner) + "/workspace/" +
 		url.PathEscape(expectedName)
-	err := c.do(ctx, http.MethodGet, requestPath, nil, &view)
+	coderNow, err := c.doAt(ctx, http.MethodGet, requestPath, nil, &view)
+	receivedAt := time.Now()
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return sandbox.Environment{}, false, nil
 	}
@@ -515,6 +778,12 @@ func (c *Client) FindBySession(ctx context.Context, sessionID string) (sandbox.E
 		return sandbox.Environment{}, false, err
 	}
 	if normalizeState(view.LatestBuild.Status) == sandbox.StateDeleted {
+		return sandbox.Environment{}, false, nil
+	}
+	if c.predatesWorkspaceName(view, coderNow, receivedAt) {
+		// Another session's workspace holds this name. Report it absent: a
+		// create then fails on Coder's name conflict instead of adopting it,
+		// and a deletion completes without touching it.
 		return sandbox.Environment{}, false, nil
 	}
 	return c.toEnvironment(view), true, nil
@@ -540,7 +809,10 @@ func (c *Client) validateWorkspaceIdentity(view workspace, expectedName string) 
 }
 
 func (c *Client) Start(ctx context.Context, id sandbox.ID) error {
-	return c.transition(ctx, id, "start")
+	finish := sandbox.BeginStage(ctx, sandbox.StageWorkspaceStart)
+	err := c.transition(ctx, id, "start")
+	finish(err, c.stageAttrs(string(id), ""))
+	return err
 }
 
 func (c *Client) Stop(ctx context.Context, id sandbox.ID) error {
@@ -571,6 +843,11 @@ func (c *Client) ExtendDeadline(ctx context.Context, id sandbox.ID, deadline tim
 }
 
 func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
+	if !c.cleanupFinished(ctx, id) {
+		// The project's Cleanup commands are still running in the workspace.
+		// The reconciler re-issues Delete on its next tick.
+		return nil
+	}
 	err := c.transition(ctx, id, "delete")
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return nil
@@ -593,6 +870,9 @@ func (c *Client) toEnvironment(view workspace) sandbox.Environment {
 		ID: sandbox.ID(view.ID), Name: view.Name, State: state, Target: agent.ID,
 		Resource: domain.ResourceProfile{}, Deadline: view.LatestBuild.Deadline,
 	}
+	if state == sandbox.StateFailed {
+		environment.Failure = buildFailure(view.LatestBuild)
+	}
 	if state == sandbox.StateStopped {
 		switch strings.ToLower(strings.TrimSpace(view.LatestBuild.Reason)) {
 		case "autostop", "dormancy":
@@ -612,20 +892,45 @@ func normalizeState(status string) string {
 		return sandbox.StateDeleting
 	case "deleted":
 		return sandbox.StateDeleted
+	case buildStatusFailed, buildStatusCanceled:
+		// A failed or canceled build never finishes on its own. Reporting it
+		// as provisioning left a session waiting out its whole startup budget
+		// with no reason, and a retry restarted nothing.
+		return sandbox.StateFailed
 	default:
 		return sandbox.StateProvisioning
 	}
 }
 
 func (c *Client) selectAgent(view workspace) (workspaceAgent, bool) {
+	var other workspaceAgent
+	others := 0
 	for _, resource := range view.LatestBuild.Resources {
 		for _, agent := range resource.Agents {
 			if c.agentName == "" || agent.Name == c.agentName {
 				return agent, true
 			}
+			other = agent
+			others++
 		}
 	}
+	// The configured name belongs to the deployment's default template; a
+	// template with a single agent under another name still has one to use.
+	if others == 1 {
+		return other, true
+	}
 	return workspaceAgent{}, false
+}
+
+// agentNames lists the agents a workspace build reported, for diagnostics.
+func agentNames(view workspace) []string {
+	var names []string
+	for _, resource := range view.LatestBuild.Resources {
+		for _, agent := range resource.Agents {
+			names = append(names, agent.Name)
+		}
+	}
+	return names
 }
 
 // BootstrapWorker installs and starts AO through the Coder agent PTY. The
@@ -656,12 +961,21 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		return err
 	}
 	agent, ok := c.selectAgent(view)
+	agentAttrs := c.stageAttrs(string(id), agent.ID)
+	agentAttrs["agent_status"] = agent.Status
+	agentAttrs["agent_lifecycle"] = agent.LifecycleState
+	agentAttrs["agent_architecture"] = agent.Architecture
+	agentAttrs["build_status"] = view.LatestBuild.Status
+	finishAgentWait := sandbox.BeginStage(ctx, sandbox.StageAgentWait)
 	if !ok || !agentReady(agent) {
 		// Never bootstrap while the agent is still starting: the template's
 		// startup script has not finished preparing the workspace yet.
-		return fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
+		err := fmt.Errorf("coder: workspace agent is not ready (status %q, lifecycle %q): %w",
 			agent.Status, agent.LifecycleState, sandbox.ErrWorkspaceNotReady)
+		finishAgentWait(err, agentAttrs)
+		return err
 	}
+	finishAgentWait(nil, agentAttrs)
 	ptyURL, err := url.Parse(c.baseURL + "/api/v2/workspaceagents/" + url.PathEscape(agent.ID) + "/pty")
 	if err != nil {
 		return fmt.Errorf("coder: build PTY URL: %w", err)
@@ -679,20 +993,52 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		arch = sandbox.ArchAMD64
 	}
 	home := ""
-	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot {
+	workspaceUser := ""
+	// The workspace user mode always probes: it needs the login user and the
+	// real HOME the worker will run with, whatever the durable root is. A
+	// working-folder checkout needs the login user's HOME too: "~" in it is
+	// that user's home, and the agent must never start in it.
+	if sandbox.NormalizeCoderDurableRoot(bootstrap.DurableRoot) == sandbox.CoderHomeDurableRoot ||
+		c.runAsWorkspaceUser || c.checkoutDirectory != "" {
+		finishProbe := sandbox.BeginStage(ctx, sandbox.StageDurableRootProbe)
 		probe, err := c.probeWorkspace(ctx, id, ptyURL)
 		if err != nil {
-			return classifyBootstrapError(err, bootstrap.DurableRoot)
+			err = classifyBootstrapError(err, bootstrap.DurableRoot)
+			finishProbe(err, agentAttrs)
+			return err
 		}
+		probeAttrs := c.stageAttrs(string(id), agent.ID)
+		probeAttrs["machine"] = probe.machine
+		if c.runAsWorkspaceUser {
+			probeAttrs["workspace_user"] = probe.user
+		}
+		finishProbe(nil, probeAttrs)
 		arch = normalizeArchitecture(probe.machine)
 		if arch == "" {
 			return unsupportedArchitectureError(probe.machine)
 		}
 		home = probe.home
+		workspaceUser = probe.user
 	}
-	resolved, err := resolveWorkerBootstrap(bootstrap, arch, home)
+	// The template's own setup can outlive the agent's startup script; a
+	// configured ready check holds the worker back until it passes.
+	if c.readyProbe != "" {
+		if err := c.waitForReadyProbe(ctx, id, ptyURL, agent); err != nil {
+			return err
+		}
+	}
+	resolved, err := c.specializeBootstrap(bootstrap, arch, home)
 	if err != nil {
 		return err
+	}
+	finishInstall := sandbox.BeginStage(ctx, sandbox.StageWorkerInstall)
+	installAttrs := c.stageAttrs(string(id), agent.ID)
+	installAttrs["arch"] = arch
+	installAttrs["durable_root"] = resolved.DurableRoot
+	installAttrs["worker_user"] = c.workerUserLabel(workspaceUser)
+	installAttrs["checkout_reuse"] = c.checkoutReuseLabel()
+	if resolved.CheckoutDirectory != "" {
+		installAttrs["checkout_directory"] = resolved.CheckoutDirectory
 	}
 	err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, arch)
 	var mismatch *architectureMismatchError
@@ -701,17 +1047,23 @@ func (c *Client) BootstrapWorker(ctx context.Context, id sandbox.ID, bootstrap s
 		if detected == "" || detected == arch {
 			return unsupportedArchitectureError(mismatch.machine)
 		}
-		if resolved, err = resolveWorkerBootstrap(bootstrap, detected, home); err != nil {
+		if resolved, err = c.specializeBootstrap(bootstrap, detected, home); err != nil {
 			return err
 		}
+		installAttrs["arch"] = detected
 		err = c.bootstrapResolvedWorker(ctx, id, ptyURL, resolved, detected)
 		if errors.As(err, &mismatch) {
-			return unsupportedArchitectureError(mismatch.machine)
+			err = unsupportedArchitectureError(mismatch.machine)
+			finishInstall(err, installAttrs)
+			return err
 		}
 	}
 	if err != nil {
-		return classifyBootstrapError(err, resolved.DurableRoot)
+		err = classifyBootstrapError(err, resolved.DurableRoot)
+		finishInstall(err, installAttrs)
+		return err
 	}
+	finishInstall(nil, installAttrs)
 	return nil
 }
 
@@ -770,6 +1122,162 @@ func unsupportedArchitectureError(machine string) error {
 		Message: fmt.Sprintf("This workspace's CPU architecture (%s) isn't supported. AO workers run on x86_64 (amd64) and arm64 workspaces.", machine),
 		Err:     fmt.Errorf("coder: no worker build for architecture %q", machine),
 	}
+}
+
+// specializeBootstrap resolves a bootstrap for one workspace and applies the
+// session's dev-environment options. In the workspace user mode the worker
+// keeps the login user's real HOME (the agent's own config directories stay
+// under the durable root's .ao tree), and a checkout-reuse hint tells the
+// worker to look for the template's existing clone of the repository.
+func (c *Client) specializeBootstrap(bootstrap sandbox.WorkerBootstrap, arch, home string) (sandbox.WorkerBootstrap, error) {
+	resolved, err := resolveWorkerBootstrap(bootstrap, arch, home)
+	if err != nil {
+		return sandbox.WorkerBootstrap{}, err
+	}
+	if c.protectSecretFiles {
+		resolved.Environment[ProtectSecretFilesEnv] = "1"
+	}
+	if !c.runAsWorkspaceUser {
+		if c.checkoutDirectory == "" && c.checkoutDirectoryUnusable != "" {
+			// The project's working folder could not be resolved to a
+			// checkout when the session was created; starting in the durable
+			// root checkout instead would hide that.
+			return sandbox.WorkerBootstrap{}, &sandbox.StartupError{
+				Code:    sandbox.StartupErrorWorkingDirectoryUnusable,
+				Message: c.checkoutDirectoryUnusable,
+				Err:     errors.New("coder: the project's working folder cannot be the session's checkout"),
+			}
+		}
+		if c.checkoutDirectory != "" {
+			if err := c.addCheckoutDirectory(&resolved, home); err != nil {
+				return sandbox.WorkerBootstrap{}, err
+			}
+		}
+		return resolved, nil
+	}
+	home = strings.TrimSpace(home)
+	if !sandbox.SafeCoderDurableRoot(home) {
+		return sandbox.WorkerBootstrap{}, &sandbox.StartupError{
+			Code:    sandbox.StartupErrorDurableRootUnavailable,
+			Message: fmt.Sprintf("AO couldn't use the workspace user's home directory (%q) to run its worker.", home),
+			Err:     errors.New("coder: workspace home directory is not a safe absolute path"),
+		}
+	}
+	resolved.RunAsWorkspaceUser = true
+	resolved.Environment["HOME"] = home
+	resolved.Environment["GIT_TERMINAL_PROMPT"] = "0"
+	if c.reuseCheckout {
+		resolved.Environment[ReuseExistingCheckoutEnv] = "1"
+	}
+	c.addLifecycleEnvironment(resolved.Environment, c.workspaceName(bootstrap.DurableIdentity))
+	return resolved, nil
+}
+
+// Worker environment for a working-folder checkout (mirrored by the worker
+// package's constants of the same names).
+const (
+	// CheckoutDirectoryEnv is the absolute folder AO checks the main
+	// repository out in; the worker verifies it is AO's own before cloning.
+	CheckoutDirectoryEnv = "AO_WORKER_CHECKOUT_DIRECTORY"
+	// UserHomeEnv is the workspace login user's home, which the worker never
+	// lets the agent start in and shows as "~" in messages.
+	UserHomeEnv = "AO_WORKER_USER_HOME"
+)
+
+// addCheckoutDirectory points a dedicated-worker-user bootstrap at the
+// session's working-folder checkout: "~/" (or "$HOME/") becomes the login
+// user's home, the worker's workspace becomes that folder instead of the
+// durable root's repository folder, and the bootstrap prepares it.
+func (c *Client) addCheckoutDirectory(resolved *sandbox.WorkerBootstrap, home string) error {
+	directory, err := ExpandCheckoutDirectory(c.checkoutDirectory, home)
+	if err != nil {
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: fmt.Sprintf("AO couldn't use this project's working folder (%s) in the workspace: %v. "+
+				"Fix it in Project settings > Repositories, then start a new session.", c.checkoutDirectory, err),
+			Err: err,
+		}
+	}
+	// The checkout must survive a workspace restart like AO's own state:
+	// inside the durable root (for example $HOME), never a folder such as
+	// /workspace/<repo> a Docker template does not keep.
+	if root := path.Clean(resolved.DurableRoot); !strings.HasPrefix(directory, strings.TrimSuffix(root, "/")+"/") {
+		shown := root
+		if home = strings.TrimSpace(home); home != "" && root == path.Clean(home) {
+			shown = "your home folder (" + root + ")"
+		}
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryNotDurable,
+			Message: domain.CoderWorkingFolderNotDurableMessage(shown) + " " +
+				fmt.Sprintf("This project's working folder is %s. Change it in Project settings > Repositories, then start a new session.", c.checkoutDirectory),
+			Err: fmt.Errorf("coder: checkout directory %s is outside the durable root %s", directory, root),
+		}
+	}
+	resolved.CheckoutDirectory = directory
+	resolved.CheckoutSiblings = slices.Clone(c.checkoutSiblings)
+	resolved.CheckoutHome = strings.TrimSpace(home)
+	resolved.Environment["AO_WORKSPACE_DIR"] = directory
+	resolved.Environment[CheckoutDirectoryEnv] = directory
+	if home = strings.TrimSpace(home); home != "" {
+		resolved.Environment[UserHomeEnv] = home
+	}
+	return nil
+}
+
+// ExpandCheckoutDirectory resolves a session's working-folder checkout (see
+// sandbox.CoderSessionProfile.CheckoutDirectory) against the workspace login
+// user's home. The result is a clean absolute path below the filesystem root
+// that is not the home directory itself. It runs on every start of the
+// session, so a hidden folder directly in the home is not refused here: a
+// session created before that rule keeps the folder AO made for it, and the
+// bootstrap refuses to create one (checkoutDirectoryScript).
+func ExpandCheckoutDirectory(directory, home string) (string, error) {
+	directory = strings.TrimSpace(directory)
+	for _, prefix := range []string{"~/", "$HOME/"} {
+		if rest, ok := strings.CutPrefix(directory, prefix); ok {
+			home = strings.TrimSpace(home)
+			if !sandbox.SafeCoderDurableRoot(home) {
+				return "", errors.New("the workspace user has no usable home directory")
+			}
+			directory = path.Join(home, rest)
+			break
+		}
+	}
+	if !sandbox.SafeCoderDurableRoot(path.Clean(directory)) || path.Clean(directory) != directory {
+		return "", errors.New("it is not a safe absolute path")
+	}
+	if home != "" && directory == path.Clean(home) {
+		return "", errors.New("it is the home directory")
+	}
+	if path.Dir(directory) == "/" {
+		return "", errors.New("it is directly below the filesystem root")
+	}
+	return directory, nil
+}
+
+// ReuseExistingCheckoutEnv is the worker environment variable that asks the
+// worker to adopt a checkout of the session repository the template already
+// cloned (mirrored by worker.ReuseExistingCheckoutEnv).
+const ReuseExistingCheckoutEnv = "AO_WORKER_REUSE_EXISTING_CHECKOUT"
+
+// workerUserLabel names who the worker runs as, for stage reports.
+func (c *Client) workerUserLabel(workspaceUser string) string {
+	if !c.runAsWorkspaceUser {
+		return domain.CoderWorkerUserAOWorker
+	}
+	if workspaceUser == "" {
+		return domain.CoderWorkerUserWorkspace
+	}
+	return domain.CoderWorkerUserWorkspace + ":" + workspaceUser
+}
+
+// checkoutReuseLabel reports whether the worker was asked to adopt the
+// template's existing checkout, for stage reports and diagnostics.
+func (c *Client) checkoutReuseLabel() string {
+	if c.reuseCheckout {
+		return "enabled"
+	}
+	return "disabled"
 }
 
 // resolveWorkerBootstrap specializes a bootstrap for one workspace: it selects
@@ -832,6 +1340,11 @@ func sha256Hex(data []byte) string {
 
 // classifyBootstrapError attaches the user-facing startup error a failed
 // bootstrap should surface. Errors already classified pass through.
+// workingFolderUnusableMarker starts the line the bootstrap prints when it
+// could not prepare the folders of a working-folder checkout
+// (checkoutDirectoryScript), followed by what failed.
+const workingFolderUnusableMarker = "AO working folder unusable:"
+
 func classifyBootstrapError(err error, durableRoot string) error {
 	var startupErr *sandbox.StartupError
 	if err == nil || errors.As(err, &startupErr) || errors.Is(err, context.Canceled) {
@@ -845,6 +1358,17 @@ func classifyBootstrapError(err error, durableRoot string) error {
 		}
 	}
 	text := err.Error()
+	if _, rest, found := strings.Cut(text, workingFolderUnusableMarker); found {
+		// The same folder fails the same way on every retry: the session
+		// stops with the reason (the reconciler parks it) until it changes.
+		detail, _, _ := strings.Cut(strings.TrimSpace(rest), "\n")
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkingDirectoryUnusable,
+			Message: "AO couldn't prepare this project's working folder in the workspace: " + strings.TrimSpace(detail) +
+				". Fix the folder or the project's working folder (Project settings > Repositories), then start a new session.",
+			Err: err,
+		}
+	}
 	switch {
 	case strings.Contains(text, "is not a mounted directory"):
 		return &sandbox.StartupError{
@@ -878,6 +1402,9 @@ func classifyBootstrapError(err error, durableRoot string) error {
 type workspaceProbeResult struct {
 	machine string
 	home    string
+	// user is the workspace login user (id -un); only the workspace user mode
+	// asks for it.
+	user string
 }
 
 // probeWorkspace runs a one-line command in the workspace to learn its CPU
@@ -888,7 +1415,12 @@ func (c *Client) probeWorkspace(ctx context.Context, id sandbox.ID, ptyURL *url.
 	query := attemptURL.Query()
 	query.Set("width", "120")
 	query.Set("height", "40")
-	query.Set("command", "sh -c "+shellQuote(`printf '%s:%s:%s\n' `+workspaceProbe+` "$(uname -m)" "$HOME"`))
+	probeCommand := `printf '%s:%s:%s\n' ` + workspaceProbe + ` "$(uname -m)" "$HOME"`
+	if c.runAsWorkspaceUser {
+		// The login user goes first so a HOME containing ':' still parses.
+		probeCommand = `printf '%s:%s:%s:%s\n' ` + workspaceProbe + ` "$(id -un)" "$(uname -m)" "$HOME"`
+	}
+	query.Set("command", "sh -c "+shellQuote(probeCommand))
 	query.Set("backend_type", "buffered")
 	attemptURL.RawQuery = query.Encode()
 	const probeAttempts = 3
@@ -1011,8 +1543,15 @@ func (c *Client) probeWorkspaceOnce(ctx context.Context, ptyURL *url.URL) (works
 				return workspaceProbeResult{}, fmt.Errorf("%w: workspace PTY closed before the probe reported", errTerminalNotReady)
 			}
 			if _, rest, found := strings.Cut(line.data, workspaceProbe+":"); found {
-				machine, home, _ := strings.Cut(strings.TrimRight(rest, "\r\n"), ":")
-				return workspaceProbeResult{machine: strings.TrimSpace(machine), home: strings.TrimSpace(home)}, nil
+				rest = strings.TrimRight(rest, "\r\n")
+				user := ""
+				if c.runAsWorkspaceUser {
+					user, rest, _ = strings.Cut(rest, ":")
+				}
+				machine, home, _ := strings.Cut(rest, ":")
+				return workspaceProbeResult{
+					machine: strings.TrimSpace(machine), home: strings.TrimSpace(home), user: strings.TrimSpace(user),
+				}, nil
 			}
 			if line.err != nil {
 				return workspaceProbeResult{}, fmt.Errorf("%w: read workspace probe: %v", errTerminalNotReady, line.err)
@@ -1382,11 +1921,21 @@ func bootstrapCommandForArchive(
 		"  if [ \"$kind\" = data ] && [ \"$sequence\" -eq \"$expected\" ] && [ \"${#chunk}\" -eq \"$declared\" ] && [ $((received + declared)) -le \"$target\" ]; then\n" +
 		"    printf %s \"$chunk\" >>\"$encoded\"\n    received=$((received + declared))\n    expected=$((expected + 1))\n    echo " + bootstrapUploadACK + ":$expected\n" +
 		"  elif [ \"$kind\" = done ] && [ \"$received\" -eq \"$target\" ]; then\n    echo " + bootstrapUploadDone + "\n    break\n  fi\ndone\nstty echo icanon 2>/dev/null || true\n" +
-		"base64 -d \"$encoded\" | gzip -d | tar -xf - -C \"$stage\"\n" +
-		"sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
+		"base64 -d \"$encoded\" | gzip -d | tar -xf - -C \"$stage\"\n"
+	if bootstrap.RunAsWorkspaceUser {
+		return "sh -lc " + shellQuote(script+workspaceUserLaunchScript(bootstrap, layout, binaryPreparation))
+	}
+	// A working-folder checkout replaces the durable root's repository folder:
+	// it is never created, so the session has exactly one AO checkout.
+	repository := shellQuote(layout.Repository) + " "
+	if bootstrap.CheckoutDirectory != "" {
+		repository = ""
+	}
+	script += "sudo -n id -u " + shellQuote(workerUser) + " >/dev/null 2>&1 || sudo -n useradd -m " + shellQuote(workerUser) + "\n" +
+		dockerGroupScript(workerUser) +
 		durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
 		"sudo -n chmod o+x \"$durable_root\"\n" +
-		"sudo -n mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
+		"sudo -n mkdir -p " + repository + shellQuote(layout.WorkerData) + " " +
 		shellQuote(layout.Home) + " " + shellQuote(layout.ClaudeConfig) + " " + shellQuote(layout.CodexHome) + "\n" +
 		"identity_file=" + shellQuote(layout.DurableIdentity) + "\n" +
 		"if sudo -n test -f \"$identity_file\"; then\n" +
@@ -1397,23 +1946,10 @@ func bootstrapCommandForArchive(
 		"  echo 'Coder durable state did not survive workspace stop/start' >&2\n  exit 1\n" +
 		"else\n" +
 		"  printf '%s\\n' " + shellQuote(strings.TrimSpace(bootstrap.DurableIdentity)) + " | sudo -n tee \"$identity_file\" >/dev/null\nfi\n" +
-		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + shellQuote(layout.Repository) + " " + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
-		// The dev-kit clones each extra repository as a sibling of the primary
-		// checkout (…/repository -> …/<name>), so the worker user must be able to
-		// create new entries directly in the durable root. Coder owns the root as
-		// the coder user and leaves it group-unwritable, which is why extra-repo
-		// clones failed with "could not create work tree dir: Permission denied".
-		// Grant the worker's group only write+traverse (g+wx, deliberately not
-		// read): a clone must create and enter <root>/<name>, never list the root.
-		// Applied to the root entry itself, non-recursively so Coder's own home
-		// entries keep their existing modes, and without transferring ownership so
-		// Coder (the owner) keeps full access. This widens the root from
-		// traversal-only to group-writable for the worker; see
-		// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
-		// permits unlink/rename of the root's top-level entries (no sticky bit);
-		// isolating the worker to a dedicated sub-root would need a larger change.
-		"sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
-		"sudo -n chmod g+wx \"$durable_root\"\n" +
+		"sudo -n chown -R " + shellQuote(workerUser+":"+workerUser) + " " + repository + shellQuote(path.Dir(layout.WorkerData)) + "\n" +
+		durableRootSiblingsScript(workerUser, bootstrap.CheckoutDirectory == "") +
+		checkoutDirectoryScript(workerUser, bootstrap.CheckoutDirectory, bootstrap.CheckoutSiblings,
+			bootstrap.CheckoutHome, layout.DurableRoot) +
 		binaryPreparation +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0600 \"$stage/worker.env\" " + shellQuote(workerEnvironment) + "\n" +
 		"sudo -n install -o " + shellQuote(workerUser) + " -g " + shellQuote(workerUser) + " -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
@@ -1439,6 +1975,134 @@ func bootstrapCommandForArchive(
 	return "sh -lc " + shellQuote(script)
 }
 
+// durableRootSiblingsScript lets the dedicated worker user add the extra
+// repositories' folders beside a durable root checkout (enabled false, for a
+// working-folder checkout, adds nothing: those folders live beside it).
+//
+// The dev-kit clones each extra repository as a sibling of the primary
+// checkout (…/repository -> …/<name>), so the worker user must be able to
+// create new entries directly in the durable root. Coder owns the root as
+// the coder user and leaves it group-unwritable, which is why extra-repo
+// clones failed with "could not create work tree dir: Permission denied".
+// Grant the worker's group only write+traverse (g+wx, deliberately not
+// read): a clone must create and enter <root>/<name>, never list the root.
+// Applied to the root entry itself, non-recursively so Coder's own home
+// entries keep their existing modes, and without transferring ownership so
+// Coder (the owner) keeps full access. This widens the root from
+// traversal-only to group-writable for the worker; see
+// cloud/docs/coder-sandbox-provider.md. Note directory write inherently
+// permits unlink/rename of the root's top-level entries (no sticky bit);
+// isolating the worker to a dedicated sub-root would need a larger change.
+func durableRootSiblingsScript(workerUser string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return "sudo -n chgrp " + shellQuote(workerUser) + " \"$durable_root\"\n" +
+		"sudo -n chmod g+wx \"$durable_root\"\n"
+}
+
+// checkoutDirectoryScript prepares a working-folder checkout for the dedicated
+// worker user (directory is absolute; siblings are the additional
+// repositories' folder names beside it; home is the workspace login user's
+// home and durableRoot the resolved durable root). A missing parent folder
+// (for example ~/work, or ~/src/acme of ~/src/acme/alice) is created one level
+// at a time, only below home or the durable root, each owned by the login
+// user; the checkout's own parent gets group write for the worker user so
+// additional repositories can be cloned beside the checkout later. Only the
+// home itself and the folders below it get o+x (traversal only, as the durable
+// root does) when the worker user cannot enter them; "/", "/root" and every
+// other folder outside the home are never changed. A missing checkout or
+// sibling folder is created owned by the worker user. A folder that already
+// exists is never chowned or changed: the worker checks it is its own
+// (worker.ResolveOwnedCheckoutDirectory) and refuses a folder the template
+// created. Failing to create the checkout or a sibling folder does not fail
+// the bootstrap; the worker reports it on the session. Failing to prepare the
+// parent folders does: it reports workingFolderUnusableMarker with what
+// failed, which the control plane turns into the session's
+// working_directory_unusable startup error.
+func checkoutDirectoryScript(workerUser, directory string, siblings []string, home, durableRoot string) string {
+	if directory == "" {
+		return ""
+	}
+	user := shellQuote(workerUser)
+	parent := path.Dir(directory)
+	home = cleanFolder(home)
+	durableRoot = cleanFolder(durableRoot)
+	var script strings.Builder
+	script.WriteString("ao_folder_unusable() { printf '%s %s\\n' " + shellQuote(workingFolderUnusableMarker) + " \"$1\" >&2; exit 1; }\n")
+	script.WriteString("checkout_parent=" + shellQuote(parent) + "\n")
+	if home != "" && parent == home && strings.HasPrefix(path.Base(directory), ".") {
+		// A hidden folder directly in the home (~/.local) is never created:
+		// owned by ao-worker, it would hold what the login user's shell
+		// profile runs (~/.local/bin). One that exists is a session's own
+		// checkout from before this rule, or the worker refuses it as not AO's.
+		quoted := shellQuote(directory)
+		script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
+			"  ao_folder_unusable " + shellQuote("AO does not create the hidden folder "+directory+" directly in the home folder") + "\nfi\n")
+	}
+	var ancestors []string
+	for dir := parent; dir != "/" && dir != "."; dir = path.Dir(dir) {
+		ancestors = append(ancestors, dir)
+	}
+	for index := len(ancestors) - 1; index >= 0; index-- {
+		dir := ancestors[index]
+		quoted := shellQuote(dir)
+		if folderBelow(dir, home) || folderBelow(dir, durableRoot) {
+			owner, mode := "\"$(id -u):$(id -g)\"", ""
+			if dir == parent {
+				owner, mode = "\"$(id -u):\""+user, " &&\n    sudo -n chmod g+wx "+quoted
+			}
+			script.WriteString("if [ ! -e " + quoted + " ] && [ ! -L " + quoted + " ]; then\n" +
+				"  { sudo -n mkdir " + quoted + " &&\n" +
+				"    sudo -n chown -h " + owner + " " + quoted + mode + "; } ||\n" +
+				"    ao_folder_unusable " + shellQuote("could not create "+dir) + "\nfi\n")
+		}
+		if dir != "/root" && (dir == home || folderBelow(dir, home)) {
+			// chmod follows a symbolic link, so a linked folder (a template's
+			// ~/src -> /root) is never opened up: it must already be enterable.
+			script.WriteString("sudo -n -u " + user + " test -x " + quoted + " || { [ ! -L " + quoted + " ] && sudo -n chmod o+x " + quoted + "; }" +
+				" || ao_folder_unusable " + shellQuote("could not let AO's worker user enter "+dir) + "\n")
+		}
+	}
+	// The worker user creates its own checkout folders in a parent it can
+	// write (one this script created): root never mkdirs then chowns a path
+	// an agent could swap for a symbolic link in between. A parent that
+	// already existed (the template's ~/work, or the home itself) is not the
+	// worker's to write, so root creates the folder there and hands it over;
+	// the agent cannot write that parent, so it cannot swap the entry.
+	script.WriteString("ao_checkout_folder() {\n" +
+		"  if [ -L \"$1\" ] || [ -e \"$1\" ]; then return 0; fi\n" +
+		"  if sudo -n -u " + user + " test -w \"$checkout_parent\" && sudo -n -u " + user + " test -x \"$checkout_parent\"; then\n" +
+		"    sudo -n -u " + user + " mkdir \"$1\"\n" +
+		"  else\n" +
+		"    sudo -n mkdir \"$1\" && sudo -n chown -h " + shellQuote(workerUser+":"+workerUser) + " \"$1\"\n" +
+		"  fi\n}\n")
+	script.WriteString("ao_checkout_folder " + shellQuote(directory) + " || true\n")
+	for _, name := range siblings {
+		script.WriteString("ao_checkout_folder " + shellQuote(path.Join(parent, name)) + " || true\n")
+	}
+	return script.String()
+}
+
+// cleanFolder is folder as a clean absolute path other than "/", or "" when
+// it is not one.
+func cleanFolder(folder string) string {
+	folder = strings.TrimSpace(folder)
+	if !strings.HasPrefix(folder, "/") {
+		return ""
+	}
+	if folder = path.Clean(folder); folder == "/" {
+		return ""
+	}
+	return folder
+}
+
+// folderBelow reports whether dir is strictly below base (a cleanFolder; ""
+// has nothing below it).
+func folderBelow(dir, base string) bool {
+	return base != "" && strings.HasPrefix(dir, base+"/")
+}
+
 // durableRootScript prepares the durable root before anything is written
 // beneath it. AO-operated templates mount a dedicated volume there and the check
 // stays strict. A bring-your-own template may keep home on the root filesystem:
@@ -1459,6 +2123,86 @@ func durableRootScript(durableRoot string, requireMount bool) string {
 		"elif [ ! -d \"$durable_root\" ]; then\n" +
 		"  sudo -n mkdir -p \"$durable_root\"\n" +
 		"  sudo -n chown \"$(id -u):$(id -g)\" \"$durable_root\"\nfi\n"
+}
+
+// dockerGroupScript adds the dedicated worker user to the workspace's docker
+// group when one exists, so the agent can drive the template's containers. It
+// is idempotent (usermod -aG keeps existing memberships; busybox images fall
+// back to adduser) and never fails the bootstrap. The membership applies to the
+// worker sudo launches afterwards, since sudo initializes groups at launch.
+func dockerGroupScript(workerUser string) string {
+	quotedUser := shellQuote(workerUser)
+	return "if getent group docker >/dev/null 2>&1 || grep -q '^docker:' /etc/group 2>/dev/null; then\n" +
+		"  sudo -n usermod -aG docker " + quotedUser + " 2>/dev/null || sudo -n adduser " + quotedUser + " docker >/dev/null 2>&1 || true\nfi\n"
+}
+
+// workspaceUserLaunchScript is the post-upload half of the bootstrap when the
+// worker runs as the workspace's own login user. No account is created and the
+// worker is not launched through sudo: it starts directly from the agent's
+// login shell, detached with setsid and nohup, so it inherits that user's HOME
+// (from worker.env), supplementary groups (for example docker) and login
+// environment. Only installing a missing worker binary into a system path still
+// uses sudo, exactly as in the dedicated-user path.
+func workspaceUserLaunchScript(
+	bootstrap sandbox.WorkerBootstrap,
+	layout sandbox.CoderWorkspaceLayout,
+	binaryPreparation string,
+) string {
+	workerDestination := strings.TrimSpace(bootstrap.Destination)
+	requireIdentity := "0"
+	if bootstrap.RequireDurableIdentity {
+		requireIdentity = "1"
+	}
+	identity := shellQuote(strings.TrimSpace(bootstrap.DurableIdentity))
+	workerEnvironment := shellQuote(path.Join(layout.WorkerData, "worker.env"))
+	workerLauncher := path.Join(layout.WorkerData, "launch.sh")
+	workerLog := shellQuote(path.Join(layout.WorkerData, "worker.log"))
+	workerPID := shellQuote(path.Join(layout.WorkerData, "worker.pid"))
+	processName := path.Base(workerDestination)
+	if len(processName) > 15 {
+		processName = processName[:15] // the kernel's comm length
+	}
+	launch := "exec nohup " + shellQuote(workerLauncher) + " " + workerEnvironment + " " +
+		shellQuote(workerDestination) + " " + workerPID + " >" + workerLog + " 2>&1 </dev/null"
+	return durableRootScript(layout.DurableRoot, bootstrap.RequireMountedDurableRoot) +
+		"mkdir -p " + shellQuote(layout.Repository) + " " + shellQuote(layout.WorkerData) + " " +
+		shellQuote(layout.Home) + " " + shellQuote(layout.ClaudeConfig) + " " + shellQuote(layout.CodexHome) + "\n" +
+		"identity_file=" + shellQuote(layout.DurableIdentity) + "\n" +
+		"if [ -f \"$identity_file\" ]; then\n" +
+		"  existing_identity=$(cat \"$identity_file\")\n" +
+		"  if [ \"$existing_identity\" != " + identity + " ]; then\n" +
+		"    echo 'Coder durable root belongs to a different AO session' >&2\n    exit 1\n  fi\n" +
+		"elif [ " + requireIdentity + " -eq 1 ]; then\n" +
+		"  echo 'Coder durable state did not survive workspace stop/start' >&2\n  exit 1\n" +
+		"else\n" +
+		"  printf '%s\\n' " + identity + " >\"$identity_file\"\nfi\n" +
+		binaryPreparation +
+		"install -m 0600 \"$stage/worker.env\" " + workerEnvironment + "\n" +
+		"install -m 0700 \"$stage/launch.sh\" " + shellQuote(workerLauncher) + "\n" +
+		// Stop this session's previous worker. pkill -f would also match this
+		// bootstrap shell (same user, and its command line names the worker
+		// path), so match the exact process name, plus the recorded pid when it
+		// still runs the worker.
+		"if [ -s " + workerPID + " ]; then\n" +
+		"  old_pid=$(cat " + workerPID + ")\n" +
+		"  case \"$old_pid\" in ''|*[!0-9]*) ;; *)\n" +
+		"    case \"$(tr '\\000' ' ' </proc/$old_pid/cmdline 2>/dev/null)\" in *" + shellQuote(workerDestination) + "*) kill \"$old_pid\" 2>/dev/null || true ;; esac ;;\n" +
+		"  esac\nfi\n" +
+		"pkill -u \"$(id -u)\" -x " + shellQuote(processName) + " 2>/dev/null || true\n" +
+		"install -m 0600 /dev/null " + workerLog + "\n" +
+		"install -m 0600 /dev/null " + workerPID + "\n" +
+		// Detach exactly as the dedicated-user path does: a new session with no
+		// controlling terminal, so nothing the worker runs can stop it by
+		// touching /dev/tty, and closing this PTY does not hang it up.
+		"ao_setsid=\nif command -v setsid >/dev/null 2>&1; then ao_setsid=setsid; fi\n" +
+		"GIT_TERMINAL_PROMPT=0 $ao_setsid sh -c " + shellQuote(launch) + " >/dev/null 2>&1 </dev/null &\n" +
+		"attempt=0\nworker_pid=\nwhile [ \"$attempt\" -lt 5 ]; do\n" +
+		"  if [ -s " + workerPID + " ]; then worker_pid=$(cat " + workerPID + "); fi\n" +
+		"  case \"$worker_pid\" in ''|*[!0-9]*) ;; *) if kill -0 \"$worker_pid\" 2>/dev/null; then break; fi ;; esac\n" +
+		"  worker_pid=\nattempt=$((attempt + 1))\nsleep 1\ndone\n" +
+		"case \"$worker_pid\" in ''|*[!0-9]*) echo 'AO worker did not start' >&2; exit 1 ;; esac\n" +
+		"sleep 1\nkill -0 \"$worker_pid\" 2>/dev/null || { echo 'AO worker exited during startup' >&2; exit 1; }\n" +
+		"rm -rf \"$stage\"\ntrap - EXIT\necho " + bootstrapOK + "\n"
 }
 
 // preinstalledHealScript emits the shell that runs before a launch-only bootstrap
@@ -1595,18 +2339,42 @@ func sanitizePTYOutput(output string) string {
 	return strings.TrimSpace(output)
 }
 
+// apiError is a non-2xx Coder API response other than not-found.
+type apiError struct {
+	status int
+	body   string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("coder: API returned %d: %s", e.status, e.body)
+}
+
+// isConflict reports Coder's 409 Conflict, which a workspace create returns
+// when the owner already has a workspace with that name.
+func isConflict(err error) bool {
+	var api *apiError
+	return errors.As(err, &api) && api.status == http.StatusConflict
+}
+
 func (c *Client) do(ctx context.Context, method, requestPath string, body, output any) error {
+	_, err := c.doAt(ctx, method, requestPath, body, output)
+	return err
+}
+
+// doAt is do that also returns the Coder server's clock when it answered
+// (its Date header; zero when it sent none or an unreadable one).
+func (c *Client) doAt(ctx context.Context, method, requestPath string, body, output any) (time.Time, error) {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("coder: encode request: %w", err)
+			return time.Time{}, fmt.Errorf("coder: encode request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+requestPath, requestBody)
 	if err != nil {
-		return fmt.Errorf("coder: create request: %w", err)
+		return time.Time{}, fmt.Errorf("coder: create request: %w", err)
 	}
 	request.Header.Set("Coder-Session-Token", c.token)
 	if body != nil {
@@ -1614,22 +2382,23 @@ func (c *Client) do(ctx context.Context, method, requestPath string, body, outpu
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
+		return time.Time{}, fmt.Errorf("coder: %s %s: %w", method, requestPath, err)
 	}
 	defer response.Body.Close()
+	serverNow, _ := http.ParseTime(response.Header.Get("Date"))
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		return sandbox.ErrNotFound
+		return serverNow, sandbox.ErrNotFound
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		snippet, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
-		return fmt.Errorf("coder: API returned %d: %s", response.StatusCode, strings.TrimSpace(string(snippet)))
+		return serverNow, &apiError{status: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if output == nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBody))
-		return nil
+		return serverNow, nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maxResponseBody)).Decode(output); err != nil {
-		return fmt.Errorf("coder: decode API response: %w", err)
+		return serverNow, fmt.Errorf("coder: decode API response: %w", err)
 	}
-	return nil
+	return serverNow, nil
 }

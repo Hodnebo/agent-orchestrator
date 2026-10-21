@@ -80,9 +80,16 @@ type fakeStore struct {
 	comments            map[string][]domain.PullRequestComment
 	commentsErr         error
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
+	interrupted         map[domain.SessionID]bool
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+
+	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
+	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
+	getCleanupFactsCalls  int
+	listCleanupFactsCalls int
+	cleanupFactsRequested []domain.SessionID
 }
 
 func newFakeStore() *fakeStore {
@@ -131,6 +138,35 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 }
 
+func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.interrupted = map[domain.SessionID]bool{"mer-1": true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	for _, sess := range list {
+		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
+			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
+		}
+	}
+	sess, err := svc.Get(context.Background(), "mer-1")
+	if err != nil || sess.DisplayStatus != "Interrupted" {
+		t.Fatalf("get displayStatus = %q, %v; want Interrupted", sess.DisplayStatus, err)
+	}
+}
+
 func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTaskPreparation: true}
@@ -150,6 +186,28 @@ func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	}
 	if first, err := svc.isFirstSession(context.Background()); err != nil || !first {
 		t.Fatalf("isFirstSession = %v, %v", first, err)
+	}
+}
+
+func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Metadata: domain.SessionMetadata{PreviewURL: "http://localhost:5173/"}}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
+
+	rec, err := svc.GetRecord(context.Background(), "mer-1")
+	if err != nil || rec.Metadata.PreviewURL != "http://localhost:5173/" {
+		t.Fatalf("GetRecord = %+v, %v", rec, err)
+	}
+	if st.listPRFactsCalls != 0 || st.listReviewRunsCalls != 0 {
+		t.Fatalf("GetRecord read PR facts %d times and review runs %d times, want none", st.listPRFactsCalls, st.listReviewRunsCalls)
+	}
+	for _, id := range []domain.SessionID{"mer-2", "missing"} {
+		_, err = svc.GetRecord(context.Background(), id)
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
+		}
 	}
 }
 
@@ -458,6 +516,16 @@ func (f *fakeStore) ListCurrentHeadReviewRunsForSessions(_ context.Context, ids 
 	out := make(map[domain.SessionID][]domain.CurrentHeadReviewRun, len(ids))
 	for _, id := range ids {
 		out[id] = append([]domain.CurrentHeadReviewRun(nil), f.reviewRuns[id]...)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) ListInterruptedSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		if f.interrupted[id] {
+			out[id] = true
+		}
 	}
 	return out, nil
 }
@@ -2563,6 +2631,8 @@ type fakeCommander struct {
 	sendFunc         func(domain.SessionID, string) error
 	cleanupErr       error
 	spawnErr         error
+	spawnWaitsForCtx bool
+	spawnHook        func(context.Context)
 	spawnRecord      domain.SessionRecord
 	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls       int
@@ -2590,6 +2660,13 @@ type backgroundTaskCall struct {
 
 func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
+	if f.spawnWaitsForCtx {
+		<-ctx.Done()
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
+	}
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2905,6 +2982,55 @@ func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T)
 	}
 }
 
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
+	}
+}
+
 func TestSpawnOrchestratorCleanPreservesPersistedMode(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
@@ -3118,6 +3244,34 @@ func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	}
 	if fc.spawnCalls != 0 {
 		t.Fatalf("manager.Spawn calls = %d, want fresh unauthorized Codex account blocked", fc.spawnCalls)
+	}
+}
+
+// The readiness gate reads the computer's own Codex login. A task that will run
+// on a saved account does not use that login, so its state is not a reason to
+// refuse; the launch checks the account it runs on.
+func TestSpawnOnASavedCodexAccountIgnoresTheComputersLogin(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+	var asked []string
+	svc.SetComputerLoginCheck(func(_ context.Context, harness domain.AgentHarness, accountID string) bool {
+		asked = append(asked, string(harness)+":"+accountID)
+		return false
+	})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if fc.spawnCalls != 1 || len(asked) != 1 || asked[0] != "codex:" {
+		t.Fatalf("spawn calls = %d, asked %v; want the saved default to launch", fc.spawnCalls, asked)
 	}
 }
 
@@ -3583,6 +3737,22 @@ func TestSpawnEmitsTypedErrorCodeOnFailure(t *testing.T) {
 	}
 }
 
+// A spawn whose request budget runs out before it extends it (its project's
+// Setup steps) timed out; it is not a cancellation by the client.
+func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{spawnWaitsForCtx: true}, Store: st, Clock: func() time.Time { return time.Unix(1700000000, 0).UTC() }})
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
+	defer release()
+
+	_, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("Spawn error = %v, want SPAWN_TIMEOUT", err)
+	}
+}
+
 // TestSpawnOrchestratorUnknownProjectReturns404 is the orchestrator-side guard
 // for Bug 1: same pre-validation, same typed envelope.
 func TestSpawnOrchestratorUnknownProjectReturns404(t *testing.T) {
@@ -3622,6 +3792,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"unknown harness", fmt.Errorf("spawn: %w: %q", sessionmanager.ErrUnknownHarness, "bogus"), apierr.KindInvalid, "UNKNOWN_HARNESS"},
 		{"missing harness", fmt.Errorf("spawn: %w: configure project worker.agent or pass --harness", sessionmanager.ErrMissingHarness), apierr.KindInvalid, "AGENT_REQUIRED"},
+		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
@@ -3725,6 +3896,12 @@ func TestToSpawnAPIErrorMapsSpawnStageSentinels(t *testing.T) {
 			fmt.Errorf("spawn mer-1: %w: %w", sessionmanager.ErrWorkspaceCreate, ports.ErrWorkspaceBranchNotFetched),
 			apierr.KindInvalid,
 			"BRANCH_NOT_FETCHED",
+		},
+		{
+			"artifact output without a data dir",
+			fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable),
+			apierr.KindInvalid,
+			"ARTIFACT_OUTPUT_UNAVAILABLE",
 		},
 		{
 			"unclassified fallback",
@@ -5591,7 +5768,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5649,7 +5826,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5785,9 +5962,23 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 }
 
 func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.getCleanupFactsCalls++
 	rec, ok := f.cleanupFacts[id]
 	return rec, ok, nil
 }
+
+func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	f.listCleanupFactsCalls++
+	f.cleanupFactsRequested = append(f.cleanupFactsRequested, ids...)
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	for _, id := range ids {
+		if rec, ok := f.cleanupFacts[id]; ok {
+			out[id] = rec
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
@@ -5818,5 +6009,102 @@ func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 		if err != nil || len(list) != 1 || list[0].WorkspaceCleanup != tc.want {
 			t.Fatalf("list=%+v err=%v", list, err)
 		}
+	}
+}
+
+type fakeArtifactDeleter struct {
+	deleted []domain.SessionID
+	err     error
+}
+
+func (f *fakeArtifactDeleter) DeleteSession(_ context.Context, id domain.SessionID) error {
+	f.deleted = append(f.deleted, id)
+	return f.err
+}
+
+func TestDeleteArtifactsDeletesThroughTheDeleterAndReconciles(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		OutputType: domain.SessionOutputArtifact,
+	}
+	deleter := &fakeArtifactDeleter{}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 || deleter.deleted[0] != "mer-1" {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+	if len(reconciler.reconciled) != 1 || reconciler.reconciled[0] != "mer-1" {
+		t.Fatalf("reconciled = %v, want [mer-1]", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsReconcilesAndReportsAFailedDelete(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true}
+	deleter := &fakeArtifactDeleter{err: errors.New("file in use")}
+	reconciler := &fakeOutputTypeReconciler{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), OutputTypeReconciler: reconciler, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want the deleter's error")
+	}
+	if len(reconciler.reconciled) != 1 {
+		t.Fatalf("reconciled = %v, want a reconcile after the failure too", reconciler.reconciled)
+	}
+}
+
+func TestDeleteArtifactsRefusesLiveSession(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	err := svc.DeleteArtifacts(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_NOT_TERMINATED" {
+		t.Fatalf("err = %v, want SESSION_NOT_TERMINATED", err)
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v for a live session, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsRefusesAnArtifactDirOutsideTheDataDir(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(t.TempDir(), "old-data", "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: t.TempDir(), ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err == nil {
+		t.Fatal("DeleteArtifacts succeeded, want a refusal")
+	}
+	if len(deleter.deleted) != 0 {
+		t.Fatalf("deleted = %v, want none", deleter.deleted)
+	}
+}
+
+func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
+	dataDir := t.TempDir()
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ArtifactDir: filepath.Join(dataDir, "artifacts", "mer-1")},
+	}
+	deleter := &fakeArtifactDeleter{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: dataDir, ArtifactDeleter: deleter})
+
+	if err := svc.DeleteArtifacts(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleter.deleted) != 1 {
+		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
 	}
 }

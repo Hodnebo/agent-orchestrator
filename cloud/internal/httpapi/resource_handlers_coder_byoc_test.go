@@ -41,6 +41,8 @@ type stubCoderBYOCStore struct {
 	// projectConfig is the project's stored Config JSON (its coder dev-kit config
 	// lives under the "coder" key). Nil => a bare project with no coder config.
 	projectConfig json.RawMessage
+	// repositoryURL is the project's main repository.
+	repositoryURL string
 }
 
 func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
@@ -52,7 +54,7 @@ func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
 func (s *stubCoderBYOCStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
-	return domain.Project{ID: projectID, Config: s.projectConfig}, nil
+	return domain.Project{ID: projectID, Config: s.projectConfig, RepositoryURL: s.repositoryURL}, nil
 }
 
 func (s *stubCoderBYOCStore) ListProviderConnections(
@@ -147,6 +149,40 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 	}
 }
 
+// A session on the org's connection (ao-worker by default) is checked out in
+// the project's working folder, with {repo} resolved from the project's
+// repository when the session is created.
+func TestCreateSessionStampsTheWorkingFolderCheckout(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{true, false} {
+		store := &stubCoderBYOCStore{
+			personalCredentialAvailable: true,
+			projectConfig:               json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`),
+			repositoryURL:               "https://github.com/acme/alice.git",
+		}
+		srv := newBYOCServer(store)
+		srv.provisioning.Coder.WorkerWorkingFolder = enabled
+
+		rec := httptest.NewRecorder()
+		srv.createSession(rec, byocCreateSessionRequest(t))
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+		}
+		profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+		if err != nil {
+			t.Fatalf("decode stamped profile: %v", err)
+		}
+		// With AO_CLOUD_CODER_WORKER_WORKING_FOLDER off (production until
+		// the rollback target honors a stamped folder) the session keeps the
+		// durable root checkout.
+		want := map[bool]string{true: "~/work/alice", false: ""}[enabled]
+		if profile.CheckoutDirectory != want || profile.WorkingDirectory != "" || profile.RunsAsWorkspaceUser() {
+			t.Fatalf("working folder %v: stamped profile = %+v", enabled, profile)
+		}
+	}
+}
+
 // A bring-your-own-Coder org whose config carries no template still runs: the
 // template comes from the project's dev-kit config, chosen per project.
 func TestCreateSessionUsesProjectTemplateWhenOrgHasNone(t *testing.T) {
@@ -202,5 +238,30 @@ func TestCreateSessionRejectsOrgOnlyAgentCredential(t *testing.T) {
 	srv.createSession(rec, byocCreateSessionRequest(t))
 	if rec.Code != http.StatusUnprocessableEntity || store.created {
 		t.Fatalf("org-only launch: status=%d created=%v body=%s", rec.Code, store.created, rec.Body.String())
+	}
+}
+
+// Re-spawning a scratch project's orchestrator in a bring-your-own org whose
+// connection has no default template runs on the deployment's Coder, as its
+// first orchestrator did; a regular project without a template still has to
+// choose one.
+func TestCreateSessionScratchProjectFallsBackWithoutTemplate(t *testing.T) {
+	t.Parallel()
+	store := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true, projectConfig: []byte(`{"source":"scratch"}`)}
+	srv := newBYOCServer(store)
+	rec := httptest.NewRecorder()
+	srv.createSession(rec, byocCreateSessionRequest(t))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("scratch: status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if store.captured.SandboxConnectionID != "" {
+		t.Fatalf("scratch: SandboxConnectionID = %q, want the deployment's Coder", store.captured.SandboxConnectionID)
+	}
+
+	regular := &stubCoderBYOCStore{personalCredentialAvailable: true, omitOrgTemplate: true}
+	rec = httptest.NewRecorder()
+	newBYOCServer(regular).createSession(rec, byocCreateSessionRequest(t))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "coder_template_required") {
+		t.Fatalf("regular: status = %d, want 422 coder_template_required; body = %s", rec.Code, rec.Body.String())
 	}
 }

@@ -18,20 +18,24 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	claudecodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -50,13 +54,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/hookprocess"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
@@ -177,15 +184,20 @@ func enqueueAgentSwitchWorkerShutdownTimeout(
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run() error {
-	return withDaemonContext(run)
+func Run(buildVersion string) error {
+	return withDaemonContext(func(ctx context.Context, stop context.CancelFunc) error {
+		return run(ctx, stop, buildVersion)
+	})
 }
 
-func run(ctx context.Context, stop context.CancelFunc) error {
+func run(ctx context.Context, stop context.CancelFunc, buildVersion string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
+	// Children inherit os.Environ(); the export settings stay in cfg only.
+	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}
@@ -210,6 +222,7 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	}
 	browserAuthority := browsersvc.NewAuthority()
 	browserBroker := browserruntime.New(log, browserRuntimeToken)
+	browserStreamBroker := browserstream.New(log, browserRuntimeToken)
 
 	// Fail fast only if a daemon is genuinely still serving the recorded port.
 	// CheckStale confirms the run-file's PID is alive, but that alone is not
@@ -271,9 +284,11 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		log.Warn("install using-ao skill", "err", err)
 	}
 
-	telemetryCfg := cfg
-	telemetryCfg.Telemetry.Events = policyCoordinator.EventsEnabled()
-	telemetrySink := newTelemetrySink(telemetryCfg, store, log)
+	// Product telemetry answers to AO_TELEMETRY_EVENTS alone. The agent-switch
+	// consent (policyCoordinator) governs only the Sentry failure path above and
+	// the dispatcher below; wiring it in here turned the "Share error events"
+	// switch into a kill switch for every daemon product event.
+	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
 	defer shutdownStep(cfg.ShutdownTimeout, log, "telemetry", telemetrySink.Close)
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -297,8 +312,22 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 			"agent": cfg.Agent,
 		},
 	})
+	if telemetryIdentity != nil && cfg.Telemetry.Events {
+		marked, err := telemetryIdentity.MarkInstalledEvent(context.Background())
+		if err != nil {
+			log.Warn("record telemetry install event", "error", err)
+		} else if marked {
+			telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
+				Name:       "ao.app.installed",
+				Source:     "daemon",
+				OccurredAt: time.Now().UTC(),
+				Level:      ports.TelemetryLevelInfo,
+			})
+		}
+	}
 
 	defer stop()
+	startGitHubLoginResolver(ctx, cfg, telemetryIdentity, log)
 	policyCoordinator.StartWatcher(ctx)
 	defer func() {
 		stop()
@@ -416,6 +445,10 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		DataDir:             cfg.DataDir,
 		ReconcileOutputType: lcStack.LCM.ReconcileSessionOutputType,
 		HibernationEnabled:  settingsSvc.ChatHibernationEnabled,
+		VersionRefresh: func() (time.Duration, bool) {
+			return cfg.VersionRefreshIdle, cfg.VersionRefresh && settingsSvc.VersionRefreshEnabled(ctx)
+		},
+		AppRunID: cfg.AppRunID,
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
@@ -497,7 +530,11 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
 
-	codexModelDriver := codexappserver.New(codexagent.New(), log)
+	if err := chatSvc.InitializeSideChats(ctx); err != nil {
+		log.Warn("side chat initialization failed", "error", err)
+	}
+	codexModelPlugin := codexagent.New()
+	codexModelDriver := codexappserver.New(codexModelPlugin, log)
 	modelDiscoverer := modelcatalog.Discoverer{
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
 			return codexModelDriver.DiscoverModels(listCtx, request.WorkingDir, request.Env)
@@ -527,8 +564,8 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		},
 		// Claude's model IDs are provider-specific — first-party aliases,
 		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
-		// from whichever provider is configured. An error here is expected and
-		// harmless: discovery falls back to the static aliases.
+		// from whichever provider is configured. On failure, the service retains
+		// the matching persisted catalog instead of inventing model aliases.
 		ClaudeModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 			return claudecodeagent.ProviderModels(listCtx, request.Binary, request.WorkingDir, request.Env)
 		},
@@ -574,7 +611,16 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, log)
+	reviewers, err := reviewer.NewResolver()
+	if err != nil {
+		stop()
+		lcStack.Stop()
+		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
+			log.Error("cdc pipeline shutdown", "err", cdcErr)
+		}
+		return fmt.Errorf("reviewer resolver: %w", err)
+	}
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, policyCoordinator, tracker, codexOperationGate, reviewers, log)
 	if err != nil {
 		stop()
 		shutdownStep(cfg.ShutdownTimeout, log, "lifecycle", func(context.Context) error {
@@ -620,6 +666,42 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if wired, ok := sessMgr.(interface {
+		SetAgentAccounts(ports.AgentAccountLaunchEnv)
+	}); ok {
+		wired.SetAgentAccounts(agentAccountSvc)
+	}
+	if stopper, ok := sessMgr.(interface {
+		ExitAgentsOnAccount(context.Context, string) error
+	}); ok {
+		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
+	}
+	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
+	if agentSvc != nil {
+		agentSvc.SetSavedDefaultSignIn(agentAccountSvc.DefaultSignIn)
+		agentAccountSvc.SetDefaultChanged(func(p domain.AgentAccountProvider) {
+			harness := map[domain.AgentAccountProvider]domain.AgentHarness{
+				domain.AgentAccountProviderClaude: domain.HarnessClaudeCode,
+				domain.AgentAccountProviderCodex:  domain.HarnessCodex,
+			}[p]
+			if harness != "" {
+				agentSvc.InvalidateAgentAuthentication(string(harness))
+			}
+		})
+	}
+	if runner, ok := sessMgr.(interface {
+		RunPromptSuggestionTask(context.Context, domain.SessionID, string, string, string) (string, error)
+	}); ok {
+		chatSvc.SetPromptSuggestionRunner(func(requestCtx context.Context, id domain.SessionID, turnID, systemPrompt, prompt string) (string, error) {
+			taskCtx, cancel := context.WithCancel(requestCtx)
+			stopOnShutdown := context.AfterFunc(ctx, cancel)
+			defer stopOnShutdown()
+			defer cancel()
+			return runner.RunPromptSuggestionTask(taskCtx, id, turnID, systemPrompt, prompt)
+		})
+	}
 	if fenced, ok := sessMgr.(interface{ SetPersistentHostReconcileDone(<-chan struct{}) }); ok {
 		fenced.SetPersistentHostReconcileDone(persistentHostsReconciled)
 	}
@@ -683,10 +765,16 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
 	}
 	systemInstall := systeminstall.NewWithDeps(hostCommands, hostCommands, systeminstall.Deps{
-		JobStore:           store,
-		Verifier:           systeminstall.NewVerifier(agents, hostCommands),
-		Sessions:           store,
-		PrivateNPMPrefixes: privateNPMPrefixes,
+		JobStore:                  store,
+		Verifier:                  systeminstall.NewVerifier(agents, hostCommands),
+		Sessions:                  store,
+		Reviewers:                 store,
+		DisableUpdateChecks:       !cfg.HarnessUpdateChecks,
+		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
+		WindowsUpdateWhenIdle:     cfg.WindowsUpdateWhenIdle,
+		ManagedRoot:               managedHarnessRoot(cfg),
+		Releases:                  store,
+		PrivateNPMPrefixes:        privateNPMPrefixes,
 	})
 	if err := systemInstall.Recover(ctx); err != nil {
 		stop()
@@ -698,12 +786,33 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		return fmt.Errorf("recover harness install jobs: %w", err)
 	}
 	sessMgr.SetHarnessUseGate(systemInstall)
+	systemInstall.SetHarnessUpdateObserver(sessMgr)
+	systemInstall.SetIdleUpdateCoordinator(sessMgr)
+	// Harness resolvers prefer AO's managed launchers once an update created them.
+	binaryutil.SetManagedBinDir(systemInstall.ManagedBinDir())
+	binaryCaches := []harnessBinaryCache{
+		resolverBinaryCache{agents: agents},
+		chatDrivers,
+		reviewers,
+		pluginBinaryCache{harness: domain.HarnessCodex, plugin: codexModelPlugin},
+	}
+	systemInstall.SetBinaryInvalidator(func(target systeminstall.Target) {
+		if harness, ok := installedAgentHarness(target); ok {
+			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
+		}
+	})
+	systemInstall.SetTelemetry(telemetrySink)
+	sessMgr.SetVersionTelemetry(telemetrySink)
+	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
+		return versionRefreshPolicy(ctx, cfg, settingsSvc)
+	})
+	chatSvc.SetVersionSwitchObserver(sessMgr.ObserveChatVersionSwitch)
 	systemInstall.SetOnSucceeded(func(target systeminstall.Target) {
 		harness, ok := installedAgentHarness(target)
 		if !ok {
 			return
 		}
-		agentSvc.InvalidateAgentInstallation(harness)
+		invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		agentSvc.RecheckAgent(harness)
 	})
 
@@ -720,6 +829,11 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	browserLive := httpd.NewBrowserLiveHub(browserStreamBroker, sessionSvc, func() bool {
+		state, err := mobilebridge.Load(bs.ConfigPath)
+		return err == nil && state.Enabled && state.BrowserRemoteAccess
+	}, log)
+	bs.OnBrowserRemoteAccessDisabled = browserLive.CloseAll
 
 	// Standalone shell terminals: user-opened shells with no agent session
 	// behind them. They reuse the same runtime adapter (and therefore the same
@@ -729,6 +843,7 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
+	agentAccountSvc.SetTerminals(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
@@ -821,7 +936,10 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 			Reader:       prReader,
 			Resolver:     prReader,
 			Writer:       store,
+			MergeWriter:  store,
 			ThreadWriter: store,
+			Lifecycle:    lcStack.LCM,
+			Logger:       log,
 		})
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
@@ -906,17 +1024,24 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
 	}
-	if res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir)); !res.NeedsInstall {
+	// A system cloudflared is version-checked by running it (30-120ms, up to a
+	// 5s timeout), so resolve off the boot path. Status reads and anything that
+	// needs a connector, such as restoring an enabled bridge, wait for this
+	// lookup rather than racing it.
+	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		if res.NeedsInstall {
+			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
+			// Mobile behaves exactly as it did before remote access existed.
+			log.Info("mobile remote access unavailable; cloudflared not installed",
+				"rejectedSystemPath", res.SystemPath)
+			return nil
+		}
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		bs.Tunnel = mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
+		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
 			Binary: res.Path, PIDPath: tunnelPID, Log: log,
 		})
-	} else {
-		// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-		// Mobile behaves exactly as it did before remote access existed.
-		log.Info("mobile remote access unavailable; cloudflared not installed",
-			"rejectedSystemPath", res.SystemPath)
-	}
+	})
 
 	// Stable, machine-bound host identity, served by the unauthenticated
 	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
@@ -935,20 +1060,40 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		go dispatcher.Run(ctx)
 	}
 	if mobilebridge.KeepAwakeSupported() {
-		bs.KeepAwake = mobilebridge.NewKeepAwake(os.Getpid())
+		ka := mobilebridge.NewKeepAwake(os.Getpid())
+		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir))
+		bs.KeepAwake = ka
 	}
+	awakeHost := awakesvc.NewHost(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir)
+	awakeSvc, stopAwake := startAwake(ctx, store, awakeHost, awakesvc.BindingFuncs{
+		Session: func(ctx context.Context, id string) (bool, error) {
+			row, found, err := store.GetSession(ctx, domain.SessionID(id))
+			return found && !row.IsTerminated, err
+		},
+		Agent:       store.HasAwakeAgentActivity,
+		Interrupted: chatSvc.InterruptedAwakeAgents,
+		Reconnect:   sessMgr.ReconnectAwakeAgent,
+		App:         awakeHost.AppAlive,
+	}, log)
+	defer stopAwake()
 	var nativeSessions ports.AgentNativeSessionResolver
 	if codewhaleAgent, ok := agents.Agent(domain.HarnessCodewhale); ok {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
+	// Terminal hooks pass the hook process gate: a Claude process other than
+	// the session's own must not replace its activity or transcript.
+	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Testing:            testingSvc,
+		Awake:              awakeSvc,
 		Projects:           projectSvc,
+		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
+		AgentAccounts:      agentAccountSvc,
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		Sessions:           sessionSvc,
@@ -968,19 +1113,21 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
-		GitHub:             githubpat.New(cfg.DataDir),
+		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
-		Activity:           lcStack.LCM,
+		Activity:           hookActivity,
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
+		TelemetryIdentity:  telemetryIdentity,
 		Mobile:             mc,
+		BrowserLive:        browserLive,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -1004,6 +1151,7 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		shutdownStep(cfg.ShutdownTimeout, log, "cdc pipeline", func(context.Context) error { return cdcPipe.Stop() })
 		return err
 	}
+	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
@@ -1017,6 +1165,21 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 		go func() {
 			if err := browserBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
+			}
+		}()
+	}
+	_ = os.Unsetenv(browserstream.RuntimeAddressEnv)
+	if ln, addr, err := browserstream.Listen(cfg.RunFilePath); err != nil {
+		log.Warn("browser stream: listener unavailable; mobile live browser disabled", "err", err)
+	} else {
+		if err := os.Setenv(browserstream.RuntimeAddressEnv, addr); err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("publish browser stream address: %w", err)
+		}
+		log.Info("browser stream: listening", "addr", addr)
+		go func() {
+			if err := browserStreamBroker.Serve(ctx, ln); err != nil {
+				log.Warn("browser stream: serve stopped with error", "err", err)
 			}
 		}()
 	}
@@ -1060,17 +1223,23 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	}
 
 	var startupReconcileDone <-chan struct{}
+	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
 		// Agent-readiness warming is advisory and idempotent, and request paths
 		// lazily Ensure on demand. Kick it here, after the listener is live, so its
 		// bounded subprocess probes no longer contend with the synchronous
 		// migration and fencing reconcile that gate the port bind.
-		agentSvc.WarmReadiness()
+		readinessDone := agentSvc.WarmReadiness()
+		if cfg.HarnessUpdateChecks {
+			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+				return systemInstall.UpdateAdvisory(ctx, target, refresh)
+			}, log)
+		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {
 			defer close(done)
-			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store); reconcileErr != nil {
+			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
 			}
 			close(persistentHostsReconciled)
@@ -1107,6 +1276,40 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 				}
 			}
 		}()
+		resumeDone := make(chan struct{})
+		usageLimitResumeDone = resumeDone
+		go func() {
+			defer close(resumeDone)
+			var sweeps sync.WaitGroup
+			defer sweeps.Wait()
+			// Recovery must attach existing provider work before scheduled retries
+			// inspect controller readiness. The durable opt-in survives shutdown.
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				// The service bounds overlapping scans and provider attempts. A wake
+				// must not stop the next tick discovering another session's deadline.
+				sweeps.Go(func() {
+					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
@@ -1124,6 +1327,9 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	// stop the private desktop driver before waiting on other shutdown workers.
 	if err := testingSvc.Close(); err != nil {
 		log.Error("testing shutdown cleanup", "err", err)
+	}
+	if usageLimitResumeDone != nil {
+		<-usageLimitResumeDone
 	}
 	if agentSwitchDispatcher != nil {
 		dispatcherStopContext, dispatcherStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -1218,6 +1424,17 @@ func run(ctx context.Context, stop context.CancelFunc) error {
 	return runErr
 }
 
+func telemetryAppVersion(configured, buildVersion string) string {
+	if configured != "" {
+		return configured
+	}
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "dev" {
+		return ""
+	}
+	return buildVersion
+}
+
 type reportSemanticSession interface {
 	SendSemantic(context.Context, domain.SessionID, string, string) error
 	InterruptTUI(context.Context, domain.SessionID) error
@@ -1275,6 +1492,46 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 	return "", false
 }
 
+// harnessBinaryCache holds agent plugins that cache the executable they resolved.
+type harnessBinaryCache interface {
+	InvalidateBinaryResolution(harness domain.AgentHarness)
+}
+
+// resolverBinaryCache is the plugins an AgentResolver hands out.
+type resolverBinaryCache struct{ agents ports.AgentResolver }
+
+func (c resolverBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if agent, ok := c.agents.Agent(harness); ok {
+		if invalidator, ok := agent.(ports.AgentBinaryResolutionInvalidator); ok {
+			invalidator.InvalidateBinaryResolution()
+		}
+	}
+}
+
+// pluginBinaryCache is one harness's plugin held outside any resolver.
+type pluginBinaryCache struct {
+	harness domain.AgentHarness
+	plugin  ports.AgentBinaryResolutionInvalidator
+}
+
+func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if harness == c.harness {
+		c.plugin.InvalidateBinaryResolution()
+	}
+}
+
+// invalidateHarnessBinary makes the harness's executable resolve again
+// everywhere. Launches and install verification, the agent service, Chat
+// drivers and model discovery each hold their own plugin instances, each
+// caching the path it found: missing one leaves it on the binary from before
+// the install.
+func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
+	readiness.InvalidateAgentInstallation(harness)
+	for _, cache := range caches {
+		cache.InvalidateBinaryResolution(domain.AgentHarness(harness))
+	}
+}
+
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	return []string{
 		roots.ClaudeProjects,
@@ -1301,4 +1558,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 		return fmt.Errorf("daemon working directory: chdir %s: %w", dataDir, err)
 	}
 	return nil
+}
+
+// newAgentAccounts builds the Claude Code and Codex account catalog. Each
+// account is a config folder under the state dir; "This computer" is the CLI's
+// own folder, which AO never changes the login of.
+func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, codexAccounts ports.CodexAccountClientFactory, log *slog.Logger) *agentaccounts.Service {
+	claudeHome, claudeConfig := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ""
+	if claudeHome != "" {
+		claudeConfig = filepath.Join(claudeHome, ".claude.json")
+	} else if home, err := os.UserHomeDir(); err == nil {
+		claudeHome, claudeConfig = filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
+	}
+	providers := []ports.AgentAccountProviderCLI{
+		&agentaccount.Claude{Binary: claudecodeagent.New().ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig},
+		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
+	}
+	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 }

@@ -120,14 +120,16 @@ func (s *Store) CreateOrchestratorChild(
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectID string
 		var createdByUserID *string
+		var parentDefault domain.SessionInterface
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id, created_by_user_id::text
+			`SELECT project_id, created_by_user_id::text,
+				COALESCE(agent_config->>'`+sessionDefaultInterfaceKey+`', '')
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2
 			  AND kind = 'orchestrator' AND is_terminated = false`,
 			orgID, orchestratorSessionID,
-		).Scan(&projectID, &createdByUserID)
+		).Scan(&projectID, &createdByUserID, &parentDefault)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
@@ -136,13 +138,19 @@ func (s *Store) CreateOrchestratorChild(
 		}
 		input.ProjectID = projectID
 		input.Kind = "worker"
+		// A spawned worker resolves its interface from the default session
+		// interface its orchestrator was created with, as a local spawn
+		// resolves from the daemon's default.
+		if input.DefaultInterface == "" {
+			input.DefaultInterface = parentDefault
+		}
 		creator := ""
 		if createdByUserID != nil {
 			creator = *createdByUserID
 		}
 		child, err = createSessionTx(
-			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes,
-			input, orchestratorSessionID, creator,
+			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing,
+			input, orchestratorSessionID, creator, s.coderReadableNames,
 		)
 		return err
 	})
@@ -174,11 +182,17 @@ func (s *Store) SendOrchestratorChildMessage(
 			return err
 		}
 		if !allowed {
-			return ErrForbidden
+			return ErrNotOrchestratorChild
+		}
+		// Waking a paused billed child is refused beyond the plan, so the
+		// orchestrator learns why its worker did not start.
+		wake, err := s.billing.replayOrMessageWakeTx(ctx, tx, orgID, childSessionID, idempotencyKey, true)
+		if err != nil {
+			return err
 		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, childSessionID, idempotencyKey, text, "", orchestratorSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, domain.ChatTurnSettings{}, wake,
 		)
 		if err != nil {
 			return err
@@ -222,9 +236,15 @@ func (s *Store) ReportToOrchestrator(
 		prefixed := fmt.Sprintf(
 			"[from worker %s %q] %s", shortSessionID(childSessionID), childName, text,
 		)
+		// A report reaches a paused orchestrator even beyond the plan: it is
+		// queued, and runs when the orchestrator is woken within the plan.
+		wake, err := s.billing.messageWakeTx(ctx, tx, orgID, parentID, false)
+		if err != nil {
+			return err
+		}
 		event, err = sendMessageTx(
 			ctx, tx, orgID, parentID, idempotencyKey, prefixed, "", childSessionID,
-			"", nil, domain.ChatTurnSettings{},
+			"", nil, domain.ChatTurnSettings{}, wake,
 		)
 		if err != nil {
 			return err
@@ -285,8 +305,23 @@ func (s *Store) DeleteOrchestratorChild(
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrForbidden
+		if tag.RowsAffected() > 0 {
+			return nil
+		}
+		// No sandbox moved: either the session is not this orchestrator's
+		// child, or it is and has nothing left to delete.
+		var child bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_sessions
+				WHERE org_id = $1 AND id = $2 AND project_id = $3 AND parent_session_id = $4
+			)`,
+			orgID, childSessionID, projectID, orchestratorSessionID,
+		).Scan(&child); err != nil {
+			return err
+		}
+		if !child {
+			return ErrNotOrchestratorChild
 		}
 		return nil
 	})

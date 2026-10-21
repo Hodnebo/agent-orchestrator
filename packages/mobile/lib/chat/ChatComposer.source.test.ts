@@ -46,8 +46,8 @@ describe("chat composer pill", () => {
 		expect(composer).toContain("onContentSizeChange={(event) => {");
 		expect(composer).toContain("style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}");
 		expect(styleRule("composer")).toContain("minHeight: COMPOSER_HEIGHT");
-		expect(styleRule("composer")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
-		expect(styleRule("composer")).toContain('alignItems: "flex-end"');
+		expect(styleRule("composerRow")).toContain("maxHeight: COMPOSER_MAX_HEIGHT");
+		expect(styleRule("composerRow")).toContain('alignItems: "flex-end"');
 		expect(styleRule("input")).toContain("minHeight: COMPOSER_FIELD_HEIGHT");
 		expect(styleRule("input")).toContain("maxHeight: COMPOSER_FIELD_MAX_HEIGHT");
 		expect(composer).toContain("const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT)");
@@ -64,13 +64,14 @@ describe("chat composer pill", () => {
 		// A controlled TextInput can retain its last native content size after its
 		// value is cleared; the empty placeholder must not inherit that height.
 		expect(composer).toMatch(/setText\(""\);\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
-		expect(composer).toContain('if (!latestText.current) {\n\t\t\t\t\t\t\tsetFieldHeight(COMPOSER_FIELD_HEIGHT);');
+		expect(composer).toMatch(/if \(!latestText.current\) \{\s*setFieldHeight\(COMPOSER_FIELD_HEIGHT\);/);
 		expect(composer).toContain("height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT");
 	});
 
 	it("does not clear a newer draft when an earlier send completes", () => {
-		expect(composer).toContain('current === text ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, current)');
-		expect(composer).toContain('if (latestText.current === text) {');
+		expect(composer).toContain('const unchanged = current === text && currentQuotes === quotes;');
+		expect(composer).toContain('unchanged ? AsyncStorage.removeItem(draftKey)');
+		expect(composer).toContain('if (latestText.current === text && latestQuotes.current === quotes) {');
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
@@ -137,5 +138,19 @@ describe("PR review composer", () => {
 		expect(prompt).toContain('name="git-pull-request"');
 		expect(prompt).toContain('name="chevron-right"');
 		expect(prompt).not.toContain('name="arrow-up-right"');
+	});
+});
+
+describe("session changes pill", () => {
+	// Codex-style: once the session has changed files, the meta row offers them
+	// where the "Sent after this" note sat. The placeholder still says a message
+	// waits for the turn, so nothing is lost, and steering stays reachable.
+	it("replaces the queue note and keeps the steer action", () => {
+		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
+		expect(start).toBeGreaterThan(-1);
+		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
+		expect(pill).toContain("changes.onOpen()");
+		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
 	});
 });
