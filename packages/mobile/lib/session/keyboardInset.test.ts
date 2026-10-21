@@ -106,12 +106,15 @@ describe("reduceChatKeyboard", () => {
 		expect(chatDockRiseOverride(state)).toBeUndefined();
 	});
 
-	it("holds the occupancy through a normal close, then releases it", () => {
-		const open = run({ kind: "controller-show", height: 336 });
-		const closing = reduceChatKeyboard("android", open, { kind: "controller-hide-start" });
-		expect(closing.height).toBe(336);
-		expect(chatDockRiseOverride(closing)).toBeUndefined();
-		expect(run({ kind: "controller-show", height: 336 }, { kind: "controller-hide-start" }, { kind: "controller-hidden" }, { kind: "platform-hidden" })).toEqual(CHAT_KEYBOARD_HIDDEN);
+	// The settle window means React Native's early keyboardDidHide reaches the
+	// reducer after keyboard-controller's own close, as a no-op.
+	it("ends a normal close hidden, with React Native's report changing nothing", () => {
+		expect(run({ kind: "controller-show", height: 336 }, { kind: "controller-hidden" }, { kind: "platform-hidden" })).toEqual(CHAT_KEYBOARD_HIDDEN);
+	});
+
+	it("treats a sub-dp height difference as the same keyboard", () => {
+		const state = run({ kind: "controller-show", height: 336.38 }, { kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(chatDockRiseOverride(state)).toBeUndefined();
 	});
 
 	// The empty-space bug: keyboard-controller never heard the keyboard close, so
@@ -131,9 +134,12 @@ describe("reduceChatKeyboard", () => {
 		expect(chatDockRiseOverride(state)).toBe(1);
 	});
 
-	it("returns to riding the progress on the next transition keyboard-controller sees", () => {
-		const recovered = run({ kind: "platform-shown", height: 312, insetsBottom: 24 }, { kind: "controller-hide-start" });
-		expect(chatDockRiseOverride(recovered)).toBeUndefined();
+	// Its progress never left 0 for an open it missed, so riding it during the
+	// close would drop the composer by a resting inset.
+	it("keeps a pinned dock pinned until keyboard-controller reports the close", () => {
+		const pinned = run({ kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(chatDockRiseOverride(pinned)).toBe(1);
+		expect(chatDockRiseOverride(reduceChatKeyboard("android", pinned, { kind: "controller-hidden" }))).toBeUndefined();
 	});
 
 	it("treats iOS heights from either source as the full occupancy", () => {

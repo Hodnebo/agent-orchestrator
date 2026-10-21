@@ -89,9 +89,14 @@ export function dockRestingInset(insetsBottom: number): number {
  *
  * React Native's own `Keyboard` events come from the root view's layout pass,
  * which compares the real window insets every time, so they fire for those
- * transitions too. They arrive late (once the keyboard has stopped), so they
- * are not used to drive the animation, only to correct whatever is left over
- * when the two disagree. The latest report wins.
+ * transitions too. They are not used to drive the animation, only to correct
+ * whatever is left over when the two disagree. On Android they can arrive as a
+ * transition *starts*: the root insets already hold the end state, so
+ * `keyboardDidHide` fires before keyboard-controller's `keyboardWillHide`.
+ * Applying that at once dropped the pad mid-close and the composer snapped
+ * instead of following the keyboard down, so the screen holds each platform
+ * report for `PLATFORM_KEYBOARD_SETTLE_MS` and applies it only if
+ * keyboard-controller still disagrees once the keyboard has stopped moving.
  *
  * `height` is the whole occupancy from the bottom of the screen, which is
  * what the root has to clear. The two sources measure that differently on
@@ -107,10 +112,19 @@ export type ChatKeyboardState = {
 
 export type ChatKeyboardSignal =
 	| { kind: "controller-show"; height: number }
-	| { kind: "controller-hide-start" }
 	| { kind: "controller-hidden" }
 	| { kind: "platform-shown"; height: number; insetsBottom: number }
 	| { kind: "platform-hidden" };
+
+/**
+ * How long a React Native keyboard report waits before it may correct
+ * keyboard-controller. Longer than Android's IME animation (about 250-300ms), so
+ * a transition keyboard-controller does see has finished first.
+ */
+export const PLATFORM_KEYBOARD_SETTLE_MS = 500;
+
+/** Heights are fractional dp; a sub-dp difference is the same keyboard. */
+const HEIGHT_TOLERANCE = 1;
 
 export const CHAT_KEYBOARD_HIDDEN: ChatKeyboardState = { visible: false, height: 0, progressTrusted: true };
 
@@ -118,15 +132,15 @@ export function reduceChatKeyboard(platform: "android" | "ios", state: ChatKeybo
 	switch (signal.kind) {
 		case "controller-show":
 			return { visible: true, height: Math.max(0, signal.height), progressTrusted: true };
-		case "controller-hide-start":
-			// Hold the occupancy until the keyboard has gone, as before; only hand the
-			// dock back to the keyboard's progress so it can follow the close.
-			return state.progressTrusted ? state : { ...state, progressTrusted: true };
+		// No case for keyboard-controller's `keyboardWillHide`: the occupancy holds
+		// until the keyboard has gone, and a pinned dock stays pinned. When the open
+		// was one keyboard-controller missed, its progress is still 0, and handing
+		// the dock back to it mid-close dropped the composer by a resting inset.
 		case "controller-hidden":
 			return CHAT_KEYBOARD_HIDDEN;
 		case "platform-shown": {
 			const height = rootKeyboardPad(platform, signal.height, signal.insetsBottom);
-			if (state.visible && state.height === height) return state;
+			if (state.visible && Math.abs(state.height - height) <= HEIGHT_TOLERANCE) return state;
 			return { visible: height > 0, height, progressTrusted: false };
 		}
 		case "platform-hidden":

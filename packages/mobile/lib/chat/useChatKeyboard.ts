@@ -8,6 +8,7 @@ import {
 	chatDockRiseOverride,
 	dockRestingInset,
 	keyboardVerticalOffset,
+	PLATFORM_KEYBOARD_SETTLE_MS,
 	reduceChatKeyboard,
 	type ChatKeyboardSignal,
 	type ChatKeyboardState,
@@ -44,14 +45,28 @@ export function useChatKeyboard() {
 	);
 
 	useEffect(() => {
+		// React Native's reports wait out the keyboard's own animation; see
+		// reduceChatKeyboard. Only the latest one is kept, and it is dropped if React
+		// Native's own record has moved on by the time it would apply.
+		let settle: ReturnType<typeof setTimeout> | undefined;
+		const settleThenCorrect = (signal: Extract<ChatKeyboardSignal, { kind: "platform-shown" | "platform-hidden" }>) => {
+			if (settle) clearTimeout(settle);
+			settle = setTimeout(() => {
+				settle = undefined;
+				if (Keyboard.isVisible() !== (signal.kind === "platform-shown")) return;
+				dispatch(signal);
+			}, PLATFORM_KEYBOARD_SETTLE_MS);
+		};
 		const subscriptions = [
 			KeyboardEvents.addListener("keyboardWillShow", (event) => dispatch({ kind: "controller-show", height: event.height })),
-			KeyboardEvents.addListener("keyboardWillHide", () => dispatch({ kind: "controller-hide-start" })),
 			KeyboardEvents.addListener("keyboardDidHide", () => dispatch({ kind: "controller-hidden" })),
-			Keyboard.addListener("keyboardDidShow", (event) => dispatch({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
-			Keyboard.addListener("keyboardDidHide", () => dispatch({ kind: "platform-hidden" })),
+			Keyboard.addListener("keyboardDidShow", (event) => settleThenCorrect({ kind: "platform-shown", height: event.endCoordinates.height, insetsBottom: insetsBottom.current })),
+			Keyboard.addListener("keyboardDidHide", () => settleThenCorrect({ kind: "platform-hidden" })),
 		];
-		return () => subscriptions.forEach((subscription) => subscription.remove());
+		return () => {
+			if (settle) clearTimeout(settle);
+			subscriptions.forEach((subscription) => subscription.remove());
+		};
 	}, []);
 
 	return {
