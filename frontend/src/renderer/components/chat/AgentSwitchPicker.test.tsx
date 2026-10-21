@@ -114,6 +114,18 @@ describe("AgentModelPicker", () => {
 		expect(await screen.findByText("GPT X")).toBeInTheDocument();
 	});
 
+	it("lists the agent's models while it starts, checked on the saved one, until it reports its own", async () => {
+		const user = userEvent.setup();
+		const { current } = open(undefined, false, "codex", { models: [], modelId: undefined, modelLabel: "Codex" }, false, true, "gpt-x");
+		await screen.findByText("GPT X");
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Model/ }));
+		const row = await screen.findByRole("menuitemradio", { name: /GPT X/ });
+		expect(row).toHaveAttribute("aria-checked", "true");
+		expect(row).toHaveAttribute("aria-disabled", "true");
+		expect(current.onPickModel).not.toHaveBeenCalled();
+	});
+
 	it("stars a row when its model was starred under another id", async () => {
 		const user = userEvent.setup();
 		const saved = { harness: "claude-code", row: "opus", model: "opus", label: "Opus" };

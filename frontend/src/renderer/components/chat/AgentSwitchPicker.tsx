@@ -249,8 +249,22 @@ export function AgentModelPicker({
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
 		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) } : current;
-	const currentSource: PickerSource = disabled
-		? { ...live, onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
+	const { settings: hostSettings } = useSettings(hostId);
+	// The agent's list is shared by every session, so it names the saved model at once.
+	// No saved model means the agent's own default, which Claude Code leaves unset.
+	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
+	// Until the agent reports its own models, its list fills the menu; picks wait for the agent.
+	const starting = loadingModels && savedCatalog && !current.models.some((model) => model.id)
+		? otherAgentSource(
+			currentHarness,
+			offeredCatalogModels(savedCatalog, hostSettings?.harnessDefaults?.[currentHarness]?.disabledModels, [savedModel]),
+			savedModel ? { harness: currentHarness, model: savedModel } : undefined,
+			() => {},
+			t,
+		)
+		: undefined;
+	const currentSource: PickerSource = disabled || starting
+		? { ...(starting ?? live), onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
 		: live;
 	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
@@ -262,7 +276,6 @@ export function AgentModelPicker({
 	const catalogs = useQueries({
 		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
 	});
-	const { settings: hostSettings } = useSettings(hostId);
 	// A pending agent offers the models its own session will, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
 		harness,
@@ -282,9 +295,6 @@ export function AgentModelPicker({
 	const modelsProblem = !settable || source.models.some((model) => model.id)
 		? undefined
 		: catalogProblem(shownCatalog);
-	// The agent's list is shared by every session, so it names the saved model at once.
-	// No saved model means the agent's own default, which Claude Code leaves unset.
-	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
 	const defaultModel = savedCatalog?.models?.find((model) => model.isDefault);
 	const savedLabel = !loadingModels || !savedCatalog ? undefined
 		: savedModel && savedModel !== "default" ? recordedModelName(currentHarness, savedModel, savedCatalog.models ?? [])
