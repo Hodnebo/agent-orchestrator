@@ -78,6 +78,31 @@ test("destination conflict offers reuse without cloning @T0", async ({ page }, t
 	expect(clones).toBe(0);
 });
 
+test("reuse validation failure preserves inputs and offers retry @T0", async ({ page }) => {
+	let validations = 0;
+	let clones = 0;
+	await page.route("**/api/v1/projects/clone/check", (route) => route.fulfill({ json: { remoteUrl, path: checkout, exists: true, canUseExisting: true } }));
+	await page.route("**/api/v1/imports/validate", async (route) => {
+		validations++;
+		if (validations === 1) {
+			await route.fulfill({ status: 503, json: { error: "unavailable", code: "SERVICE_UNAVAILABLE", message: "Validation is temporarily unavailable." } });
+		} else {
+			await route.fulfill({ json: validation });
+		}
+	});
+	await page.route("**/api/v1/projects/clone/prepare", async (route) => { clones++; await route.abort(); });
+	await openClone(page);
+	await page.getByRole("button", { name: "Use existing checkout", exact: true }).click();
+	const dialog = page.getByRole("dialog", { name: "Clone a Git repository" });
+	await expect(dialog.getByText("Validation is temporarily unavailable.", { exact: true })).toBeVisible();
+	await expect(dialog.getByRole("textbox", { name: "Repository URL" })).toHaveValue("https://github.com/acme/example");
+	await expect(dialog.getByRole("textbox", { name: "Clone into", exact: true })).toHaveValue("/clones");
+	await dialog.getByRole("button", { name: "Use existing checkout", exact: true }).click();
+	await expect(page.getByRole("button", { name: "Create and start", exact: true })).toBeVisible();
+	expect(validations).toBe(2);
+	expect(clones).toBe(0);
+});
+
 test("cloning shows status and Cancel keeps inputs for retry @T0", async ({ page }, testInfo) => {
 	let release: () => void = () => undefined;
 	const pending = new Promise<void>((resolve) => { release = resolve; });
