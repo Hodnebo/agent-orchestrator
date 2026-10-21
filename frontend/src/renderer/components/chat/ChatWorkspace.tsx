@@ -467,7 +467,8 @@ export interface ChatWorkspaceProps {
 	theme?: "light" | "dark";
 	/** `picked` names the setting the user chose from its own menu; other changes echo the shown settings. */
 	onChooseSettings?: (settings: TurnSettings, picked?: keyof TurnSettings) => void;
-	onRememberPermissions?: (mode: ApprovalMode) => Promise<unknown> | void;
+	/** `null` forgets the project's remembered mode. */
+	onRememberPermissions?: (mode: ApprovalMode | null) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
 	rememberPermissionsPending?: boolean;

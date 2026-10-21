@@ -511,13 +511,13 @@ export function AgentModelPicker({
 }
 
 /** An on/off setting the agent has, as a menu row. The row owns the switch, so a click or Enter fires once. */
-export function ToggleRow({ label, checked, onChange }: { label: string; checked?: boolean; onChange?: (next: boolean) => void }) {
+export function ToggleRow({ label, checked, onChange, className }: { label: string; checked?: boolean; onChange?: (next: boolean) => void; className?: string }) {
 	if (checked === undefined) return null;
 	return (
 		<OptionMenuItem
 			disabled={!onChange}
 			onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
-			className="justify-between gap-4 text-xs text-foreground"
+			className={cn("justify-between gap-4 text-xs text-foreground", className)}
 		>
 			<span>{label}</span>
 			<Switch aria-label={label} checked={checked} tabIndex={-1} />

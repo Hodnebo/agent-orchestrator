@@ -4,9 +4,9 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 
-const { patch } = vi.hoisted(() => ({ patch: vi.fn() }));
+const { patch, del, get } = vi.hoisted(() => ({ patch: vi.fn(), del: vi.fn(), get: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
-	apiClient: { PATCH: patch },
+	apiClient: { PATCH: patch, DELETE: del, GET: get },
 	apiErrorMessage: (error: { message: string }) => error.message,
 }));
 import { useRememberProjectPermissions } from "./useRememberProjectPermissions";
@@ -19,7 +19,12 @@ function setup(sourceHarness?: string) {
 	return { ...renderHook(() => useRememberProjectPermissions("project-one", sourceHarness), { wrapper }), invalidate };
 }
 
-beforeEach(() => patch.mockReset());
+beforeEach(() => {
+	patch.mockReset();
+	del.mockReset();
+	get.mockReset();
+	get.mockResolvedValue({ data: { status: "ok", project: { config: {} } } });
+});
 
 describe("project permission persistence", () => {
 	it("writes only the requested permission to the correct project and refreshes project data", async () => {
@@ -33,6 +38,18 @@ describe("project permission persistence", () => {
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project", "project-one"] });
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 		await waitFor(() => expect(result.current.savedMode).toBe("bypass-permissions"));
+	});
+
+	it("reads the project's remembered mode and forgets it", async () => {
+		get.mockResolvedValue({ data: { status: "ok", project: { config: { agentConfig: { permissions: "auto" } } } } });
+		del.mockResolvedValue({ data: { project: {} } });
+		const { result, invalidate } = setup();
+		await waitFor(() => expect(result.current.savedMode).toBe("auto"));
+		await act(async () => { await result.current.remember(null); });
+		expect(del).toHaveBeenCalledWith("/api/v1/projects/{id}/permissions", { params: { path: { id: "project-one" } } });
+		expect(patch).not.toHaveBeenCalled();
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project", "project-one"] });
+		await waitFor(() => expect(result.current.savedMode).toBeUndefined());
 	});
 
 	it("reports errors without claiming success and allows an explicit retry", async () => {
@@ -58,19 +75,9 @@ it("sends source harness context so the daemon can preserve Full access across p
 	});
 });
 
-it("keeps saved-mode feedback scoped to its project and source harness", async () => {
+it("reads a Codex Full access write as the bypass mode the project stores", async () => {
 	patch.mockResolvedValue({});
-	const client = new QueryClient();
-	const wrapper = ({ children }: { children: ReactNode }) =>
-		<QueryClientProvider client={client}>{children}</QueryClientProvider>;
-	const { result, rerender } = renderHook(
-		({ projectId, harness }) => useRememberProjectPermissions(projectId, harness),
-		{ wrapper, initialProps: { projectId: "project-one", harness: "codex" } },
-	);
+	const { result } = setup("codex");
 	await act(async () => { await result.current.remember("default"); });
-	await waitFor(() => expect(result.current.savedMode).toBe("default"));
-	rerender({ projectId: "project-two", harness: "codex" });
-	expect(result.current.savedMode).toBeUndefined();
-	rerender({ projectId: "project-one", harness: "claude-code" });
-	expect(result.current.savedMode).toBeUndefined();
+	await waitFor(() => expect(result.current.savedMode).toBe("bypass-permissions"));
 });
