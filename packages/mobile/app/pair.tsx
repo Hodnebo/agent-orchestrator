@@ -168,12 +168,24 @@ export default function PairScreen() {
 		if (!gate.start()) return;
 		try {
 			await attemptPair(code, offer);
-		} finally {
+		} catch (e) {
 			// An attempt that threw (storage, navigation) never reported how it
-			// ended; without this the scanner would stay claimed and ignore scans.
+			// ended. Without this the scanner would stay claimed and ignore scans,
+			// and the spinner would just stop with nothing to act on.
+			console.warn("[pair] attempt failed", e);
+			setAwaitingLocalNetwork(false);
+			setBusy(false);
 			if (gate.release()) {
-				setAwaitingLocalNetwork(false);
-				setBusy(false);
+				// Recorded as a failure so a code still in view waits to be pointed
+				// at again instead of retrying every frame.
+				gate.failed(code, Date.now());
+				haptics.warning();
+				setFailure({
+					title: "Couldn't pair",
+					icon: "alert-circle",
+					message: "Something went wrong on this phone. Try again.",
+					showLocalNetworkHint: false,
+				});
 			}
 		}
 	}
@@ -357,12 +369,17 @@ export default function PairScreen() {
 				)}
 			</View>
 
-			{awaitingLocalNetwork && !failure ? (
+			{/* From the moment a scan starts: the first race alone can take ~20 s
+			    when a code's tunnel is down, and a frozen-looking scanner after the
+			    haptic reads as broken. The Local Network line only while waiting on it. */}
+			{(busy || awaitingLocalNetwork) && !failure ? (
 				<View style={styles.notice} accessibilityLiveRegion="polite">
 					<View style={styles.noticeLead}><ActivityIndicator size="small" color={t.textSecondary} /></View>
 					<View style={styles.noticeBody}>
 						<Text style={styles.noticeTitle}>Connecting…</Text>
-						<Text style={styles.noticeText}>If asked, allow access to your local network.</Text>
+						{awaitingLocalNetwork ? (
+							<Text style={styles.noticeText}>If asked, allow access to your local network.</Text>
+						) : null}
 					</View>
 				</View>
 			) : null}
