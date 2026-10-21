@@ -31,6 +31,12 @@ function renderPanel(cliLogin?: CliLoginControls) {
 	return render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" cliLogin={cliLogin} /></TooltipProvider></QueryClientProvider>);
 }
 
+const findCliLoginRow = () => waitFor(() => {
+	const row = document.querySelector<HTMLElement>('[data-agent-account="device-claude"]');
+	if (!row) throw new Error("no CLI login row");
+	return row;
+});
+
 beforeEach(() => {
 	getMock.mockReset().mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
@@ -97,11 +103,7 @@ it("signs the CLI login in again and out from its own row", async () => {
 	const user = userEvent.setup();
 	const cliLogin = { disabled: false, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() };
 	renderPanel(cliLogin);
-	const row = await waitFor(() => {
-		const element = document.querySelector<HTMLElement>('[data-agent-account="device-claude"]');
-		if (!element) throw new Error("no CLI login row");
-		return element;
-	});
+	const row = await findCliLoginRow();
 	await user.click(within(row).getByRole("button", { name: "Sign in again" }));
 	await user.click(within(row).getByRole("button", { name: "Log out" }));
 
@@ -116,11 +118,7 @@ it("offers only a sign-in on a signed-out CLI login, held while a login terminal
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [{ ...device, signedIn: false, default: false }, { ...saved, signedIn: true, default: true }] },
 	}));
 	renderPanel({ disabled: true, canLogout: true, onSignIn: vi.fn(), onLogout: vi.fn() });
-	const row = await waitFor(() => {
-		const element = document.querySelector<HTMLElement>('[data-agent-account="device-claude"]');
-		if (!element) throw new Error("no CLI login row");
-		return element;
-	});
+	const row = await findCliLoginRow();
 	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
 });

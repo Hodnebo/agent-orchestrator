@@ -338,8 +338,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
 	}, []);
 
-	// With a saved default, readiness is that account's sign-in: the CLI's own
-	// login is read from its row in the accounts list instead.
 	const cliLoginOnOwnRow = useCallback((agentId: AgentId) => !hostId && agentAccountProviderFor(agentId) !== null
 		&& followsSavedAccount(queryClient.getQueryData<AgentReadiness>(readinessKey)?.agents.find((agent) => agent.id === agentId)), [hostId, queryClient, readinessKey]);
 
@@ -621,7 +619,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
 		setAuthWorkflow(authWorkflowRef.current);
 		const signingIn = workflow.action !== "logout";
-		// When readiness speaks for a saved account, the CLI login is checked on its own row.
 		const ownRow = cliLoginOnOwnRow(workflow.agentId);
 		let cliSignedIn: boolean | undefined;
 		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
@@ -671,7 +668,6 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			void queryClient.invalidateQueries({ queryKey: shellKey });
 			await checkAuth(workflow.agentId, { fresh: true });
-			void refreshCliLogin(workflow.agentId);
 			if (authWorkflowRef.current?.terminal.handleId === workflow.terminal.handleId) {
 				authWorkflowRef.current = null;
 				setAuthWorkflow(null);
@@ -681,12 +677,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "cleanup_failed", reason: error instanceof Error ? error.message : t("settings.harness.authFailed") } : current);
 			return false;
 		}
-	}, [checkAuth, hostId, queryClient, refreshCliLogin, shellKey, t]);
+	}, [checkAuth, hostId, queryClient, shellKey, t]);
 
 	// A login the panel could not confirm may still have taken: the daemon keeps
 	// re-checking readiness. Once the harness reads as logged in, close the panel
 	// instead of leaving a stale "signed out" terminal on screen.
-	// Readiness that speaks for a saved account says nothing about the CLI login.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
 		if (cliLoginOnOwnRow(authWorkflow.agentId)) return;
