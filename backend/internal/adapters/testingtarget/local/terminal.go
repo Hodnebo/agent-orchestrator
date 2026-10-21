@@ -80,7 +80,8 @@ func (a *Adapter) terminalControl(ctx context.Context, s *launch, action string)
 		}
 		// The target's own visible command must name both private state paths.
 		// A new unrelated Terminal window is never enough for admission.
-		if !strings.Contains(w.Text, "AO_DATA_DIR="+s.target.DataDir) || !strings.Contains(w.Text, "AO_RUN_FILE="+s.root+"/running.json") {
+		command := strings.NewReplacer("\r", "", "\n", "").Replace(w.Text)
+		if !strings.Contains(command, "AO_DATA_DIR="+s.target.DataDir) || !strings.Contains(command, "AO_RUN_FILE="+s.root+"/running.json") {
 			return result, errors.New("new terminal does not show this target's private state command")
 		}
 		if err := a.captureTerminal(ctx, s, w); err != nil {

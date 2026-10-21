@@ -24,7 +24,7 @@ func terminalFixture(t *testing.T) (*fakeSystem, *[]terminalWindow, *int) {
 		if w.ID == "old" {
 			t.Fatal("read pre-existing terminal text")
 		}
-		return "exec env AO_DATA_DIR=" + f.s.target.DataDir + " AO_RUN_FILE=" + f.s.root + "/running.json ao triage\nWhat went wrong?", nil
+		return "exec env AO_DATA_DIR=" + strings.ReplaceAll(f.s.target.DataDir, "/", "/\n") + " AO_RUN_FILE=" + strings.ReplaceAll(f.s.root, "/", "/\r\n") + "/running.json ao triage\nWhat went wrong?", nil
 	}
 	f.a.ops.windows = func(_ context.Context, pid int) ([]string, error) {
 		if pid != 90 {
