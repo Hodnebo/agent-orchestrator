@@ -19,6 +19,7 @@ type terminalWindow struct {
 	ID        string    `json:"id"`
 	TTY       string    `json:"tty"`
 	Text      string    `json:"text"`
+	Closed    bool      `json:"closed,omitempty"`
 	StartedAt time.Time `json:"-"`
 }
 
@@ -60,6 +61,9 @@ func (a *Adapter) terminalControl(ctx context.Context, s *launch, action string)
 		}
 		var candidates []terminalWindow
 		for _, w := range windows {
+			if w.Closed {
+				continue
+			}
 			existed := false
 			for _, before := range s.terminalArm {
 				if w.PID == before.PID && w.ID == before.ID && w.StartedAt.Equal(before.StartedAt) {
@@ -166,7 +170,11 @@ const terminalSnapshotScript = `ObjC.import('AppKit');
 var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.apple.Terminal');
 var result=[];
 if(Number(apps.count)===1){var pid=Number(apps.objectAtIndex(0).processIdentifier),app=Application('Terminal');
-for(var w of app.windows()){var tabs=w.tabs();if(tabs.length!==1)continue;
+for(var w of app.windows()){var tabs=w.tabs();
+if(tabs===null || tabs.length===0){
+if(w.visible()!==false)throw Error('Terminal tab inventory unavailable');
+result.push({pid:pid,id:String(w.id()),closed:true});continue;}
+if(tabs.length!==1)continue;
 result.push({pid:pid,id:String(w.id()),tty:tabs[0].tty()});}}
 JSON.stringify(result)`
 
@@ -231,7 +239,15 @@ func (a *Adapter) closeOwnedTerminal(ctx context.Context, s *launch) error {
 			continue
 		}
 		started, err := a.ops.startTime(w.PID)
-		if err != nil || !started.Equal(w.StartedAt) || current.TTY != w.TTY {
+		if err != nil || !started.Equal(w.StartedAt) {
+			return errors.New("refusing to close changed terminal identity")
+		}
+		// Terminal can retain a hidden WindowServer window after its last tab
+		// closes. Only positive tabless/hidden metadata proves that state.
+		if current.Closed {
+			return nil
+		}
+		if current.TTY != w.TTY {
 			return errors.New("refusing to close changed terminal identity")
 		}
 		if err := a.ops.closeTerminal(ctx, w); err != nil {
@@ -245,6 +261,19 @@ func (a *Adapter) closeOwnedTerminal(ctx context.Context, s *launch) error {
 		}
 		for _, id := range ids {
 			if id == w.ID {
+				windows, err := a.ops.terminals(ctx)
+				if err != nil {
+					return err
+				}
+				for _, current := range windows {
+					if current.PID == w.PID && current.ID == w.ID && current.Closed {
+						started, err := a.ops.startTime(w.PID)
+						if err != nil || !started.Equal(w.StartedAt) {
+							return errors.New("closed terminal PID identity changed")
+						}
+						return nil
+					}
+				}
 				return errors.New("owned terminal window remains")
 			}
 		}
@@ -257,7 +286,7 @@ func nativeTerminalText(ctx context.Context, w terminalWindow) (string, error) {
 	if err != nil || id <= 0 {
 		return "", errors.New("invalid owned terminal window")
 	}
-	script := fmt.Sprintf(`var app=Application('Terminal'),w=app.windows.byId(%d),tabs=w.tabs(); if(tabs.length!==1 || tabs[0].tty()!==%q)throw Error('Terminal identity changed'); JSON.stringify(tabs[0].contents())`, id, w.TTY)
+	script := fmt.Sprintf(`var app=Application('Terminal'),w=app.windows.byId(%d),tabs=w.tabs(); if(tabs===null || tabs.length!==1 || tabs[0].tty()!==%q)throw Error('Terminal identity changed'); JSON.stringify(tabs[0].contents())`, id, w.TTY)
 	cmd := processutil.CommandContext(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", script)
 	cmd.Env = strippedEnv(os.Environ())
 	data, err := cmd.Output()

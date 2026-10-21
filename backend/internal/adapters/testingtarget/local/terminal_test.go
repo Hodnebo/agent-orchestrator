@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestTerminalAdmissionInputIdentityTextAndCleanup(t *testing.T) {
 }
 
 func TestTerminalAdmissionFailsClosed(t *testing.T) {
-	for _, kind := range []string{"unarmed", "existing", "ambiguous", "unrelated", "expired", "reused"} {
+	for _, kind := range []string{"unarmed", "existing", "ambiguous", "unrelated", "expired", "reused", "placeholder"} {
 		t.Run(kind, func(t *testing.T) {
 			f, windows, reads := terminalFixture(t)
 			if kind != "unarmed" {
@@ -108,6 +109,8 @@ func TestTerminalAdmissionFailsClosed(t *testing.T) {
 				f.s.terminalArmedAt = time.Now().Add(-3 * time.Minute)
 			case "reused":
 				f.times[90] = f.times[90].Add(time.Hour)
+			case "placeholder":
+				(*windows)[len(*windows)-1] = terminalWindow{PID: 90, ID: "new", Closed: true}
 			}
 			if _, err := f.a.Control(context.Background(), f.s.target, "admit_terminal"); err == nil {
 				t.Fatal("admitted unsafe terminal")
@@ -117,6 +120,57 @@ func TestTerminalAdmissionFailsClosed(t *testing.T) {
 			}
 			if kind == "existing" && *reads != 0 {
 				t.Fatal("read pre-existing window")
+			}
+		})
+	}
+}
+
+func TestTerminalCleanupAcceptsOnlyProvedClosedPlaceholder(t *testing.T) {
+	for _, state := range []string{"after close", "already closed", "hidden live tab", "unknown metadata", "reused PID"} {
+		t.Run(state, func(t *testing.T) {
+			f, windows, _ := terminalFixture(t)
+			control(t, f, "arm_terminal")
+			*windows = append(*windows, terminalWindow{PID: 90, ID: "new", TTY: "/dev/ttys002"})
+			control(t, f, "admit_terminal")
+			closed := terminalWindow{PID: 90, ID: "new", Closed: true}
+			if state == "already closed" || state == "reused PID" {
+				(*windows)[1] = closed
+			}
+			if state == "reused PID" {
+				f.times[90] = f.times[90].Add(time.Hour)
+			}
+			closes := 0
+			f.a.ops.closeTerminal = func(_ context.Context, w terminalWindow) error {
+				closes++
+				if w.ID != "new" {
+					t.Fatal("closed an unowned window")
+				}
+				if state == "after close" {
+					(*windows)[1] = closed
+				}
+				return nil
+			}
+			if state == "unknown metadata" {
+				inventory := f.a.ops.terminals
+				f.a.ops.terminals = func(ctx context.Context) ([]terminalWindow, error) {
+					if closes > 0 {
+						return nil, errors.New("metadata unavailable")
+					}
+					return inventory(ctx)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			err := f.a.closeOwnedTerminal(ctx, f.s)
+			wantClosed := state == "after close" || state == "already closed"
+			if (err == nil) != wantClosed {
+				t.Fatalf("state=%s err=%v", state, err)
+			}
+			if (state == "already closed" || state == "reused PID") && closes != 0 {
+				t.Fatal("closed a placeholder or reused identity")
+			}
+			if len(*windows) != 2 || (*windows)[0].ID != "old" {
+				t.Fatal("lost pre-existing window")
 			}
 		})
 	}

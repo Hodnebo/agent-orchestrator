@@ -151,6 +151,8 @@ is required after switching. The controller records terminal tty process births,
 terminates only those captured processes and closes only the admitted window at
 cleanup. Terminal.app itself and its other windows never become owned.
 
+Terminal may retain a hidden native window after its last tab closes. Inventory records that placeholder only when the tab list is null or empty and visibility is explicitly false. Cleanup accepts this positive closed state for the exact admitted window and original PID birth. Hidden windows with live tabs and unavailable metadata still fail closed. Placeholders cannot be admitted for input.
+
 For hosts with several macOS Spaces, the supervisor can opt into
 `AO_TESTING_STICKY_WINDOWS=1`. The recipe snapshots this setting and the owned
 Electron makes only its own windows visible on all workspaces, including

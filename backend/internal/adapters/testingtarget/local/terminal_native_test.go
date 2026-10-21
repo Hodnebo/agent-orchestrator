@@ -40,3 +40,30 @@ const value=vm.runInNewContext(source,{
 		})
 	}
 }
+
+func TestTerminalSnapshotHandlesClosedTablessWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	script := `const assert=require('node:assert/strict'),vm=require('node:vm');
+const source=` + strconv.Quote(terminalSnapshotScript) + `;
+for(const tabs of [null,[]]) {
+ const result=JSON.parse(vm.runInNewContext(source,{
+  ObjC:{import(){}},$:{NSRunningApplication:{runningApplicationsWithBundleIdentifier(){return {count:'1',objectAtIndex(){return {processIdentifier:695}}}}}},
+  Application(){return {windows(){return [
+   {id(){return 72},tabs(){return [{tty(){return '/dev/ttys000'},contents(){throw Error('unowned text')}}]}},
+   {id(){return 7400},visible(){return false},tabs(){return tabs}}
+  ]}}}
+ }));
+ assert.equal(result.length,2);assert.equal(result[0].tty,'/dev/ttys000');
+ assert.equal(result[1].id,'7400');assert.equal(result[1].closed,true);assert.equal(result[1].tty,undefined);
+}
+for(const visible of [true,undefined]) {
+ assert.throws(()=>vm.runInNewContext(source,{
+  ObjC:{import(){}},$:{NSRunningApplication:{runningApplicationsWithBundleIdentifier(){return {count:1,objectAtIndex(){return {processIdentifier:695}}}}}},
+  Application(){return {windows(){return [{id(){return 7400},visible(){return visible},tabs(){return null}}]}}}
+ }),/Terminal tab inventory unavailable/);
+}`
+	if out, err := exec.CommandContext(ctx, "node", "-e", script).CombinedOutput(); err != nil {
+		t.Fatalf("closed terminal metadata: %v: %s", err, out)
+	}
+}
