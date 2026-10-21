@@ -279,6 +279,56 @@ describe("shared Stay Awake controls", () => {
 		await waitFor(() => expect(coffee()).toHaveAttribute("aria-pressed", "false"));
 		expect(state.sessions.filter((s) => !s.endedAt)).toHaveLength(0);
 	});
+	it.each(["active", "safety stop", "timeout", "status error", "hung status"])("waits for native acknowledgement after the POST (%s)", async (outcome) => {
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => {
+			const result = await post(path, options);
+			if (path === "/api/v1/awake/sessions") {
+				state.active = false;
+				state.reason = "starting";
+				return { data: snapshot() };
+			}
+			return result;
+		});
+		await show();
+		vi.useFakeTimers();
+		try {
+			fireEvent.click(coffee());
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			// The POST has finished, but native ownership has not been acknowledged.
+			expect(state.sessions).toHaveLength(1);
+			for (let i = 0; i < 4; i++) {
+				expect(coffee()).toHaveAttribute("aria-busy", "true");
+				expect(coffee()).toHaveAccessibleDescription(/Starting Stay Awake/);
+				expect(coffee()).toBeDisabled();
+				expect(screen.getByRole("button", { name: "Mobile wake" })).toBeDisabled();
+				expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+				await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			}
+			if (outcome === "active") state.active = true;
+			if (outcome === "safety stop") {
+				state.paused = true;
+				state.reason = "low_battery";
+			}
+			if (outcome === "status error") test.get.mockRejectedValue(new Error("status unavailable"));
+			if (outcome === "hung status") test.get.mockImplementation(() => new Promise(() => {}));
+			await act(async () => { await vi.advanceTimersByTimeAsync(outcome === "timeout" || outcome === "hung status" ? 3_100 : 600); });
+			expect(coffee()).not.toHaveAttribute("aria-busy");
+			expect(coffee()).toBeEnabled();
+			if (outcome === "active") {
+				expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull();
+				expect(coffee()).toHaveAccessibleDescription(/being kept awake/);
+				expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
+			} else {
+				expect(screen.getByTestId("awake-inactive-indicator")).toBeInTheDocument();
+				if (outcome === "safety stop") expect(coffee()).toHaveAccessibleDescription(/battery/i);
+			}
+		} finally {
+			client.clear();
+			vi.useRealTimers();
+		}
+	});
+
 	it("releases legacy desktop lid ownership when the lid option is turned off", async () => {
 		state.sessions = [awakeSession({ id: "legacy", lidClosed: true })];
 		mobile.keepAwake.enabled = true;
