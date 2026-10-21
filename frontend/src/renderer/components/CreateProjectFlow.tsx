@@ -202,6 +202,8 @@ export function CreateProjectFlow({
 	const cloneDialogOpen = activeView === "clone";
 	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => initialCloneDetails(hostId));
 	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
+	const [cloneActivity, setCloneActivity] = useState<"cloning" | "validating" | null>(null);
+	const [cloneRegistrationFailed, setCloneRegistrationFailed] = useState(false);
 	const preparedClone = usePreparedClone(hostId);
 	const [remoteBrowse, setRemoteBrowse] = useState<RemoteBrowseRequest | null>(null);
 	const folderPickerOpen = activeView === "folder";
@@ -247,6 +249,7 @@ export function CreateProjectFlow({
 	// so its modals and backdrop step aside instead of covering the page.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const resetProjectImportState = () => {
+		setCloneRegistrationFailed(false);
 		setProjectValidation(null);
 		setProjectImportStep(null);
 		setProjectPrepEvents([]);
@@ -264,12 +267,12 @@ export function CreateProjectFlow({
 		window.setTimeout(() => setProjectImportShake(false), 320);
 	};
 
-	const abandonPreparedClone = async (): Promise<boolean> => {
+	const abandonPreparedClone = async (keepCheckout = false): Promise<boolean> => {
 		try {
-			await preparedClone.cleanup();
+			await preparedClone.cleanup(keepCheckout);
 			return true;
-		} catch {
-			reportProjectError(t("createProject.cloneCleanupFailed", {
+		} catch (err) {
+			reportProjectError(keepCheckout ? apiErrorMessage(err, t("createProject.couldNotAdd")) : t("createProject.cloneCleanupFailed", {
 				defaultValue: "AO could not remove the incomplete checkout. Try again before leaving this flow.",
 			}));
 			return false;
@@ -494,7 +497,15 @@ export function CreateProjectFlow({
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
-				await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
+				for (let attempt = 0; ; attempt++) {
+					try {
+						await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
+						break;
+					} catch (err: unknown) {
+						if (attempt === 2 || !(err instanceof TypeError || apiErrorCode(err) === "SERVICE_UNAVAILABLE")) throw err;
+						await new Promise((resolve) => window.setTimeout(resolve, (attempt + 1) * 1000));
+					}
+				}
 				setSelectedPath(null);
 				setCloneSelection(null);
 				preparedClone.complete();
@@ -526,12 +537,18 @@ export function CreateProjectFlow({
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
 			const message = cloneSelection
-				? t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" })
-				: err instanceof Error ? err.message : t("createProject.couldNotAdd");
+				? t("createProject.cloneRegistrationFailed", {
+					path: selectedPath,
+					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody")),
+				})
+				: apiErrorMessage(err, t("createProject.couldNotAdd"));
 			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {
 				setRepositorySetup(code);
 			}
-			if (cloneSelection) reportProjectError(message);
+			if (cloneSelection) {
+				setCloneRegistrationFailed(true);
+				reportProjectError(message);
+			}
 			else if (selectedKind === "single_repo") reportProjectError(safeProjectCreationError(
 				message,
 				t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." }),
@@ -569,13 +586,17 @@ export function CreateProjectFlow({
 			reportProjectError(t("remote.connectBeforeStart"));
 			return;
 		}
-		if (preparedClone.current() && !(await abandonPreparedClone())) return;
+		const previous = preparedClone.current();
+		if (previous && !preparedClone.matches(next) && !(await abandonPreparedClone())) return;
 		setError(null);
+		setCloneRegistrationFailed(false);
 		setIsPreparingGit(true);
+		setCloneActivity(preparedClone.current() ? "validating" : "cloning");
 		let clonedPath: string | null = null;
 		try {
-			const data = await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent);
 			clonedPath = data.path;
+			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
 			setCloneDialogOpen(false);
 			setCloneSelection(next);
@@ -596,18 +617,16 @@ export function CreateProjectFlow({
 			}
 			setSelectedPath(data.path);
 		} catch (err) {
-			reportProjectError(clonedPath
-				? t("createProject.cloneValidationFailed", {
-					defaultValue: "AO cloned the repository but could not verify the checkout. Try again.",
-				})
-				: apiErrorCode(err) === "GIT_CLONE_FAILED"
-					? t("createProject.cloneFailedGuidance", {
-						defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
-					})
-					: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
-			if (clonedPath) await abandonPreparedClone();
+			if (err instanceof DOMException && err.name === "AbortError") {
+				setError(t("createProject.cloneCancelled"));
+			} else {
+				reportProjectError(clonedPath
+					? t("createProject.cloneValidationKept", { path: clonedPath })
+					: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." })));
+			}
 			setCloneDialogOpen(true);
 		} finally {
+			setCloneActivity(null);
 			setIsPreparingGit(false);
 		}
 	};
@@ -825,6 +844,14 @@ export function CreateProjectFlow({
 							onClose={() => {
 								void leaveCloneDialog(false);
 							}}
+							onCheckDestination={preparedClone.checkDestination}
+							onUseExisting={(path) => {
+								setCloneDialogOpen(false);
+								setCloneSelection(null);
+								void chooseDirectory("single_repo", path);
+							}}
+							onCancel={preparedClone.cancel}
+							activity={cloneActivity}
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
 							open={cloneDialogOpen && !settingsOpen}
@@ -918,7 +945,15 @@ export function CreateProjectFlow({
 				validation={projectValidation}
 			/>
 			<CreateProjectAgentSheet
-				action={cloneSelection ? "clone" : "create"}
+				preparedClonePath={cloneSelection ? selectedPath ?? undefined : undefined}
+				onKeepCheckout={cloneRegistrationFailed ? async () => {
+					if (!(await abandonPreparedClone(true))) return;
+					setSelectedPath(null);
+					setCloneSelection(null);
+					setCloneRegistrationFailed(false);
+					setError(null);
+					onDismiss?.();
+				} : undefined}
 				connected={connected}
 				error={error}
 				hostId={hostId}
@@ -929,7 +964,7 @@ export function CreateProjectFlow({
 				onOpenChange={(open) => {
 					if (!open) {
 						void (async () => {
-							if (!(await abandonPreparedClone())) return;
+							if (!(await abandonPreparedClone(cloneRegistrationFailed))) return;
 							setSelectedPath(null);
 							setCloneSelection(null);
 							resetProjectImportState();
@@ -942,7 +977,7 @@ export function CreateProjectFlow({
 					cloneSelection
 						? () => {
 								void (async () => {
-									if (!(await abandonPreparedClone())) return;
+									if (!(await abandonPreparedClone(cloneRegistrationFailed))) return;
 									setCloneSelection(null);
 									setSelectedPath(null);
 									setCloneDetails(initialCloneDetails(hostId));

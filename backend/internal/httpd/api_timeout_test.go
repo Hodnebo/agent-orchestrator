@@ -13,8 +13,29 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 )
+
+type cloneTimeoutProbe struct {
+	projectsvc.Manager
+	budget time.Duration
+}
+
+func (s *cloneTimeoutProbe) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
+	s.budget = remainingRequestBudget(ctx)
+	return projectsvc.ClonePreparationResult{Path: "/prepared"}, nil
+}
+
+func TestClonePreparationDoesNotUseOrdinaryRequestDeadline(t *testing.T) {
+	svc := &cloneTimeoutProbe{}
+	router := NewRouterWithControl(config.Config{RequestTimeout: time.Millisecond}, discardLogger(), nil, APIDeps{Projects: svc}, ControlDeps{})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/projects/clone/prepare", bytes.NewBufferString(`{"remoteUrl":"file:///source","destinationParent":"/clones"}`)))
+	if response.Code != http.StatusOK || svc.budget != 0 {
+		t.Fatalf("clone status=%d, budget=%s; want 200 and no deadline", response.Code, svc.budget)
+	}
+}
 
 type timeoutProbeSessionService struct {
 	controllers.SessionService

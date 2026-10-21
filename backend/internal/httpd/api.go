@@ -237,6 +237,12 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A clone can take minutes. Its request still cancels on client
+					// disconnect, including the desktop's explicit Cancel action.
+					if req.Method == http.MethodPost && (req.URL.Path == "/api/v1/projects/clone/prepare" || req.URL.Path == "/api/v1/projects/clone") {
+						next.ServeHTTP(w, req)
+						return
+					}
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
 						return

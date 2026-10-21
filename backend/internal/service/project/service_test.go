@@ -2384,3 +2384,98 @@ func TestEmptyCloneOnboardingCreatesFirstWorkspace(t *testing.T) {
 		})
 	}
 }
+
+func TestCloneDestinationPreflightPreservesExistingFolders(t *testing.T) {
+	m := newManager(t)
+	ctx := context.Background()
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	parent := t.TempDir()
+	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: parent}
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || check.Exists || check.Path != filepath.Join(parent, filepath.Base(source)) {
+		t.Fatalf("available destination: %+v, %v", check, err)
+	}
+	if err := os.MkdirAll(check.Path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(check.Path, "keep.txt")
+	if err := os.WriteFile(keep, []byte("do not change"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check, err = m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || check.CanUseExisting {
+		t.Fatalf("conflicting folder: %+v, %v", check, err)
+	}
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "do not change" {
+		t.Fatalf("existing content changed: %q, %v", data, err)
+	}
+}
+
+func TestCloneDestinationPreflightRecognizesPreparedAndRegisteredCheckout(t *testing.T) {
+	m := newManager(t)
+	ctx := context.Background()
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: t.TempDir()}
+	prepared, err := m.PrepareClone(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || check.Exists {
+		t.Fatalf("prepared clone should resume: %+v, %v", check, err)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}); err != nil {
+		t.Fatal(err)
+	}
+	check, err = m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("registered checkout: %+v, %v", check, err)
+	}
+}
+
+func TestPreparedCloneRegistrationRetryFindsRegisteredProject(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	prepared := prepareClone(t, m, (&url.URL{Scheme: "file", Path: source}).String())
+	in := project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}
+	if _, err := m.Add(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Add(t.Context(), in)
+	wantCode(t, err, "PATH_ALREADY_REGISTERED")
+}
+
+func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	in := project.CloneInput{RemoteURL: (&url.URL{Scheme: "file", Path: source}).String(), DestinationParent: t.TempDir()}
+	prepared, err := m.PrepareClone(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := project.ClonePreparationCleanupInput{Path: prepared.Path, PreparationID: prepared.PreparationID, KeepCheckout: true}
+	if err := m.CleanupPreparedClone(t.Context(), cleanup); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(prepared.Path, "user-edit.txt")
+	if err := os.WriteFile(keep, []byte("keep my work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check, err := m.CheckCloneDestination(t.Context(), in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("kept checkout must require explicit reuse: %+v, %v", check, err)
+	}
+	_, err = m.PrepareClone(t.Context(), in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	cleanup.KeepCheckout = false
+	if err := m.CleanupPreparedClone(t.Context(), cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep my work" {
+		t.Fatalf("released checkout was modified: %q, %v", data, err)
+	}
+}

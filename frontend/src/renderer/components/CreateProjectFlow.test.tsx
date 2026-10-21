@@ -208,6 +208,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 		isInitializing,
 		kind,
 		onSubmit,
+		onKeepCheckout,
 		open,
 		path,
 		shake,
@@ -217,6 +218,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 		isInitializing: boolean;
 		kind: string;
 		onSubmit: (selection: { workerAgent: string; orchestratorAgent: string }) => Promise<void>;
+		onKeepCheckout?: () => void;
 		open: boolean;
 		path: string | null;
 		shake?: boolean;
@@ -224,6 +226,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 		open && (isCreating || isInitializing) ? null : open ? (
 			<div className={shake ? "modal-shake" : undefined} data-kind={kind} data-path={path ?? ""} data-testid="agent-sheet">
 				{error ? <span>{error}</span> : null}
+				{onKeepCheckout ? <button onClick={onKeepCheckout}>Keep checkout and close</button> : null}
 				<button
 					type="button"
 					onClick={() => void onSubmit({ workerAgent: "codex", orchestratorAgent: "codex" })}
@@ -488,6 +491,7 @@ describe("CreateProjectFlow remote host", () => {
 		}));
 		expect(hostMocks.bPost).toHaveBeenCalledWith("/api/v1/projects/clone/prepare", {
 			body: { remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo" },
+			signal: expect.any(AbortSignal),
 		});
 		expect(apiMocks.POST).not.toHaveBeenCalled();
 	});
@@ -681,31 +685,58 @@ describe("CreateProjectFlow droppedPath", () => {
 		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
 	});
 
-	it("cleans up a checkout when validation fails after cloning", async () => {
+	it("keeps a successful clone and retries validation without cloning again", async () => {
 		const user = userEvent.setup();
+		let validations = 0;
 		apiMocks.POST.mockImplementation(async (path: string) => {
-			if (path === "/api/v1/projects/clone/prepare") {
-				return { data: { path: "/repo/incomplete", remoteUrl: "file:///source/incomplete.git", preparationId: "prep-incomplete" } };
-			}
-			if (path === "/api/v1/imports/validate") {
-				return { error: { message: "rpc failed: request_id=secret" } };
-			}
+			if (path === "/api/v1/projects/clone/prepare") return { data: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-incomplete" } };
+			if (path === "/api/v1/imports/validate") return ++validations === 1 ? { error: { message: "rpc failed: request_id=secret" } } : { data: projectValidation("/repo/empty-repository") };
 			return {};
 		});
-
 		renderChooseFlow();
 		await openSource(user, "Clone a repo");
 		fireEvent.click(await screen.findByText("Continue clone"));
-
-		await waitFor(() => expect(apiMocks.POST).toHaveBeenCalledWith(
-			"/api/v1/projects/clone/cleanup",
-			{ body: { path: "/repo/incomplete", preparationId: "prep-incomplete" } },
-		));
-		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
-		expect(useUiStore.getState().globalToast?.body).toBe(
-			"AO cloned the repository but could not verify the checkout. Try again.",
-		);
+		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toContain("Retry to check this checkout again without cloning"));
 		expect(useUiStore.getState().globalToast?.body).not.toContain("request_id");
+		fireEvent.click(screen.getByText("Continue clone"));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/empty-repository");
+		expect(apiMocks.POST.mock.calls.filter(([path]) => path === "/api/v1/projects/clone/prepare")).toHaveLength(1);
+		expect(apiMocks.POST.mock.calls.some(([path]) => path === "/api/v1/projects/clone/cleanup")).toBe(false);
+	});
+
+	it("retries registration without cloning again and lets users keep a failed checkout", async () => {
+		const user = userEvent.setup();
+		const create = vi.fn().mockRejectedValue(new Error("Choose another project name."));
+		apiMocks.POST.mockImplementation(async (path: string) => path === "/api/v1/projects/clone/prepare"
+			? { data: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-kept" } }
+			: { data: projectValidation("/repo/empty-repository") });
+		renderChooseFlow({ onCreateProject: create });
+		await openSource(user, "Clone a repo");
+		fireEvent.click(await screen.findByText("Continue clone"));
+		fireEvent.click(await screen.findByText("Submit agents"));
+		expect(await screen.findByText(/Project setup failed. Your checkout is safe/)).toHaveTextContent("Choose another project name.");
+		fireEvent.click(screen.getByText("Submit agents"));
+		await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+		fireEvent.click(await screen.findByText("Keep checkout and close"));
+		await waitFor(() => expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument());
+		expect(apiMocks.POST.mock.calls.filter(([path]) => path === "/api/v1/projects/clone/prepare")).toHaveLength(1);
+		expect(apiMocks.POST).toHaveBeenCalledWith("/api/v1/projects/clone/cleanup", {
+			body: { path: "/repo/empty-repository", preparationId: "prep-kept", keepCheckout: true },
+		});
+	});
+
+	it("automatically retries a temporary registration failure", async () => {
+		const user = userEvent.setup();
+		const create = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValue(undefined);
+		apiMocks.POST.mockImplementation(async (path: string) => path === "/api/v1/projects/clone/prepare"
+			? { data: { path: "/repo/empty-repository", remoteUrl: "file:///source/empty-repository.git", preparationId: "prep-retry" } }
+			: { data: projectValidation("/repo/empty-repository") });
+		renderChooseFlow({ onCreateProject: create });
+		await openSource(user, "Clone a repo");
+		fireEvent.click(await screen.findByText("Continue clone"));
+		fireEvent.click(await screen.findByText("Submit agents"));
+		await waitFor(() => expect(create).toHaveBeenCalledTimes(2), { timeout: 5000 });
+		expect(apiMocks.POST.mock.calls.filter(([path]) => path === "/api/v1/projects/clone/prepare")).toHaveLength(1);
 	});
 
 	it("keeps a failed checkout cleanup retryable before leaving clone", async () => {
@@ -727,6 +758,8 @@ describe("CreateProjectFlow droppedPath", () => {
 		await openSource(user, "Clone a repo");
 		fireEvent.click(await screen.findByText("Continue clone"));
 
+		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toContain("Retry to check this checkout again without cloning"));
+		fireEvent.click(screen.getByText("Back clone"));
 		await waitFor(() => expect(cleanupAttempts).toBe(1));
 		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
 		expect(useUiStore.getState().globalToast?.body).toBe(
