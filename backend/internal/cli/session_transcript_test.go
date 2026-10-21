@@ -406,6 +406,59 @@ func TestSanitizeText(t *testing.T) {
 	}
 }
 
+func TestTranscriptCapsStreamedActivityFields(t *testing.T) {
+	const fieldLength = 32768
+	fields := []struct {
+		kind string
+		key  string
+	}{
+		{kind: "mcp_tool", key: "progress"},
+		{kind: "file_change", key: "patchOutput"},
+	}
+	var activities []json.RawMessage
+	for i, field := range fields {
+		raw, err := json.Marshal(map[string]any{
+			"kind": "activity", "sequence": i + 1, "activityKind": field.kind,
+			"detail": map[string]any{field.key: strings.Repeat("x", fieldLength)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activities = append(activities, raw)
+	}
+	doc := buildTranscriptView("demo", "", transcriptRequest{n: len(fields), cap: transcriptCapDefault}, conversationSnapshotWire{
+		ConversationID: "cnv", Activities: activities,
+	})
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output struct {
+		TruncatedFields int `json:"truncatedFields"`
+		Entries         []struct {
+			Detail      map[string]string `json:"detail"`
+			Truncations []fieldTruncation `json:"truncations"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.TruncatedFields != len(fields) || len(output.Entries) != len(fields) {
+		t.Fatalf("streamed field truncation counts = %d, %d", output.TruncatedFields, len(output.Entries))
+	}
+	for i, field := range fields {
+		entry := output.Entries[i]
+		value := entry.Detail[field.key]
+		if utf8.RuneCountInString(value) != transcriptCapDefault || !strings.Contains(value, "chars omitted") {
+			t.Errorf("%s was not capped: length %d", field.key, utf8.RuneCountInString(value))
+		}
+		if len(entry.Truncations) != 1 || entry.Truncations[0].Field != "detail."+field.key ||
+			entry.Truncations[0].OriginalChars != fieldLength || entry.Truncations[0].KeptChars != transcriptCapDefault {
+			t.Errorf("%s truncations = %#v", field.key, entry.Truncations)
+		}
+	}
+}
+
 func transcriptSequences(out string) []string {
 	var seqs []string
 	for _, line := range strings.Split(out, "\n") {

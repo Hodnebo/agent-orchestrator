@@ -377,7 +377,8 @@ func sanitizeText(s string) string {
 // paths, and statuses are left whole.
 var cappedKeys = map[string]bool{
 	"text": true, "summary": true, "command": true, "rawCommand": true,
-	"output": true, "terminalInput": true, "streamedText": true, "patch": true,
+	"output": true, "terminalInput": true, "streamedText": true, "progress": true,
+	"patch": true, "patchOutput": true,
 	"error": true, "errorMessage": true, "explanation": true, "rationale": true,
 	"message": true, "workerReports": true,
 }
