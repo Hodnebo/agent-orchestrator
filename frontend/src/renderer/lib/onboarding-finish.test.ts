@@ -19,6 +19,7 @@ describe("runOnboardingFinish", () => {
 		const createProject = vi.fn().mockResolvedValue(undefined);
 		const outcome = await runOnboardingFinish(request, {
 			createProject,
+			createStandaloneSession: vi.fn(),
 		});
 
 		expect(outcome).toEqual({ ok: true });
@@ -57,6 +58,7 @@ describe("runOnboardingFinish", () => {
 	it("leaves onboarding incomplete and reports the reason when the project fails", async () => {
 		const outcome = await runOnboardingFinish(request, {
 			createProject: vi.fn().mockRejectedValue(new Error("clone failed: repository not found")),
+			createStandaloneSession: vi.fn(),
 		});
 
 		expect(outcome).toEqual({ message: "clone failed: repository not found", ok: false });
