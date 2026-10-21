@@ -244,27 +244,45 @@ func TestSessionGet_TranscriptEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("409 mismatch", func(t *testing.T) {
-		cfg := setConfigEnv(t)
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/conversation") {
-				w.WriteHeader(http.StatusConflict)
-				_, _ = io.WriteString(w, `{"code":"SESSION_MODE_MISMATCH","message":"no chat"}`)
-				return
+	for _, tc := range []struct {
+		name         string
+		code         string
+		message      string
+		wantGuidance string
+	}{
+		{"409 mismatch", "SESSION_MODE_MISMATCH", "this session was created in Terminal UI mode and has no chat conversation", "Terminal UI mode"},
+		{"409 transition", "CHAT_INTERFACE_TRANSITION", "the session is switching interfaces; send again after the handoff completes", "send again after the handoff completes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/conversation") {
+					w.WriteHeader(http.StatusConflict)
+					_, _ = io.WriteString(w, `{"code":"`+tc.code+`","message":"`+tc.message+`","requestId":"req-transition"}`)
+					return
+				}
+				if strings.Contains(r.URL.Path, "/sessions/") {
+					_, _ = io.WriteString(w, `{"session":`+sessionJSONWithMode("demo-1", "demo", "chat")+`}`)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "get", "demo-1", "--transcript", "1")
+			var apiErr apiResponseError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict ||
+				apiErr.ErrorBody.Code != tc.code || apiErr.ErrorBody.RequestID != "req-transition" {
+				t.Fatalf("daemon error envelope = %#v, err = %v", apiErr, err)
 			}
-			if strings.Contains(r.URL.Path, "/sessions/") {
-				_, _ = io.WriteString(w, `{"session":`+sessionJSONWithMode("demo-1", "demo", "chat")+`}`)
-				return
+			if !strings.Contains(err.Error(), tc.wantGuidance) || !strings.Contains(err.Error(), tc.code) || !strings.Contains(err.Error(), "req-transition") {
+				t.Fatalf("diagnostics or guidance lost: %v", err)
 			}
-			w.WriteHeader(http.StatusNoContent)
-		}))
-		t.Cleanup(srv.Close)
-		writeRunFileFor(t, cfg, srv)
-		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "get", "demo-1", "--transcript", "1")
-		if err == nil || !strings.Contains(err.Error(), "Terminal UI mode") {
-			t.Fatalf("err = %v", err)
-		}
-	})
+			if tc.code == "CHAT_INTERFACE_TRANSITION" && strings.Contains(err.Error(), "no durable transcript") {
+				t.Fatalf("transition incorrectly described as permanent: %v", err)
+			}
+		})
+	}
 
 	t.Run("empty conversation", func(t *testing.T) {
 		cfg := setConfigEnv(t)

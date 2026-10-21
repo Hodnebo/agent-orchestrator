@@ -649,8 +649,8 @@ func (c *commandContext) getSession(ctx context.Context, cmd *cobra.Command, id 
 	if err != nil {
 		var apiErr apiResponseError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict &&
-			(apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" || apiErr.ErrorBody.Code == "CHAT_INTERFACE_TRANSITION") {
-			return transcriptUnavailable(id)
+			apiErr.ErrorBody.Code == "SESSION_MODE_MISMATCH" {
+			return fmt.Errorf("%w: %w", transcriptUnavailable(id), err)
 		}
 		return err
 	}
