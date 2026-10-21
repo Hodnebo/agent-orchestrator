@@ -1,0 +1,79 @@
+name: Sync contributor Project
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+  issues:
+    types: [opened, reopened]
+  pull_request:
+    paths:
+      - ".github/scripts/contributor-project/**"
+      - ".github/workflows/contributor-project.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Run contributor Project tests
+        working-directory: .github/scripts/contributor-project
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s tests -v
+
+  sync:
+    concurrency:
+      group: ao-contributor-project
+      cancel-in-progress: false
+    if: github.event_name != 'pull_request' && github.repository == 'OrchestratorInc/agent-orchestrator' && vars.AO_CONTRIBUTOR_PROJECT_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: .github/scripts/contributor-project
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PROJECT_URL: ${{ vars.AO_CONTRIBUTOR_PROJECT_URL }}
+    steps:
+      - name: Check configuration
+        working-directory: .
+        env:
+          APP_CLIENT_ID: ${{ vars.AO_CONTRIBUTOR_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.AO_CONTRIBUTOR_APP_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_CLIENT_ID" || { echo "Set AO_CONTRIBUTOR_APP_CLIENT_ID."; exit 1; }
+          test -n "$APP_KEY" || { echo "Set AO_CONTRIBUTOR_APP_PRIVATE_KEY."; exit 1; }
+
+      - name: Check out trusted automation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+
+      - name: Run Project sync tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Create a Project-scoped installation token
+        id: project-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AO_CONTRIBUTOR_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AO_CONTRIBUTOR_APP_PRIVATE_KEY }}
+          owner: OrchestratorInc
+
+      - name: Add open issues and fill blank suggestions
+        env:
+          GH_TOKEN: ${{ steps.project-token.outputs.token }}
+        run: |
+          python3 scripts/sync_project.py \
+            --mapping-file data/issue-areas.json \
+            --owners-file data/area-owners.json \
+            --project-url "$PROJECT_URL" \
+            --apply
