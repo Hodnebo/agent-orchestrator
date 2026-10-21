@@ -273,6 +273,30 @@ func TestStartupChatCheckRetryStopsOnceReattached(t *testing.T) {
 	if got := launcher.attemptCount(); got != 1 {
 		t.Fatalf("attempts = %d, want the retry to leave a reattached chat alone", got)
 	}
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "ready" {
+		t.Fatalf("readiness = %s, want the reattached chat settled as ready", got)
+	}
+}
+
+func TestStartupChatCheckStaysCheckingWhileRetryPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m, st, _, _ := newLifecycleManager()
+	launcher := &flakyStartupLauncher{failures: 1, err: ports.ErrChatRecoveryInconclusive}
+	m.chat = launcher
+	m.startupChatRetryDelays = []time.Duration{100 * time.Millisecond}
+	rec := startupChatRecord()
+	st.sessions[rec.ID] = rec
+	if err := m.ReconcileBackground(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The startup attempt failed, but a reattach is scheduled: clients must show
+	// a reconnect in progress, not offer Resume.
+	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "checking" {
+		t.Fatalf("readiness while a retry is pending = %s, want checking", got)
+	}
+	waitFor(t, "the retry to reattach", func() bool { return launcher.HasLiveChatController(rec.ID) })
+	waitFor(t, "ready readiness", func() bool { return m.SessionStatusReadiness(st.sessions[rec.ID]) == "ready" })
 }
 
 func TestStartupChatCheckRetryGivesUpAfterSchedule(t *testing.T) {

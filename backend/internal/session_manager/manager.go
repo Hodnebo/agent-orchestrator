@@ -4281,14 +4281,19 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer cancel()
 					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
-				m.finishStatusRecovery(ctx, rec, err)
+				retry := err != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+					retryableStartupChatCheck(err) && len(m.startupChatRetryDelays) > 0
+				if !retry {
+					// A scheduled reattach keeps the session checking; its last attempt settles it.
+					m.finishStatusRecovery(ctx, rec, err)
+				}
 				if err != nil {
-					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "error", err)
-					if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && retryableStartupChatCheck(err) {
-						retryMu.Lock()
-						retryChats = append(retryChats, rec.ID)
-						retryMu.Unlock()
-					}
+					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "retrying", retry, "error", err)
+				}
+				if retry {
+					retryMu.Lock()
+					retryChats = append(retryChats, rec.ID)
+					retryMu.Unlock()
 				}
 			}
 		}()
