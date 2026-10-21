@@ -4,8 +4,11 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 // migrationSnapshots caches a database image for every goose version the
@@ -16,8 +19,7 @@ import (
 // pays for one replay no matter how many versions the tests ask for.
 var migrationSnapshots struct {
 	sync.Mutex
-	images  map[int64][]byte
-	highest int64
+	images map[int64][]byte
 }
 
 // snapshotDSN keeps the checkpoint databases in rollback-journal mode so ao.db
@@ -46,10 +48,16 @@ func buildMigrationSnapshots(t *testing.T, version int64) []byte {
 	if migrationSnapshots.images == nil {
 		migrationSnapshots.images = map[int64][]byte{}
 	}
+	startVersion := int64(0)
+	for cachedVersion := range migrationSnapshots.images {
+		if cachedVersion <= version && cachedVersion > startVersion {
+			startVersion = cachedVersion
+		}
+	}
 	databasePath := filepath.Join(t.TempDir(), "ao.db")
-	if migrationSnapshots.highest > 0 {
-		if err := os.WriteFile(databasePath, migrationSnapshots.images[migrationSnapshots.highest], 0o600); err != nil {
-			t.Fatalf("resume migration checkpoint %d: %v", migrationSnapshots.highest, err)
+	if startVersion > 0 {
+		if err := os.WriteFile(databasePath, migrationSnapshots.images[startVersion], 0o600); err != nil {
+			t.Fatalf("resume migration checkpoint %d: %v", startVersion, err)
 		}
 	}
 	db, err := sql.Open("sqlite", "file:"+databasePath+snapshotDSN)
@@ -57,15 +65,37 @@ func buildMigrationSnapshots(t *testing.T, version int64) []byte {
 		t.Fatalf("open migration checkpoint: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	for next := migrationSnapshots.highest + 1; next <= version; next++ {
-		upTo(t, db, next)
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("read migrations dir: %v", err)
+	}
+	versions := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		migrationVersion, err := goose.NumericComponent(entry.Name())
+		if err != nil {
+			t.Fatalf("read version from migration %q: %v", entry.Name(), err)
+		}
+		if migrationVersion > startVersion && migrationVersion <= version {
+			versions = append(versions, migrationVersion)
+		}
+	}
+	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
+	for _, migrationVersion := range versions {
+		upTo(t, db, migrationVersion)
 		snapshot, err := os.ReadFile(databasePath)
 		if err != nil {
-			t.Fatalf("read migration checkpoint %d: %v", next, err)
+			t.Fatalf("read migration checkpoint %d: %v", migrationVersion, err)
 		}
-		migrationSnapshots.images[next] = snapshot
-		migrationSnapshots.highest = next
+		migrationSnapshots.images[migrationVersion] = snapshot
 	}
+	snapshot, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read migration snapshot at %d: %v", version, err)
+	}
+	migrationSnapshots.images[version] = snapshot
 	return migrationSnapshots.images[version]
 }
 
