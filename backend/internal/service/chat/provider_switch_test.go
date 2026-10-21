@@ -316,6 +316,26 @@ func lastStart(driver *editDriverState) ports.ChatStartConfig {
 	return driver.startConfigs[len(driver.startConfigs)-1]
 }
 
+func TestProviderSwitchBackToClaudeOnAutoClearsTheSavedCompactionWindow(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	for _, req := range []domain.ProviderSwitchRequest{
+		{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "to-claude", AutoCompactWindow: "1m"},
+		{TargetHarness: domain.HarnessOpenCode, IdempotencyKey: "to-opencode"},
+		{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "back-on-auto"},
+	} {
+		if err := h.svc.SwitchProvider(ctx, testSession, req); err != nil {
+			t.Fatalf("switch to %s: %v", req.TargetHarness, err)
+		}
+	}
+	if got, ok := lastStart(driver).Env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]; ok {
+		t.Fatalf("compaction window after switching back on Auto = %q, want it unset", got)
+	}
+	if conversation, err := h.st.ConversationForSession(ctx, testSession); err != nil || conversation.Settings.AutoCompactWindow != "" {
+		t.Fatalf("saved window = %q, %v; want Auto", conversation.Settings.AutoCompactWindow, err)
+	}
+}
+
 func TestProviderSwitchTargetPermissionMode(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

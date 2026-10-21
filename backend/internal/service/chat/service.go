@@ -744,6 +744,14 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	}
 	// A switch to Claude Code sets the window, Auto (empty) included.
 	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
+		// The switch's config is the source's, which may still carry the window
+		// AO set for an earlier Claude Code start. Drop that value so the new
+		// choice, Auto included, is what starts; a project's own value stays.
+		if previous := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; previous > 0 &&
+			cfg.Env[claudeAutoCompactWindowEnv] == fmt.Sprint(previous) {
+			cfg.Env = cloneStartConfig(cfg).Env
+			delete(cfg.Env, claudeAutoCompactWindowEnv)
+		}
 		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
 	}
 	// Claude Code reads its compaction window when it starts. Auto leaves any
