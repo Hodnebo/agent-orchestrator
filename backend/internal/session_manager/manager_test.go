@@ -1948,13 +1948,15 @@ func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{path: wsDir}
 	lookPath := func(string) (string, error) { return fakeAmp, nil }
-	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath,
+		Executable: func() (string, error) { return "/opt/ao", nil }, NewLaunchID: func() string { return "amp-launch" },
+	})
 
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "high"}}); err != nil {
 		t.Fatalf("amp spawn with model high failed: %v", err)
 	}
 
-	want := []string{fakeAmp, "--mode", "high"}
+	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "amp-launch", "--", fakeAmp, "--mode", "high"}
 	if !reflect.DeepEqual(rt.lastCfg.Argv, want) {
 		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
 	}
@@ -2000,14 +2002,16 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{path: wsDir}
 	lookPath := func(string) (string, error) { return fakeAmp, nil }
-	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: amp.New()}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath,
+		Executable: func() (string, error) { return "/opt/ao", nil }, NewLaunchID: func() string { return "amp-launch" },
+	})
 
 	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
 	if err != nil {
 		t.Fatalf("amp spawn with project default mode failed: %v", err)
 	}
 
-	want := []string{fakeAmp, "--mode", "high"}
+	want := []string{"/opt/ao", "agent-process", "supervise", "--session", "mer-1", "--launch", "amp-launch", "--", fakeAmp, "--mode", "high"}
 	if !reflect.DeepEqual(rt.lastCfg.Argv, want) {
 		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
 	}
@@ -7953,6 +7957,40 @@ func TestSpawn_RejectsFreshClaudeAuthInWorkspaceLaunchContext(t *testing.T) {
 	}
 	if len(st.sessions) != 0 || ws.destroyed != 1 {
 		t.Fatalf("rejected launch cleanup: sessions=%d destroyed=%d, want 0/1", len(st.sessions), ws.destroyed)
+	}
+}
+
+type preLaunchRecordingAgent struct {
+	*recordingAgent
+	preLaunch ports.LaunchConfig
+}
+
+func (a *preLaunchRecordingAgent) PreLaunch(_ context.Context, cfg ports.LaunchConfig) error {
+	a.preLaunch = cfg
+	a.preLaunch.Env = maps.Clone(cfg.Env)
+	return nil
+}
+
+// PreLaunch prepares the provider config the launched process will read, so
+// it gets the same launch environment (for example a project
+// CLAUDE_CONFIG_DIR) the runtime starts the agent with.
+func TestSpawn_PreLaunchReceivesTheLaunchEnvironment(t *testing.T) {
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.Config.Env = map[string]string{"CLAUDE_CONFIG_DIR": "/profiles/work"}
+	st.projects["mer"] = project
+	agent := &preLaunchRecordingAgent{recordingAgent: &recordingAgent{}}
+	m.agents = singleAgent{agent: agent}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeTUI,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if agent.preLaunch.WorkspacePath != "/ws/mer-1" || agent.preLaunch.Env["CLAUDE_CONFIG_DIR"] != "/profiles/work" ||
+		agent.preLaunch.Env[EnvSessionID] != "mer-1" {
+		t.Fatalf("PreLaunch config = %#v, want the session workspace and launch environment", agent.preLaunch)
 	}
 }
 
