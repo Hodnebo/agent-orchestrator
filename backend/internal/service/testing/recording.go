@@ -109,7 +109,9 @@ func (s *Service) stopRecording(ctx context.Context, st *attemptState, target do
 	// Final evidence must survive an expired recording-stop deadline.
 	copyCtx, copyCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	var saveErr error
-	if stopErr == nil {
+	// A positive duration is supplied only after movie validation. Keep that
+	// playable partial evidence even when finalization reports a coverage gap.
+	if stopErr == nil || result.Duration > 0 {
 		saveErr = s.saveRecording(copyCtx, st, result)
 	}
 	copyCancel()

@@ -46,7 +46,9 @@ type windowRecording struct {
 	result  RecordingResult
 	process *recordingProcess
 	birth   time.Time
+	stopAt  time.Time
 	stopped bool
+	gapErr  error
 }
 
 // StartRecording launches the built-in exact-window recorder to attempt storage.
@@ -139,16 +141,23 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 	// A forced stop remains a recording gap even if the resulting container
 	// validates, and even when cleanup later retries finalization.
 	defer func() {
-		if r.result.Gap != "" {
-			result, err = recordingGap(result, errors.Join(errors.New(r.result.Gap), err))
+		if r.gapErr != nil && !errors.Is(err, r.gapErr) {
+			err = errors.Join(r.gapErr, err)
+		}
+		if err != nil {
+			result, err = recordingGap(result, err)
 		}
 	}()
 	if r.stopped {
-		return r.result, nil
+		return r.result, r.gapErr
 	}
 	p := r.process
+	stopAt := a.now().UTC()
 	if _, err := a.signalRecorder(ctx, r, os.Interrupt); err != nil {
 		return recordingGap(r.result, err)
+	}
+	if r.stopAt.IsZero() {
+		r.stopAt = stopAt
 	}
 	if err := waitRecorder(ctx, p, a.interruptWait); err != nil {
 		if ctx.Err() != nil {
@@ -159,13 +168,13 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 			return recordingGap(r.result, fmt.Errorf("recorder PID %d did not exit after SIGINT: %w", p.pid, err))
 		}
 		if sent {
-			r.result.Gap = fmt.Sprintf("recorder PID %d did not exit within %s after SIGINT; SIGTERM was required", p.pid, a.interruptWait)
+			r.gapErr = fmt.Errorf("recorder PID %d did not exit within %s after SIGINT; SIGTERM was required", p.pid, a.interruptWait)
 		}
 		if err := waitRecorder(ctx, p, a.terminateWait); err != nil {
 			return recordingGap(r.result, fmt.Errorf("recorder finalization pending after SIGTERM for PID %d: %w", p.pid, err))
 		}
 	}
-	r.result.StoppedAt = a.now().UTC()
+	r.result.StoppedAt = r.stopAt // exclude encoder finalization from capture time
 	source := filepath.Join(filepath.Dir(r.result.Path), "window.mov")
 	if _, err := a.validateMovie(ctx, source, r.result.Width, r.result.Height); err != nil {
 		return recordingGap(r.result, errors.Join(err, p.err))
@@ -183,11 +192,17 @@ func (a *Adapter) stopRecording(ctx context.Context, b *binding) (result Recordi
 		return recordingGap(r.result, &Error{Code: "recording_remux_failed", Detail: fmt.Sprintf("remove owned MOV source: %v", err), cause: errors.Join(ErrRefused, err)})
 	}
 	r.result.Duration, r.stopped = duration, true
-	if p.err != nil {
-		r.result.Gap = fmt.Sprintf("owned recorder failed before clean finalization: %v", p.err)
-		return r.result, nil // deferred gap handling preserves the same result on retry
+	// screencapture can exit successfully with a decodable but truncated
+	// timeline. Allow two seconds for startup/container timing; a larger
+	// shortfall must never masquerade as continuous wall-clock coverage.
+	wall := r.result.StoppedAt.Sub(r.result.StartedAt)
+	if missing := wall - duration; missing > 2*time.Second {
+		r.gapErr = errors.Join(r.gapErr, refuse("recording_incomplete", fmt.Sprintf("movie duration %s covers requested wall time %s with a %s shortfall; missing intervals are unknown", duration, wall, missing)))
 	}
-	return r.result, nil
+	if p.err != nil {
+		r.gapErr = errors.Join(r.gapErr, fmt.Errorf("owned recorder failed before clean finalization: %w", p.err))
+	}
+	return r.result, r.gapErr
 }
 
 func (a *Adapter) validateMovie(ctx context.Context, path string, expectedWidth, expectedHeight int) (time.Duration, error) {

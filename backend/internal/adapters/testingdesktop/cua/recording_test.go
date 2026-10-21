@@ -213,6 +213,73 @@ func TestRecordingPreservesProviderFailureWithPlayableMovie(t *testing.T) {
 	}
 }
 
+func TestRecordingDetectsMissingWallTime(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	r.info = strings.Replace(validMovieInfo, "3.368", "18.402", 1)
+	now := time.Date(2026, 10, 21, 11, 14, 36, 483105000, time.UTC)
+	f.adapter.now = func() time.Time { return now }
+	startFakeRecording(t, f)
+	now = now.Add(458226786 * time.Microsecond)
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || result.Duration != 18402*time.Millisecond || !strings.Contains(result.Gap, "7m19.824786s") {
+		t.Fatalf("short recording was accepted as complete: %+v %v", result, err)
+	}
+	if _, err := os.Stat(result.Path); err != nil {
+		t.Fatal("playable partial movie lost", err)
+	}
+	again, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err == nil || again.Gap != result.Gap || len(r.signals) != 1 {
+		t.Fatal("repeated stop erased coverage gap", again, err)
+	}
+}
+
+func TestRecordingCleanExitShortfallReturnsIncompleteError(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	f.adapter.now = func() time.Time { return now }
+	startFakeRecording(t, f)
+	now = now.Add(10 * time.Second)
+	for _, stop := range []string{"first stop", "retry"} {
+		t.Run(stop, func(t *testing.T) {
+			result, err := f.adapter.StopRecording(context.Background(), f.target)
+			var incomplete *Error
+			if !errors.As(err, &incomplete) || incomplete.Code != "recording_incomplete" || !errors.Is(err, ErrRefused) {
+				t.Fatalf("clean recorder exit lost recording_incomplete error: %+v %v", result, err)
+			}
+			if r.process.err != nil || result.Duration != 3368*time.Millisecond || result.MIMEType != "video/mp4" || result.Gap != err.Error() {
+				t.Fatalf("clean recorder exit lost validated partial MP4: %+v %v process=%v", result, err, r.process.err)
+			}
+			if _, err := os.Stat(result.Path); err != nil {
+				t.Fatal("validated partial MP4 is missing", err)
+			}
+		})
+	}
+	if len(r.signals) != 1 || r.remuxCalls != 1 {
+		t.Fatalf("retry repeated recorder finalization: signals=%v remux=%d", r.signals, r.remuxCalls)
+	}
+}
+
+func TestRecordingCoverageExcludesFinalizationTime(t *testing.T) {
+	f := newFixture(t)
+	r := prepareRecording(t, f)
+	now := time.Now().UTC()
+	f.adapter.now = func() time.Time { return now }
+	start := startFakeRecording(t, f)
+	now = now.Add(3368 * time.Millisecond)
+	signal := r.process.signal
+	r.process.signal = func(s os.Signal) error {
+		// Encoding/remux time is not time requested for capture.
+		now = now.Add(30 * time.Second)
+		return signal(s)
+	}
+	result, err := f.adapter.StopRecording(context.Background(), f.target)
+	if err != nil || result.Gap != "" || result.StoppedAt.Sub(start.StartedAt) != result.Duration {
+		t.Fatal("encoder finalization created a false coverage gap", result, err)
+	}
+}
+
 func TestRecordingEscalatesIgnoredSIGINTAfterTargetClosed(t *testing.T) {
 	f := newFixture(t)
 	r := prepareRecording(t, f)

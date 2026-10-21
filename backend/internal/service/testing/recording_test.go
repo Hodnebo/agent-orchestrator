@@ -25,6 +25,7 @@ type movieDesktop struct {
 	startGap, stopGap string
 	closeErr          error
 	mimeType          string
+	partialMovie      bool
 }
 
 func (d *movieDesktop) Close(ctx context.Context) error {
@@ -69,6 +70,7 @@ func (d *movieDesktop) StopRecording(ctx context.Context, _ domain.TestTargetIde
 	d.result.StagingCleanup = "verified absent after final move"
 	d.result.Gap = d.stopGap
 	if d.stopErr != nil {
+		d.result.Duration = 0 // no movie was validated
 		d.result.Gap = "owned recorder did not finalize"
 		return d.result, d.stopErr
 	}
@@ -78,7 +80,12 @@ func (d *movieDesktop) StopRecording(ctx context.Context, _ domain.TestTargetIde
 	if err := os.WriteFile(d.result.Path, []byte("fake-finalized-movie"), 0600); err != nil {
 		return d.result, err
 	}
-	return d.result, nil
+	if d.partialMovie {
+		d.result.Duration = 18402 * time.Millisecond
+		d.result.StoppedAt = d.result.StartedAt.Add(458226786 * time.Microsecond)
+		return d.result, errors.New("recording_incomplete: movie 18.402s, wall 458.226786s")
+	}
+	return d.result, d.stopErr
 }
 
 func movieFixture(t *testing.T, configure func(*movieDesktop)) (*fixture, *movieDesktop) {
@@ -356,6 +363,65 @@ func TestRecordingFailureSetsActionableGapAndStillStopsTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecordingGapRetainsPlayablePartialMovie(t *testing.T) {
+	f, desktop := movieFixture(t, func(d *movieDesktop) {
+		d.partialMovie = true
+		d.mimeType = "video/mp4"
+	})
+	_, _ = f.svc.Cancel(context.Background(), f.start.AttemptID)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := f.svc.WaitCleanup(ctx, f.start.AttemptID); err == nil {
+		t.Fatal("partial recording reported complete coverage")
+	}
+	rec, _, err := f.store.GetTestAttempt(ctx, f.start.AttemptID)
+	if err != nil || !strings.Contains(rec.RecordingGap, "recording_incomplete") {
+		t.Fatal("gap lost", rec, err)
+	}
+	receipts, err := f.svc.ListEvidence(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	video, metadata := false, false
+	for _, receipt := range receipts {
+		if receipt.Kind == "recording" && receipt.MIMEType == "video/mp4" {
+			data, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), receipt.RelativePath))
+			if err != nil || string(data) != "fake-finalized-movie" {
+				t.Fatal("partial movie not saved", err)
+			}
+			video = true
+		}
+		if receipt.Kind == "recording_metadata" {
+			data, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), receipt.RelativePath))
+			var result ports.TestingRecordingResult
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &result); err != nil || result.Gap != rec.RecordingGap || result.Duration != 18402*time.Millisecond {
+				t.Fatal("partial movie metadata lost coverage gap or validated duration", result, err)
+			}
+			metadata = true
+		}
+	}
+	if !video || !metadata {
+		t.Fatalf("partial evidence missing: video=%t metadata=%t, %s", video, metadata, desktop.result.Path)
+	}
+	journal, err := os.ReadFile(filepath.Join(f.dir, "testing", string(f.run.ID), string(rec.ID), "actions.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(journal), []byte("\n")) {
+		var record domain.TestActionRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Tool == "stop_recording" && record.State == "failed" && record.RecordingGap == rec.RecordingGap {
+			return
+		}
+	}
+	t.Fatal("partial recording gap missing from completion journal")
 }
 
 type exhaustedMovieCopy struct{ ports.TestingEvidenceStore }
