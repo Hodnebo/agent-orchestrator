@@ -552,6 +552,11 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 				cleanupErr = errors.Join(cleanupErr, desktop.Release(terminalCtx, st.terminalTarget))
 			}
 			terminalCancel()
+			// The additional window has its own bounded finalization phase.
+			// Preserve the app's existing cleanup budget after that phase.
+			var appCancel context.CancelFunc
+			ctx, appCancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer appCancel()
 		}
 		recordingCtx, recordingCancel := context.WithTimeout(ctx, 20*time.Second)
 		cleanupErr = errors.Join(cleanupErr, s.stopRecording(recordingCtx, st, rec.Target))
