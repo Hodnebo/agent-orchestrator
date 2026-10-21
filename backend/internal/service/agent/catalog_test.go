@@ -1695,6 +1695,41 @@ func TestModelsCachesProjectScopesIndependently(t *testing.T) {
 	}
 }
 
+// Settings refreshes only the device-global catalog. A provider connected
+// inside the harness leaves the discovery fingerprint unchanged, so project
+// pickers kept a list without the new models until the next day.
+func TestGlobalRefreshRediscoversProjectScopesThatDiffer(t *testing.T) {
+	projects := &fakeProjectLookup{records: map[string]domain.ProjectRecord{
+		"proj-a": {ID: "proj-a", Path: "/work/a"},
+	}}
+	cache := &fakeModelCache{}
+	discoverer := successfulModelDiscoverer()
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("opencode-v2", "OpenCode 2", nil)}, cache, projects, discoverer)
+	for _, projectID := range []string{"", "proj-a"} {
+		if _, err := svc.Models(context.Background(), "opencode-v2", projectID, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	discoverer.mu.Lock()
+	discoverer.catalog.Models = append(discoverer.catalog.Models, ports.AgentModelInfo{ID: "console-openrouter/aion-labs/aion-2.0", Label: "aion-labs/aion-2.0"})
+	discoverer.mu.Unlock()
+	if _, err := svc.ModelCatalog(context.Background(), "opencode-v2", "", true); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		record, ok, _ := cache.GetAgentModelCatalog(context.Background(), "opencode-v2", "proj-a")
+		var catalog ports.AgentModelCatalog
+		if ok && json.Unmarshal([]byte(record.CatalogJSON), &catalog) == nil && len(catalog.Models) == 2 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("project catalog still lacks the models the global refresh found")
+}
+
 func TestModelsIgnoresUnknownProjectScope(t *testing.T) {
 	svc := newService([]agentregistry.HarnessAgent{
 		harnessAgent("codex", "Codex", nil),
