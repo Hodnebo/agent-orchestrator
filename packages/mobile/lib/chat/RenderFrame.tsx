@@ -24,6 +24,7 @@ import {
 	renderTheme,
 	renderThemeFragment,
 	renderThemeScript,
+	renderViewerStyleScript,
 	subscribeRenderViewport,
 	type RenderDisplayMode,
 	type RenderRef,
@@ -39,6 +40,10 @@ startRenderHeightStore();
 const LINK_TAP_WINDOW_MS = 1000;
 // A page whose process the OS keeps killing stops reloading after this many.
 const MAX_PROCESS_RESTARTS = 2;
+// A page this device has already loaded usually comes back within this; only
+// a slower load shows the skeleton, so a cached page does not flash one.
+const SKELETON_DELAY_MS = 250;
+const VIEWER_STYLE_SCRIPT = renderViewerStyleScript(space.xl);
 
 function useRenderTheme(): RenderTheme {
 	const t = useTheme();
@@ -85,6 +90,7 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 		<WebView
 			ref={web}
 			source={source}
+			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}
 			injectedJavaScript={fullscreen ? `${RENDER_ZOOM_SCRIPT}\n${RENDER_BRIDGE_SCRIPT}` : RENDER_BRIDGE_SCRIPT}
 			onMessage={(event) => {
 				const message = readRenderBridgeMessage(event.nativeEvent.data);
@@ -111,8 +117,11 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 			setBuiltInZoomControls={fullscreen}
 			setDisplayZoomControls={false}
 			overScrollMode={fullscreen ? "always" : "never"}
-			showsVerticalScrollIndicator={fullscreen}
+			showsVerticalScrollIndicator={false}
 			showsHorizontalScrollIndicator={false}
+			// A stored page never changes: Android serves it from cache without asking
+			// again. iOS has no such switch and revalidates (a quick 304).
+			cacheMode="LOAD_CACHE_ELSE_NETWORK"
 			style={styles.web}
 		/>
 	</View>;
@@ -162,7 +171,7 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 				? <View style={styles.viewerError}><Text style={styles.fallbackTitle}>Couldn't load this page.</Text></View>
 				: visible ? <View style={styles.viewerBody}>
 					<RenderDocument key={page.mount} path={render.path} displayMode="fullscreen" onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} />
-					{page.loading ? <RenderSkeleton height={Number.POSITIVE_INFINITY} label={render.title} style={styles.viewerSkeleton} /> : null}
+					{page.loading ? <RenderSkeleton height={Number.POSITIVE_INFINITY} label={render.title} style={styles.viewerSkeleton} delayMs={SKELETON_DELAY_MS} /> : null}
 				</View> : null}
 		</View>
 	</Modal>;
@@ -233,7 +242,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
 		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
-		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} /> : null}
+		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} delayMs={measured ? SKELETON_DELAY_MS : 0} /> : null}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
 		<Pressable
 			accessibilityRole="button"
@@ -261,8 +270,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	viewerHeader: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.xs },
 	viewerTitle: { flex: 1, fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
 	viewerClose: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated },
-	// The thread's own inset, so the page sits where it did inline.
-	viewerBody: { flex: 1, paddingHorizontal: space.xl },
+	// Edge to edge: the page carries the thread's inset itself (VIEWER_STYLE_SCRIPT).
+	viewerBody: { flex: 1 },
 	viewerSkeleton: { position: "absolute", top: 0, left: space.xl, right: space.xl, height: 360 },
 	viewerError: { flex: 1, alignItems: "center", justifyContent: "center" },
 	fallback: { alignSelf: "flex-start", marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },

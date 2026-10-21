@@ -16,6 +16,7 @@ import {
 	serializeRememberedHeights,
 	subscribeRememberedHeights,
 	renderSkeletonLines,
+	renderViewerStyleScript,
 	subscribeRenderViewport,
 	isRenderPageLoad,
 	readRenderBridgeMessage,
@@ -341,3 +342,25 @@ describe("RENDER_BRIDGE_SCRIPT height report", () => {
 	});
 });
 
+
+describe("renderViewerStyleScript", () => {
+	it("keeps the gutter inside the page and hides its scrollbar", () => {
+		const appended: Array<{ id?: string; textContent?: string }> = [];
+		const document = {
+			createElement: () => ({}),
+			head: { appendChild: (node: { id?: string; textContent?: string }) => appended.push(node) },
+		};
+		new Function("document", renderViewerStyleScript(20))(document);
+		expect(appended).toHaveLength(1);
+		expect(appended[0].id).toBe("ao-viewer");
+		expect(appended[0].textContent).toContain("padding-left:20px!important");
+		expect(appended[0].textContent).toContain("padding-right:20px!important");
+		expect(appended[0].textContent).toContain("html::-webkit-scrollbar{display:none!important}");
+	});
+
+	it("still applies before the head exists", () => {
+		const appended: unknown[] = [];
+		new Function("document", renderViewerStyleScript(16))({ createElement: () => ({}), head: null, documentElement: { appendChild: (node: unknown) => appended.push(node) } });
+		expect(appended).toHaveLength(1);
+	});
+});

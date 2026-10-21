@@ -12,13 +12,21 @@ import { renderSkeletonLines } from "./renderFrameModel";
  * Where a page will be: a block for its content and, when the frame is tall
  * enough, two caption lines, with a soft band sweeping across while it loads.
  * Reduce Motion leaves the blocks still; their shape alone says "loading".
+ * With a delay, it appears only if loading is still going then, so a page that
+ * comes from cache does not flash a skeleton on its way in.
  */
-export function RenderSkeleton({ height, label, style }: { height: number; label: string; style?: StyleProp<ViewStyle> }) {
+export function RenderSkeleton({ height, label, style, delayMs = 0 }: { height: number; label: string; style?: StyleProp<ViewStyle>; delayMs?: number }) {
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const [width, setWidth] = useState(0);
 	const sweep = useRef(new Animated.Value(0)).current;
-	const animate = !reduceMotion && width > 0;
+	const [shown, setShown] = useState(delayMs <= 0);
+	useEffect(() => {
+		if (shown) return;
+		const timer = setTimeout(() => setShown(true), delayMs);
+		return () => clearTimeout(timer);
+	}, [shown, delayMs]);
+	const animate = shown && !reduceMotion && width > 0;
 	useEffect(() => {
 		if (!animate) return;
 		const loop = Animated.loop(Animated.sequence([
@@ -31,6 +39,7 @@ export function RenderSkeleton({ height, label, style }: { height: number; label
 			sweep.setValue(0);
 		};
 	}, [animate, sweep]);
+	if (!shown) return null;
 	const lines = renderSkeletonLines(height);
 	// Every block starts at the frame's left edge, so one translation lines the band up across them.
 	const band = animate ? <ShimmerBand width={width} sweep={sweep} /> : null;

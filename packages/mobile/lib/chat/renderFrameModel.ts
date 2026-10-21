@@ -312,6 +312,23 @@ export const RENDER_ZOOM_SCRIPT = `(function () {
   meta.content = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes";
 })(); true;`;
 
+/**
+ * The expanded view's page styles, set before first paint. The page runs edge
+ * to edge, so zoomed content pans to the screen edges, and keeps the thread's
+ * gutter inside itself, so at normal zoom it sits where it did inline. Native
+ * scroll indicators are off, and this hides the scrollbar the bootstrap shows
+ * in its fullscreen mode.
+ */
+export function renderViewerStyleScript(gutter: number): string {
+	const css = `html{padding-left:${gutter}px!important;padding-right:${gutter}px!important;scrollbar-width:none!important}html::-webkit-scrollbar{display:none!important}`;
+	return `(function () {
+  var style = document.createElement("style");
+  style.id = "ao-viewer";
+  style.textContent = ${JSON.stringify(css)};
+  (document.head || document.documentElement).appendChild(style);
+})(); true;`;
+}
+
 export type RenderBridgeMessage = { type: "height"; height: number } | { type: "link"; url: string };
 
 /** A message from RENDER_BRIDGE_SCRIPT, or undefined for anything else the page posts. */
