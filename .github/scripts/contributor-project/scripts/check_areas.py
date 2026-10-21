@@ -7,12 +7,13 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT.parents[2]
 SOURCE_EXTENSIONS = set(".go .ts .tsx .js .jsx .mjs .cjs .mts .py .sh .sql .css .html .swift .c .h .cc .cpp .m .mm .java .kt .nix .tf .gradle .ps1 .bat .cmd".split())
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=ROOT.parents[2])
+    parser.add_argument("--repo", type=Path, default=SOURCE)
     parser.add_argument("--ref", default="origin/main")
     args = parser.parse_args()
     taxonomy = json.loads((ROOT / "data/issue-areas.json").read_text())
