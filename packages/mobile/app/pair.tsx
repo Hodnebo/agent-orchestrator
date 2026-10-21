@@ -57,7 +57,9 @@ export default function PairScreen() {
 	const [awaitingLocalNetwork, setAwaitingLocalNetwork] = useState(false);
 	const [gate] = useState(createScanGate);
 	// Answering that prompt sends the app inactive and straight back to active —
-	// the only sign iOS gives that the user has decided.
+	// the only sign iOS gives that the user has decided. It is approximate: Control
+	// Center, a notification or Face ID cycle the same way, which at worst ends a
+	// wait early or retries a failed code once.
 	const promptAnsweredAt = useRef<number | null>(null);
 	// Read from the AppState listener, which outlives any one render.
 	const latestPair = useRef<(code: string) => void>(() => {});
@@ -69,7 +71,12 @@ export default function PairScreen() {
 				wasInactive = false;
 				promptAnsweredAt.current = Date.now();
 				// Answered after the wait gave up: connect now rather than
-				// leaving the error up until the user finds Try again.
+				// leaving the error up until the user finds Try again. Only while
+				// this screen is in front — the manual-connect and name sheets sit
+				// on top of it, and a pair behind them could push a second sheet or
+				// close the screen mid-typing. Checked before promptAnswered() so
+				// the one retry is not spent while hidden.
+				if (!focused.current) return;
 				const code = gate.promptAnswered();
 				if (code) latestPair.current(code);
 			}
@@ -159,6 +166,19 @@ export default function PairScreen() {
 	// than making the user re-scan.
 	async function pair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
 		if (!gate.start()) return;
+		try {
+			await attemptPair(code, offer);
+		} finally {
+			// An attempt that threw (storage, navigation) never reported how it
+			// ended; without this the scanner would stay claimed and ignore scans.
+			if (gate.release()) {
+				setAwaitingLocalNetwork(false);
+				setBusy(false);
+			}
+		}
+	}
+
+	async function attemptPair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
 		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);

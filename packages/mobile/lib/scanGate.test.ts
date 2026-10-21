@@ -110,3 +110,26 @@ describe("retrying when the Local Network prompt is answered late", () => {
 		expect(gate.promptAnswered()).toBeNull();
 	});
 });
+
+// An attempt can throw (storage, navigation) without reporting how it ended.
+// The scanner must not stay claimed by it, or no scan works until the screen
+// is reopened — the bug this gate exists to fix, by another route.
+describe("releasing an attempt that ended without reporting", () => {
+	it("frees the scanner when the attempt is still claimed", () => {
+		const gate = createScanGate();
+		gate.start();
+		expect(gate.release()).toBe(true);
+		expect(gate.sighting("A", 0)).toBe(true);
+	});
+
+	it("is a no-op once the attempt reported its end", () => {
+		const gate = createScanGate();
+		gate.start();
+		gate.failed("A", 1_000);
+		expect(gate.release()).toBe(false);
+		gate.start();
+		gate.succeeded();
+		expect(gate.release()).toBe(false);
+		expect(gate.sighting("B", 2_000)).toBe(false);
+	});
+});

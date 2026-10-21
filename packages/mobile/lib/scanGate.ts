@@ -19,6 +19,11 @@ export type ScanGate = {
 	cancelled(): void;
 	succeeded(): void;
 	/**
+	 * Ends an attempt that stopped without reporting how (it threw), so the
+	 * scanner is not left claimed. True if one was still running.
+	 */
+	release(): boolean;
+	/**
 	 * The code to retry because the Local Network prompt was answered after
 	 * the attempt waiting on it had already given up; at most once per failure.
 	 */
@@ -70,6 +75,11 @@ export function createScanGate(): ScanGate {
 		succeeded() {
 			inFlight = false;
 			done = true;
+		},
+		release() {
+			if (!inFlight) return false;
+			inFlight = false;
+			return true;
 		},
 		promptAnswered() {
 			if (inFlight || done || !awaitedLocalNetwork || failedCode === null) return null;
