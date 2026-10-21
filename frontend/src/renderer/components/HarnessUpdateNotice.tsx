@@ -15,6 +15,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { MiddleTruncatedText } from "./MiddleTruncatedText";
+import { HarnessJobSlowDetail, JobElapsed } from "./settings/harness/HarnessJobProgress";
 import { HarnessSessionsDialog, IdleUpdateStatus } from "./settings/harness/HarnessSessionsDialog";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -298,7 +299,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					<div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
 						<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1 text-caption"><MiddleTruncatedText className="whitespace-nowrap font-mono text-settings-label" text={versionLabel(advisory.currentVersion!)} /><ArrowRight className="size-3 shrink-0 text-settings-muted" role="img" aria-label={t("settings.harness.availableVersion")} /><MiddleTruncatedText className="whitespace-nowrap font-mono font-medium text-settings-accent" text={versionLabel(advisory.latestVersion!)} /></p>
-					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
+					{busy ? <Button size="sm" variant="secondary" className="h-7 min-w-16 shrink-0 px-2 text-xs disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-3 animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}<JobElapsed job={job} /></Button>
 						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="h-7 min-w-16 shrink-0 px-2 text-xs" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 							: sessions ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
 							: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
@@ -313,6 +314,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 						<p role="alert" className="break-words text-caption text-error">{error}</p>
 						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
+					{busy ? <HarnessJobSlowDetail job={job} className="mt-1" /> : null}
 					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
 					{!error && !busy && inUse[agentId] ? <p role="status" className="mt-1 break-words text-caption text-settings-muted">
 						{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}
