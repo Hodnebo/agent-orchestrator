@@ -459,6 +459,66 @@ func TestTranscriptCapsStreamedActivityFields(t *testing.T) {
 	}
 }
 
+func TestTranscriptCapsNestedToolArrays(t *testing.T) {
+	const fieldLength = 10000
+	activity, err := json.Marshal(map[string]any{
+		"kind": "activity", "sequence": 1, "activityKind": "mcp_tool",
+		"detail": map[string]any{
+			"arguments": map[string]any{"values": [][]string{{strings.Repeat("a", fieldLength)}}},
+			"result":    map[string]any{"cells": [][]string{{strings.Repeat("b", fieldLength)}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := buildTranscriptView("demo", "", transcriptRequest{n: 1, cap: transcriptCapDefault}, conversationSnapshotWire{
+		ConversationID: "cnv", Activities: []json.RawMessage{activity},
+	})
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output struct {
+		TruncatedFields int `json:"truncatedFields"`
+		Entries         []struct {
+			Detail struct {
+				Arguments struct {
+					Values [][]string `json:"values"`
+				} `json:"arguments"`
+				Result struct {
+					Cells [][]string `json:"cells"`
+				} `json:"result"`
+			} `json:"detail"`
+			Truncations []fieldTruncation `json:"truncations"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &output); err != nil {
+		t.Fatal(err)
+	}
+	if output.TruncatedFields != 2 || len(output.Entries) != 1 {
+		t.Fatalf("truncation counts = %d, %d", output.TruncatedFields, len(output.Entries))
+	}
+	entry := output.Entries[0]
+	for i, value := range []string{entry.Detail.Arguments.Values[0][0], entry.Detail.Result.Cells[0][0]} {
+		if utf8.RuneCountInString(value) != transcriptCapDefault || !strings.Contains(value, "chars omitted") {
+			t.Errorf("nested tool field %d was not capped: length %d", i, utf8.RuneCountInString(value))
+		}
+	}
+	paths := map[string]bool{"detail.arguments.values.0.0": true, "detail.result.cells.0.0": true}
+	if len(entry.Truncations) != len(paths) {
+		t.Fatalf("truncations = %#v", entry.Truncations)
+	}
+	for _, trunc := range entry.Truncations {
+		if !paths[trunc.Field] || trunc.OriginalChars != fieldLength || trunc.KeptChars != transcriptCapDefault {
+			t.Errorf("truncation = %#v", trunc)
+		}
+		delete(paths, trunc.Field)
+	}
+	if len(paths) != 0 {
+		t.Errorf("missing truncation fields = %#v", paths)
+	}
+}
+
 func transcriptSequences(out string) []string {
 	var seqs []string
 	for _, line := range strings.Split(out, "\n") {

@@ -411,7 +411,19 @@ func walkCap(v any, path string, maxChars int, fullCmd string, force bool, sink 
 			return
 		}
 		for i, item := range items {
-			walkCap(item, fmt.Sprintf("%s.%d", path, i), maxChars, fullCmd, force, sink)
+			itemPath := fmt.Sprintf("%s.%d", path, i)
+			if value, ok := item.(string); ok {
+				if !force {
+					continue
+				}
+				next, trunc := elideField(value, maxChars, itemPath, fullCmd)
+				if trunc != nil {
+					items[i] = next
+					*sink = append(*sink, *trunc)
+				}
+				continue
+			}
+			walkCap(item, itemPath, maxChars, fullCmd, force, sink)
 		}
 		return
 	}
@@ -438,23 +450,7 @@ func walkCap(v any, path string, maxChars int, fullCmd string, force bool, sink 
 		case map[string]any:
 			walkCap(typed, childPath, maxChars, fullCmd, childForce, sink)
 		case []any:
-			for i, item := range typed {
-				itemPath := fmt.Sprintf("%s.%d", childPath, i)
-				switch itemTyped := item.(type) {
-				case string:
-					if !childForce {
-						continue
-					}
-					next, trunc := elideField(itemTyped, maxChars, itemPath, fullCmd)
-					if trunc == nil {
-						continue
-					}
-					typed[i] = next
-					*sink = append(*sink, *trunc)
-				default:
-					walkCap(itemTyped, itemPath, maxChars, fullCmd, childForce, sink)
-				}
-			}
+			walkCap(typed, childPath, maxChars, fullCmd, childForce, sink)
 		}
 	}
 }
