@@ -18,7 +18,12 @@ export function usePreparedClone(hostId?: string) {
 	}, [hostId]);
 
 	const checkDestination = useCallback(async (input: { remoteUrl: string; destinationParent: string }, signal: AbortSignal) => {
-		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/projects/clone/check", { body: input, signal });
+		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/projects/clone/check", { body: input, signal });
+		if (response?.status === 404 || response?.status === 405) {
+			// Older daemons lack this optional preflight. Keep the dialog's path
+			// preview and let prepare enforce destination conflicts as before.
+			return { remoteUrl: input.remoteUrl, path: "", exists: false, canUseExisting: false };
+		}
 		if (error) throw error;
 		if (!data) throw new Error("Could not check the destination. Retry or choose another folder.");
 		return data;

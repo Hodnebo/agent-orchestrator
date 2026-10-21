@@ -8,6 +8,28 @@ vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => api }));
 
 beforeEach(() => { api.POST.mockReset(); });
 
+it.each([404, 405])("allows cloning on an older daemon without destination preflight (%s)", async (status) => {
+	api.POST.mockResolvedValueOnce({ error: { message: "Route unavailable" }, response: { status } });
+	const { result } = renderHook(() => usePreparedClone("older-host"));
+	const input = { remoteUrl: "https://github.com/acme/repo.git", destinationParent: "/projects" };
+	const signal = new AbortController().signal;
+	await expect(result.current.checkDestination(input, signal)).resolves.toEqual({
+		remoteUrl: input.remoteUrl, path: "", exists: false, canUseExisting: false,
+	});
+	expect(api.POST).toHaveBeenCalledWith("/api/v1/projects/clone/check", { body: input, signal });
+	const conflict = { code: "CLONE_DESTINATION_EXISTS", message: "Destination exists" };
+	api.POST.mockResolvedValueOnce({ error: conflict, response: { status: 409 } });
+	await expect(result.current.prepare(input.remoteUrl, input.destinationParent)).rejects.toBe(conflict);
+	expect(result.current.current()).toBeNull();
+});
+
+it.each([400, 401, 403, 500, 503])("preserves destination check failures other than missing routes (%s)", async (status) => {
+	const error = { message: "Could not inspect destination" };
+	api.POST.mockResolvedValueOnce({ error, response: { status } });
+	const { result } = renderHook(() => usePreparedClone("remote-host"));
+	await expect(result.current.checkDestination({ remoteUrl: "file:///source", destinationParent: "/projects" }, new AbortController().signal)).rejects.toBe(error);
+});
+
 it("cancels the active clone request", async () => {
 	api.POST.mockImplementation((_path, { signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
 		signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
