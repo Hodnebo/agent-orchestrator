@@ -769,7 +769,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 			if completedTurns[turnID] && boundary.UserMessageID != "" &&
 				text.user.NativeUserMessageID == boundary.UserMessageID &&
 				nativeHistoryTextMatches(boundary.UserText, text.user.Text) &&
-				nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text) {
+				(boundary.Interrupted || nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text)) {
 				matched = true
 				break
 			}
@@ -1600,6 +1600,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.retryTurnLocked(ctx, turnID, false)
+}
+
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
@@ -1616,8 +1620,11 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	}
 
 	prompt, err := c.store.RetryPrompt(ctx, c.conversation.ID, turnID)
-	if err != nil {
+	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
@@ -1654,6 +1661,9 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if prompt.ProviderInputText != "" {
+		prompt.Text = prompt.ProviderInputText
+	}
 
 	now := c.now()
 	newTurnID := c.newID()
@@ -1667,7 +1677,13 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Continuation:        prompt.Continuation,
 	}
 	var created bool
-	if c.reviewID == "" {
+	if autoResume {
+		store, ok := c.store.(usageLimitStore)
+		if !ok {
+			return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
+		}
+		created, err = store.AppendAutoResumeRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
+	} else if c.reviewID == "" {
 		created, err = c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
 	} else {
 		created, err = c.store.AppendReviewRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, retryMessage, newTurnID, turnID, now)
@@ -1855,6 +1871,7 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	msg = excerptDeliveryMessage(msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if len(followers) > 0 {
 		if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
@@ -1888,7 +1905,7 @@ func (c *Controller) dispatch(
 	c.dispatchingTurnID = turnID
 	c.dispatchedApproval, c.hasDispatchedApproval = msg.Settings.Approval, true
 	c.mu.Unlock()
-	ref, err := c.conv.SendTurn(ctx, excerptDeliveryMessage(msg))
+	ref, err := c.conv.SendTurn(ctx, msg)
 	if err != nil {
 		failFollowers("batch delivery to provider is uncertain: " + err.Error())
 		c.mu.Lock()

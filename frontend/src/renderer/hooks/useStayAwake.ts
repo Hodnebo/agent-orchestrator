@@ -57,7 +57,30 @@ export function useStayAwake(enabled = true) {
 				if (!data) throw new Error("Mobile status is unavailable");
 				cache.setQueryData<MobileStatus>(mobileStatusQueryKey, data);
 			};
-			const start = () => awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
+			const start = async () => {
+				let latest = await awake.actAsync({ kind: "start", request: { scope: "ao", sessionId: "", mode: "indefinite", lidClosed: false } });
+				// A successful POST writes a lease; the native helper acknowledges it
+				// on its next two-second scan. Keep the shared intent pending until
+				// that acknowledgement instead of flashing an inactive warning.
+				const deadline = Date.now() + 5_000;
+				while (!latest.active && !latest.paused && (!latest.reason || latest.reason === "starting" || latest.reason === "helper_unavailable") && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 500));
+					let timeout: number | undefined;
+					try {
+						const confirmed = await Promise.race([
+							cache.fetchQuery<AwakeState>({ queryKey: awakeQueryKey, staleTime: 0 }),
+							new Promise<undefined>((resolve) => { timeout = window.setTimeout(resolve, Math.max(0, deadline - Date.now())); }),
+						]);
+						if (!confirmed) break;
+						latest = confirmed;
+					} catch {
+						// An unavailable status endpoint must not leave the controls busy.
+						break;
+					} finally {
+						window.clearTimeout(timeout);
+					}
+				}
+			};
 			const ensureDesktop = async () => {
 				if (awake.state?.paused) await awake.actAsync({ kind: "resume" });
 				if (sessions.length > 0) return;

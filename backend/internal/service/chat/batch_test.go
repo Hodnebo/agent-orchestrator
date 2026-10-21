@@ -116,6 +116,97 @@ func TestQueuedChatMessagesDrainInOneProviderInput(t *testing.T) {
 	}
 }
 
+func TestFailedBatchRetryPreservesEveryProviderInput(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	active, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "active", ClientMessageID: "retry-batch-active", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := productionCaps()
+	caps[ports.ChatCapabilityEmbeddedContext] = true
+	h.conv.setCapabilities(caps)
+	for _, msg := range []ports.ChatUserMessage{
+		{Text: "first", ClientMessageID: "retry-batch-first", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "text", Text: "verified context", Internal: true}}},
+		{Text: "second", ClientMessageID: "retry-batch-second", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "resource", URI: "file:///worktree/context.txt", Name: "context.txt"}}},
+	} {
+		if _, err := h.svc.Send(ctx, testSession, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+		ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return len(h.conv.sentTexts()) == 2 })
+	original := h.conv.sentMessages()[1]
+	if !strings.Contains(original.Text, "verified context") || len(original.Content) != 1 {
+		t.Fatalf("original provider input = %+v", original)
+	}
+	message, found, err := h.st.ConversationMessageByClientID(ctx, h.ctrl.ConversationID(), "retry-batch-first")
+	if err != nil || !found {
+		t.Fatalf("batch leader = %+v, %v", message, err)
+	}
+	turn, err := h.st.TurnByID(ctx, message.TurnID)
+	if err != nil || turn.ProviderInputText != original.Text {
+		t.Fatalf("recorded provider input = %+v, %v", turn, err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+		ProviderTurnID: turn.ProviderTurnID, TurnState: domain.TurnStateFailed,
+		Err: errors.New("provider failed")})
+	failedTurnSnapshot(t, h, turn.ID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	retried := h.conv.sentMessages()[2]
+	if retried.Text != original.Text || len(retried.Content) != 1 ||
+		retried.Content[0].URI != original.Content[0].URI {
+		t.Fatalf("retry lost or duplicated batch input: original=%+v retry=%+v", original, retried)
+	}
+}
+
+func TestRollbackHidesEarlierMembersOfSteerFallbackBatch(t *testing.T) {
+	provider := newSteerRecorder()
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
+	active, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "active", ClientMessageID: "rollback-active", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted,
+		ProviderTurnID: active.ProviderTurnID})
+	for _, text := range []string{"pending before fallback one", "pending before fallback two"} {
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: text, ClientMessageID: text, Origin: domain.MessageOriginAutomation,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider.failWith(ports.ErrChatNoSteerableTurn)
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "fallback", ClientMessageID: "rollback-fallback", Origin: domain.MessageOriginHuman,
+	}, false)
+	if err != nil || result.Turn.ID == "" {
+		t.Fatalf("fallback = %+v, %v", result, err)
+	}
+	if count, err := h.st.RollbackTurns(ctx, h.ctrl.ConversationID(), result.Turn.ID, time.Now()); err != nil || count != 3 {
+		t.Fatalf("rolled back %d turns: %v", count, err)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range snapshot.Messages {
+		if strings.Contains(message.Text, "pending before fallback") || message.Text == "fallback" {
+			t.Fatalf("rolled back batch member remains visible: %+v", message)
+		}
+	}
+}
+
 func TestQueuedBatchKeepsConcurrentArrivalForNextTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

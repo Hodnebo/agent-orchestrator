@@ -203,7 +203,6 @@ var shippedMigrations = map[int64]string{
 	198: "0198_harness_defaults.sql",
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
-	201: "0201_conversation_batch_members.sql",
 	202: "0202_allow_memcode_harness.sql",
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
@@ -212,6 +211,10 @@ var shippedMigrations = map[int64]string{
 	213: "0213_session_stale_binary.sql",
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
+
+	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
+	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
+	20261021051727800: "20261021051727800_conversation_batch_members.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
