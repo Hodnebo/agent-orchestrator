@@ -573,6 +573,32 @@ func TestSwitchWithAMessageKeepsOtherSwitchesOutUntilItIsSent(t *testing.T) {
 	}
 }
 
+func TestNewMessageToAnAlreadyActiveTargetRunsWithItsPicks(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	// Another window already brought Claude in, bypassed and on the older model.
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "other-window",
+		Model: "model-old", PermissionMode: domain.PermissionModeBypassPermissions,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// This window still shows the source; it picks Claude with Accept edits and sends a new message.
+	if _, switched, err := h.svc.SwitchProviderAndSend(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "new-pick",
+		Model: "model-picked", PermissionMode: domain.PermissionModeAcceptEdits,
+	}, ports.ChatUserMessage{Text: "Use the selected permissions", ClientMessageID: "new-message"}); err != nil || !switched {
+		t.Fatalf("switch and send: switched %v, %v", switched, err)
+	}
+	driver.mu.Lock()
+	claude := driver.fresh
+	driver.mu.Unlock()
+	sent := claude.sentMessages()
+	if len(sent) != 1 || sent[0].Settings.Approval != ports.PermissionModeAcceptEdits || sent[0].Settings.Model != "model-picked" {
+		t.Fatalf("delivered %+v; want the picked accept-edits and model-picked", sent)
+	}
+}
+
 func TestRetryOfADeliveredMessageDoesNotSwitchBack(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()

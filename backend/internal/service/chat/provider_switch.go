@@ -68,13 +68,51 @@ func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID
 		return turn, false, err
 	}
 	if !delivered {
-		// A retry after the switch went through finds the target already active.
-		if err := s.switchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		// A retry after the switch went through finds the target already active,
+		// and so does a window that picked the agent another one already brought
+		// in. Either way the message runs with what its sender picked.
+		if err := s.switchProvider(ctx, id, request); errors.Is(err, domain.ErrProviderAlreadyActive) {
+			if err := s.applyPicksToActiveTarget(ctx, id, request); err != nil {
+				return turn, false, err
+			}
+		} else if err != nil {
 			return turn, false, err
 		}
 	}
 	turn, err = s.Send(ctx, id, msg)
 	return turn, true, err
+}
+
+// applyPicksToActiveTarget gives the agent already running the model, effort
+// and permission mode a switch to it named. A pick it cannot take refuses the
+// message before anything is sent.
+func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+	if request.Model == "" && request.Effort == "" && request.PermissionMode == "" {
+		return nil
+	}
+	controller, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer release()
+	current := controller.Settings()
+	picked := current
+	picked.Model = cmp.Or(request.Model, current.Model)
+	picked.ReasoningEffort = cmp.Or(request.Effort, current.ReasoningEffort)
+	if request.PermissionMode != "" {
+		picked.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
+	}
+	if picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort && picked.ApprovalMode == current.ApprovalMode {
+		return nil
+	}
+	if _, err := s.setTurnSettings(ctx, controller, domain.SessionConversationOwner(id), picked); err != nil {
+		return &domain.ProviderSwitchError{
+			Kind:   domain.ProviderSwitchRefusalUnsupported,
+			Detail: fmt.Sprintf("%s is already active and did not take the picked settings: %v", request.TargetHarness, err),
+			Cause:  err,
+		}
+	}
+	return nil
 }
 
 // lockProviderSwitch admits one provider switch per session at a time.
