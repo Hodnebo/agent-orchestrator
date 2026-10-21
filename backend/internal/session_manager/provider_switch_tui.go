@@ -118,13 +118,18 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 		// A target that used up the switch's time still leaves the restore its own.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*interfaceTransitionStepLimit)
 		defer cancel()
-		if launchStore != nil {
-			_ = launchStore.SetSessionLaunchOptions(ctx, id, sourceLaunch)
-		}
 		// So does one made while the target was starting.
 		source := source
 		keepUserEdits(ctx, &source)
-		restoreErr := m.store.UpdateSession(ctx, source)
+		// Ownership and the source's launch choices go back in one write, as they
+		// moved: a stop between two writes would leave the target owning the
+		// session with neither its handoff nor the source's native identity.
+		var restoreErr error
+		if launchStore != nil {
+			restoreErr = launchStore.UpdateSessionWithLaunchOptions(ctx, source, sourceLaunch)
+		} else {
+			restoreErr = m.store.UpdateSession(ctx, source)
+		}
 		if restoreErr == nil {
 			_, restoreErr = m.relaunchSessionWithPolicy(ctx, "restore source provider", source, project, ws, nil, false, false, domain.SessionInterfaceTransitionHistoryStrict)
 		}
