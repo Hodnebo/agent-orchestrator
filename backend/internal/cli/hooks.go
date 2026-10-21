@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,7 @@ type setActivityAPIRequest struct {
 	TranscriptPath               string                              `json:"transcriptPath,omitempty"`
 	LaunchID                     string                              `json:"launchId,omitempty"`
 	Entrypoint                   string                              `json:"entrypoint,omitempty"`
+	ProcessID                    int                                 `json:"processId,omitempty"`
 	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
 }
 
@@ -229,12 +231,20 @@ func hookAgentSessionID(payload []byte) string {
 		SessionIDCamel      string `json:"sessionId"`
 		ConversationID      string `json:"conversation_id"`
 		ConversationIDCamel string `json:"conversationId"`
-		// Cline exposes the resumable task handle as top-level taskId.
+		// Current Cline CLI hooks distinguish the durable CLI session from the
+		// SDK's process-local task/conversation ID. --id resumes the root.
+		SessionContext struct {
+			RootSessionID string `json:"rootSessionId"`
+		} `json:"sessionContext"`
+		// Legacy hook producers expose only the task ID.
 		TaskIDCamel string `json:"taskId"`
 		TaskIDSnake string `json:"task_id"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	id := strings.TrimSpace(p.SessionID)
+	id := strings.TrimSpace(p.SessionContext.RootSessionID)
+	if id == "" {
+		id = strings.TrimSpace(p.SessionID)
+	}
 	if id == "" {
 		id = strings.TrimSpace(p.SessionIDCamel)
 	}
@@ -700,6 +710,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// worktree, which inherits this session's env and launch id (#6454).
 		if entrypoint := strings.TrimSpace(os.Getenv("CLAUDE_CODE_ENTRYPOINT")); len(entrypoint) <= maxActivityMetaLen {
 			req.Entrypoint = entrypoint
+		}
+		// Claude names the process running the hook. The daemon drops hooks
+		// from a Claude process other than the session's terminal one.
+		if pid, err := strconv.Atoi(strings.TrimSpace(os.Getenv("CLAUDE_PID"))); err == nil && pid > 1 {
+			req.ProcessID = pid
 		}
 	}
 	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "user-prompt-submit" &&

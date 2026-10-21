@@ -125,6 +125,21 @@ type Config struct {
 	// ArtifactEndpoint is an S3-compatible endpoint such as local MinIO
 	// (AO_CLOUD_ARTIFACT_ENDPOINT). Empty uses AWS S3.
 	ArtifactEndpoint string
+	// CoderReadableWorkspaceNames gives new Coder sessions the readable
+	// <prefix>-o-<id> / <prefix>-w-<word>-<id> workspace names
+	// (AO_CLOUD_CODER_READABLE_NAMES). Off, new sessions keep the
+	// <prefix>-<id> name every release computes. Stored names are read either
+	// way, so turning it off never loses a workspace. A release that predates
+	// stored names computes the old name, so turn it on only once the
+	// rollback target can read stored names.
+	CoderReadableWorkspaceNames bool
+	// CoderWorkerWorkingFolder makes a Coder session whose worker runs as the
+	// dedicated ao-worker user check its repository out in the project's
+	// working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Off, those
+	// sessions keep the durable root's repository folder. A stored working
+	// folder is honored either way; a release that predates it ignores it, so
+	// turn it on only once the rollback target honors it.
+	CoderWorkerWorkingFolder bool
 
 	NodeOpsBaseURL       string
 	NodeOpsAPIKey        string
@@ -276,6 +291,16 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("invalid AO_CLOUD_STRIPE_PRICE_IDS: %w", err)
 		}
 	}
+	// Both off by default on a hosted control plane: the offering file of
+	// each environment sets them (see cloud/docs/deployment.md).
+	coderReadableNames, readableErr := strictBoolEnv("AO_CLOUD_CODER_READABLE_NAMES", !hosted)
+	if readableErr != nil {
+		return Config{}, readableErr
+	}
+	coderWorkerWorkingFolder, workingFolderErr := strictBoolEnv("AO_CLOUD_CODER_WORKER_WORKING_FOLDER", !hosted)
+	if workingFolderErr != nil {
+		return Config{}, workingFolderErr
+	}
 	coderParametersEnv := map[string]string{}
 	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_CODER_PARAMETERS_JSON")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &coderParametersEnv); err != nil {
@@ -307,6 +332,9 @@ func Load() (Config, error) {
 		ArtifactBucket:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_BUCKET")),
 		ArtifactRegion:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_REGION")),
 		ArtifactEndpoint:       strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_ENDPOINT")), "/"),
+
+		CoderReadableWorkspaceNames: coderReadableNames,
+		CoderWorkerWorkingFolder:    coderWorkerWorkingFolder,
 		SandboxProvider: strings.ToLower(
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
@@ -868,6 +896,21 @@ func boolEnv(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+// strictBoolEnv reads a true/false setting; unset is fallback and anything
+// else but true or false is an error, so a typo never flips a rollout flag.
+func strictBoolEnv(key string, fallback bool) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return fallback, nil
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", key)
+	}
 }
 
 func durationEnv(key string, fallback time.Duration) time.Duration {
