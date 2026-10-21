@@ -43,6 +43,11 @@ const MAX_PROCESS_RESTARTS = 2;
 // A page this device has already loaded usually comes back within this; only
 // a slower load shows the skeleton, so a cached page does not flash one.
 const SKELETON_DELAY_MS = 250;
+// A frame that measures out of range lets its page go only after this. Content
+// added above (earlier history) lays the list out once before the scroll anchor
+// restores the position, and a measure in between would unload and reload pages
+// that never left the screen.
+const LEAVE_RANGE_DELAY_MS = 400;
 const VIEWER_STYLE_SCRIPT = renderViewerStyleScript(space.xl);
 
 function useRenderTheme(): RenderTheme {
@@ -205,10 +210,25 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const [expanded, setExpanded] = useState(false);
 	// Sized on this device already: by a report this mount, or one saved earlier.
 	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
+	const liveRef = useRef(live);
+	liveRef.current = live;
+	const leaveRange = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(leaveRange.current), []);
 	const measure = useCallback(() => {
 		frame.current?.measureInWindow((_x, y, _width, height) => {
 			// A cell the list has clipped measures as zero; leave it as it was.
-			if (height > 0) setLive((current) => renderFrameLive(y, height, viewportHeight, current, measured));
+			if (height <= 0) return;
+			if (renderFrameLive(y, height, viewportHeight, liveRef.current, measured)) {
+				clearTimeout(leaveRange.current);
+				leaveRange.current = undefined;
+				if (!liveRef.current) setLive(true);
+				return;
+			}
+			if (!liveRef.current || leaveRange.current) return;
+			leaveRange.current = setTimeout(() => {
+				leaveRange.current = undefined;
+				setLive(false);
+			}, LEAVE_RANGE_DELAY_MS);
 		});
 	}, [viewportHeight, measured]);
 	useEffect(() => subscribeRenderViewport(measure), [measure]);

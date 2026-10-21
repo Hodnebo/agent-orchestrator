@@ -64,6 +64,7 @@ it("keeps the skeleton for a page that returns after leaving range mid-load", ()
 	act(() => webView().props.onLoadEnd());
 	// Scrolled far out of range before the page reported its height: the WebView goes.
 	moveFrame(10_000);
+	act(() => { vi.advanceTimersByTime(500); });
 	expect(webView()).toBeUndefined();
 	// The old page's fallback would have fired by now.
 	act(() => { vi.advanceTimersByTime(5_000); });
@@ -93,4 +94,25 @@ it("shows the page as soon as it reports its height", () => {
 	act(() => webView().props.onLoadEnd());
 	act(() => webView().props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "height", height: 280 }) } }));
 	expect(skeletonShown()).toBe(false);
+});
+
+it("keeps a page through a moment out of range, as when earlier history loads above it", () => {
+	const page = webView();
+	act(() => page.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "height", height: 280 }) } }));
+	// The list lays out with everything pushed down, then the scroll anchor puts it back.
+	moveFrame(10_000);
+	act(() => { vi.advanceTimersByTime(100); });
+	moveFrame(100);
+	act(() => { vi.advanceTimersByTime(1_000); });
+	// The same WebView, still showing its page: nothing unloaded or reloaded.
+	expect(webView()).toBe(page);
+	expect(skeletonShown()).toBe(false);
+});
+
+it("lets a page go once it has really left range", () => {
+	moveFrame(10_000);
+	act(() => { vi.advanceTimersByTime(300); });
+	expect(webView()).toBeDefined();
+	act(() => { vi.advanceTimersByTime(200); });
+	expect(webView()).toBeUndefined();
 });
