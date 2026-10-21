@@ -159,7 +159,15 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
 	const close = () => { haptics.tap(); onClose(); };
-	return <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose} onShow={() => { setFailed(false); page.reset(); }}>
+	// Reset on close, not on show: iOS fires onShow after the fade-in, and a reset
+	// then remounts a page that is already showing, so it flashes blank and reloads.
+	const { reset } = page;
+	useEffect(() => {
+		if (visible) return;
+		setFailed(false);
+		reset();
+	}, [visible, reset]);
+	return <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose}>
 		<View style={[styles.viewer, { paddingTop: insets.top }]}>
 			<View style={styles.viewerHeader}>
 				<Text numberOfLines={1} accessibilityRole="header" style={styles.viewerTitle}>{render.title}</Text>
