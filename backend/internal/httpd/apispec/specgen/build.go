@@ -200,6 +200,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersTestingQueryCall":                          "TestingQueryCall",
 	"ControllersTestingReportCall":                         "TestingReportCall",
 	"ControllersTestingToolResponse":                       "TestingToolResponse",
+	"ControllersTestingControlCall":                        "TestingControlCall",
+	"DomainTestTargetControlRequest":                       "TestTargetControlRequest",
 	"ControllersDesktopWorkspaceLocationResponse":          "DesktopWorkspaceLocationResponse",
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
@@ -3225,6 +3227,7 @@ func testingOperations() []operation {
 		{"key", "testingKey", controllers.TestingKeyCall{}},
 		{"read_target_logs", "testingReadTargetLogs", controllers.TestingLogsCall{}},
 		{"target_daemon_query", "testingTargetDaemonQuery", controllers.TestingQueryCall{}},
+		{"target_control", "testingTargetControl", controllers.TestingControlCall{}},
 		{"submit_report", "testingSubmitReport", controllers.TestingReportCall{}},
 	}
 	for _, tool := range tools {

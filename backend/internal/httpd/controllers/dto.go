@@ -3454,3 +3454,10 @@ type TestingToolResponse struct {
 	Report            *domain.TestSubmitReportResult `json:"report,omitempty"`
 	Evidence          []domain.TestEvidenceReceipt   `json:"evidence"`
 }
+
+// TestingControlCall documents controller-owned lifecycle and window admission.
+type TestingControlCall struct {
+	SessionID domain.SessionID                `json:"sessionId"`
+	RequestID string                          `json:"requestId"`
+	Input     domain.TestTargetControlRequest `json:"input"`
+}

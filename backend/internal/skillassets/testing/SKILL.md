@@ -165,6 +165,21 @@ Create scratch fixtures only under the supplied `fixtureDir`, using unique
 child names. Recreate the same contents for head. Keep evidence outside the
 private target before cleanup removes data, profile and fixtures.
 
+## Daemon-down and native terminal checks
+
+Use `target_control` only for the active owned target. `stop_daemon` stops its
+private daemon while preserving the Electron window. `restart_daemon` starts it
+through that same Electron app and checks its replacement identity. Do not use
+host shell signals or a different daemon to reproduce an offline state.
+
+For a native terminal trigger, call `arm_terminal`, trigger it through the owned
+app, then call `admit_terminal` within two minutes. Admission refuses existing,
+ambiguous or unrelated windows. Call `observe` for the admitted terminal and use
+its fresh screenshot for normal type/key input. Use `read_terminal` for bounded
+text, and `select_app` to return to Electron. Observe again after switching.
+The controller records both windows and closes only the admitted terminal during
+cleanup. Do not bypass an admission refusal or act on another terminal.
+
 ## Retain evidence and finish
 
 Use `ao testing evidence <attemptId>` against the supervisor to read receipts.

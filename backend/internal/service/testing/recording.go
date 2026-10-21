@@ -64,7 +64,10 @@ func (s *Service) startRecording(ctx context.Context, st *attemptState, target d
 		record.Detail = "Recording provider is not configured; no recording was started."
 	}
 	s.mu.Lock()
-	st.recording = configured && setupErr == nil && (startErr == nil || result.RecorderPID > 0)
+	if st.recordings == nil {
+		st.recordings = map[string]bool{}
+	}
+	st.recordings[target.ID] = configured && setupErr == nil && (startErr == nil || result.RecorderPID > 0)
 	s.mu.Unlock()
 	record.At = s.deps.Clock.Now().UTC()
 	record.State = "completed"
@@ -87,8 +90,8 @@ func (s *Service) startRecording(ctx context.Context, st *attemptState, target d
 
 func (s *Service) stopRecording(ctx context.Context, st *attemptState, target domain.TestTargetIdentity) error {
 	s.mu.Lock()
-	started := st.recording
-	st.recording = false
+	started := st.recordings[target.ID]
+	delete(st.recordings, target.ID)
 	s.mu.Unlock()
 	if !started {
 		return nil

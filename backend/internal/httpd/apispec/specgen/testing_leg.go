@@ -25,6 +25,7 @@ func testingLegOperations() []operation {
 		{"key", "testingSessionKey", controllers.TestingKeyCall{}},
 		{"read_target_logs", "testingSessionReadTargetLogs", controllers.TestingLogsCall{}},
 		{"target_daemon_query", "testingSessionTargetDaemonQuery", controllers.TestingQueryCall{}},
+		{"target_control", "testingSessionTargetControl", controllers.TestingControlCall{}},
 		{"submit_report", "testingSessionSubmitReport", controllers.TestingReportCall{}},
 	} {
 		ops = append(ops, operation{method: http.MethodPost, path: "/api/v1/testing/sessions/{sessionId}/tools/" + tool.name, id: tool.id, tag: "testing", summary: "Resolve the current owned target and call " + tool.name, pathParams: []any{controllers.TestingWorkerIDParam{}, controllers.TestingCapabilityHeader{}}, reqBody: tool.input, resps: append([]respUnit{{http.StatusOK, controllers.TestingToolResponse{}}}, errors...)})

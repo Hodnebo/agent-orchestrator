@@ -21,7 +21,7 @@ import (
 )
 
 // ToolNames lists the exact native testing tools mounted by HTTP and MCP.
-var ToolNames = []string{"screenshot", "observe", "click", "type", "key", "read_target_logs", "target_daemon_query", "submit_report"}
+var ToolNames = []string{"screenshot", "observe", "click", "type", "key", "read_target_logs", "target_daemon_query", "target_control", "submit_report"}
 
 // IsTool reports whether name belongs to the native testing profile.
 func IsTool(name string) bool {
@@ -97,6 +97,9 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 	case "target_daemon_query":
 		input = &domain.TestDaemonQueryRequest{}
 		required = []string{"resource"}
+	case "target_control":
+		input = &domain.TestTargetControlRequest{}
+		required = []string{"action"}
 	case "submit_report":
 		input = &domain.TestSubmitReportRequest{}
 		required = []string{"outcome", "markdown"}
@@ -141,6 +144,12 @@ func decodeInput(raw json.RawMessage, name string) (any, json.RawMessage, error)
 		}
 	}
 	switch v := input.(type) {
+	case *domain.TestTargetControlRequest:
+		switch v.Action {
+		case "stop_daemon", "restart_daemon", "arm_terminal", "admit_terminal", "select_app", "read_terminal":
+		default:
+			return nil, nil, invalid("Invalid target control action")
+		}
 	case *domain.TestClickRequest:
 		if v.ScreenshotID == "" || v.X < 0 || v.Y < 0 {
 			return nil, nil, invalid("Screenshot and nonnegative coordinates are required")
@@ -292,7 +301,11 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 	if err = s.deps.Target.Probe(callCtx, grant.target); err != nil {
 		return result, targetChanged()
 	}
-	record := domain.TestActionRecord{AttemptID: id, WindowID: grant.target.WindowID, LaunchID: grant.target.LaunchID, RequestID: requestID, Tool: name, Input: canonical, State: "dispatching", At: s.deps.Clock.Now().UTC()}
+	window := grant.target
+	if st.desktopTarget.ID != "" {
+		window = st.desktopTarget
+	}
+	record := domain.TestActionRecord{AttemptID: id, WindowID: window.WindowID, LaunchID: grant.target.LaunchID, RequestID: requestID, Tool: name, Input: canonical, State: "dispatching", At: s.deps.Clock.Now().UTC()}
 	if name == "click" || name == "type" || name == "key" {
 		record.ConfiguredDeliveryMode = s.deliveryMode()
 		record.DeliveryMode = record.ConfiguredDeliveryMode
@@ -323,6 +336,9 @@ func (s *Service) Execute(ctx context.Context, id domain.TestAttemptID, session 
 		if err != nil {
 			record.State = "failed"
 			record.Detail += "; Tool failed or was cancelled; partial action may have been delivered"
+			if name == "target_control" {
+				record.Detail += "; " + workerLaunchCause(err)
+			}
 			var failure *apierr.Error
 			if errors.As(err, &failure) && failure.Code == "TEST_INPUT_REFUSED" {
 				record.State = "refused"
@@ -518,7 +534,48 @@ func (s *Service) settle(ctx context.Context, st *attemptState, target domain.Te
 
 func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.TestTargetIdentity, input any, requestID string) (result ToolResult, err error) {
 	result.Evidence = []domain.TestEvidenceReceipt{}
+	appTarget := target
+	if st.desktopTarget.ID != "" {
+		target = st.desktopTarget
+	}
 	switch v := input.(type) {
+	case *domain.TestTargetControlRequest:
+		control, ok := s.deps.Target.(ports.TestingTargetControl)
+		if !ok {
+			return result, ProviderNotConfigured()
+		}
+		controlled, e := control.Control(ctx, appTarget, v.Action)
+		if e != nil {
+			return result, fmt.Errorf("target control %s: %w", v.Action, e)
+		}
+		if controlled.Window != nil {
+			selected := *controlled.Window
+			if v.Action == "select_app" {
+				selected = appTarget
+			}
+			if v.Action == "admit_terminal" {
+				st.terminalTarget = selected
+				bound, bindErr := s.deps.Desktop.BindWindow(ctx, selected)
+				if bindErr != nil {
+					return result, bindErr
+				}
+				if !sameTarget(bound, selected) {
+					return result, targetChanged()
+				}
+				if e := s.startRecording(ctx, st, bound); e != nil {
+					return result, e
+				}
+			}
+			st.desktopTarget = selected
+			s.mu.Lock()
+			clear(st.frames)
+			s.mu.Unlock()
+		}
+		data, _ := json.Marshal(controlled)
+		if _, e := s.save(ctx, st, &result, "target_control", "application/json", data, nil); e != nil {
+			return result, e
+		}
+		result.Logs = &domain.TestLogResult{Text: controlled.Detail + "\n" + controlled.Text}
 	case *domain.TestScreenshotRequest, *domain.TestObserveRequest:
 		if err := s.capture(ctx, st, target, &result); err != nil {
 			return result, err
@@ -566,7 +623,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 			return result, inputFailure(e)
 		}
 	case *domain.TestReadLogsRequest:
-		logs, e := s.deps.Target.ReadLogs(ctx, target, *v)
+		logs, e := s.deps.Target.ReadLogs(ctx, appTarget, *v)
 		if e != nil {
 			return result, apierr.Unavailable("TEST_LOGS_FAILED", "Target logs failed")
 		}
@@ -578,7 +635,7 @@ func (s *Service) dispatch(ctx context.Context, st *attemptState, target domain.
 		}
 		result.Logs = &logs
 	case *domain.TestDaemonQueryRequest:
-		query, e := s.deps.Target.QueryDaemon(ctx, target, *v)
+		query, e := s.deps.Target.QueryDaemon(ctx, appTarget, *v)
 		if e != nil {
 			return result, apierr.Unavailable("TEST_QUERY_FAILED", "Target daemon query failed")
 		}

@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// TestTargetControlRequest selects a controller-owned lifecycle operation.
+// It accepts no PID, path, endpoint or window identifier.
+type TestTargetControlRequest struct {
+	_      struct{} `additionalProperties:"false"`
+	Action string   `json:"action" enum:"stop_daemon,restart_daemon,arm_terminal,admit_terminal,select_app,read_terminal"`
+}
+
 // TestScreenshotRequest captures the attempt's bound window without arguments.
 type TestScreenshotRequest struct {
 	_ struct{} `additionalProperties:"false"`

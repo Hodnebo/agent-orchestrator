@@ -110,6 +110,7 @@ func TestTestingMCPNegotiationAndSchemas(t *testing.T) {
 				"read_target_logs":{"type":"object","properties":{"cursor":{"type":"string","maxLength":256},"maxBytes":{"type":"integer","minimum":1,"maximum":262144}},"additionalProperties":false},
 				"target_daemon_query":{"type":"object","properties":{"resource":{"enum":["projects","sessions","reviews","conversation"]},"sessionId":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}},"required":["resource"],"oneOf":[{"properties":{"resource":{"enum":["projects","sessions"]}},"not":{"required":["sessionId"]}},{"properties":{"resource":{"enum":["reviews","conversation"]}},"required":["sessionId"]}],"additionalProperties":false},
 				"submit_report":{"type":"object","properties":{"outcome":{"enum":["reproduced","not_reproduced","needs_information","environment_blocked","partial","cancelled"]},"markdown":{"type":"string","maxLength":65536}},"required":["outcome","markdown"],"additionalProperties":false},
+				"target_control":{"type":"object","properties":{"action":{"enum":["stop_daemon","restart_daemon","arm_terminal","admit_terminal","select_app","read_terminal"]}},"required":["action"],"additionalProperties":false},
 				"observe":{"type":"object","properties":{},"additionalProperties":false}
 			}`), &want); err != nil {
 				t.Fatal(err)
@@ -126,8 +127,8 @@ func TestTestingMCPNegotiationAndSchemas(t *testing.T) {
 				}
 				got[tool.Name] = schema
 			}
-			if len(tools.Tools) != 8 || !reflect.DeepEqual(got, want) {
-				t.Fatalf("tools/list differs from the eight-tool contract: %#v", got)
+			if len(tools.Tools) != 9 || !reflect.DeepEqual(got, want) {
+				t.Fatalf("tools/list differs from the nine-tool contract: %#v", got)
 			}
 			finish()
 		})
@@ -146,6 +147,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		"screenshot": `{}`, "observe": `{}`, "click": `{"screenshotId":"shot-1","x":0,"y":0}`,
 		"type": `{"screenshotId":"shot-1","elementId":"element-1","text":"hello"}`,
 		"key":  `{"screenshotId":"shot-1","keys":["ENTER"]}`, "read_target_logs": `{}`,
+		"target_control":      `{"action":"stop_daemon"}`,
 		"target_daemon_query": `{"resource":"sessions"}`, "submit_report": `{"outcome":"partial","markdown":"# Observations"}`,
 	}
 	responses := map[string]string{
@@ -153,6 +155,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		"type":                `{"action":{"delivered":true},"evidence":[]}`,
 		"key":                 `{"action":{"delivered":true},"evidence":[]}`,
 		"read_target_logs":    `{"logs":{"text":"target log","truncated":false},"evidence":[]}`,
+		"target_control":      `{"logs":{"text":"Owned target daemon stopped","truncated":false},"evidence":[]}`,
 		"target_daemon_query": `{"query":{"resource":"sessions","data":{"sessions":[]}},"evidence":[]}`,
 		"submit_report":       `{"report":{"outcome":"partial","evidenceId":"report-1"},"evidence":[]}`,
 	}
@@ -204,6 +207,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		{"type", `{"screenshotId":"shot-1","elementId":"element-1","text":"hello"}`},
 		{"key", `{"screenshotId":"shot-1","keys":["ENTER"]}`},
 		{"read_target_logs", `{}`},
+		{"target_control", `{"action":"stop_daemon"}`},
 		{"target_daemon_query", `{"resource":"sessions"}`},
 		{"submit_report", `{"outcome":"partial","markdown":"# Observations"}`},
 	} {
@@ -243,7 +247,7 @@ func TestTestingMCPForwardsToolsAndScreenshot(t *testing.T) {
 		}
 	}
 	finish()
-	if len(calls) != 8 {
+	if len(calls) != 9 {
 		t.Fatalf("daemon calls: %v", calls)
 	}
 }

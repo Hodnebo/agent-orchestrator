@@ -3235,6 +3235,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/testing/attempts/{attemptId}/tools/target_control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Call the target-bound target_control tool */
+        post: operations["testingTargetControl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/testing/attempts/{attemptId}/tools/target_daemon_query": {
         parameters: {
             query?: never;
@@ -3433,6 +3450,23 @@ export interface paths {
         put?: never;
         /** Resolve the current owned target and call submit_report */
         post: operations["testingSessionSubmitReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/testing/sessions/{sessionId}/tools/target_control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve the current owned target and call target_control */
+        post: operations["testingSessionTargetControl"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6102,6 +6136,10 @@ export interface components {
             evidenceId: string;
             outcome: string;
         };
+        TestTargetControlRequest: {
+            /** @enum {string} */
+            action: "stop_daemon" | "restart_daemon" | "arm_terminal" | "admit_terminal" | "select_app" | "read_terminal";
+        };
         TestTypeRequest: {
             /** @description Use an element from this observation, or supply both x and y instead. */
             elementId?: string;
@@ -6137,6 +6175,11 @@ export interface components {
         };
         TestingClickCall: {
             input: components["schemas"]["TestClickRequest"];
+            requestId: string;
+            sessionId: string;
+        };
+        TestingControlCall: {
+            input: components["schemas"]["TestTargetControlRequest"];
             requestId: string;
             sessionId: string;
         };
@@ -19082,6 +19125,98 @@ export interface operations {
             };
         };
     };
+    testingTargetControl: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Launch-only worker capability. Never persist it, put it in a URL or log it. */
+                "X-AO-Test-Capability"?: string;
+            };
+            path: {
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingControlCall"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingToolResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     testingTargetDaemonQuery: {
         parameters: {
             query?: never;
@@ -20090,6 +20225,98 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TestingReportCall"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestingToolResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    testingSessionTargetControl: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Launch-only worker capability. Never persist it, put it in a URL or log it. */
+                "X-AO-Test-Capability"?: string;
+            };
+            path: {
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestingControlCall"];
             };
         };
         responses: {

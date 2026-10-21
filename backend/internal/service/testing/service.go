@@ -45,7 +45,9 @@ type attemptState struct {
 	cleanupDone             chan struct{}
 	cleanupErr              error
 	finishErr               error
-	recording               bool
+	recordings              map[string]bool
+	desktopTarget           domain.TestTargetIdentity
+	terminalTarget          domain.TestTargetIdentity
 	desktopBindingAttempted bool
 	desktopReleased         bool
 	cleanupRunning          bool
@@ -543,6 +545,14 @@ func (s *Service) cleanup(ctx context.Context, st *attemptState, done chan struc
 		cleanupErr = errors.Join(cleanupErr, ProviderNotConfigured())
 		result.State = domain.TestCleanupFailed
 	} else if rec.Target.ID != "" {
+		if st.terminalTarget.ID != "" {
+			terminalCtx, terminalCancel := context.WithTimeout(ctx, 25*time.Second)
+			cleanupErr = errors.Join(cleanupErr, s.stopRecording(terminalCtx, st, st.terminalTarget))
+			if desktop, ok := s.deps.Desktop.(ports.TestingDesktopReleaser); ok {
+				cleanupErr = errors.Join(cleanupErr, desktop.Release(terminalCtx, st.terminalTarget))
+			}
+			terminalCancel()
+		}
 		recordingCtx, recordingCancel := context.WithTimeout(ctx, 20*time.Second)
 		cleanupErr = errors.Join(cleanupErr, s.stopRecording(recordingCtx, st, rec.Target))
 		recordingCancel()

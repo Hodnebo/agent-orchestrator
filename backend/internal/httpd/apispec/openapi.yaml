@@ -10058,6 +10058,81 @@ paths:
       summary: Call the target-bound submit_report tool
       tags:
       - testing
+  /api/v1/testing/attempts/{attemptId}/tools/target_control:
+    post:
+      operationId: testingTargetControl
+      parameters:
+      - in: path
+        name: attemptId
+        required: true
+        schema:
+          type: string
+      - description: Launch-only worker capability. Never persist it, put it in a
+          URL or log it.
+        in: header
+        name: X-AO-Test-Capability
+        schema:
+          description: Launch-only worker capability. Never persist it, put it in
+            a URL or log it.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingControlCall'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingToolResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Call the target-bound target_control tool
+      tags:
+      - testing
   /api/v1/testing/attempts/{attemptId}/tools/target_daemon_query:
     post:
       operationId: testingTargetDaemonQuery
@@ -10916,6 +10991,81 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Resolve the current owned target and call submit_report
+      tags:
+      - testing
+  /api/v1/testing/sessions/{sessionId}/tools/target_control:
+    post:
+      operationId: testingSessionTargetControl
+      parameters:
+      - in: path
+        name: sessionId
+        required: true
+        schema:
+          type: string
+      - description: Launch-only worker capability. Never persist it, put it in a
+          URL or log it.
+        in: header
+        name: X-AO-Test-Capability
+        schema:
+          description: Launch-only worker capability. Never persist it, put it in
+            a URL or log it.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestingControlCall'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestingToolResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "415":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unsupported Media Type
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Resolve the current owned target and call target_control
       tags:
       - testing
   /api/v1/testing/sessions/{sessionId}/tools/target_daemon_query:
@@ -17968,6 +18118,21 @@ components:
       - outcome
       - evidenceId
       type: object
+    TestTargetControlRequest:
+      additionalProperties: false
+      properties:
+        action:
+          enum:
+          - stop_daemon
+          - restart_daemon
+          - arm_terminal
+          - admit_terminal
+          - select_app
+          - read_terminal
+          type: string
+      required:
+      - action
+      type: object
     TestTypeRequest:
       additionalProperties: false
       oneOf:
@@ -18087,6 +18252,19 @@ components:
           type: string
         sessionId:
           minLength: 1
+          type: string
+      required:
+      - sessionId
+      - requestId
+      - input
+      type: object
+    TestingControlCall:
+      properties:
+        input:
+          $ref: '#/components/schemas/TestTargetControlRequest'
+        requestId:
+          type: string
+        sessionId:
           type: string
       required:
       - sessionId
