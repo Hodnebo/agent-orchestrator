@@ -560,6 +560,7 @@ describe("shell workspace startup", () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		shellMocks.state.routeParams = { projectId: "proj-1" };
 		vi.mocked(apiClient.POST)
+			.mockReset()
 			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
 			.mockResolvedValueOnce({ error: {
 				code: "PATH_ALREADY_REGISTERED", message: "Already registered", details: { existingProjectId: "proj-1" },
@@ -575,7 +576,10 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: "orch-existing" },
 		}));
-		expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(1);
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+		});
+		expect(apiClient.POST).toHaveBeenCalledTimes(3);
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
 	});
 

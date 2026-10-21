@@ -539,7 +539,7 @@ export function CreateProjectFlow({
 			const message = cloneSelection
 				? t("createProject.cloneRegistrationFailed", {
 					path: selectedPath,
-					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody")),
+					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." })),
 				})
 				: apiErrorMessage(err, t("createProject.couldNotAdd"));
 			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {

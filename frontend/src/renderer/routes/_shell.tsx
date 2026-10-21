@@ -871,16 +871,15 @@ function ShellLayout() {
 			clonePreparationId: input.clonePreparationId,
 			config: createProjectConfig(input),
 		} });
-		let project = error ? undefined : data?.project;
+		let projectId = error ? undefined : data?.project.id;
 		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
 			const existingProjectId = apiErrorDetails(error)?.existingProjectId;
 			if (typeof existingProjectId === "string" && existingProjectId !== "") {
 				const existing = await client.GET("/api/v1/projects/{id}", { params: { path: { id: existingProjectId } } });
-				if (!existing.error && existing.data?.project?.id === existingProjectId) project = existing.data.project;
+				if (!existing.error && existing.data?.status === "ok" && existing.data.project.id === existingProjectId) projectId = existingProjectId;
 			}
 		}
-		if (!project) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
-		const projectId = project.id;
+		if (!projectId) throw Object.assign(new Error(apiErrorMessage(error, "Could not add project on this host.")), { code: apiErrorCode(error) });
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));

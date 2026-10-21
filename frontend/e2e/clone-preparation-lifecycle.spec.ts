@@ -16,6 +16,13 @@ for (const destinationMode of ["picker", "typed"] as const) {
 				await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 				return;
 			}
+			if (pathname === "/api/v1/projects/clone/check") {
+				await route.fulfill({ json: {
+					remoteUrl: "https://example.com/example.git", path: "/repos/example",
+					exists: false, canUseExisting: false,
+				} });
+				return;
+			}
 			if (pathname === "/api/v1/projects/clone/prepare") {
 				expect(route.request().postDataJSON()).toEqual({
 					remoteUrl: "https://example.com/example.git", destinationParent: "/repos",
@@ -84,7 +91,7 @@ for (const destinationMode of ["picker", "typed"] as const) {
 		await page.getByRole("textbox", { name: "Repository URL" }).fill("https://example.com/example.git");
 		await selectDestination();
 		await page.getByRole("button", { name: "Continue", exact: true }).click();
-		await page.getByRole("button", { name: "Clone", exact: true }).click();
+		await page.getByRole("button", { name: "Create and start", exact: true }).click();
 
 		await expect.poll(() => addRequest).toMatchObject({
 			path: "/repos/example",
