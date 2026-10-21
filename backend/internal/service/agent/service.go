@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -381,7 +382,49 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, projectID string, r
 	if refresh {
 		mode = modelLoadRefresh
 	}
-	return s.coalesceModelLoad(ctx, agentID, projectID, mode)
+	catalog, err := s.coalesceModelLoad(ctx, agentID, projectID, mode)
+	if err == nil && refresh && projectID == "" && !catalog.Stale {
+		s.rediscoverDriftedProjectCatalogs(agentID, catalog)
+	}
+	return catalog, err
+}
+
+// rediscoverDriftedProjectCatalogs rediscovers project catalogs whose models
+// differ from a freshly refreshed device-global one. Settings refreshes only the
+// global scope, and a provider connected inside the harness need not change the
+// discovery fingerprint, so pickers would otherwise keep the old list.
+func (s *Service) rediscoverDriftedProjectCatalogs(agentID string, global ports.AgentModelCatalog) {
+	if s.cache == nil {
+		return
+	}
+	want := modelIDSet(global.Models)
+	go func() {
+		records, err := s.cache.ListAgentModelCatalogsByAgent(s.ctx, agentID)
+		if err != nil {
+			return
+		}
+		for _, record := range records {
+			if record.ProjectID == "" || record.ProjectID == "@browse:all" || s.ctx.Err() != nil {
+				continue
+			}
+			if _, ok := credentialTypeFromScope(record.ProjectID); ok {
+				continue
+			}
+			var catalog ports.AgentModelCatalog
+			if json.Unmarshal([]byte(record.CatalogJSON), &catalog) != nil || maps.Equal(modelIDSet(catalog.Models), want) {
+				continue
+			}
+			_, _ = s.revalidateModels(s.ctx, agentID, record.ProjectID)
+		}
+	}()
+}
+
+func modelIDSet(models []ports.AgentModelInfo) map[string]struct{} {
+	ids := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		ids[model.ID] = struct{}{}
+	}
+	return ids
 }
 
 // catalogInputCheckTTL is how long a matching input check stands for a cached
