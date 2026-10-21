@@ -1,5 +1,4 @@
 import { DEFAULT_LOCALE } from "@/i18n/locales";
-import { visibleProductName } from "./branding";
 import { COMPANY } from "./constants";
 import { source } from "./source";
 import { articlePath } from "./translations";
@@ -9,7 +8,7 @@ type Node = ReturnType<typeof source.getPageTree>["children"][number];
 
 /** A short summary of the product, at the top of llms.txt. */
 export const PRODUCT_SUMMARY =
-  "Orchestrator is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.";
+  "Orchestrator, also known as Agent Orchestrator or AO, is a desktop app for supervising AI coding agents. It gives each worker an isolated workspace, keeps its conversation or terminal available, and connects Git work to pull requests, CI, reviews, and merge conflicts.";
 
 /** The Markdown copy of an English article, e.g. `/quickstart.md`. The home page is `/index.md`. */
 export function markdownPath(slugs: string[]): string {
@@ -21,14 +20,10 @@ export function sourceUrl(page: Page): string {
   return `${COMPANY.GITHUB_URL}/blob/main/frontend/src/docs/content/${page.path}`;
 }
 
-function description(page: Page): string {
-  return page.data.description ? visibleProductName(page.data.description) : "";
-}
-
 /** The article as Markdown, headed by its title, URL and description. */
 export async function pageMarkdown(page: Page): Promise<string> {
   const header = [`# ${page.data.title}`, "", `URL: ${COMPANY.DOCS_URL}${articlePath(page.slugs)}`];
-  if (page.data.description) header.push("", `> ${description(page)}`);
+  if (page.data.description) header.push("", `> ${page.data.description}`);
   const body = (await page.data.getText("processed")).trim();
   return `${header.join("\n")}\n\n${body}\n`;
 }
@@ -38,7 +33,7 @@ function link(title: string, href: string): string {
 }
 
 function listItem(page: Page): string {
-  const text = description(page);
+  const text = page.data.description ?? "";
   const item = `- ${link(page.data.title, `${COMPANY.DOCS_URL}${markdownPath(page.slugs)}`)}`;
   return text ? `${item}: ${text}` : item;
 }
@@ -74,7 +69,7 @@ function sections(): { title: string; pages: Page[] }[] {
  * sidebar section, each linking to its Markdown copy.
  */
 export function llmsIndex(): string {
-  const out = [`# ${COMPANY.NAME} Docs`, "", `> ${PRODUCT_SUMMARY}`, ""];
+  const out = ["# Orchestrator.inc Docs", "", `> ${PRODUCT_SUMMARY}`, ""];
   out.push(
     `Each link below is the Markdown version of a page. ${link("llms-full.txt", `${COMPANY.DOCS_URL}/llms-full.txt`)} has every page in one file.`,
   );
