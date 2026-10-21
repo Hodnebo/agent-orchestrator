@@ -46,6 +46,54 @@ func TestMigrationAllowsAOActionAndKeepsActivitySchema(t *testing.T) {
 	}
 }
 
+func TestProviderItemLookupUsesIndex(t *testing.T) {
+	const actionMigration = 20261020090353460
+	const lookupMigration = 20261021142844923
+	db := openMigratedDatabaseCopy(t, actionMigration)
+	upTo(t, db, lookupMigration)
+
+	rows, err := db.Query(`EXPLAIN QUERY PLAN
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1`, "ao-action:session.spawned:mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	usesLookupIndex := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		usesLookupIndex = usesLookupIndex ||
+			strings.Contains(detail, "idx_conversation_activities_provider_item_lookup") &&
+				strings.Contains(detail, "provider_item_id=?")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !usesLookupIndex {
+		t.Fatal("provider item lookup did not use its index")
+	}
+
+	downTo(t, db, actionMigration)
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_conversation_activities_provider_item_lookup'`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("lookup index remains after rollback: %d", remaining)
+	}
+}
+
 func schemaObjects(t *testing.T, db *sql.DB, kind, nameLike string) string {
 	t.Helper()
 	rows, err := db.Query(`SELECT name || ' ' || sql FROM sqlite_master WHERE type = ? AND name LIKE ? ORDER BY name`, kind, nameLike)

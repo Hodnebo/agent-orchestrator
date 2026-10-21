@@ -134,6 +134,7 @@ SELECT current_session_id
 FROM conversations
 JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
 WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
   AND current_session_id IS NOT NULL
 LIMIT 1;
 
