@@ -184,11 +184,12 @@ func enqueueAgentSwitchWorkerShutdownTimeout(
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run() error {
+func Run(buildVersion string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
 	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
@@ -304,8 +305,8 @@ func Run() error {
 			"agent": cfg.Agent,
 		},
 	})
-	if install, ok := telemetryIdentity.(interface{ MarkInstalledEvent() (bool, error) }); ok && cfg.Telemetry.Events {
-		marked, err := install.MarkInstalledEvent()
+	if telemetryIdentity != nil && cfg.Telemetry.Events {
+		marked, err := telemetryIdentity.MarkInstalledEvent(context.Background())
 		if err != nil {
 			log.Warn("record telemetry install event", "error", err)
 		} else if marked {
@@ -1301,6 +1302,17 @@ func Run() error {
 		log.Error("cdc pipeline shutdown", "err", err)
 	}
 	return runErr
+}
+
+func telemetryAppVersion(configured, buildVersion string) string {
+	if configured != "" {
+		return configured
+	}
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "dev" {
+		return ""
+	}
+	return buildVersion
 }
 
 type reportSemanticSession interface {

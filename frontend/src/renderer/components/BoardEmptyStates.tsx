@@ -32,8 +32,11 @@ export function BoardWelcome() {
 						mode="choose"
 						onCloneProject={done(cloneProject)}
 						onCreateProject={done(createProject)}
-						onInitializeProject={initializeProjectRepository}
-						onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+						onInitializeProject={done(initializeProjectRepository)}
+						onCreateStandaloneAgent={() => {
+							completeWelcome();
+							requestNewTask(STANDALONE_WORKSPACE_ID);
+						}}
 					/>
 					<GitHubOnboardingNotice />
 				</div>

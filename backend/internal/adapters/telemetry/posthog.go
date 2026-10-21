@@ -396,10 +396,12 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// A signed-in install reports as the AO Cloud user, so its events never
 	// depend on which account the anonymous install ID was once merged into.
 	// Signed out, the current anonymous install ID is used.
-	distinctID, _ := props["ao_cloud_user_id"].(string)
-	if distinctID == "" && s.ident != nil {
-		distinctID = s.ident.InstallID()
+	cloudUserID, _ := props["ao_cloud_user_id"].(string)
+	identity := ports.TelemetryIdentity{CloudUserID: cloudUserID}
+	if s.ident != nil {
+		identity.InstallID = s.ident.InstallID()
 	}
+	distinctID := identity.DistinctID()
 	body := map[string]any{
 		"api_key":     s.apiKey,
 		"event":       eventName,
@@ -426,7 +428,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 				actor, _ := props["github_actor"].(string)
 				uid, _ := props["ao_cloud_user_id"].(string)
 				s.setMu.Lock()
-				s.setKey = actor + "|" + uid
+				s.setKey = personSetKey(actor, uid)
 				s.setMu.Unlock()
 			}
 			return
@@ -557,7 +559,7 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	if actor == "" && uid == "" {
 		return
 	}
-	key := actor + "|" + uid
+	key := personSetKey(actor, uid)
 	s.setMu.Lock()
 	changed := key != s.setKey
 	s.setMu.Unlock()
@@ -579,6 +581,8 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 }
 
 var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
+
+func personSetKey(actor, uid string) string { return actor + "|" + uid }
 
 func remoteEventName(name string) string {
 	if alias, ok := remoteEventNameAliases[name]; ok {

@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,7 +68,10 @@ func (i *Identity) FreshInstall() bool { return i.fresh }
 
 // MarkInstalledEvent reserves the one install event before it enters the
 // best-effort queue. A restart cannot emit it again if the queued send is lost.
-func (i *Identity) MarkInstalledEvent() (bool, error) {
+func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if !i.fresh || i.OptedOut() {
@@ -128,7 +132,10 @@ func (i *Identity) InstallID() string {
 // The binding must be durable before any event is exported under it, so a failed
 // write leaves the previous binding in place, returns the error, and suppresses
 // remote export until a later call completes cleanly.
-func (i *Identity) SetCloudUserID(id string) error {
+func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	id = strings.TrimSpace(id)
 	if id != "" && !cloudUserIDPattern.MatchString(id) {
 		return ports.ErrInvalidCloudUserID

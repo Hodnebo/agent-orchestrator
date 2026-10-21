@@ -8,7 +8,7 @@ describe("analytics opt-out store", () => {
 	beforeEach(() => {
 		bridge.getAnalyticsOptOut.mockReset().mockResolvedValue(true);
 		bridge.setAnalyticsOptOut.mockReset();
-		useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, saveError: false });
+		useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	});
 
 	it("loads the main-owned switch", async () => {
@@ -27,5 +27,11 @@ describe("analytics opt-out store", () => {
 		bridge.setAnalyticsOptOut.mockRejectedValue(new Error("disk full"));
 		await useAnalyticsOptOutStore.getState().setOptedOut(true);
 		expect(useAnalyticsOptOutStore.getState()).toMatchObject({ optedOut: false, saving: false, saveError: true });
+	});
+
+	it("reports a failed load separately from a failed save", async () => {
+		bridge.getAnalyticsOptOut.mockRejectedValue(new Error("unavailable"));
+		await useAnalyticsOptOutStore.getState().load();
+		expect(useAnalyticsOptOutStore.getState()).toMatchObject({ loaded: true, loadError: true, saveError: false });
 	});
 });

@@ -23,7 +23,7 @@ export interface MobileTelemetryClient {
  * What a paired desktop reports at GET /api/v1/telemetry/identity. distinctId is
  * the AO Cloud user ID when the desktop is signed in, else its install ID. The
  * phone identifies only the Cloud ID; the install ID remains anonymous. There
- * is no email here by design: the desktop sets it once as a person property.
+ * is no email here by design: the desktop sets it as a person property.
  */
 export type DesktopTelemetryIdentity = {
 	distinctId?: string;
@@ -58,8 +58,6 @@ export type MobileTelemetryOptions = {
 	allow?: (event: string) => boolean;
 	/** Called when the opt-out flips, so the runtime can persist it. */
 	onOptOutChange?: (optedOut: boolean) => void;
-	/** Start opted out (restored from storage). */
-	optedOut?: boolean;
 	/**
 	 * Drop every capture until setOptedOut() is called with the saved preference.
 	 * The runtime sets this because the preference loads asynchronously and a
@@ -78,7 +76,7 @@ export function createMobileTelemetry(
 	void client.register(context);
 	const denied = new Set(options.disabledEvents ?? []);
 	const allow = options.allow ?? (() => true);
-	let optedOut = options.optedOut ?? false;
+	let optedOut = false;
 	let blocked = options.awaitPreference ?? false;
 	let liveStateApplied = false;
 	let identified = false;

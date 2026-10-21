@@ -1,6 +1,7 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
+import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -184,10 +185,10 @@ function registerBaseProperties(): void {
 }
 
 /**
- * Identifies the signed-in AO Cloud user: posthog.identify(<WorkOS user.id>) with
- * email, ao_cloud_user_id and github_login as person properties. The SDK's
- * bootstrap ID is the anonymous ins_ install ID, so identify() aliases it into
- * the same person and the daemon's events (same ins_ ID) join that profile.
+ * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
+ * person property only. An unlinked install starts with its ins_ ID and can be
+ * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
+ * The signed-in daemon sends events under the Cloud user ID directly.
  */
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
@@ -224,7 +225,8 @@ export function clearCloudUser(): void {
  * posthog.reset() so no identity survives in the SDK. Opting back in resumes
  * capture, initializing the client first if this launch started opted out.
  * ponytail: after an in-session opt-in the SDK uses a fresh anonymous ID until
- * the next launch restores the ins_ install ID.
+ * the next launch chooses an install ID or a fresh anonymous ID from the
+ * durable binding state.
  */
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
@@ -712,7 +714,7 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_viewed":
 		case "ao.onboarding.step_completed":
 		case "ao.onboarding.step_abandoned":
-			if (properties?.step === "welcome" || properties?.step === "github_auth") safe.step = properties.step;
+			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
 		case "ao.renderer.project_add_requested":
 		case "ao.renderer.loaded":

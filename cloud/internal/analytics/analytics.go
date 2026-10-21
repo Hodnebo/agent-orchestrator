@@ -2,8 +2,8 @@
 // emits (invites and, once billing exists, pricing and subscription events) to
 // PostHog. Every event is attributed to the signed-in AO Cloud user ID, the same
 // distinct ID the desktop passes to posthog.identify, so cloud events join the
-// desktop person. Email is never sent from here: it is set once, by the
-// desktop, as a person property at identify time.
+// desktop person. Email is never sent from here: the desktop sets it as a
+// person property when it identifies the Cloud user.
 package analytics
 
 import (

@@ -3,7 +3,8 @@
 Orchestrator.inc collects limited product-usage and reliability data to learn which parts of
 the app are useful and whether releases are working as expected. If you sign in
 to AO Cloud, Orchestrator.inc sends the email address of that account to PostHog
-once, as a person property, along with your AO Cloud user ID and GitHub username.
+as a person property at sign-in and subsequent signed-in launches, along with
+your AO Cloud user ID and GitHub username.
 Without an AO Cloud sign-in, no email address is sent. Some events include a
 GitHub project owner or an authenticated username, so they can identify an
 account. Other events use a random installation identifier to group activity.
@@ -37,11 +38,12 @@ Orchestrator.inc sends structured events in a few broad categories:
   input
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available
-- If you are signed in to AO Cloud: your AO Cloud (WorkOS) user ID on every
+- If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
-  address, AO Cloud user ID, and GitHub username. The email is set once at
-  sign-in from the AO Cloud account itself. It is never read from git config and
-  is not attached to individual events. See "Signing in to AO Cloud" below
+  address, AO Cloud user ID, and GitHub username. The email is set at sign-in
+  and subsequent signed-in launches from the AO Cloud account itself. It is
+  never read from git config and is not attached to individual events. See
+  "Signing in to AO Cloud" below
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
@@ -266,9 +268,10 @@ contract.
 When you sign in to AO Cloud, the desktop app calls PostHog `identify` with your
 AO Cloud user ID as the identity and sets three person properties:
 `email`, `ao_cloud_user_id`, and `github_login`. The installation identifier is
-merged into that identity, so activity from this installation, its daemon, and a
-paired phone belongs to one person. Only the user ID and, once resolved, the
-GitHub username are added to events themselves (as `ao_cloud_user_id` and
+merged into that identity on first sign-in. Later signed-in daemon events use
+the AO Cloud user ID directly, and a paired phone identifies only that ID.
+Only the user ID and, once resolved, the GitHub username are added to events
+themselves (as `ao_cloud_user_id` and
 `github_actor`). The email is a person property only. It comes from the AO Cloud
 account you signed in with and is never read from git config. The daemon and the
 mobile app never receive your email; they receive only the user ID. Signing out

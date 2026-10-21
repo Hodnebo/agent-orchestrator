@@ -2359,9 +2359,9 @@ type IdentityResponse struct {
 }
 
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
-// phone paired to this desktop adopts DistinctID (the AO Cloud user ID when
-// signed in, else the desktop install ID) so its events join the same person,
-// and honors OptedOut. It carries no email.
+// phone paired to this desktop identifies only a signed-in AO Cloud user ID.
+// Without one, DistinctID is the desktop install ID and stays anonymous. The
+// phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
 	DistinctID  string `json:"distinctId"`
 	CloudUserID string `json:"cloudUserId,omitempty"`

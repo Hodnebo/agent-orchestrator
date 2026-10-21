@@ -84,7 +84,7 @@ type TelemetryConfig struct {
 	DisabledEvents []string
 	// AppVersion is the desktop app version the daemon was launched by, stamped
 	// on remote events so failures can be attributed to a release. The
-	// supervisor passes it in; BuildVersion is the fallback when it does not.
+	// supervisor passes it in; the daemon applies its binary version if absent.
 	AppVersion string
 	// SentryDSN, when set (AO_SENTRY_DSN), enables daemon-side Sentry capture of
 	// genuine server faults (5xx and panics) with their Go stack. Blank keeps
@@ -107,11 +107,6 @@ type GitLabConfig struct {
 	// (AO_GITLAB_TOKEN / GITLAB_TOKEN / glab).
 	HostTokens map[string]string
 }
-
-// BuildVersion is the binary's own stamped version, set by the cli package when
-// release tooling overrides cli.Version. Empty on unstamped (dev) builds so
-// telemetry reports no version rather than a misleading "dev".
-var BuildVersion string
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
 // trusts. General routes additionally admit loopback-served content, while
@@ -439,11 +434,6 @@ func Load() (Config, error) {
 	}
 	if raw := os.Getenv("AO_TELEMETRY_APP_VERSION"); raw != "" {
 		cfg.Telemetry.AppVersion = strings.TrimSpace(raw)
-	}
-	if cfg.Telemetry.AppVersion == "" {
-		// Daemon started without the desktop supervisor (ao start, a service):
-		// fall back to the binary's own stamped build version.
-		cfg.Telemetry.AppVersion = BuildVersion
 	}
 	if raw := os.Getenv("AO_SENTRY_DSN"); raw != "" {
 		cfg.Telemetry.SentryDSN = strings.TrimSpace(raw)

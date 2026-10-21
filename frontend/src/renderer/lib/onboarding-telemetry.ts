@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
+import type { OnboardingStep } from "./onboarding-steps";
 import { captureRendererEvent } from "./telemetry";
 
 // Desktop onboarding funnel: each step reports viewed, completed and abandoned at
 // most once per install, so the counts read as a funnel rather than a page-view
 // firehose. Closed vocabulary on both axes; nothing user-authored is sent.
-export const ONBOARDING_STEPS = ["welcome", "github_auth"] as const;
-export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 export type OnboardingPhase = "viewed" | "completed" | "abandoned";
 
 const STORAGE_KEY = "ao.telemetry.onboardingSteps";

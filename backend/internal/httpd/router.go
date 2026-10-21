@@ -423,7 +423,7 @@ func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
 			}
 			lastSeq = body.Sequence
 		}
-		if err := ident.SetCloudUserID(body.CloudUserID); err != nil {
+		if err := ident.SetCloudUserID(req.Context(), body.CloudUserID); err != nil {
 			if errors.Is(err, ports.ErrInvalidCloudUserID) {
 				envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
 				return

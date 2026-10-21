@@ -292,7 +292,8 @@ describe("createMobileTelemetry", () => {
 
 		it("restores a persisted opt-out before anything is sent", async () => {
 			const { client, captures } = fakeClient();
-			const t = createMobileTelemetry(client, {}, { optedOut: true });
+			const t = createMobileTelemetry(client, {}, { awaitPreference: true });
+			t.restoreOptOut(true);
 			await t.active(memory(), new Date("2026-08-06T01:00:00Z"));
 			t.capture(MOBILE_EVENTS.paired, { method: "qr" });
 			expect(captures).toEqual([]);

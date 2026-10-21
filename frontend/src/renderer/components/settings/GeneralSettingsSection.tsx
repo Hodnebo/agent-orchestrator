@@ -299,6 +299,7 @@ function AnalyticsRow() {
 	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
 	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
 	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
 	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
 	const load = useAnalyticsOptOutStore((state) => state.load);
 	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
@@ -306,24 +307,23 @@ function AnalyticsRow() {
 		void load();
 	}, [load]);
 	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.analytics.label")}>
-				<Switch
-					aria-label={t("settings.analytics.label")}
-					checked={!optedOut}
-					disabled={saving || !loaded}
-					onCheckedChange={(share) => {
-						void setOptedOut(!share);
-					}}
-				/>
-			</SettingsRow>
-			<p
-				className={cn("px-3 pb-2 text-xs leading-relaxed", saveError ? "text-destructive" : "text-muted-foreground")}
-				role={saveError ? "alert" : undefined}
-			>
-				{t(saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
-			</p>
-		</div>
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 

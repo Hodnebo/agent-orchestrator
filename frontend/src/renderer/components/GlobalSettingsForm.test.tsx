@@ -182,6 +182,8 @@ beforeEach(async () => {
 		getTelemetryPolicy,
 		setTelemetryEvents,
 		onTelemetryPolicy,
+		getAnalyticsOptOut,
+		setAnalyticsOptOut,
 		isMacPlatform,
 		isWindowsPlatform,
 	]) {
@@ -230,7 +232,7 @@ beforeEach(async () => {
 	});
 	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
-	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, saveError: false });
+	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
@@ -411,7 +413,7 @@ describe("GlobalSettingsForm", () => {
 		const toggle = await screen.findByRole("switch", { name: "Share usage analytics" });
 		await waitFor(() => expect(toggle).toBeEnabled());
 		expect(toggle).toBeChecked();
-		expect(screen.getByText(/your email, AO Cloud user ID and GitHub username are attached/)).toBeInTheDocument();
+		expect(screen.getByText(/your email is used only as a person property/)).toBeInTheDocument();
 
 		await user.click(toggle);
 
@@ -419,6 +421,13 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(toggle).not.toBeChecked());
 		// The error-event policy is a separate control and was not touched.
 		expect(setTelemetryEvents).not.toHaveBeenCalled();
+	});
+
+	it("labels an analytics preference load failure as a load failure", async () => {
+		getAnalyticsOptOut.mockRejectedValueOnce(new Error("unavailable"));
+		renderForm();
+		expect(await screen.findByText("Could not load the analytics preference.")).toHaveAttribute("role", "alert");
+		expect(screen.queryByText("Could not save the analytics preference.")).not.toBeInTheDocument();
 	});
 
 	it("names the platform restriction instead of claiming cleanup keeps retrying", async () => {
@@ -494,7 +503,7 @@ describe("GlobalSettingsForm", () => {
 		await user.click(screen.getByLabelText("Language"));
 		await user.click(await screen.findByRole("menuitem", { name: "Simplified Chinese" }));
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the language preference.");
+		expect(await screen.findByText("Could not save the language preference.")).toHaveAttribute("role", "alert");
 		expect(useLocaleStore.getState().locale).toBe("en");
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 	});

@@ -57,6 +57,14 @@ type TelemetryIdentity struct {
 	OptedOut bool
 }
 
+// DistinctID selects the signed-in Cloud user or the anonymous install.
+func (i TelemetryIdentity) DistinctID() string {
+	if i.CloudUserID != "" {
+		return i.CloudUserID
+	}
+	return i.InstallID
+}
+
 // ErrInvalidCloudUserID is returned for an id that is not a plausible user id.
 var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
 
@@ -64,9 +72,11 @@ var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
 type TelemetryIdentityStore interface {
 	Snapshot() TelemetryIdentity
 	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out). It
-	// returns ErrInvalidCloudUserID when the id is not a plausible WorkOS user id,
+	// returns ErrInvalidCloudUserID when the id is not a plausible AO Cloud user id,
 	// and another error when the identity state could not be made durable, in
 	// which case remote export stays suppressed until a later call succeeds.
-	SetCloudUserID(id string) error
+	SetCloudUserID(ctx context.Context, id string) error
+	// MarkInstalledEvent reserves the one install event before queueing it.
+	MarkInstalledEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
 }
