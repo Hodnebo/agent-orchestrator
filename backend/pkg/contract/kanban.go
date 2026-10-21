@@ -36,6 +36,9 @@ const (
 // has to report.
 type KanbanSessionFacts struct {
 	SessionFacts
+	// Interrupted reports that the person stopped the worker's latest turn.
+	// It only speaks while the worker is idle: a new turn supersedes it.
+	Interrupted       bool
 	HasArtifactOutput bool
 	AutoReview        bool
 	AutoInjectReview  bool
@@ -190,11 +193,12 @@ type DisplayStatus string
 // can produce them.
 const (
 	// Building.
-	DisplayWorking    DisplayStatus = "Working"
-	DisplayBlocked    DisplayStatus = "Blocked"
-	DisplayExited     DisplayStatus = "Exited"
-	DisplayNoSignal   DisplayStatus = "No signal"
-	DisplayAwaitingPR DisplayStatus = "Awaiting PR"
+	DisplayWorking     DisplayStatus = "Working"
+	DisplayBlocked     DisplayStatus = "Blocked"
+	DisplayExited      DisplayStatus = "Exited"
+	DisplayNoSignal    DisplayStatus = "No signal"
+	DisplayInterrupted DisplayStatus = "Interrupted"
+	DisplayAwaitingPR  DisplayStatus = "Awaiting PR"
 	// Validating.
 	DisplayFixingCI           DisplayStatus = "Fixing CI failures"
 	DisplayAddressingComments DisplayStatus = "Addressing comments"
@@ -304,6 +308,8 @@ func buildingDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGr
 		return DisplayBlocked
 	case session.Activity == ActivityExited:
 		return DisplayExited
+	case interruptedWhileIdle(session):
+		return DisplayInterrupted
 	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
 		return DisplayNoSignal
 	default:
@@ -356,11 +362,20 @@ func artifactDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGr
 		return DisplayBlocked
 	case session.Activity == ActivityExited:
 		return DisplayExited
+	case interruptedWhileIdle(session):
+		return DisplayInterrupted
 	case silentPastGrace(session.SessionFacts, now, noSignalGrace):
 		return DisplayNoSignal
 	default:
 		return DisplayNeedsReview
 	}
+}
+
+// interruptedWhileIdle reports a worker the person stopped mid-turn. Without
+// it, an idle worker with nothing delivered reads as if it had finished and
+// was waiting on its own PR or review.
+func interruptedWhileIdle(session KanbanSessionFacts) bool {
+	return session.Interrupted && session.Activity == ActivityIdle
 }
 
 // inReviewDisplayStatus reports the review-feedback loop from the person's
