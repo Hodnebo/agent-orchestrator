@@ -399,6 +399,11 @@ func TestSanitizeText(t *testing.T) {
 	if got := sanitizeText("a\x1b"); got != "a" {
 		t.Fatalf("trailing escape survived: %q", got)
 	}
+	links := "before \x1b]8;;https://example.com/one\x1b\\IMPORTANT\x1b]8;;\x1b\\ between " +
+		"\x1b]8;;https://example.com/two\x1b\\SECOND\x1b]8;;\x1b\\ after"
+	if got := sanitizeText(links); got != "before IMPORTANT between SECOND after" {
+		t.Fatalf("OSC8 labels lost: %q", got)
+	}
 }
 
 func transcriptSequences(out string) []string {
