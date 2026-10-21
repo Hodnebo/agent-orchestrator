@@ -248,7 +248,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 ### Which coding agents are supported?
 
-36 coding agent harnesses (35+), including Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode, Aider, Amp, Droid, Goose, Cline and Kimi. See the [Supported agents](#supported-agents) table above. Worker, Chat and reviewer support differ by agent.
+37 coding agent harnesses (35+), including Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode, Aider, Amp, Droid, Goose, Cline and Kimi. See the [Supported agents](#supported-agents) table above. Worker, Chat and reviewer support differ by agent.
 
 ### Which platforms does it run on?
 
