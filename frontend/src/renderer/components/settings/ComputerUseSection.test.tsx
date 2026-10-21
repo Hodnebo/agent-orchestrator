@@ -1,0 +1,169 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const apiMocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const bridgeMocks = vi.hoisted(() => ({ openExternal: vi.fn() }));
+
+vi.mock("../../lib/api-client", () => ({
+	apiClient: { GET: apiMocks.get, POST: apiMocks.post },
+	apiErrorMessage: (error: unknown, fallback = "Request failed") =>
+		typeof error === "object" && error && "message" in error ? String((error as { message: unknown }).message) : fallback,
+}));
+
+vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: bridgeMocks.openExternal } } }));
+
+import { ComputerUseSection } from "./ComputerUseSection";
+
+type Status = Record<string, unknown>;
+
+const notInstalled: Status = { platform: "darwin", installed: false, updateAvailable: false, daemon: "unknown", imageDirectory: "/Users/me/.ao/data/computer-use" };
+const installed: Status = {
+	platform: "darwin",
+	installed: true,
+	binaryPath: "/Users/me/.local/bin/cua-driver",
+	version: "0.28.2",
+	latestVersion: "0.28.2",
+	updateAvailable: false,
+	daemon: "running",
+	permissions: { accessibility: "granted", screenRecording: "granted", granting: false },
+	imageDirectory: "/Users/me/.ao/data/computer-use",
+};
+
+function daemon({ status, job = { target: "cua-driver", status: "idle", command: "/bin/bash <downloaded from https://cua.ai/driver/install.sh>" } }: { status: () => Status; job?: Record<string, unknown> | (() => Record<string, unknown>) }) {
+	apiMocks.get.mockImplementation(async (path: string) => {
+		if (path === "/api/v1/computer-use/status") return { data: status(), error: undefined };
+		if (path === "/api/v1/system/install/{target}") return { data: typeof job === "function" ? job() : job, error: undefined };
+		if (path === "/api/v1/computer-use/doctor") return { data: { report: "[ok  ] binary: cua-driver 0.28.2" }, error: undefined };
+		return { data: undefined, error: { message: `unexpected ${path}` } };
+	});
+}
+
+function renderSection() {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(
+		<QueryClientProvider client={client}>
+			<ComputerUseSection />
+		</QueryClientProvider>,
+	);
+	return client;
+}
+
+beforeEach(() => {
+	apiMocks.get.mockReset();
+	apiMocks.post.mockReset();
+	bridgeMocks.openExternal.mockReset();
+});
+
+describe("ComputerUseSection", () => {
+	it("offers the official installer when Cua Driver is missing", async () => {
+		daemon({ status: () => notInstalled });
+		apiMocks.post.mockResolvedValue({ data: { target: "cua-driver", status: "running" }, error: undefined });
+		renderSection();
+
+		const install = await screen.findByRole("button", { name: "Install · Official installer" });
+		expect(screen.getByText("Lets agents see the screen and operate desktop apps.")).toBeInTheDocument();
+		expect(screen.queryByText("Background service")).not.toBeInTheDocument();
+
+		await userEvent.click(install);
+		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
+		expect(await screen.findByRole("status")).toHaveTextContent("Installing…");
+	});
+
+	it("refreshes status when a running install finishes", async () => {
+		let current = notInstalled;
+		let job: Record<string, unknown> = { target: "cua-driver", status: "running" };
+		daemon({ status: () => current, job: () => job });
+		renderSection();
+		expect(await screen.findByRole("status")).toHaveTextContent("Installing…");
+
+		current = installed;
+		job = { target: "cua-driver", status: "succeeded", output: "installed cua-driver" };
+		expect(await screen.findByText("0.28.2", {}, { timeout: 4_000 })).toBeInTheDocument();
+		expect(screen.getByText("Installed")).toBeInTheDocument();
+		expect(screen.getByText("Background service")).toBeInTheDocument();
+	});
+
+	it("shows the driver's state once installed and offers an update", async () => {
+		daemon({ status: () => ({ ...installed, latestVersion: "0.37.0", updateAvailable: true, releaseNotesUrl: "https://example.test/notes" }) });
+		apiMocks.post.mockResolvedValue({ data: { target: "cua-driver", status: "running" }, error: undefined });
+		renderSection();
+
+		const update = await screen.findByRole("button", { name: "Update to 0.37.0" });
+		expect(screen.getByText("Running")).toBeInTheDocument();
+		expect(screen.getByText("macOS permissions")).toBeInTheDocument();
+		expect(screen.queryByText(/Accessibility: Granted/)).not.toBeInTheDocument();
+		expect(screen.getByText("/Users/me/.local/bin/cua-driver")).toBeInTheDocument();
+		expect(screen.getByText("ao cua")).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Release notes" }));
+		expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://example.test/notes");
+
+		await userEvent.click(update);
+		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
+	});
+
+	it("starts a stopped background service", async () => {
+		daemon({ status: () => ({ ...installed, daemon: "stopped", permissions: { accessibility: "unknown", screenRecording: "unknown", granting: false } }) });
+		apiMocks.post.mockResolvedValue({ data: installed, error: undefined });
+		renderSection();
+
+		expect(await screen.findByText("Stopped")).toBeInTheDocument();
+		expect(screen.getByText("Start the background service to check them.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Start" }));
+
+		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/computer-use/daemon/start");
+		expect(await screen.findByText("Running")).toBeInTheDocument();
+	});
+
+	it("asks macOS for missing permissions and follows the request", async () => {
+		daemon({ status: () => ({ ...installed, permissions: { accessibility: "granted", screenRecording: "missing", granting: false } }) });
+		apiMocks.post.mockResolvedValue({ data: { ...installed, permissions: { accessibility: "granted", screenRecording: "missing", granting: true } }, error: undefined });
+		renderSection();
+
+		expect(await screen.findByText("Accessibility: Granted · Screen Recording: Missing")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Grant" }));
+
+		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/computer-use/permissions/grant");
+		expect(await screen.findByRole("status")).toHaveTextContent("Waiting for System Settings…");
+	});
+
+	it("hands over the command when AO cannot run the installer here", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+		daemon({ status: () => ({ ...notInstalled, platform: "linux" }), job: { target: "cua-driver", status: "unsupported", command: "bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"", error: "bash was not found on PATH." } });
+		renderSection();
+
+		expect(await screen.findByText("bash was not found on PATH.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Copy command" }));
+		expect(writeText).toHaveBeenCalledWith("bash -c \"$(curl -fsSL https://cua.ai/driver/install.sh)\"");
+	});
+
+	it("shows a failed install and its output", async () => {
+		daemon({ status: () => notInstalled, job: { target: "cua-driver", status: "failed", error: "exit status 1", output: "error: /Applications is not writable", command: "/bin/bash <downloaded from https://cua.ai/driver/install.sh>" } });
+		renderSection();
+
+		expect(await screen.findByText("exit status 1")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry install" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Show diagnostics" }));
+		expect(document.querySelector("[data-computer-use-install-output]")).toHaveTextContent("/Applications is not writable");
+	});
+
+	it("runs the driver's doctor report", async () => {
+		daemon({ status: () => installed });
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Run doctor" }));
+		expect(await screen.findByText(/binary: cua-driver 0.28.2/)).toBeInTheDocument();
+	});
+
+	it("reports an action failure next to the section", async () => {
+		daemon({ status: () => ({ ...installed, daemon: "stopped" }) });
+		apiMocks.post.mockResolvedValue({ data: undefined, error: { message: "Could not start Cua Driver's background service: no desktop session" } });
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no desktop session"));
+	});
+});

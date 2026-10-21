@@ -44,6 +44,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"Ctrl+/",
 	],
 	"components/settings/CoderSettingsSection.tsx": ["grep -q '^Ready' ~/.bootstrap-status"],
+	"components/settings/ComputerUseSection.tsx": ["ao cua"],
 	"components/settings/ConnectMobileSetup.tsx": ["tailscale ip -4"],
 	"components/settings/UpdatesSection.tsx": ["PR #"],
 };

@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/cuadriver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/systemexec"
@@ -59,6 +60,7 @@ import (
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
@@ -656,6 +658,11 @@ func Run(buildVersion string) error {
 			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		}
 	})
+	// Cua Driver installs to ~/.local/bin or %LOCALAPPDATA%, which a
+	// desktop-launched daemon's PATH rarely includes.
+	cuaDriver := cuadriver.New()
+	systemInstall.SetSystemTargetResolver(systeminstall.TargetCuaDriver, cuaDriver.Locate)
+	computerUse := computeruse.New(cuaDriver, cfg.DataDir)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
@@ -943,6 +950,7 @@ func Run(buildVersion string) error {
 		AgentAccounts:      agentAccountSvc,
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
+		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,
@@ -1176,6 +1184,11 @@ func Run(buildVersion string) error {
 		log.Error("harness installer shutdown", "err", err)
 	}
 	installStopCancel()
+	computerUseStopCtx, computerUseStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	if err := computerUse.Close(computerUseStopCtx); err != nil {
+		log.Error("computer use shutdown", "err", err)
+	}
+	computerUseStopCancel()
 	if startupReconcileDone != nil {
 		<-startupReconcileDone
 	}

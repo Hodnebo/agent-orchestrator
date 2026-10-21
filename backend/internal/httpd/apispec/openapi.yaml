@@ -2476,6 +2476,288 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/computer-use/call:
+    post:
+      operationId: callComputerUseTool
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComputerUseCallRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseCallResult'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Run one Cua Driver tool; screenshots are saved to files and returned
+        as paths
+      tags:
+      - computer-use
+  /api/v1/computer-use/daemon/start:
+    post:
+      operationId: startComputerUseDaemon
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start Cua Driver's background service and wait briefly for it to answer
+      tags:
+      - computer-use
+  /api/v1/computer-use/doctor:
+    get:
+      operationId: getComputerUseDoctor
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseDoctorResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run Cua Driver's environment report
+      tags:
+      - computer-use
+  /api/v1/computer-use/permissions/grant:
+    post:
+      operationId: grantComputerUsePermissions
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ask macOS for Cua Driver's Accessibility and Screen Recording permissions;
+        progress shows in status
+      tags:
+      - computer-use
+  /api/v1/computer-use/status:
+    get:
+      operationId: getComputerUseStatus
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseStatus'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Report whether Cua Driver is installed, its version and update, its
+        background service, and macOS permissions
+      tags:
+      - computer-use
+  /api/v1/computer-use/tools:
+    get:
+      operationId: listComputerUseTools
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseToolsResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List the tools Cua Driver offers
+      tags:
+      - computer-use
+  /api/v1/computer-use/tools/{tool}:
+    get:
+      operationId: describeComputerUseTool
+      parameters:
+      - description: Cua Driver tool name, e.g. get_window_state.
+        in: path
+        name: tool
+        required: true
+        schema:
+          description: Cua Driver tool name, e.g. get_window_state.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComputerUseToolDescription'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Describe one Cua Driver tool and its JSON input
+      tags:
+      - computer-use
   /api/v1/cues/{cueId}:
     delete:
       operationId: deleteCue
@@ -12343,13 +12625,13 @@ paths:
       operationId: getSystemInstallStatus
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, or cloudflared.'
+          opencode-v2, copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            opencode-v2, copilot, or cloudflared.'
+            opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
           - gh
@@ -12359,6 +12641,7 @@ paths:
           - opencode-v2
           - copilot
           - cloudflared
+          - cua-driver
           type: string
       responses:
         "200":
@@ -12392,13 +12675,13 @@ paths:
       operationId: startSystemInstall
       parameters:
       - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, or cloudflared.'
+          opencode-v2, copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
           description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-            opencode-v2, copilot, or cloudflared.'
+            opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
           - gh
@@ -12408,6 +12691,7 @@ paths:
           - opencode-v2
           - copilot
           - cloudflared
+          - cua-driver
           type: string
       responses:
         "202":
@@ -14861,6 +15145,155 @@ components:
       - incomplete
       - estimatedCost
       type: object
+    ComputerUseCallRequest:
+      properties:
+        arguments:
+          additionalProperties: {}
+          description: Tool arguments as a JSON object.
+          type: object
+        sessionId:
+          description: AO session the call is made for; screenshots are saved under
+            it.
+          type: string
+        tool:
+          description: Driver tool name, e.g. list_windows or get_window_state.
+          type: string
+      required:
+      - tool
+      type: object
+    ComputerUseCallResult:
+      properties:
+        images:
+          description: Screenshots this call saved. Open them with an image viewer.
+          items:
+            $ref: '#/components/schemas/ComputerUseImage'
+          type: array
+        result:
+          description: The tool's JSON output. Inline images are replaced by *_file_path
+            fields.
+        tool:
+          type: string
+      required:
+      - tool
+      - result
+      - images
+      type: object
+    ComputerUseDoctorResponse:
+      properties:
+        report:
+          description: Cua Driver's own environment report (cua-driver doctor).
+          type: string
+      required:
+      - report
+      type: object
+    ComputerUseImage:
+      properties:
+        mimeType:
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - mimeType
+      type: object
+    ComputerUsePermissions:
+      properties:
+        accessibility:
+          description: Accessibility, needed to read and operate app controls.
+          enum:
+          - granted
+          - missing
+          - unknown
+          type: string
+        grantError:
+          description: Why the last permission request failed.
+          type: string
+        granting:
+          description: A permission request is waiting on the user in System Settings.
+          type: boolean
+        screenRecording:
+          description: Screen Recording, needed for screenshots.
+          enum:
+          - granted
+          - missing
+          - unknown
+          type: string
+      required:
+      - accessibility
+      - screenRecording
+      - granting
+      type: object
+    ComputerUseStatus:
+      properties:
+        binaryPath:
+          description: The cua-driver executable AO runs.
+          type: string
+        daemon:
+          description: Whether Cua Driver's background service answers.
+          enum:
+          - running
+          - stopped
+          - unknown
+          type: string
+        imageDirectory:
+          description: Where screenshots from ao cua are saved.
+          type: string
+        installed:
+          type: boolean
+        latestVersion:
+          description: Newest release on the driver's update channel, when it could
+            be checked.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/ComputerUsePermissions'
+          description: macOS only.
+        platform:
+          description: 'Operating system the daemon runs on: darwin, linux, or windows.'
+          type: string
+        releaseNotesUrl:
+          type: string
+        updateAvailable:
+          type: boolean
+        version:
+          type: string
+      required:
+      - platform
+      - installed
+      - updateAvailable
+      - daemon
+      - imageDirectory
+      type: object
+    ComputerUseTool:
+      properties:
+        description:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      - description
+      type: object
+    ComputerUseToolDescription:
+      properties:
+        description:
+          description: The tool's description and JSON input schema as Cua Driver
+            prints them.
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      - description
+      type: object
+    ComputerUseToolsResponse:
+      properties:
+        tools:
+          items:
+            $ref: '#/components/schemas/ComputerUseTool'
+          type: array
+      required:
+      - tools
+      type: object
     ConsumeAgentAccountResetCreditRequest:
       properties:
         idempotencyKey:
@@ -16937,6 +17370,7 @@ components:
           - memcode
           - hermes
           - cloudflared
+          - cua-driver
           type: string
         updatedAt:
           format: date-time
@@ -21865,6 +22299,9 @@ tags:
 - description: Local machine readiness checks the desktop app runs before showing
     the board
   name: system
+- description: Cua Driver computer-use integration behind Settings and ao cua (loopback
+    only)
+  name: computer-use
 - description: Server-side unfurl of external links for the CSP-locked renderer
   name: link-preview
 - description: Local GitHub personal access token storage and repository listing

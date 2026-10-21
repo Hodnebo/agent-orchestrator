@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
@@ -2058,7 +2059,38 @@ type GitHubAuthRequirementResponse = systemcheck.Requirement
 
 // InstallTargetParam is the {target} path parameter for /system/install routes.
 type InstallTargetParam struct {
-	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, or cloudflared."`
+	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared,cua-driver" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver."`
+}
+
+// ComputerUseStatusResponse is the body of GET /api/v1/computer-use/status and
+// of the daemon-start and permission-grant actions.
+type ComputerUseStatusResponse = computeruse.Status
+
+// ComputerUseCallRequest is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallRequest = computeruse.CallRequest
+
+// ComputerUseCallResponse is the body of POST /api/v1/computer-use/call.
+type ComputerUseCallResponse = computeruse.CallResult
+
+// ComputerUseDoctorResponse is the body of GET /api/v1/computer-use/doctor.
+type ComputerUseDoctorResponse struct {
+	Report string `json:"report" description:"Cua Driver's own environment report (cua-driver doctor)."`
+}
+
+// ComputerUseToolsResponse is the body of GET /api/v1/computer-use/tools.
+type ComputerUseToolsResponse struct {
+	Tools []computeruse.Tool `json:"tools"`
+}
+
+// ComputerUseToolParam is the {tool} path parameter for /computer-use/tools/{tool}.
+type ComputerUseToolParam struct {
+	Tool string `path:"tool" description:"Cua Driver tool name, e.g. get_window_state."`
+}
+
+// ComputerUseToolDescription is the body of GET /api/v1/computer-use/tools/{tool}.
+type ComputerUseToolDescription struct {
+	Name        string `json:"name"`
+	Description string `json:"description" description:"The tool's description and JSON input schema as Cua Driver prints them."`
 }
 
 // StartInstallResponse is the body of POST /api/v1/system/install/{target} (202).
