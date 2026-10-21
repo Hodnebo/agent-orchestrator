@@ -114,6 +114,19 @@ var (
 	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
 )
 
+// browserTool reports whether tool is one of Cua Driver's browser tools.
+// `ao cua` hides and refuses them: they attach to a browser over CDP and
+// would fight `ao browser`, AO's own browser control, for the same pages.
+// run_steps and run_script cannot reach them, so blocking direct calls is
+// enough.
+func browserTool(tool string) bool {
+	return strings.HasPrefix(tool, "browser_") || tool == "get_browser_state" || tool == "page"
+}
+
+func browserToolBlocked(tool string) error {
+	return apierr.Forbidden("COMPUTER_USE_BROWSER_TOOL_DISABLED", fmt.Sprintf("%q is a Cua Driver browser tool, which AO turns off. Use `ao browser` for web pages.", tool))
+}
+
 // Service runs Cua Driver for the settings page and `ao cua`.
 type Service struct {
 	driver ports.ComputerUseDriver
@@ -257,7 +270,7 @@ func (s *Service) Doctor(ctx context.Context) (string, error) {
 	return report, nil
 }
 
-// Tools lists the driver's tools.
+// Tools lists the driver's tools, without its browser tools.
 func (s *Service) Tools(ctx context.Context) ([]Tool, error) {
 	binary, err := s.locate(ctx)
 	if err != nil {
@@ -269,13 +282,22 @@ func (s *Service) Tools(ctx context.Context) ([]Tool, error) {
 	if err != nil {
 		return nil, apierr.Unavailable("COMPUTER_USE_TOOLS_FAILED", commandFailure(err, stdout, stderr))
 	}
-	return parseTools(string(stdout)), nil
+	tools := []Tool{}
+	for _, tool := range parseTools(string(stdout)) {
+		if !browserTool(tool.Name) {
+			tools = append(tools, tool)
+		}
+	}
+	return tools, nil
 }
 
 // DescribeTool returns the driver's description and input schema for tool.
 func (s *Service) DescribeTool(ctx context.Context, tool string) (string, error) {
 	if !toolNamePattern.MatchString(tool) {
 		return "", invalidTool(tool)
+	}
+	if browserTool(tool) {
+		return "", browserToolBlocked(tool)
 	}
 	binary, err := s.locate(ctx)
 	if err != nil {
@@ -297,6 +319,9 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	tool := strings.TrimSpace(request.Tool)
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
+	}
+	if browserTool(tool) {
+		return CallResult{}, browserToolBlocked(tool)
 	}
 	arguments := make(map[string]any, len(request.Arguments)+1)
 	for key, value := range request.Arguments {

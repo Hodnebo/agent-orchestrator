@@ -55,7 +55,7 @@ func (f *fakeDriver) Run(_ context.Context, _ string, args ...string) ([]byte, [
 	case "permissions":
 		return []byte(`{"accessibility":true,"screen_recording":false}`), nil, nil
 	case "list-tools":
-		return []byte("click: Click against a target pid\nzoom: Capture a cropped JPEG\nnot a tool line\n"), nil, nil
+		return []byte("browser_click: Click a page element\nclick: Click against a target pid\nget_browser_state: Read-only browser inspection\npage: Legacy browser compatibility tool\nzoom: Capture a cropped JPEG\nnot a tool line\n"), nil, nil
 	}
 	if f.onCall != nil {
 		return f.onCall(args)
@@ -333,6 +333,26 @@ func TestToolsParsesListOutput(t *testing.T) {
 	}
 	if len(tools) != 2 || tools[0].Name != "click" || tools[1].Description != "Capture a cropped JPEG" {
 		t.Fatalf("tools = %+v", tools)
+	}
+}
+
+func TestBrowserToolsAreBlocked(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	for _, tool := range []string{"browser_click", "browser_prepare", "get_browser_state", "page"} {
+		t.Run(tool, func(t *testing.T) {
+			_, callErr := s.Call(context.Background(), CallRequest{Tool: tool})
+			_, describeErr := s.DescribeTool(context.Background(), tool)
+			for _, err := range []error{callErr, describeErr} {
+				var apiErr *apierr.Error
+				if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_BROWSER_TOOL_DISABLED" {
+					t.Fatalf("err = %v, want COMPUTER_USE_BROWSER_TOOL_DISABLED", err)
+				}
+			}
+		})
+	}
+	if len(driver.calls) != 0 {
+		t.Fatalf("driver ran %v for a blocked tool", driver.calls)
 	}
 }
 

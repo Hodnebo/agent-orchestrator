@@ -49,6 +49,9 @@ Tips:
   whole display instead (at full resolution, so prefer window snapshots).
 - Screenshots are saved under AO's data directory, grouped by session, and old
   ones are pruned automatically. Do not copy them into the repository.
+- Cua Driver's browser tools (`browser_*`, `get_browser_state`, `page`) are
+  turned off because they conflict with `ao browser`. Use `ao browser` for web
+  pages in the AO Browser panel.
 
 ## Safety
 
@@ -66,5 +69,7 @@ destructive or outward-facing (sending messages, purchases, deleting data).
 - macOS permissions (`ao cua status` shows `missing`): ask the user to click
   **Grant** next to macOS permissions in Settings > Computer use agents and approve
   CuaDriver in System Settings.
+- `COMPUTER_USE_BROWSER_TOOL_DISABLED`: you called a Cua Driver browser tool;
+  use `ao browser` instead.
 - `COMPUTER_USE_CALL_FAILED`: the driver's own message follows; for example
   `window_id_not_found` means the window closed, so list windows again.
