@@ -97,3 +97,15 @@ it("ticks like a ratchet while dragging, bumps when armed, and lands on release"
 	expect(feel.press).toHaveBeenCalledTimes(1);
 	expect(onMerge).toHaveBeenCalledTimes(1);
 });
+
+it("stays on screen as a merged bar labelled with the PR number", () => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	act(() => { renderer = create(<SwipeToMerge label="Swipe to merge PR #1" busyLabel="Merging…" merged mergedLabel="Merged PR #1" onMerge={async () => true} onAccessibilityActivate={() => {}} />); });
+	const texts = renderer!.root.findAll((node) => (node.type as unknown) === "Text").map((node) => node.props.children);
+	expect(texts).toContain("Merged PR #1");
+	expect(texts).not.toContain("Swipe to merge PR #1");
+	const control = renderer!.root.findAll((node) => node.props.accessible === true)[0];
+	expect(control.props.accessibilityLabel).toBe("Merged PR #1");
+	expect(control.props.accessibilityActions).toEqual([]);
+	expect(control.props.accessibilityHint).toBeUndefined();
+});

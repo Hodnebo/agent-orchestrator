@@ -298,9 +298,10 @@ function ReviewDetailContent() {
 				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
 				: <Text style={styles.note}>No Orchestrator review for this pull request yet.</Text>}
 		</ScrollView>
-		{/* Docked under the scroll, within thumb reach, like a checkout's slide-to-pay. */}
-		{merge?.canMerge && pr ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
-			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+		{/* Docked under the scroll, within thumb reach, like a checkout's slide-to-pay.
+		    It stays after the merge as a purple "Merged" bar rather than vanishing. */}
+		{pr && (merge?.canMerge || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
 		</View> : null}
 		</View>
 	);

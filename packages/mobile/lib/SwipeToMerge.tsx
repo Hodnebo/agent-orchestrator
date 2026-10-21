@@ -26,6 +26,7 @@ const TRACK_HEIGHT = 56;
 const INSET = 4;
 const KNOB = TRACK_HEIGHT - INSET * 2;
 const COMMIT_MS = 160;
+const MERGED_FADE_MS = 700;
 const SPRING = { damping: 20, stiffness: 240, mass: 0.7 };
 
 /**
@@ -33,8 +34,9 @@ const SPRING = { damping: 20, stiffness: 240, mass: 0.7 };
  * on light): a faint green wash with a white sheen down from the top edge, and
  * a green border that brightens as the knob travels. Dragging floods solid
  * merge green in behind the knob, only as far as the knob has gone, and the
- * knob itself turns solid with a white icon. Plain React Native gradient
- * styles, so iOS and Android draw it the same.
+ * knob itself turns solid with a white icon. Once merged, the full green bar
+ * fades to GitHub's merged purple (#8957e5, #8250df on light). Plain React
+ * Native gradient styles, so iOS and Android draw it the same.
  */
 const GITHUB_MERGE = {
 	dark: {
@@ -43,6 +45,7 @@ const GITHUB_MERGE = {
 		knobSheen: "linear-gradient(180deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 60%)",
 		fill: "linear-gradient(90deg, #2ea043 0%, #238636 100%)", fillBase: "#238636",
 		rim: "rgba(46,160,67,0.35)", rimArmed: "rgba(63,185,80,0.95)", knobRim: "rgba(63,185,80,0.7)", icon: "#3fb950", ink: "#ffffff", label: "rgba(255,255,255,0.88)",
+		merged: "linear-gradient(90deg, #a371f7 0%, #8957e5 100%)", mergedBase: "#8957e5", mergedRim: "rgba(163,113,247,0.95)",
 	},
 	light: {
 		track: "rgba(31,136,61,0.05)", knob: "rgba(31,136,61,0.1)",
@@ -50,6 +53,7 @@ const GITHUB_MERGE = {
 		knobSheen: "linear-gradient(180deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 60%)",
 		fill: "linear-gradient(90deg, #2da44e 0%, #1f883d 100%)", fillBase: "#1f883d",
 		rim: "rgba(31,136,61,0.3)", rimArmed: "rgba(31,136,61,0.9)", knobRim: "rgba(31,136,61,0.65)", icon: "#1a7f37", ink: "#1a7f37", label: "#1a7f37",
+		merged: "linear-gradient(90deg, #8957e5 0%, #8250df 100%)", mergedBase: "#8250df", mergedRim: "rgba(130,80,223,0.9)",
 	},
 } as const;
 
@@ -60,13 +64,16 @@ const GITHUB_MERGE = {
  * `onAccessibilityActivate`, which should confirm before merging.
  *
  * `onMerge` resolves true when the merge went through; the knob then stays at
- * the end until the screen replaces this control. False springs it back.
+ * the end. False springs it back. Pass `merged` once the pull request is
+ * merged: the bar stays full, fades to purple, reads `mergedLabel`, and locks.
  */
 export function SwipeToMerge({
 	label,
 	busyLabel,
 	busy = false,
 	disabled = false,
+	merged = false,
+	mergedLabel = "Merged",
 	onMerge,
 	onAccessibilityActivate,
 }: {
@@ -74,6 +81,8 @@ export function SwipeToMerge({
 	busyLabel: string;
 	busy?: boolean;
 	disabled?: boolean;
+	merged?: boolean;
+	mergedLabel?: string;
 	onMerge: () => Promise<boolean>;
 	onAccessibilityActivate: () => void;
 }) {
@@ -87,7 +96,13 @@ export function SwipeToMerge({
 	const detent = useSharedValue(0);
 	const committed = useSharedValue(false);
 	const shimmer = useSharedValue(0);
-	const locked = disabled || busy;
+	const locked = disabled || busy || merged;
+	// 0 → 1 as the merged bar fades from green to purple. A pull request that was
+	// already merged when the screen opened starts purple, with no fade.
+	const mergedness = useSharedValue(merged ? 1 : 0);
+	useEffect(() => {
+		mergedness.value = merged ? (reduceMotion ? 1 : withTiming(1, { duration: MERGED_FADE_MS, easing: Easing.inOut(Easing.quad) })) : 0;
+	}, [merged, mergedness, reduceMotion]);
 
 	useEffect(() => {
 		if (reduceMotion || locked) {
@@ -173,21 +188,31 @@ export function SwipeToMerge({
 		"worklet";
 		return max > 0 ? x / max : 0;
 	};
+	// A merged bar holds the knob at the end, however it got there.
 	const knobStyle = useAnimatedStyle(() => ({
-		transform: [{ translateX: translateX.value }],
+		transform: [{ translateX: mergedness.value > 0 ? travel.value : translateX.value }],
+		borderColor: interpolateColor(mergedness.value, [0, 1], [gh.knobRim, gh.mergedRim]),
 	}));
 	const trackStyle = useAnimatedStyle(() => ({
-		borderColor: interpolateColor(ratio(translateX.value, travel.value), [0, 1], [gh.rim, gh.rimArmed]),
+		borderColor: interpolateColor(
+			mergedness.value,
+			[0, 1],
+			[interpolateColor(ratio(mergedness.value > 0 ? travel.value : translateX.value, travel.value), [0, 1], [gh.rim, gh.rimArmed]), gh.mergedRim],
+		),
 	}));
+	const purpleStyle = useAnimatedStyle(() => ({ opacity: mergedness.value }));
 	// The fill trails the knob: it reaches from the track's left edge to the
 	// knob's right edge, so only the ground the knob has covered turns green.
 	const fillStyle = useAnimatedStyle(() => ({
-		width: translateX.value + KNOB + INSET * 2 - 1,
-		opacity: interpolate(ratio(translateX.value, travel.value), [0, 0.04], [0, 1], "clamp"),
+		width: (mergedness.value > 0 ? travel.value : translateX.value) + KNOB + INSET * 2 - 1,
+		opacity: mergedness.value > 0 ? 1 : interpolate(ratio(translateX.value, travel.value), [0, 0.04], [0, 1], "clamp"),
 	}));
 	// The same switch on the knob: glass at rest, solid with a white icon once moving.
+	// Its own background fades, not a layer over it: an overlay sits inside the
+	// translucent rim, which then showed a green ring on the purple bar.
 	const solidStyle = useAnimatedStyle(() => ({
-		opacity: interpolate(ratio(translateX.value, travel.value), [0, 0.04], [0, 1], "clamp"),
+		opacity: mergedness.value > 0 ? 1 : interpolate(ratio(translateX.value, travel.value), [0, 0.04], [0, 1], "clamp"),
+		backgroundColor: interpolateColor(mergedness.value, [0, 1], [gh.fillBase, gh.mergedBase]),
 	}));
 	const labelStyle = useAnimatedStyle(() => ({
 		opacity: interpolate(ratio(translateX.value, travel.value), [0, 0.6], [1, 0.45], "clamp"),
@@ -201,28 +226,30 @@ export function SwipeToMerge({
 		<View
 			accessible
 			accessibilityRole="button"
-			accessibilityLabel={busy ? busyLabel : label}
-			accessibilityHint="Swipe right to merge"
+			accessibilityLabel={merged ? mergedLabel : busy ? busyLabel : label}
+			accessibilityHint={merged ? undefined : "Swipe right to merge"}
 			accessibilityState={{ busy, disabled: locked }}
 			accessibilityActions={locked ? [] : [{ name: "activate", label }]}
 			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "activate") onAccessibilityActivate(); }}
-			style={disabled && !busy ? styles.disabled : undefined}
+			style={disabled && !busy && !merged ? styles.disabled : undefined}
 		>
 			<Animated.View onLayout={onLayout} style={[styles.track, { backgroundColor: gh.track, experimental_backgroundImage: gh.sheen }, trackStyle]}>
-				<Animated.View pointerEvents="none" style={[styles.labelRow, labelStyle]}>
+				{merged ? null : <Animated.View pointerEvents="none" style={[styles.labelRow, labelStyle]}>
 					<Text style={[styles.label, { color: gh.label }]} numberOfLines={1}>{label}</Text>
 					<Animated.View style={[styles.chevrons, chevronStyle]}>
 						<Feather name="chevron-right" size={15} color={gh.label} />
 						<Feather name="chevron-right" size={15} color={gh.label} style={styles.chevronTail} />
 					</Animated.View>
+				</Animated.View>}
+				<Animated.View pointerEvents="none" style={[styles.fill, { backgroundColor: gh.fillBase, experimental_backgroundImage: gh.fill }, fillStyle]}>
+					<Animated.View style={[styles.fillPurple, { backgroundColor: gh.mergedBase, experimental_backgroundImage: gh.merged }, purpleStyle]} />
 				</Animated.View>
-				<Animated.View pointerEvents="none" style={[styles.fill, { backgroundColor: gh.fillBase, experimental_backgroundImage: gh.fill }, fillStyle]} />
-				{busy ? <View pointerEvents="none" style={styles.busyRow}><Text style={[styles.label, { color: "#ffffff" }]} numberOfLines={1}>{busyLabel}</Text></View> : null}
+				{busy || merged ? <View pointerEvents="none" style={styles.busyRow}><Text style={[styles.label, { color: "#ffffff" }]} numberOfLines={1}>{merged ? mergedLabel : busyLabel}</Text></View> : null}
 				<GestureDetector gesture={pan}>
-					<Animated.View hitSlop={12} style={[styles.knob, { backgroundColor: gh.knob, borderColor: gh.knobRim, experimental_backgroundImage: gh.knobSheen }, knobStyle]}>
+					<Animated.View hitSlop={12} style={[styles.knob, { backgroundColor: gh.knob, experimental_backgroundImage: gh.knobSheen }, knobStyle]}>
 						<Feather name="git-merge" size={20} color={gh.icon} />
-						<Animated.View pointerEvents="none" style={[styles.knobSolid, { backgroundColor: gh.fillBase }, solidStyle]}>
-							{busy ? <ActivityIndicator size="small" color="#ffffff" /> : <Feather name="git-merge" size={20} color="#ffffff" />}
+						<Animated.View pointerEvents="none" style={[styles.knobSolid, solidStyle]}>
+							{busy && !merged ? <ActivityIndicator size="small" color="#ffffff" /> : <Feather name="git-merge" size={20} color="#ffffff" />}
 						</Animated.View>
 					</Animated.View>
 				</GestureDetector>
@@ -235,7 +262,8 @@ const styles = StyleSheet.create({
 	track: { height: TRACK_HEIGHT, borderRadius: TRACK_HEIGHT / 2, borderWidth: 1, justifyContent: "center" },
 	disabled: { opacity: 0.45 },
 	labelRow: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingLeft: KNOB },
-	fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK_HEIGHT / 2 },
+	fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK_HEIGHT / 2, overflow: "hidden" },
+	fillPurple: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
 	knobSolid: { position: "absolute", top: -1, right: -1, bottom: -1, left: -1, borderRadius: KNOB / 2, borderWidth: 1, borderColor: "rgba(255,255,255,0.35)", alignItems: "center", justifyContent: "center", boxShadow: "0px 2px 6px 0px rgba(0,0,0,0.25)" },
 	busyRow: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center", paddingRight: KNOB },
 	label: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
