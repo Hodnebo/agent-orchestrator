@@ -197,6 +197,7 @@
 	"agentSwitch.busy": "智能体正在工作。请在其空闲时切换。",
 	"agentSwitch.switchTerminalTo": "将此终端切换到 {{target}}",
 	"agentSwitch.switchToChat": "切换到聊天界面",
+	"agentSwitch.switchToTerminal": "切换到终端界面",
 	"agentSwitch.switched": "已切换",
 	"agentSwitch.switching": "正在切换",
 	"agentSwitch.switchedFromTo": "已从 {{from}} 切换到 {{to}}",

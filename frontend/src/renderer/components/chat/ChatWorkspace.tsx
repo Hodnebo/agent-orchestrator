@@ -444,8 +444,6 @@ export interface ChatWorkspaceProps {
 	agentSwitch?: AgentSwitchProps;
 	/** A line above the chat box, such as a switch waiting for the next message. */
 	composerNotice?: ReactNode;
-	/** A control after the permission picker, such as the switch to the terminal view. */
-	composerAction?: ReactNode;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -705,7 +703,6 @@ function ChatWorkspaceContent({
 	models,
 	agentSwitch,
 	composerNotice,
-	composerAction,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1391,7 +1388,6 @@ function ChatWorkspaceContent({
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
-					afterPermissions={composerAction}
 					models={models ?? []}
 					settings={stableSettings}
 					onRememberPermissions={onRememberPermissions}
@@ -1430,7 +1426,6 @@ function ChatWorkspaceContent({
 			controllerTransitioning,
 			models,
 			agentSwitch,
-			composerAction,
 			stableUsage,
 			newWorkDisabled,
 			session?.provisionState,
@@ -1890,8 +1885,6 @@ function ChatWorkspaceContent({
 										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={<>
-											{/* The settings bar carries the interface switch; while the agent is stopped it is hidden, and the switch to the terminal is the way out. */}
-											{agentSwitch && composerSettings ? null : composerAction}
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}
 										</>}

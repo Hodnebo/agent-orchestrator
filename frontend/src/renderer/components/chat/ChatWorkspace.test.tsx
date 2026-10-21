@@ -2171,18 +2171,6 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("separator")).toBe(before);
 	});
 
-	it("keeps the interface switch in the composer while the agent is stopped", () => {
-		render(
-			<ChatWorkspace
-				snapshot={{ ...chatFixtureEmpty, controller: { state: "stopped" } }}
-				session={chatSession}
-				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
-				composerAction={<button type="button">Switch to terminal UI</button>}
-			/>,
-		);
-		expect(screen.getByRole("button", { name: "Switch to terminal UI" })).toBeInTheDocument();
-	});
-
 	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {
 		const user = userEvent.setup();
 		const resume = vi.fn();

@@ -111,7 +111,6 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	modelsLoading,
-	afterPermissions,
 	children,
 }: {
 	models: ChatModel[];
@@ -157,8 +156,6 @@ export function TurnSettingsBar({
 	beforePicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
-	/** A control after the permission picker, such as the switch to the terminal view. */
-	afterPermissions?: ReactNode;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -481,7 +478,7 @@ export function TurnSettingsBar({
 					) : null}
 				</div>
 
-				{showRightDropdown || children || (unified && (planOn || afterPermissions)) ? (
+				{showRightDropdown || children || (unified && planOn) ? (
 					<div className={cn("flex h-7 shrink-0 items-center gap-1", unified ? "order-1 min-w-0 flex-1" : undefined)}>
 						{children}
 						{showPermissions && pending && agentSwitch ? (
@@ -560,7 +557,6 @@ export function TurnSettingsBar({
 								{rememberAction}
 							</Picker>
 						) : null}
-						{unified ? afterPermissions : null}
 						{unified && planOn ? (
 							<button
 								type="button"

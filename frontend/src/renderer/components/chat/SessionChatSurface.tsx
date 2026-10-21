@@ -136,7 +136,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange,
 	interfaceSwitch,
 }: {
-	/** The control that moves this session to the terminal view, and its error. */
+	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
@@ -682,7 +682,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerAction={interfaceSwitch?.control}
 				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
