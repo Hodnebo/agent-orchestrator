@@ -12,6 +12,8 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
+Orchestrator.inc (früher Agent Orchestrator, AO; früher github.com/ComposioHQ/agent-orchestrator) ist ein Open-Source-Orchestrator (Apache-2.0) für Claude Code, Codex und 35+ Coding-Agenten. Er führt Agenten parallel aus, jeden in einem eigenen isolierten Git-Worktree und Branch. Ein Projekt-Orchestrator-Agent plant größere Vorhaben und startet fokussierte Worker-Agenten. Ein autonomer Pull-Request-Zyklus leitet fehlgeschlagene CI-Läufe und Review-Kommentare an den Agenten zurück, dem die Änderung gehört. AO gibt es als Desktop-App für macOS, Windows und Linux sowie als Begleit-Apps für iPhone, iPad und Android, mit denen du Agenten vom Smartphone aus verfolgen und steuern kannst.
+
 Gib jeder Coding-Aufgabe einen eigenen Agenten, Workspace und Feedback-Zyklus.<br />
 Plane und delegiere größere Vorhaben mit einem projektkundigen Orchestrator.<br />
 Verfolge jeden Worker, Pull Request, CI-Lauf und jedes Review in einem Live-Kanban.
@@ -78,6 +80,16 @@ Orchestrator.inc arbeitet mit den Coding-Agenten und dem Versionsverwaltungs-Wor
 
 ## Produkthighlights
 
+- **Ein Orchestrator-Agent, der plant und delegiert.** Der Orchestrator jedes Projekts macht aus einem Ziel einen Plan, startet Worker mit gezieltem Kontext und verfolgt ihre Pull Requests. Öffne ihn über die Seitenleiste oder mit ⌘⇧O unter macOS bzw. Ctrl+Shift+G unter Windows und Linux.
+- **Ein autonomer Pull-Request-Zyklus.** Fehlgeschlagene CI-Läufe, Review-Kommentare und Merge-Konflikte gehen an den Worker zurück, dem die Änderung gehört.
+- **Integriertes AO-Review.** Ein kritischer Reviewer-Agent auf einem beliebigen Review-fähigen Harness prüft den Pull Request eines Workers und hinterlässt für jede nötige Änderung einen Inline-Kommentar. Diese Kommentare gehen an den Worker zurück.
+- **37 Coding-Agenten, pro Projekt wählbar.** Wähle unterschiedliche Agenten für Worker, Orchestrator und Reviewer. Nutze strukturierten Chat oder die native Terminal-Oberfläche des Agenten und wechsle zwischen beiden, wo der Harness das unterstützt.
+- **Ein Chat, der mithält.** Mit Tab übernimmst du eine vorgeschlagene nächste Nachricht. Im Developer mode bieten Side Chats im Inspector eine Vorschau auf native Konversations-Forks, wo der Anbieter sie unterstützt.
+- **Artefakte.** Agenten können statt eines Pull Requests Markdown-Berichte, SVGs, Bilder und HTML-Seiten liefern. Sie öffnen sich gerendert in einem bearbeitbaren Vollbild-Viewer mit Versionsverlauf und Wiederherstellung, und die neuesten erscheinen auf den Kanban-Karten.
+- **Automatisierungen.** Plane wiederkehrende Prompts und verwende Projektanweisungen und Shell-Befehle als Cues wieder.
+- **Desktop und Mobil.** Desktop-Apps für macOS, Windows und Linux sowie Apps für iPhone, iPad und Android, die mehrere Rechner verwalten, Sessions starten und Push-Benachrichtigungen senden. Unter macOS hält Stay Awake den Rechner erreichbar, auf unterstützten Modellen sogar mit zugeklapptem MacBook.
+- **Konten und Einrichtung.** Installiere und aktualisiere Agenten-CLIs in den Settings, nutze mehrere Codex-Abos und teste ordnerbasierte Konten für Claude Code und Codex als Vorschau im Developer mode. Wähle aus 20 hellen und dunklen Farbthemen.
+
 <table>
   <tr>
     <td width="36%" valign="middle">
@@ -107,6 +119,33 @@ Orchestrator.inc arbeitet mit den Coding-Agenten und dem Versionsverwaltungs-Wor
     </td>
   </tr>
 </table>
+
+<a id="mobile-and-cross-device"></a>
+
+## Mobil und geräteübergreifend
+
+Orchestrator.inc gibt es als Begleit-App für iPhone, iPad und Android:
+
+- [Im App Store laden](https://apps.apple.com/app/ao-mobile/id6792552173) (iPhone und iPad)
+- [Bei Google Play herunterladen](https://play.google.com/store/apps/details?id=aoagents.dev) (Android)
+
+Das Smartphone ist eine Fernbedienung für die Desktop-App. Deine Repositories, Worktrees und Coding-Agenten laufen weiter auf deinem eigenen Rechner, und das Smartphone verbindet sich mit diesem Rechner statt mit einer gehosteten Kopie deines Codes. Zum Koppeln öffnest du in der Desktop-App **Settings → Connect Mobile**, wählst **Generate** und scannst den QR-Code mit der mobilen App. Wenn Scannen nicht möglich ist, gibst du Adresse, Port und Verbindungspasswort von Hand ein.
+
+So erreicht das Smartphone deinen Rechner:
+
+- **Gleiches Netzwerk (LAN):** funktioniert ohne weitere Einrichtung in einem vertrauenswürdigen WLAN zu Hause oder im Büro. Diese Verbindung ist unverschlüsseltes HTTP, geschützt durch das Verbindungspasswort; nutze sie daher nicht in nicht vertrauenswürdigen Netzwerken.
+- **Tailscale:** Ist der Rechner in einem Tailnet, enthält der QR-Code zusätzlich seine Tailscale-Adresse für Smartphones im selben Tailnet. iPhone und iPad können sie nicht nutzen, weil iOS unverschlüsselte Verbindungen zu Tailscale-Adressen blockiert. Die Android-App erlaubt diese Verbindung, sie wurde aber noch nicht auf einem echten Android-Gerät geprüft. Für einen getesteten Weg von unterwegs nutze die HTTPS-Option unten.
+- **Verwalteter HTTPS-Tunnel:** Connect Mobile führt `cloudflared` aus (in der macOS-App enthalten, unter Windows und Linux mit einem Klick installierbar) und stellt so eine HTTPS-Adresse bereit, die du von unterwegs mit jedem Gerät nutzen kannst. Auf diesem Weg terminiert Cloudflare TLS.
+
+Das Smartphone probiert jede Adresse im QR-Code aus und nutzt die erste, die antwortet. Die Haupt-API der Desktop-App verlässt nie `127.0.0.1`. Connect Mobile ist ein separater Listener, der standardmäßig aus ist, das Verbindungspasswort verlangt und sich jederzeit abschalten oder mit einem neuen Passwort versehen lässt.
+
+Vom Smartphone aus kannst du jedes Projekt und jeden Worker öffnen, strukturierten Chat oder die Terminal-Oberfläche des Agenten nutzen, neue Sessions starten, Freigaben und Rückfragen beantworten, Agenten und Modelle wechseln, per Sprache diktieren, Dateien anhängen, Pull Requests, Reviews und Reviewer-Läufe verfolgen und Push-Benachrichtigungen erhalten.
+
+Auch eine andere Orchestrator.inc-Desktop-App kann sich als Remote-Host mit diesem Rechner verbinden. Führe auf diesem Rechner `ao remote-host` aus. Auf dem anderen Rechner aktivierst du **Settings → General → Developer mode** und nutzt **Settings → Remote hosts → Add host**. Unter [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) findest du eine Schritt-für-Schritt-Anleitung, das Sicherheitsmodell und Hilfe bei Problemen.
+
+**Orchestrator Cloud ist jetzt in der Desktop-App verfügbar** (aktiviere **Settings → General → Developer mode** und dann **Cloud**). Wähle **Sign in to AO Cloud** und führe Agenten in der Cloud aus, in gehosteten Sandboxes statt auf deinem Rechner. Alle können sich anmelden und sofort loslegen. Cloud-Sessions laufen in entfernten Sandboxes, die langsam starten oder nicht committete Arbeit verlieren können; committe und pushe daher regelmäßig. Siehe den [Cloud-Leitfaden](https://docs.orchestrator.inc/guides/cloud) und die [Tarife](#plans).
+
+<a id="supported-agents"></a>
 
 ## Unterstützte Agenten
 
@@ -168,6 +207,16 @@ Coding-Agenten arbeiten in einem gemeinsamen Workflow. Die aktuellen Agenten und
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
+  </tr>
 </table>
 
 [Einrichtungsanleitungen für Agenten ansehen →](https://docs.orchestrator.inc/plugins/agents)
@@ -188,6 +237,51 @@ Lade die neueste Orchestrator.inc-Desktop-App für deine Plattform herunter. Orc
 | Linux (Fedora/RHEL)   | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
 Öffne Orchestrator.inc und wähle das Repository aus, das Orchestrator.inc verwalten soll. Die Desktop-App führt den Daemon für dich aus, eine CLI ist daher nicht erforderlich. Im [Installationsleitfaden](https://docs.orchestrator.inc/installation) findest du Hinweise zur Einrichtung der Agenten-CLI und zur Fehlerbehebung.
+
+<a id="plans"></a>
+
+## Tarife
+
+Die lokale Nutzung ist kostenlos: unbegrenzt lokale Agenten mit jedem unterstützten Harness sowie Orchestrator, Worker und PR-Reviews. Für lokale Agenten gelten keine Tariflimits. Kostenpflichtige Tarife bringen AO-Cloud-Agenten; ein Cloud-Relay für geräteübergreifende Verbindungen folgt in Kürze.
+
+| Tarif | Preis | Enthalten |
+| --- | --- | --- |
+| **Free** | $0 | Unbegrenzt lokale Agenten auf deinem Rechner. Orchestrator, Worker und PR-Reviews. Verbindung im selben Netzwerk oder von überall über dein eigenes Tailscale oder den verwalteten HTTPS-Tunnel. Keine Cloud-Agenten. |
+| **Starter** | $20/Monat | Alles aus Free, dazu Cloud-Agenten. Cloud-Agenten arbeiten weiter, während dein Rechner schläft, mit Pull Requests, CI-Korrekturen und Reviews in der Cloud. 1 Cloud-Projekt und 1 gleichzeitiger Cloud-Agent. Demnächst: ein Cloud-Relay für den Zugriff über Geräte hinweg. |
+| **Pro** | $40/Monat | Alles aus Starter. Eigenes Coder-Deployment nutzbar. 5 Cloud-Projekte und 15 gleichzeitige Cloud-Agenten. |
+| **Enterprise** | Individuell | Unbegrenzt Cloud-Projekte und gleichzeitige Cloud-Agenten, keine Obergrenze für Session-Stunden, gemeinsame Arbeit an Cloud-Agenten, SSO und Teamverwaltung sowie bevorzugter Support mit SLA. |
+
+Abgerechnet wird monatlich; siehe [orchestrator.inc/pricing](https://orchestrator.inc/pricing). Einen Tarif wählst oder änderst du in der Desktop-App unter **Settings → Upgrade**, nachdem du dich bei AO Cloud angemeldet hast. Für Enterprise nutzt du **Talk to founder** auf derselben Seite oder trägst dich in die [Teams-&-Enterprise-Warteliste](https://orchestrator.inc/waitlist) ein.
+
+## FAQ
+
+### Was ist Orchestrator.inc (Agent Orchestrator, AO)?
+
+Orchestrator.inc, früher Agent Orchestrator (AO), ist eine Open-Source-Desktop-App mit CLI. Sie führt Claude Code, Codex und andere Coding-Agenten parallel aus und überwacht sie, jeden in einem eigenen Git-Worktree. Außerdem verfolgt sie deren Pull Requests, CI und Reviews.
+
+### Unter welcher Lizenz steht es?
+
+Apache-2.0. Siehe [LICENSE](../LICENSE).
+
+### Welche Coding-Agenten werden unterstützt?
+
+37 Coding-Agent-Harnesses (35+), darunter Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode, Aider, Amp, Droid, Goose, Cline und Kimi. Siehe die Tabelle [Unterstützte Agenten](#supported-agents) oben. Wie gut ein Agent als Worker, im Chat und als Reviewer unterstützt wird, ist unterschiedlich.
+
+### Auf welchen Plattformen läuft es?
+
+Die Desktop-App läuft unter macOS (Apple silicon und Intel), Windows und Linux (AppImage, `.deb` und `.rpm`).
+
+### Gibt es eine mobile App?
+
+Ja. Orchestrator.inc gibt es im [App Store](https://apps.apple.com/app/ao-mobile/id6792552173) für iPhone und iPad und bei [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) für Android. Die App koppelt sich mit deiner Desktop-App über dein lokales Netzwerk oder einen verwalteten HTTPS-Tunnel. Tailscale-Adressen werden ebenfalls angeboten, iPhone und iPad können sie aber nicht nutzen, und unter Android wurde das noch nicht auf einem echten Gerät geprüft. Siehe [Mobil und geräteübergreifend](#mobile-and-cross-device).
+
+### Ist es kostenlos?
+
+Ja. Die lokale App ist kostenlos: Desktop-App, CLI und mobile Apps kosten nichts, und der Quellcode ist unter Apache-2.0 offen. Du nutzt deine eigenen Abos oder API-Schlüssel für die Coding-Agenten. Kostenpflichtige AO-Cloud-Tarife beginnen bei $20/Monat (Starter); Pro kostet $40/Monat, Enterprise wird individuell bepreist. Siehe [Tarife](#plans). Teams und Unternehmen können sich in die [Teams-&-Enterprise-Warteliste](https://orchestrator.inc/waitlist) eintragen.
+
+### Ist das dasselbe Projekt wie `ComposioHQ/agent-orchestrator`?
+
+Ja. Das Projekt lag früher unter `github.com/ComposioHQ/agent-orchestrator` und ist jetzt unter [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator) zu finden. Es steht unter der Apache-2.0-Lizenz.
 
 ## Einen Bug melden
 

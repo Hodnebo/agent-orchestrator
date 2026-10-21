@@ -12,6 +12,8 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
+Orchestrator.inc(이전 이름 Agent Orchestrator, AO, 이전 저장소 github.com/ComposioHQ/agent-orchestrator)는 Claude Code, Codex를 비롯해 35개 이상의 코딩 에이전트를 위한 오픈 소스(Apache-2.0) 오케스트레이터입니다. 에이전트를 병렬로 실행하며, 각 에이전트는 격리된 자체 git worktree와 브랜치에서 작업합니다. 프로젝트 오케스트레이터 에이전트가 더 큰 목표를 계획하고 범위가 분명한 워커 에이전트를 실행합니다. 자율적인 풀 리퀘스트 루프는 CI 실패와 리뷰 코멘트를 변경을 맡은 에이전트에게 다시 전달합니다. AO는 macOS, Windows, Linux용 데스크톱 앱으로 제공되며, iPhone, iPad, Android용 컴패니언 앱으로 휴대폰에서도 에이전트를 확인하고 지시할 수 있습니다.
+
 모든 코딩 작업에 전용 에이전트, 워크스페이스, 피드백 루프를 제공하세요.<br />
 프로젝트를 이해하는 오케스트레이터와 더 큰 목표를 계획하고 위임하세요.<br />
 모든 워커, 풀 리퀘스트, CI 실행, 리뷰를 실시간 Kanban에서 확인하세요.
@@ -78,6 +80,16 @@ Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 �
 
 ## 제품 주요 기능
 
+- **계획하고 위임하는 오케스트레이터 에이전트.** 각 프로젝트의 오케스트레이터가 목표를 계획으로 바꾸고, 필요한 컨텍스트와 함께 워커를 실행하고, 워커의 풀 리퀘스트를 추적합니다. 사이드바에서 열거나 macOS에서는 ⌘⇧O, Windows와 Linux에서는 Ctrl+Shift+G로 열 수 있습니다.
+- **자율적인 풀 리퀘스트 루프.** CI 실패, 리뷰 코멘트, 머지 충돌은 변경을 맡은 워커에게 다시 전달됩니다.
+- **내장 AO 리뷰.** 리뷰를 지원하는 어떤 하네스에서든 깐깐한 리뷰어 에이전트가 워커의 풀 리퀘스트를 검토하고, 필요한 변경마다 인라인 코멘트를 남깁니다. 이 코멘트는 워커에게 다시 전달됩니다.
+- **프로젝트별로 고르는 37개 코딩 에이전트.** 워커, 오케스트레이터, 리뷰어에 각각 다른 에이전트를 고를 수 있습니다. 구조화된 Chat이나 에이전트의 네이티브 터미널 UI를 사용하고, 하네스가 지원하면 둘 사이를 전환할 수 있습니다.
+- **흐름을 놓치지 않는 Chat.** Tab으로 다음 메시지 제안을 받아들일 수 있습니다. Developer mode에서는 인스펙터의 사이드 채팅에서, 공급자가 지원하는 경우 네이티브 대화 포크를 미리 사용해 볼 수 있습니다.
+- **아티팩트.** 에이전트는 풀 리퀘스트 대신 Markdown 보고서, SVG, 이미지, HTML 페이지를 결과물로 제출할 수 있습니다. 결과물은 전체 화면의 편집 가능한 뷰어에서 렌더링되어 열리고 버전 기록과 복원을 지원하며, 최신 결과물은 Kanban 카드에 표시됩니다.
+- **자동화.** 반복 프롬프트를 예약하고, 프로젝트 지침과 셸 명령을 Cues로 재사용할 수 있습니다.
+- **데스크톱과 모바일.** macOS, Windows, Linux용 데스크톱 앱과 함께, iPhone, iPad, Android 앱으로 여러 컴퓨터를 관리하고 세션을 시작하고 푸시 알림을 받을 수 있습니다. macOS에서는 Stay Awake가 컴퓨터에 계속 접속할 수 있도록 유지하며, 지원 모델에서는 MacBook 덮개를 닫아도 동작합니다.
+- **계정과 설정.** Settings에서 에이전트 CLI를 설치하고 업데이트하며, 여러 Codex 구독 계정을 사용하고, Developer mode 미리 보기로 Claude Code와 Codex의 폴더별 계정을 사용해 볼 수 있습니다. 밝은 테마와 어두운 테마를 포함한 20가지 색상 테마 중에서 고를 수 있습니다.
+
 <table>
   <tr>
     <td width="36%" valign="middle">
@@ -107,6 +119,33 @@ Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 �
     </td>
   </tr>
 </table>
+
+<a id="mobile-and-cross-device"></a>
+
+## 모바일과 기기 간 연결
+
+Orchestrator.inc는 iPhone, iPad, Android용 컴패니언 앱을 제공합니다.
+
+- [App Store에서 다운로드](https://apps.apple.com/app/ao-mobile/id6792552173) (iPhone 및 iPad)
+- [Google Play에서 다운로드](https://play.google.com/store/apps/details?id=aoagents.dev) (Android)
+
+휴대폰은 데스크톱 앱의 리모컨입니다. 저장소, worktree, 코딩 에이전트는 계속 내 컴퓨터에서 실행되고, 휴대폰은 호스팅된 코드 사본이 아니라 그 컴퓨터에 연결됩니다. 페어링하려면 데스크톱 앱에서 **Settings → Connect Mobile**을 열고 **Generate**를 선택한 다음, 모바일 앱으로 QR 코드를 스캔하세요. 스캔할 수 없다면 주소, 포트, 연결 비밀번호를 직접 입력하세요.
+
+휴대폰이 컴퓨터에 연결하는 방법:
+
+- **같은 네트워크(LAN):** 신뢰할 수 있는 집이나 사무실 Wi-Fi에서 별도 설정 없이 동작합니다. 이 연결은 연결 비밀번호로 보호되는 암호화되지 않은 HTTP이므로, 신뢰할 수 없는 네트워크에서는 사용하지 마세요.
+- **Tailscale:** 컴퓨터가 tailnet에 연결되어 있으면 QR 코드에 Tailscale 주소도 포함되어, 같은 tailnet의 휴대폰에서 사용할 수 있습니다. iOS가 Tailscale 주소로의 암호화되지 않은 연결을 차단하기 때문에 iPhone과 iPad에서는 사용할 수 없습니다. Android 앱은 이 연결을 허용하지만, 아직 실제 Android 기기에서 검증되지 않았습니다. 외부에서 검증된 방법으로 연결하려면 아래 HTTPS 방식을 사용하세요.
+- **관리형 HTTPS 터널:** Connect Mobile은 `cloudflared`(macOS 앱에 포함, Windows와 Linux에서는 클릭 한 번으로 설치)를 실행해, 외부에서 어떤 기기로든 사용할 수 있는 HTTPS 주소를 추가합니다. 이 경로에서는 Cloudflare가 TLS를 종료합니다.
+
+휴대폰은 QR 코드에 있는 모든 주소를 시도하고 가장 먼저 응답하는 주소를 사용합니다. 데스크톱의 기본 API는 `127.0.0.1` 밖으로 나가지 않습니다. Connect Mobile은 별도의 리스너로, 기본적으로 꺼져 있고, 연결 비밀번호가 필요하며, 언제든 끄거나 새 비밀번호로 바꿀 수 있습니다.
+
+휴대폰에서는 어떤 프로젝트와 워커든 열고, 구조화된 Chat이나 에이전트의 터미널 UI를 사용하고, 새 세션을 시작하고, 승인 요청과 질문에 답하고, 에이전트와 모델을 바꾸고, 음성으로 입력하고, 파일을 첨부하고, 풀 리퀘스트와 리뷰, 리뷰어 실행을 확인하고, 푸시 알림을 받을 수 있습니다.
+
+다른 Orchestrator.inc 데스크톱 앱에서 이 컴퓨터에 원격 호스트로 연결할 수도 있습니다. 이 컴퓨터에서 `ao remote-host`를 실행하세요. 다른 컴퓨터에서는 **Settings → General → Developer mode**를 켜고 **Settings → Remote hosts → Add host**를 사용하세요. 단계별 설정, 보안 모델, 문제 해결 방법은 [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access)을 참고하세요.
+
+**이제 데스크톱 앱에서 Orchestrator Cloud를 사용할 수 있습니다** (**Settings → General → Developer mode**를 켠 다음 **Cloud**를 켜세요). **Sign in to AO Cloud**를 선택하면 내 컴퓨터가 아닌 호스팅된 샌드박스에서, 클라우드로 에이전트를 실행할 수 있습니다. 누구나 로그인해서 바로 시작할 수 있습니다. 클라우드 세션은 원격 샌드박스에서 실행되므로 시작이 느리거나 커밋하지 않은 작업이 사라질 수 있으니, 자주 커밋하고 푸시하세요. [Cloud 가이드](https://docs.orchestrator.inc/guides/cloud)와 [요금제](#plans)를 참고하세요.
+
+<a id="supported-agents"></a>
 
 ## 지원 에이전트
 
@@ -168,6 +207,16 @@ Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 �
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
+  </tr>
 </table>
 
 [에이전트 설정 가이드 살펴보기 →](https://docs.orchestrator.inc/plugins/agents)
@@ -188,6 +237,51 @@ Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 �
 | Linux (Fedora/RHEL)   | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
 Orchestrator.inc를 열고 Orchestrator.inc가 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
+
+<a id="plans"></a>
+
+## 요금제
+
+로컬 사용은 무료입니다. 지원되는 모든 하네스로 로컬 에이전트를 무제한 사용할 수 있고, 오케스트레이터, 워커, PR 리뷰도 포함됩니다. 로컬 에이전트에는 요금제 제한이 없습니다. 유료 요금제에는 AO Cloud 에이전트가 추가되며, 기기 간 연결을 위한 클라우드 릴레이도 곧 제공됩니다.
+
+| 요금제 | 가격 | 포함 내용 |
+| --- | --- | --- |
+| **Free** | $0 | 내 컴퓨터에서 로컬 에이전트 무제한. 오케스트레이터, 워커, PR 리뷰. 같은 네트워크에서, 또는 직접 설정한 Tailscale이나 관리형 HTTPS 터널로 어디서든 연결. 클라우드 에이전트 없음. |
+| **Starter** | $20/월 | Free의 모든 기능과 클라우드 에이전트. 컴퓨터가 잠자기 상태여도 클라우드 에이전트가 계속 작업하며, 풀 리퀘스트, CI 수정, 리뷰를 클라우드에서 처리합니다. 클라우드 프로젝트 1개, 동시 클라우드 에이전트 1개. 출시 예정: 기기 간 접속을 위한 클라우드 릴레이. |
+| **Pro** | $40/월 | Starter의 모든 기능. 자체 Coder 배포 사용 가능. 클라우드 프로젝트 5개, 동시 클라우드 에이전트 15개. |
+| **Enterprise** | 별도 문의 | 클라우드 프로젝트와 동시 클라우드 에이전트 무제한, 세션 시간 제한 없음, 클라우드 에이전트 공동 작업, SSO와 팀 관리, SLA가 포함된 우선 지원. |
+
+요금제는 월 단위로 청구됩니다. [orchestrator.inc/pricing](https://orchestrator.inc/pricing)을 참고하세요. AO Cloud에 로그인한 뒤 데스크톱 앱의 **Settings → Upgrade**에서 요금제를 선택하거나 변경할 수 있습니다. Enterprise는 같은 페이지의 **Talk to founder**를 사용하거나 [Teams & Enterprise 대기자 명단](https://orchestrator.inc/waitlist)에 등록하세요.
+
+## 자주 묻는 질문
+
+### Orchestrator.inc(Agent Orchestrator, AO)는 무엇인가요?
+
+Orchestrator.inc(이전 이름 Agent Orchestrator, AO)는 오픈 소스 데스크톱 앱이자 CLI입니다. Claude Code, Codex 등 여러 코딩 에이전트를 각자의 git worktree에서 병렬로 실행하고 감독하며, 풀 리퀘스트, CI, 리뷰도 추적합니다.
+
+### 라이선스는 무엇인가요?
+
+Apache-2.0입니다. [LICENSE](../LICENSE)를 참고하세요.
+
+### 어떤 코딩 에이전트를 지원하나요?
+
+37개 코딩 에이전트 하네스(35개 이상)를 지원하며, Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode, Aider, Amp, Droid, Goose, Cline, Kimi 등이 포함됩니다. 위의 [지원 에이전트](#supported-agents) 표를 참고하세요. 워커, Chat, 리뷰어 지원 여부는 에이전트마다 다릅니다.
+
+### 어떤 플랫폼에서 실행되나요?
+
+데스크톱 앱은 macOS(Apple silicon 및 Intel), Windows, Linux(AppImage, `.deb`, `.rpm`)에서 실행됩니다.
+
+### 모바일 앱이 있나요?
+
+네. iPhone과 iPad용은 [App Store](https://apps.apple.com/app/ao-mobile/id6792552173), Android용은 [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev)에 있습니다. 앱은 로컬 네트워크나 관리형 HTTPS 터널을 통해 데스크톱과 페어링됩니다. Tailscale 주소도 제공되지만 iPhone과 iPad에서는 사용할 수 없고, Android에서는 아직 실제 기기에서 검증되지 않았습니다. [모바일과 기기 간 연결](#mobile-and-cross-device)을 참고하세요.
+
+### 무료인가요?
+
+네. 로컬 앱은 무료입니다. 데스크톱 앱, CLI, 모바일 앱은 모두 무료이며, 소스 코드는 Apache-2.0으로 공개되어 있습니다. 코딩 에이전트는 본인의 구독이나 API 키를 사용합니다. 유료 AO Cloud 요금제는 월 $20(Starter)부터 시작하며, Pro는 월 $40, Enterprise는 별도 문의입니다. [요금제](#plans)를 참고하세요. 팀과 기업은 [Teams & Enterprise 대기자 명단](https://orchestrator.inc/waitlist)에 등록할 수 있습니다.
+
+### `ComposioHQ/agent-orchestrator`와 같은 프로젝트인가요?
+
+네. 이 프로젝트는 이전에 `github.com/ComposioHQ/agent-orchestrator`에 있었고, 지금은 [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator)에 있습니다. Apache-2.0 라이선스로 배포됩니다.
 
 ## 버그 신고
 

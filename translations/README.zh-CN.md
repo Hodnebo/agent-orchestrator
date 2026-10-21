@@ -12,6 +12,8 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
+Orchestrator.inc（原名 Agent Orchestrator，简称 AO；原仓库为 github.com/ComposioHQ/agent-orchestrator）是一款开源（Apache-2.0）编排器，支持 Claude Code、Codex 等 35 个以上编程智能体。它并行运行智能体，每个智能体都在各自隔离的 git worktree 和分支中工作。项目编排器智能体负责规划更大的目标，并启动专注于具体任务的 worker 智能体。自主的拉取请求循环会把 CI 失败和评审意见交回负责该变更的智能体。AO 提供适用于 macOS、Windows 和 Linux 的桌面应用，以及适用于 iPhone、iPad 和 Android 的配套应用，让你在手机上也能跟进和指挥智能体。
+
 让每个编程任务都有自己的智能体、工作区和反馈闭环。<br />
 通过了解项目上下文的编排器规划和委派更大的目标。<br />
 在实时看板中跟踪每个 worker、拉取请求、CI 运行和评审。
@@ -78,6 +80,16 @@ Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使
 
 ## 产品亮点
 
+- **会规划、会委派的编排器智能体。** 每个项目的编排器会把目标拆成计划，带着聚焦的上下文启动 worker，并跟进它们的拉取请求。可从侧边栏打开，也可在 macOS 上按 ⌘⇧O、在 Windows 和 Linux 上按 Ctrl+Shift+G 打开。
+- **自主的拉取请求循环。** CI 失败、评审意见和合并冲突都会交回负责该变更的 worker。
+- **内置 AO 评审。** 在任意支持评审的 harness 上，一个严格的评审智能体会审查 worker 的拉取请求，并为每项必须修改的内容留下行内评论。这些评论会交回给 worker。
+- **37 个编程智能体，按项目选择。** 可以为 worker、编排器和评审者分别选择不同的智能体。使用结构化 Chat 或智能体原生的终端界面，并在 harness 支持时在两者之间切换。
+- **跟得上节奏的 Chat。** 按 Tab 即可采用建议的下一条消息。在 Developer mode 下，检查器中的侧边对话可以预览原生会话分叉（需提供方支持）。
+- **产出物。** 智能体可以交付 Markdown 报告、SVG、图片和 HTML 页面，而不必提交拉取请求。它们会在可编辑的全屏查看器中渲染打开，支持版本历史和恢复，最新的产出物会显示在看板卡片上。
+- **自动化。** 定时运行重复的提示词，并把项目指令和 shell 命令保存为 Cues 重复使用。
+- **桌面端与移动端。** 提供 macOS、Windows 和 Linux 桌面应用，以及 iPhone、iPad 和 Android 应用，可管理多台电脑、启动会话并接收推送通知。在 macOS 上，Stay Awake 可让电脑保持可连接状态，支持的机型即使合上 MacBook 也能保持。
+- **账户与设置。** 在 Settings 中安装和更新智能体 CLI，使用多个 Codex 订阅账户，并以 Developer mode 预览功能试用 Claude Code 和 Codex 的按文件夹账户。可从 20 种浅色和深色配色主题中选择。
+
 <table>
   <tr>
     <td width="36%" valign="middle">
@@ -107,6 +119,33 @@ Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使
     </td>
   </tr>
 </table>
+
+<a id="mobile-and-cross-device"></a>
+
+## 移动端与跨设备
+
+Orchestrator.inc 提供适用于 iPhone、iPad 和 Android 的配套应用：
+
+- [在 App Store 下载](https://apps.apple.com/app/ao-mobile/id6792552173)（iPhone 和 iPad）
+- [在 Google Play 下载](https://play.google.com/store/apps/details?id=aoagents.dev)（Android）
+
+手机是桌面应用的遥控器。你的仓库、worktree 和编程智能体仍在你自己的电脑上运行，手机连接的是这台电脑，而不是托管的代码副本。要配对，请在桌面应用中打开 **Settings → Connect Mobile**，选择 **Generate**，然后用移动应用扫描二维码。如果无法扫描，可以手动输入地址、端口和连接密码。
+
+手机连接电脑的方式：
+
+- **同一网络（LAN）：** 在可信的家庭或办公室 Wi-Fi 中无需额外设置即可使用。该连接是受连接密码保护的未加密 HTTP，请勿在不可信的网络中使用。
+- **Tailscale：** 当电脑加入 tailnet 时，二维码中还会包含它的 Tailscale 地址，供同一 tailnet 中的手机使用。iPhone 和 iPad 无法使用该地址，因为 iOS 会阻止对 Tailscale 地址的未加密连接。Android 应用允许这种连接，但尚未在真实的 Android 设备上验证。如需在外出时使用经过测试的方式，请使用下面的 HTTPS 选项。
+- **托管 HTTPS 隧道：** Connect Mobile 会运行 `cloudflared`（macOS 应用已内置，Windows 和 Linux 可一键安装），添加一个 HTTPS 地址，让任何设备在外也能连接。在这条线路上，TLS 由 Cloudflare 终止。
+
+手机会尝试二维码中的每个地址，并使用第一个响应的地址。桌面端的主 API 始终只在 `127.0.0.1` 上。Connect Mobile 是一个独立的监听器，默认关闭，需要连接密码，并且可以随时关闭或更换新密码。
+
+在手机上，你可以打开任何项目和 worker，使用结构化 Chat 或智能体的终端界面，启动新会话，回复审批和提问，切换智能体和模型，语音输入，添加附件，跟进拉取请求、评审和评审运行，并接收推送通知。
+
+其他 Orchestrator.inc 桌面应用也可以把这台电脑作为远程主机连接。在这台电脑上运行 `ao remote-host`。在另一台电脑上开启 **Settings → General → Developer mode**，然后使用 **Settings → Remote hosts → Add host**。分步设置、安全模型和故障排除请参阅 [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access)。
+
+**Orchestrator Cloud 现已在桌面应用中提供**（先开启 **Settings → General → Developer mode**，再开启 **Cloud**）。选择 **Sign in to AO Cloud**，即可在托管沙箱而不是你的电脑上运行云端智能体。任何人都可以登录并立即开始。云端会话运行在远程沙箱中，可能启动较慢，也可能丢失未提交的工作，因此请经常提交并推送。请参阅 [Cloud 指南](https://docs.orchestrator.inc/guides/cloud) 和[套餐](#plans)。
+
+<a id="supported-agents"></a>
 
 ## 支持的智能体
 
@@ -168,6 +207,16 @@ Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
+  </tr>
 </table>
 
 [浏览智能体设置指南 →](https://docs.orchestrator.inc/plugins/agents)
@@ -188,6 +237,51 @@ Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使
 | Linux（Fedora/RHEL）   | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
 打开 Orchestrator.inc，并选择你希望 Orchestrator.inc 管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.orchestrator.inc/installation)。
+
+<a id="plans"></a>
+
+## 套餐
+
+本地使用免费：可使用任何受支持的 harness 无限运行本地智能体，并包含编排器、worker 和 PR 评审。本地智能体没有套餐限制。付费套餐增加 AO Cloud 智能体，用于跨设备连接的云端中继也即将推出。
+
+| 套餐 | 价格 | 包含 |
+| --- | --- | --- |
+| **Free** | $0 | 在本机无限运行本地智能体。编排器、worker 和 PR 评审。可在同一网络内连接，也可通过你自己的 Tailscale 或托管 HTTPS 隧道随时随地连接。无云端智能体。 |
+| **Starter** | $20/月 | 包含 Free 的全部内容，另加云端智能体。电脑休眠时云端智能体仍会继续工作，并在云端处理拉取请求、CI 修复和评审。1 个云端项目，1 个同时运行的云端智能体。即将推出：用于跨设备访问的云端中继。 |
+| **Pro** | $40/月 | 包含 Starter 的全部内容。可使用自己的 Coder 部署。5 个云端项目，15 个同时运行的云端智能体。 |
+| **Enterprise** | 定制价格 | 云端项目和同时运行的云端智能体不限数量，无会话时长上限，可协作使用云端智能体，支持 SSO 和团队管理，并提供带 SLA 的优先支持。 |
+
+套餐按月计费，详见 [orchestrator.inc/pricing](https://orchestrator.inc/pricing)。登录 AO Cloud 后，可在桌面应用的 **Settings → Upgrade** 中选择或更改套餐。如需 Enterprise，请在同一页面使用 **Talk to founder**，或加入 [Teams & Enterprise 候补名单](https://orchestrator.inc/waitlist)。
+
+## 常见问题
+
+### Orchestrator.inc（Agent Orchestrator，AO）是什么？
+
+Orchestrator.inc（原名 Agent Orchestrator，简称 AO）是一款开源桌面应用和 CLI。它在各自独立的 git worktree 中并行运行和监督 Claude Code、Codex 及其他编程智能体，并跟踪它们的拉取请求、CI 和评审。
+
+### 使用什么许可证？
+
+Apache-2.0。参见 [LICENSE](../LICENSE)。
+
+### 支持哪些编程智能体？
+
+支持 37 个编程智能体 harness（35 个以上），包括 Claude Code、Codex、Cursor、Gemini CLI、GitHub Copilot、opencode、Aider、Amp、Droid、Goose、Cline 和 Kimi。参见上方的[支持的智能体](#supported-agents)表格。各智能体对 worker、Chat 和评审者角色的支持程度不同。
+
+### 支持哪些平台？
+
+桌面应用支持 macOS（Apple silicon 和 Intel）、Windows 和 Linux（AppImage、`.deb` 和 `.rpm`）。
+
+### 有移动应用吗？
+
+有。Orchestrator.inc 已在 [App Store](https://apps.apple.com/app/ao-mobile/id6792552173)（iPhone 和 iPad）和 [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev)（Android）上架。应用通过本地网络或托管 HTTPS 隧道与桌面端配对。也会提供 Tailscale 地址，但 iPhone 和 iPad 无法使用，Android 也尚未在真实设备上验证。参见[移动端与跨设备](#mobile-and-cross-device)。
+
+### 免费吗？
+
+免费。本地应用不收费：桌面应用、CLI 和移动应用都免费，源代码以 Apache-2.0 开源。你使用自己的编程智能体订阅或 API 密钥。付费的 AO Cloud 套餐起价为 $20/月（Starter）；Pro 为 $40/月，Enterprise 为定制价格。参见[套餐](#plans)。团队和企业可以加入 [Teams & Enterprise 候补名单](https://orchestrator.inc/waitlist)。
+
+### 这和 `ComposioHQ/agent-orchestrator` 是同一个项目吗？
+
+是的。该项目原先位于 `github.com/ComposioHQ/agent-orchestrator`，现在位于 [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator)。它采用 Apache-2.0 许可证。
 
 ## 报告 bug
 

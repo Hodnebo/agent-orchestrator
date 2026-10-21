@@ -12,6 +12,8 @@
 [![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
 [![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
+Orchestrator.inc（旧称 Agent Orchestrator、AO。旧リポジトリは github.com/ComposioHQ/agent-orchestrator）は、Claude Code、Codex をはじめ 35 以上のコーディングエージェントに対応したオープンソース（Apache-2.0）のオーケストレーターです。エージェントを並列に実行し、それぞれに隔離された git worktree とブランチを割り当てます。プロジェクトのオーケストレーターエージェントが大きな目標を計画し、焦点を絞ったワーカーエージェントを起動します。自律的なプルリクエストのループにより、CI の失敗やレビューコメントは変更を担当するエージェントに戻されます。AO は macOS、Windows、Linux 向けのデスクトップアプリとして提供され、iPhone、iPad、Android 向けのコンパニオンアプリを使えば、スマートフォンからエージェントの状況を確認し、指示を出せます。
+
 すべてのコーディングタスクに、それぞれ専用のエージェント、ワークスペース、フィードバックループを。<br />
 プロジェクトを理解するオーケストレーターとともに、より大きな成果を計画し委任できます。<br />
 すべてのワーカー、プルリクエスト、CI、レビューをライブ Kanban で追跡できます。
@@ -78,6 +80,16 @@ Orchestrator.inc は、すでに利用しているコーディングエージェ
 
 ## プロダクトの特長
 
+- **計画と委任を担うオーケストレーターエージェント。** 各プロジェクトのオーケストレーターが目標を計画に落とし込み、必要なコンテキストを渡してワーカーを起動し、そのプルリクエストを追跡します。サイドバーから、または macOS では ⌘⇧O、Windows と Linux では Ctrl+Shift+G で開けます。
+- **自律的なプルリクエストのループ。** CI の失敗、レビューコメント、マージコンフリクトは、変更を担当するワーカーに戻されます。
+- **組み込みの AO レビュー。** レビューに対応した任意のハーネス上で、厳しい視点を持つレビュアーエージェントがワーカーのプルリクエストを確認し、必要な変更ごとにインラインコメントを付けます。そのコメントはワーカーに戻されます。
+- **37 のコーディングエージェントをプロジェクトごとに選択。** ワーカー、オーケストレーター、レビュアーにそれぞれ別のエージェントを選べます。構造化された Chat とエージェント本来のターミナル UI を使い分け、ハーネスが対応していれば切り替えられます。
+- **流れを止めない Chat。** 次のメッセージの候補を Tab で採用できます。Developer mode では、インスペクターのサイドチャットで、プロバイダーが対応している場合にネイティブな会話フォークをプレビューできます。
+- **アーティファクト。** エージェントはプルリクエストの代わりに、Markdown のレポート、SVG、画像、HTML ページを成果物として届けられます。成果物は全画面表示の編集可能なビューアーでレンダリングされ、バージョン履歴と復元に対応し、最新のものは Kanban のカードに表示されます。
+- **オートメーション。** 定期的なプロンプトをスケジュールし、プロジェクトの指示やシェルコマンドを Cues として再利用できます。
+- **デスクトップとモバイル。** macOS、Windows、Linux 向けのデスクトップアプリに加え、iPhone、iPad、Android 向けアプリで複数のコンピューターを管理し、セッションを開始し、プッシュ通知を受け取れます。macOS では Stay Awake がマシンを接続可能な状態に保ち、対応モデルでは MacBook のふたを閉じていても動作します。
+- **アカウントとセットアップ。** エージェントの CLI を Settings からインストール・更新し、複数の Codex サブスクリプションアカウントを使い分け、Developer mode のプレビューとして Claude Code と Codex のフォルダー単位のアカウントを試せます。ライトとダークの 20 種類のカラーテーマから選べます。
+
 <table>
   <tr>
     <td width="36%" valign="middle">
@@ -107,6 +119,33 @@ Orchestrator.inc は、すでに利用しているコーディングエージェ
     </td>
   </tr>
 </table>
+
+<a id="mobile-and-cross-device"></a>
+
+## モバイルとデバイス間の連携
+
+Orchestrator.inc には iPhone、iPad、Android 向けのコンパニオンアプリがあります。
+
+- [App Store からダウンロード](https://apps.apple.com/app/ao-mobile/id6792552173)（iPhone と iPad）
+- [Google Play で手に入れよう](https://play.google.com/store/apps/details?id=aoagents.dev)（Android）
+
+スマートフォンはデスクトップアプリのリモコンです。リポジトリ、worktree、コーディングエージェントはあなた自身のコンピューターで動き続け、スマートフォンはホストされたコードのコピーではなく、そのコンピューターに接続します。ペアリングするには、デスクトップアプリで **Settings → Connect Mobile** を開き、**Generate** を選んで、モバイルアプリで QR コードを読み取ります。読み取れない場合は、アドレス、ポート、接続パスワードを手動で入力します。
+
+スマートフォンからコンピューターへの接続方法:
+
+- **同じネットワーク（LAN）:** 自宅やオフィスの信頼できる Wi-Fi なら、追加の設定なしで使えます。この接続は接続パスワードで保護された暗号化なしの HTTP なので、信頼できないネットワークでは使わないでください。
+- **Tailscale:** コンピューターが tailnet に参加している場合、QR コードにはその Tailscale アドレスも含まれ、同じ tailnet のスマートフォンから使えます。iOS が Tailscale アドレスへの暗号化されていない接続をブロックするため、iPhone と iPad では使えません。Android アプリはこの接続を許可していますが、実機の Android 端末ではまだ検証されていません。外出先から確実に接続するには、次の HTTPS の方法を使ってください。
+- **管理された HTTPS トンネル:** Connect Mobile は `cloudflared`（macOS アプリに同梱、Windows と Linux ではワンクリックでインストール）を実行し、外出先からどのデバイスでも使える HTTPS アドレスを追加します。この経路では Cloudflare が TLS を終端します。
+
+スマートフォンは QR コードに含まれるすべてのアドレスを試し、最初に応答したものを使います。デスクトップのメイン API が `127.0.0.1` の外に出ることはありません。Connect Mobile は独立したリスナーで、既定ではオフになっており、接続パスワードが必要で、いつでもオフにしたりパスワードを変更したりできます。
+
+スマートフォンからは、任意のプロジェクトとワーカーを開く、構造化された Chat やエージェントのターミナル UI を使う、新しいセッションを開始する、承認や質問に答える、エージェントやモデルを切り替える、音声で入力する、ファイルを添付する、プルリクエスト・レビュー・レビュアーの実行を追う、プッシュ通知を受け取る、といった操作ができます。
+
+別の Orchestrator.inc デスクトップアプリから、このコンピューターにリモートホストとして接続することもできます。このコンピューターで `ao remote-host` を実行し、もう一方のコンピューターで **Settings → General → Developer mode** をオンにしてから **Settings → Remote hosts → Add host** を使います。手順、セキュリティモデル、トラブルシューティングは [Remote access and mobile](https://docs.orchestrator.inc/configuration/remote-access) を参照してください。
+
+**Orchestrator Cloud がデスクトップアプリで利用できるようになりました**（**Settings → General → Developer mode** をオンにしてから **Cloud** をオンにします）。**Sign in to AO Cloud** を選ぶと、コンピューターではなくホストされたサンドボックス上で、クラウドでエージェントを実行できます。誰でもサインインしてすぐに始められます。クラウドセッションはリモートのサンドボックスで実行されるため、起動に時間がかかったり、コミットしていない作業が失われたりすることがあります。こまめにコミットとプッシュをしてください。[Cloud ガイド](https://docs.orchestrator.inc/guides/cloud) と [プラン](#plans) を参照してください。
+
+<a id="supported-agents"></a>
 
 ## 対応エージェント
 
@@ -168,6 +207,16 @@ Orchestrator.inc は、すでに利用しているコーディングエージェ
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="../frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
+  </tr>
 </table>
 
 [エージェントのセットアップガイドを見る →](https://docs.orchestrator.inc/plugins/agents)
@@ -188,6 +237,51 @@ Orchestrator.inc は、すでに利用しているコーディングエージェ
 | Linux（Fedora/RHEL）   | [ダウンロード](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
 
 Orchestrator.inc を開き、Orchestrator.inc に管理させたいリポジトリを指定します。デスクトップアプリがデーモンを実行するため、CLI は不要です。エージェント CLI のセットアップとトラブルシューティングは[インストールガイド](https://docs.orchestrator.inc/installation)を参照してください。
+
+<a id="plans"></a>
+
+## プラン
+
+ローカルでの利用は無料です。対応するどのハーネスでもローカルエージェントを無制限に使え、オーケストレーター、ワーカー、PR レビューも含まれます。ローカルエージェントにはプランによる制限がありません。有料プランでは AO Cloud のエージェントが使えるようになり、デバイス間をつなぐクラウドリレーも近日提供予定です。
+
+| プラン | 価格 | 含まれるもの |
+| --- | --- | --- |
+| **Free** | $0 | 手元のマシンでローカルエージェントを無制限に。オーケストレーター、ワーカー、PR レビュー。同じネットワーク内で、または自分の Tailscale か管理された HTTPS トンネルでどこからでも接続。クラウドエージェントなし。 |
+| **Starter** | $20/月 | Free のすべてに加えてクラウドエージェント。コンピューターがスリープしている間もクラウドエージェントが作業を続け、プルリクエスト、CI の修正、レビューをクラウドで処理します。クラウドプロジェクト 1 つ、同時実行のクラウドエージェント 1 つ。近日提供: デバイス間アクセスのためのクラウドリレー。 |
+| **Pro** | $40/月 | Starter のすべて。独自の Coder デプロイメントを利用可能。クラウドプロジェクト 5 つ、同時実行のクラウドエージェント 15。 |
+| **Enterprise** | 個別見積もり | クラウドプロジェクトと同時実行のクラウドエージェントが無制限、セッション時間の上限なし、クラウドエージェントでの共同作業、SSO とチーム管理、SLA 付きの優先サポート。 |
+
+プランは月額で請求されます。詳しくは [orchestrator.inc/pricing](https://orchestrator.inc/pricing) を参照してください。プランの選択や変更は、AO Cloud にサインインした後、デスクトップアプリの **Settings → Upgrade** で行います。Enterprise については同じページの **Talk to founder** を使うか、[Teams & Enterprise のウェイティングリスト](https://orchestrator.inc/waitlist) に登録してください。
+
+## よくある質問
+
+### Orchestrator.inc（Agent Orchestrator、AO）とは何ですか？
+
+Orchestrator.inc（旧称 Agent Orchestrator、AO）は、オープンソースのデスクトップアプリと CLI です。Claude Code、Codex などのコーディングエージェントを、それぞれ専用の git worktree で並列に実行・監督し、プルリクエスト、CI、レビューも追跡します。
+
+### ライセンスは何ですか？
+
+Apache-2.0 です。[LICENSE](../LICENSE) を参照してください。
+
+### どのコーディングエージェントに対応していますか？
+
+37 のコーディングエージェントハーネス（35 以上）に対応しています。Claude Code、Codex、Cursor、Gemini CLI、GitHub Copilot、opencode、Aider、Amp、Droid、Goose、Cline、Kimi などです。上の [対応エージェント](#supported-agents) の表を参照してください。ワーカー、Chat、レビュアーとしての対応状況はエージェントごとに異なります。
+
+### どのプラットフォームで動きますか？
+
+デスクトップアプリは macOS（Apple silicon と Intel）、Windows、Linux（AppImage、`.deb`、`.rpm`）で動作します。
+
+### モバイルアプリはありますか？
+
+はい。iPhone と iPad 向けは [App Store](https://apps.apple.com/app/ao-mobile/id6792552173)、Android 向けは [Google Play](https://play.google.com/store/apps/details?id=aoagents.dev) で公開しています。アプリはローカルネットワーク、または管理された HTTPS トンネル経由でデスクトップとペアリングします。Tailscale アドレスも提供されますが、iPhone と iPad では使えず、Android ではまだ実機で検証されていません。[モバイルとデバイス間の連携](#mobile-and-cross-device) を参照してください。
+
+### 無料ですか？
+
+はい。ローカルアプリは無料です。デスクトップアプリ、CLI、モバイルアプリはすべて無料で、ソースコードは Apache-2.0 で公開されています。コーディングエージェントには、ご自身のサブスクリプションや API キーを使います。有料の AO Cloud プランは $20/月（Starter）からで、Pro は $40/月、Enterprise は個別見積もりです。[プラン](#plans) を参照してください。チームや企業の方は [Teams & Enterprise のウェイティングリスト](https://orchestrator.inc/waitlist) に登録できます。
+
+### `ComposioHQ/agent-orchestrator` と同じプロジェクトですか？
+
+はい。このプロジェクトは以前 `github.com/ComposioHQ/agent-orchestrator` にあり、現在は [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator) にあります。ライセンスは Apache-2.0 です。
 
 ## バグを報告する
 
