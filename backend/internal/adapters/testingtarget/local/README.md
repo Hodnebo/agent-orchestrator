@@ -150,3 +150,9 @@ returns observation and input to the owned Electron window. A fresh observation
 is required after switching. The controller records terminal tty process births,
 terminates only those captured processes and closes only the admitted window at
 cleanup. Terminal.app itself and its other windows never become owned.
+
+For hosts with several macOS Spaces, the supervisor can opt into
+`AO_TESTING_STICKY_WINDOWS=1`. The recipe snapshots this setting and the owned
+Electron makes only its own windows visible on all workspaces, including
+fullscreen workspaces. It changes no host app assignment or global Space. Cua's
+PID, window, current-Space and focus checks still run without exceptions.

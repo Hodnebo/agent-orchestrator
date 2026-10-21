@@ -83,6 +83,7 @@ type Recipe struct {
 	DeliveryMode  string                          `json:"deliveryMode,omitempty"`
 	VisualMarker  bool                            `json:"visualMarker,omitempty"`
 	RealProviders bool                            `json:"realProviders,omitempty"`
+	StickyWindows bool                            `json:"stickyWindows,omitempty"`
 }
 
 // Deps supplies persistence, providers and target recipes.

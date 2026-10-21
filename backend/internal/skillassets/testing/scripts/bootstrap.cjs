@@ -1,9 +1,31 @@
 // This wrapper stays in ignored build output, never in AO frontend source.
-const { app, ipcMain } = require('electron');
+const { app, ipcMain, BaseWindow } = require('electron');
 const fs = require('node:fs');
 const { randomBytes } = require('node:crypto');
 
 if (app.isPackaged) throw new Error('Testing target must be unpackaged');
+// This opt-in fixture changes only windows created by this owned Electron.
+// Keep Cua's current-Space admission checks intact on hosts using several Spaces.
+if (process.env.AO_TESTING_STICKY_WINDOWS === '1') {
+  const configured = new WeakSet();
+  app.on('web-contents-created', (_event, contents) => {
+    contents.on('did-finish-load', () => {
+      if (!contents.getURL().startsWith('app://renderer/')) return;
+      for (const window of BaseWindow.getAllWindows()) {
+        if (window.isDestroyed() || configured.has(window)) continue;
+        configured.add(window);
+        const pin = () => {
+          if (window.isDestroyed()) return;
+          window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+          console.log(`Testing target Space fixture active: ${window.isVisibleOnAllWorkspaces()}`);
+        };
+        // AO shows BaseWindow after this load event. Apply after that show too.
+        window.on('show', pin);
+        if (window.isVisible()) pin();
+      }
+    });
+  });
+}
 if (process.env.AO_TARGET_MARKER_ORACLE) {
   const marker = `SCREEN-${randomBytes(8).toString('hex').toUpperCase()}`;
   fs.writeFileSync(process.env.AO_TARGET_MARKER_ORACLE, JSON.stringify({ marker }), { mode: 0o600 });

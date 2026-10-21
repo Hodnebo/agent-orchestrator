@@ -56,11 +56,13 @@ func TestTestingProviderComposition(t *testing.T) {
 	for _, tc := range []struct {
 		name, checkout, mode string
 		real                 bool
+		sticky               bool
 		wantMode             cua.DeliveryMode
 		configured           bool
 	}{
 		{name: "URL intake without manual checkout", wantMode: cua.Foreground, configured: true},
 		{name: "configured default foreground", checkout: "/isolated/checkout", wantMode: cua.Foreground, configured: true},
+		{name: "sticky owned windows", checkout: "/isolated/checkout", wantMode: cua.Foreground, configured: true, sticky: true},
 		{name: "real providers", checkout: "/isolated/checkout", wantMode: cua.Foreground, configured: true, real: true},
 		{name: "explicit foreground", checkout: "/isolated/checkout", mode: "foreground", wantMode: cua.Foreground, configured: true},
 	} {
@@ -69,6 +71,9 @@ func TestTestingProviderComposition(t *testing.T) {
 			env := map[string]string{"AO_TESTING_TARGET_CHECKOUT": tc.checkout, "AO_TESTING_DESKTOP_DELIVERY": tc.mode}
 			if tc.real {
 				env["AO_TESTING_REAL_PROVIDERS"] = "1"
+			}
+			if tc.sticky {
+				env["AO_TESTING_STICKY_WINDOWS"] = "1"
 			}
 			desktop := &wiringDesktop{}
 			created := false
@@ -110,7 +115,7 @@ func TestTestingProviderComposition(t *testing.T) {
 				}
 			} else {
 				var recipe testingsvc.Recipe
-				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) || recipe.VisualMarker == tc.real || recipe.RealProviders != tc.real {
+				if err != nil || json.Unmarshal([]byte(run.RecipeSnapshot), &recipe) != nil || recipe.CheckoutPath != tc.checkout || recipe.DeliveryMode != string(tc.wantMode) || recipe.VisualMarker == tc.real || recipe.RealProviders != tc.real || recipe.StickyWindows != tc.sticky {
 					t.Fatal("configured recipe not retained", run, err)
 				}
 			}

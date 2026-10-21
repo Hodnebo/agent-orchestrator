@@ -154,6 +154,7 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 	var recipe struct {
 		VisualMarker  bool `json:"visualMarker"`
 		RealProviders bool `json:"realProviders"`
+		StickyWindows bool `json:"stickyWindows"`
 	}
 	if spec.RecipeSnapshot != "" {
 		if err := json.Unmarshal([]byte(spec.RecipeSnapshot), &recipe); err != nil {
@@ -287,6 +288,9 @@ func (a *Adapter) Start(ctx context.Context, spec ports.TestingTargetSpec) (resu
 		return s.target, err
 	}
 	s.env = targetEnv(os.Environ(), s, recipe.VisualMarker, recipe.RealProviders)
+	if recipe.StickyWindows {
+		s.env = append(s.env, "AO_TESTING_STICKY_WINDOWS=1")
+	}
 	if err := os.Mkdir(filepath.Join(s.root, "control"), 0o700); err != nil {
 		s.mu.Unlock()
 		return s.target, err

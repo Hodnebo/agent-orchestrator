@@ -180,7 +180,7 @@ func testingProvidersFromEnv(cfg config.Config, getenv func(string) string, targ
 	checkout := getenv("AO_TESTING_TARGET_CHECKOUT")
 	desktop := newTestingDesktopBridge(cua.Config{DataDir: cfg.DataDir, DeliveryMode: mode}, makeDesktop)
 	providers := testingProviders{PullRequests: localtarget.NewPullRequestIntake(), Target: target, Desktop: desktop, Close: desktop.Close,
-		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: getenv("AO_TESTING_REAL_PROVIDERS") != "1", RealProviders: getenv("AO_TESTING_REAL_PROVIDERS") == "1"}}}
+		Recipes: map[string]testingsvc.Recipe{"local-ao": {ID: "local-ao", CheckoutPath: checkout, Snapshot: "isolated local AO checkout", DeliveryMode: string(mode), VisualMarker: getenv("AO_TESTING_REAL_PROVIDERS") != "1", RealProviders: getenv("AO_TESTING_REAL_PROVIDERS") == "1", StickyWindows: getenv("AO_TESTING_STICKY_WINDOWS") == "1"}}}
 	return providers, nil
 }
 
