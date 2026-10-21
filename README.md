@@ -142,7 +142,7 @@ How the phone reaches your computer:
 
 - **Same network (LAN):** works out of the box on a trusted home or office Wi-Fi. This connection is plain HTTP protected by the connection password, so keep it off untrusted networks.
 - **Tailscale:** when the computer is on a tailnet, the QR code also carries its Tailscale address, for phones on the same tailnet. iPhone and iPad cannot use it, because iOS blocks unencrypted connections to Tailscale addresses. The Android app allows this connection, but it has not been verified on a physical Android device yet. Use the HTTPS option below for a tested path away from home.
-- **Managed HTTPS tunnel:** Connect Mobile can install and run `cloudflared` to add an HTTPS address for use away from home on any device. Cloudflare terminates TLS on that route.
+- **Managed HTTPS tunnel:** Connect Mobile runs `cloudflared` (included in the macOS app, one-click install on Windows and Linux) to add an HTTPS address for use away from home on any device. Cloudflare terminates TLS on that route.
 
 The phone tries every address in the QR code and uses the first one that answers. The desktop's main API never leaves `127.0.0.1`. Connect Mobile is a separate listener that is off by default, needs the connection password, and can be switched off or given a new password at any time.
 
