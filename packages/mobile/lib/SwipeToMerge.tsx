@@ -17,7 +17,7 @@ import { scheduleOnRN } from "react-native-worklets";
 
 import { haptics } from "./haptics";
 import { Feather } from "./icons";
-import { boundSwipeToMergeTranslation, shouldCommitSwipeToMerge, swipeToMergeTravel } from "./swipe-to-merge-model";
+import { boundSwipeToMergeTranslation, shouldCommitSwipeToMerge, swipeToMergeDetent, swipeToMergeTravel } from "./swipe-to-merge-model";
 import { useThemeState } from "./ThemeProvider";
 import { type, space } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
@@ -84,6 +84,7 @@ export function SwipeToMerge({
 	const translateX = useSharedValue(0);
 	const startX = useSharedValue(0);
 	const armed = useSharedValue(false);
+	const detent = useSharedValue(0);
 	const committed = useSharedValue(false);
 	const shimmer = useSharedValue(0);
 	const locked = disabled || busy;
@@ -108,10 +109,13 @@ export function SwipeToMerge({
 		translateX.value = withSpring(0, SPRING);
 	}, [committed, translateX]);
 	const commit = useCallback(() => {
-		haptics.tap();
+		haptics.press();
 		onMerge().then(settle, () => settle(false));
 	}, [onMerge, settle]);
-	const select = useCallback(() => haptics.select(), []);
+	// Haptics run on the JS thread; the gesture worklets schedule them by name.
+	const grab = useCallback(() => haptics.tap(), []);
+	const tick = useCallback(() => haptics.detent(), []);
+	const arm = useCallback(() => haptics.armed(), []);
 
 	const onLayout = useCallback((event: LayoutChangeEvent) => {
 		travel.value = swipeToMergeTravel(event.nativeEvent.layout.width, KNOB, INSET);
@@ -126,15 +130,23 @@ export function SwipeToMerge({
 		// its first jump and the knob stopped short of the end.
 		.onBegin((event) => {
 			startX.value = event.absoluteX;
+			detent.value = 0;
+			if (!committed.value) scheduleOnRN(grab);
 		})
 		.onUpdate((event) => {
 			if (committed.value) return;
 			translateX.value = boundSwipeToMergeTranslation(event.absoluteX - startX.value, travel.value);
-			// One tick when the knob crosses the point of no return, either way.
+			// A ratchet: a light tick per detent the knob passes, and a firmer bump
+			// in place of that frame's tick when it crosses the point of no return.
 			const nextArmed = shouldCommitSwipeToMerge(translateX.value, travel.value);
+			const nextDetent = swipeToMergeDetent(translateX.value, travel.value);
 			if (nextArmed !== armed.value) {
 				armed.value = nextArmed;
-				scheduleOnRN(select);
+				detent.value = nextDetent;
+				scheduleOnRN(nextArmed ? arm : tick);
+			} else if (nextDetent !== detent.value) {
+				detent.value = nextDetent;
+				scheduleOnRN(tick);
 			}
 		})
 		.onEnd((event) => {

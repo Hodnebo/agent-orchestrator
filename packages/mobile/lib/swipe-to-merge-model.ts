@@ -20,3 +20,12 @@ export function shouldCommitSwipeToMerge(translationX: number, travel: number): 
 	"worklet";
 	return travel > 0 && translationX >= travel * SWIPE_TO_MERGE_THRESHOLD_RATIO;
 }
+
+/** How many haptic detents the knob passes over the full track. */
+export const SWIPE_TO_MERGE_DETENTS = 10;
+
+/** Which detent the knob sits in; a change between frames is one haptic tick. */
+export function swipeToMergeDetent(translationX: number, travel: number): number {
+	"worklet";
+	return travel > 0 ? Math.floor((translationX / travel) * SWIPE_TO_MERGE_DETENTS) : 0;
+}

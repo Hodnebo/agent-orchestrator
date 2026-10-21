@@ -1,5 +1,6 @@
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
@@ -31,6 +32,7 @@ export default function ReviewDetailScreen() {
 
 function ReviewDetailContent() {
 	const t = useTheme();
+	const insets = useSafeAreaInsets();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
@@ -217,10 +219,11 @@ function ReviewDetailContent() {
 		: primaryAction !== "none" && multiplePullRequests ? "Applies to every eligible pull request in this session." : undefined;
 
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
+		<View style={styles.screen}>
+		<ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
-			<View style={[styles.row, merge?.canMerge && styles.rowAboveSlider]}>
+			<View style={styles.row}>
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
 						<Feather name="git-pull-request" size={13} color={t.textSecondary} />
@@ -234,9 +237,6 @@ function ReviewDetailContent() {
 					{merge?.reason ? <Text style={styles.detail}>{merge.reason}</Text> : null}
 				</View>
 			</View>
-			{merge?.canMerge && pr ? <View style={styles.sliderSlot}>
-				<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
-			</View> : null}
 
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its pill and menu are laid over the row rather
@@ -298,6 +298,11 @@ function ReviewDetailContent() {
 				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
 				: <Text style={styles.note}>No Orchestrator review for this pull request yet.</Text>}
 		</ScrollView>
+		{/* Docked under the scroll, within thumb reach, like a checkout's slide-to-pay. */}
+		{merge?.canMerge && pr ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+		</View> : null}
+		</View>
 	);
 }
 
@@ -369,12 +374,12 @@ function toneColor(t: Theme, tone: MergeTone, tint = false): string {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	scroll: { flex: 1 },
 	content: { paddingBottom: space.huge },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	// A worker row's metrics: eyebrow, title, status line, divider underneath.
 	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
-	rowAboveSlider: { borderBottomWidth: 0 },
-	sliderSlot: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.md, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+	mergeFooter: { paddingHorizontal: space.lg, paddingTop: space.md, backgroundColor: t.bgBase, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
 	rowPressed: { backgroundColor: t.bgSubtle },
 	// Room for the pill and menu laid over the row's trailing edge.
 	rowWithOverlay: { paddingRight: 150 },

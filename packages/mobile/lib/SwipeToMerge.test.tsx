@@ -2,6 +2,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vitest";
 
 const gesture = vi.hoisted(() => ({ callbacks: {} as Record<string, (...args: any[]) => void> }));
+const feel = vi.hoisted(() => ({ tap: vi.fn(), select: vi.fn(), detent: vi.fn(), armed: vi.fn(), press: vi.fn(), error: vi.fn() }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", ActivityIndicator: "ActivityIndicator", StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("react-native-gesture-handler", () => ({
 	GestureDetector: "GestureDetector",
@@ -33,13 +34,13 @@ vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: (...args: unknown[]
 vi.mock("./ThemeProvider", () => ({ useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => true }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
-vi.mock("./haptics", () => ({ haptics: { tap: () => {}, select: () => {}, error: () => {} } }));
+vi.mock("./haptics", () => ({ haptics: feel }));
 vi.mock("./tokens", () => ({ type: { subheadline: { fontSize: 15, lineHeight: 20 } }, space: { xs: 4 } }));
 
 import { SwipeToMerge } from "./SwipeToMerge";
 
 let renderer: ReactTestRenderer | undefined;
-afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); gesture.callbacks = {}; });
+afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); gesture.callbacks = {}; Object.values(feel).forEach((fn) => fn.mockClear()); });
 
 function mount(onMerge: () => Promise<boolean>) {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -73,4 +74,26 @@ it("does not merge when the finger stops short of the end", async () => {
 		gesture.callbacks.onEnd({ absoluteX: 180, translationX: 160 });
 	});
 	expect(onMerge).not.toHaveBeenCalled();
+});
+
+it("ticks like a ratchet while dragging, bumps when armed, and lands on release", async () => {
+	const onMerge = vi.fn(async () => false);
+	mount(onMerge);
+	await act(async () => {
+		gesture.callbacks.onBegin({ absoluteX: 20 });
+		expect(feel.tap).toHaveBeenCalledTimes(1);
+		// 244pt of travel: halfway passes detents 1–5.
+		gesture.callbacks.onUpdate({ absoluteX: 20 + 122 });
+		expect(feel.detent).toHaveBeenCalledTimes(1);
+		gesture.callbacks.onUpdate({ absoluteX: 20 + 150 });
+		expect(feel.detent).toHaveBeenCalledTimes(2);
+		expect(feel.armed).not.toHaveBeenCalled();
+		// Past 85%: the armed bump replaces that frame's detent tick.
+		gesture.callbacks.onUpdate({ absoluteX: 20 + 220 });
+		expect(feel.armed).toHaveBeenCalledTimes(1);
+		expect(feel.detent).toHaveBeenCalledTimes(2);
+		gesture.callbacks.onEnd({ absoluteX: 20 + 240 });
+	});
+	expect(feel.press).toHaveBeenCalledTimes(1);
+	expect(onMerge).toHaveBeenCalledTimes(1);
 });
