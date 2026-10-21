@@ -220,7 +220,11 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	// shown anyway once it has had time to.
 	const { ready } = page;
 	const readyFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	useEffect(() => () => clearTimeout(readyFallback.current), []);
+	// The fallback belongs to the page that armed it. When that page goes (out of
+	// range, or remounted after its process died), so does the timer; otherwise it
+	// would mark the next page ready before its height, which then resizes in view.
+	useEffect(() => () => clearTimeout(readyFallback.current), [page.mount]);
+	useEffect(() => { if (!live) clearTimeout(readyFallback.current); }, [live]);
 	const onLoaded = useCallback(() => {
 		clearTimeout(readyFallback.current);
 		readyFallback.current = setTimeout(ready, REPORT_SETTLE_LIMIT_MS + 500);
