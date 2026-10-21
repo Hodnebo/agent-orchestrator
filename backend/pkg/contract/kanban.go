@@ -36,8 +36,10 @@ const (
 // has to report.
 type KanbanSessionFacts struct {
 	SessionFacts
-	// Interrupted reports that the person stopped the worker's latest turn.
-	// It only speaks while the worker is idle: a new turn supersedes it.
+	// Interrupted reports that the worker's latest Chat turn settled as
+	// interrupted, the same state the timeline shows. That is usually the
+	// person pressing Stop, but an account switch can settle a turn the same
+	// way. It only speaks while the worker is idle: a new turn supersedes it.
 	Interrupted       bool
 	HasArtifactOutput bool
 	AutoReview        bool
