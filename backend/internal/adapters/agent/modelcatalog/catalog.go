@@ -468,6 +468,9 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
 	output, err := cmd.CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
+		cancel()
+		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
+		defer cancel()
 		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
