@@ -91,3 +91,19 @@ test("leaves Markdown release notes unchanged", () => {
 	const markdown = "**Changes**\n\n- Fix it by @person in [#1](https://github.com/Untrivial-ai/agent-orchestrator/pull/1)";
 	expect(normalizeReleaseNotes(markdown)).toBe(markdown);
 });
+
+test("leaves loose Markdown lists and inline code untouched", () => {
+	const markdown = "- First change\n\n- Second change with `a<b>c`";
+	expect(normalizeReleaseNotes(markdown)).toBe("- First change\n\n- Second change with `ac`");
+});
+
+test("keeps nested HTML list items on their own lines", () => {
+	expect(normalizeReleaseNotes("<ul><li>Parent<ul><li>Nested</li></ul></li><li>Sibling</li></ul>"))
+		.toBe("- Parent\n- Nested\n- Sibling");
+});
+
+test("reads quoted href values even when another attribute contains >", () => {
+	expect(normalizeReleaseNotes(
+		"<p><a title=\"a > b\" href='https://github.com/Untrivial-ai/agent-orchestrator/pull/1'>#1</a></p>",
+	)).toBe("[#1](https://github.com/Untrivial-ai/agent-orchestrator/pull/1)");
+});

@@ -100,7 +100,7 @@ export function updateFailureOutcome(
 /** Longest release-note text worth pushing to the renderer. */
 export const RELEASE_NOTES_MAX_CHARS = 4000;
 
-/** Trims and bounds release notes that have already been converted to plain text. */
+/** Trims and bounds release notes that have already been flattened to text. */
 export function boundPlainReleaseNotes(notes: string | null | undefined): string | undefined {
 	const text = (notes ?? "").trim();
 	if (text === "") return undefined;
@@ -109,10 +109,17 @@ export function boundPlainReleaseNotes(notes: string | null | undefined): string
 		: text;
 }
 
+// Attribute values may themselves contain ">", so anchors are matched quote-aware.
+const HTML_ANCHOR_PATTERN = /<a\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/a>/gi;
+// Only notes rendered as HTML (releases.atom) are rewritten; a Markdown body
+// from the API must pass through unchanged.
+const HTML_BLOCK_PATTERN = /<(?:p|ul|ol|li|div|h[1-6])(?:\s[^>]*)?>/i;
+
 /** Rewrites an HTML anchor as a Markdown link; mentions and non-https links keep only their text. */
-function htmlAnchorToMarkdown(_match: string, href: string, inner: string): string {
+function htmlAnchorToMarkdown(_match: string, attributes: string, inner: string): string {
 	const text = inner.replace(/<[^>]*>/g, "").replace(/[[\]]/g, "\\$&").trim();
-	const url = href.replace(/&amp;/gi, "&");
+	const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
+	const url = (href?.[1] ?? href?.[2] ?? "").replace(/&amp;/gi, "&");
 	if (text === "" || text.startsWith("@") || !/^https:\/\/[^\s()]+$/.test(url)) return text;
 	return `[${text}](${url})`;
 }
@@ -136,11 +143,16 @@ export function normalizeReleaseNotes(
 		: Array.isArray(notes)
 			? notes.map((entry) => entry?.note ?? "").join("\n\n")
 			: "";
-	const text = raw
-		.replace(/<a\b[^>]*?\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, htmlAnchorToMarkdown)
-		.replace(/<li(?:\s[^>]*)?>/gi, "- ")
-		.replace(/<\/?(?:strong|b)(?:\s[^>]*)?>/gi, "**")
-		.replace(/<\/?code(?:\s[^>]*)?>/gi, "`")
+	const isHtml = HTML_BLOCK_PATTERN.test(raw);
+	const markdown = isHtml
+		? raw
+			.replace(HTML_ANCHOR_PATTERN, htmlAnchorToMarkdown)
+			// The leading break keeps a nested item off its parent's line.
+			.replace(/<li(?:\s[^>]*)?>/gi, "\n- ")
+			.replace(/<\/?(?:strong|b)(?:\s[^>]*)?>/gi, "**")
+			.replace(/<\/?code(?:\s[^>]*)?>/gi, "`")
+		: raw;
+	const text = markdown
 		// Keep block boundaries as line breaks before tags are dropped, so
 		// "<li>a</li><li>b</li>" does not collapse into "ab".
 		.replace(/<\/(p|div|li|ul|ol|h[1-6]|tr)>/gi, "\n")
@@ -157,8 +169,7 @@ export function normalizeReleaseNotes(
 		.split("\n")
 		.map((line) => line.trim())
 		.join("\n")
-		// "</li>\n<li>" leaves a blank line that would make the list loose.
-		.replace(/^(- .*)\n\n(?=- )/gm, "$1\n")
 		.trim();
-	return boundPlainReleaseNotes(text);
+	// "</li>\n<li>" leaves a blank line that would make the list loose.
+	return boundPlainReleaseNotes(isHtml ? text.replace(/^(- .*)\n\n(?=- )/gm, "$1\n") : text);
 }
