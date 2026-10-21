@@ -1669,10 +1669,12 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
 	if (concrete && mapped.currentValue !== concrete.value) {
 		const label = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
+		// The row stands for the hidden model too, so a favourite saved on it still shows as offered.
+		const aliases = [...((implicit as typeof implicit & { aliases?: string[] }).aliases ?? []), concrete.value];
 		return {
 			...mapped,
 			choices: mapped.choices.filter((choice) => choice !== concrete).map((choice) =>
-				choice === implicit ? { ...choice, name: label } : choice,
+				choice === implicit ? { ...choice, name: label, aliases } : choice,
 			),
 		};
 	}

@@ -70,3 +70,21 @@ it.each([true, false])("restores a Cursor favorite's saved Thinking %s", async (
 	const change = await pickSetup("cursor", options, options, { harness: "cursor", row: "model-1", model: "model-1", label: "Model 1", effort: "high", thinking });
 	expect(change).toHaveBeenCalledWith("thinking", { value: thinking ? "on" : "off" });
 });
+
+// Claude's catalog names its default after a model ("Opus 5.5"); while another model
+// runs, the picker shows that row instead of "opus". A favourite saved on Opus must
+// still find its model, or it is greyed out.
+it("keeps a model folded into the agent's default row offered to its favourites", () => {
+	const claude: ChatConfigOption = {
+		id: "model", name: "Model", category: "model", type: "select", currentValue: "haiku",
+		choices: [
+			{ value: "default", name: "Default (recommended)", description: "Opus 5.5" },
+			{ value: "opus", name: "Opus 5.5" },
+			{ value: "haiku", name: "Haiku 4.5" },
+		],
+	};
+	render(<TurnSettingsBar harness="claude-code" models={[]} settings={{ model: "haiku" }}
+		configOptions={[claude]} onChangeConfigOption={vi.fn()} agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }} />);
+	const rows = picker.current?.models ?? [];
+	expect(rows.some((model) => model.id === "opus" || model.aliases?.includes("opus"))).toBe(true);
+});
