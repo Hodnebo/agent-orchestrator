@@ -99,6 +99,16 @@ Orchestrator.inc works with the coding agents and source-control workflow you al
 
 ## Product highlights
 
+- **An orchestrator agent that plans and delegates.** Each project's orchestrator turns an outcome into a plan, spawns workers with focused context, and follows their pull requests. Open it from the sidebar or with ⌘⇧O on macOS, Ctrl+Shift+G on Windows and Linux.
+- **An autonomous pull-request loop.** CI failures, review comments, and merge conflicts go back to the worker that owns the change.
+- **Built-in AO review.** An adversarial reviewer agent, on any reviewer-capable harness, reviews a worker's pull request and posts an inline comment for each change it requires. Those comments go back to the worker.
+- **36 coding agents, chosen per project.** Pick different agents for workers, the orchestrator, and reviewers. Use structured Chat or the agent's native terminal UI and switch between them where the harness supports it.
+- **Chat that keeps up.** Tab accepts a suggested next message. In Developer mode, side chats in the inspector preview native conversation forks where the provider supports it.
+- **Artifacts.** Agents can deliver Markdown reports, SVGs, images, and HTML pages instead of a pull request. They open rendered in a full-screen, editable viewer with version history and restore, and the latest ones appear on Kanban cards.
+- **Automations.** Schedule recurring prompts, and reuse project instructions and shell commands as Cues.
+- **Desktop and mobile.** Desktop apps for macOS, Windows, and Linux, plus iPhone, iPad, and Android apps that manage several computers, start sessions, and send push notifications. On macOS, Stay Awake keeps the machine reachable, even with a MacBook lid closed on supported models.
+- **Accounts and setup.** Install and update agent CLIs from Settings, keep several Codex subscription accounts, and try per-folder Claude Code and Codex accounts as a Developer mode preview. Choose from 20 light and dark color themes.
+
 <table>
   <tr>
     <td width="36%" valign="middle">
@@ -216,6 +226,11 @@ Another Orchestrator.inc desktop can also connect to this computer as a remote h
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><img src="frontend/src/renderer/assets/agents/memcode.png" alt="memcode" width="24" height="24" align="middle" /> &nbsp; <b>memcode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
   </tr>
 </table>
 
