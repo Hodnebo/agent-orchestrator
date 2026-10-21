@@ -479,11 +479,14 @@ func elideWithCommand(text string, maxChars int, fullCmd string) string {
 	if omitted < 1 {
 		omitted = 1
 	}
-	for attempt := 0; attempt < 8; attempt++ {
+	if len([]rune(truncationMarker(original, fullCmd)))+2 > maxChars {
+		fullCmd = ""
+	}
+	for {
 		marker := truncationMarker(omitted, fullCmd)
 		markerRunes := []rune(marker)
 		if len(markerRunes) >= maxChars {
-			return marker
+			return string(runes[:maxChars])
 		}
 		head := (maxChars - len(markerRunes)) / 2
 		tail := maxChars - len(markerRunes) - head
@@ -512,8 +515,6 @@ func elideWithCommand(text string, maxChars int, fullCmd string) string {
 		}
 		omitted = nextOmitted
 	}
-	marker := truncationMarker(original, fullCmd)
-	return marker
 }
 
 func truncationMarker(omitted int, fullCmd string) string {

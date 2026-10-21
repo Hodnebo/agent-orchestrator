@@ -374,6 +374,29 @@ func TestSessionGet_TranscriptEdges(t *testing.T) {
 	})
 }
 
+func TestTranscriptSmallCapKeepsTextAndAccurateOmission(t *testing.T) {
+	const fieldCap = 80
+	source := strings.Repeat("H", 500) + strings.Repeat("T", 500)
+	command := transcriptCommand("demo-1", 1, 2, intPtr(0), "")
+	got, receipt := elideField(source, fieldCap, "text", command)
+	if utf8.RuneCountInString(got) != fieldCap {
+		t.Fatalf("capped length = %d, want %d: %q", utf8.RuneCountInString(got), fieldCap, got)
+	}
+	if !strings.HasPrefix(got, "H") || !strings.HasSuffix(got, "T") {
+		t.Fatalf("source head or tail lost: %q", got)
+	}
+	if strings.Contains(got, command) {
+		t.Fatalf("full command displaced source text: %q", got)
+	}
+	omitted := len(source) - strings.Count(got, "H") - strings.Count(got, "T")
+	if !strings.Contains(got, truncationMarker(omitted, "")) {
+		t.Fatalf("omission count does not match retained text: %q, omitted %d", got, omitted)
+	}
+	if receipt == nil || receipt.OriginalChars != len(source) || receipt.KeptChars != fieldCap {
+		t.Fatalf("truncation receipt = %#v", receipt)
+	}
+}
+
 func TestSplitWorkerReports(t *testing.T) {
 	visible, reports, ok := splitWorkerReports("hello\n\n<ao-worker-reports>\nbody\n</ao-worker-reports>")
 	if !ok || visible != "hello" || reports != "body" {
