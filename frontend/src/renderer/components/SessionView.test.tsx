@@ -195,7 +195,7 @@ vi.mock("../lib/api-client", () => ({
 	},
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorRequestId: (error: { requestId?: string } | undefined) => error?.requestId,
-	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	apiErrorMessage: (error: unknown, fallback = "Request failed") => error instanceof Error ? error.message : fallback,
 }));
 
 const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() => {
@@ -308,6 +308,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onSelectChat,
 		controllerTransitioning,
 		agentResuming,
+		controllerResumeError,
 		shellTerminals = [],
 		shellTarget,
 		onSelectShellTerminal,
@@ -330,6 +331,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		reviewerTarget?: { kind: "reviewer"; handleId: string; harness: string; sessionId: string };
 		onSelectChat?: () => void;
 		agentResuming?: boolean;
+		controllerResumeError?: string;
 		controllerTransitioning?: boolean;
 		shellTerminals?: Array<{ handleId: string; title: string }>;
 		shellTarget?: { kind: "shell"; handleId: string };
@@ -349,6 +351,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			data-testid="chat-surface"
 			data-transitioning={controllerTransitioning || agentResuming ? "true" : "false"}
 			data-new-work-disabled={newWorkDisabled ? "true" : "false"}
+			data-resume-error={controllerResumeError}
 		>
 			chat surface
 			<div data-testid={`auxiliary-tab-order-${session.id}`}>
@@ -1125,17 +1128,22 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).not.toHaveBeenCalled();
 	});
 
-	it("leaves a failed automatic resume stopped for manual retry", async () => {
+	it.each(["chat", "tui"] as const)("leaves a failed automatic resume in %s stopped with its error for manual retry", async (mode) => {
 		const session = workerSession("sess-1");
-		session.mode = "chat";
+		session.mode = mode;
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const view = render(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
-		expect(chatSurfaceTransitionRenders[0]).toBe(true);
-		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
+		if (mode === "chat") {
+			expect(chatSurfaceTransitionRenders[0]).toBe(true);
+			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
+			expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-resume-error", "provider unavailable");
+		} else {
+			expect(screen.getByRole("alert")).toHaveTextContent("provider unavailable");
+		}
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await act(async () => {});
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
