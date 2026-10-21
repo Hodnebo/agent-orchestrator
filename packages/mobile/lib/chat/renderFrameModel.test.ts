@@ -246,13 +246,23 @@ describe("remembered render heights", () => {
 });
 
 describe("render viewport signal", () => {
-	it("tells subscribed frames to re-check, until they unsubscribe", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("tells subscribed frames to re-check once a frame, however often it is raised", () => {
 		let calls = 0;
 		const unsubscribe = subscribeRenderViewport(() => { calls += 1; });
+		// A streaming reply raises it on every content-size change.
+		for (let index = 0; index < 20; index++) notifyRenderViewport();
+		vi.advanceTimersByTime(20);
+		expect(calls).toBe(1);
 		notifyRenderViewport();
+		vi.advanceTimersByTime(20);
+		expect(calls).toBe(2);
 		unsubscribe();
 		notifyRenderViewport();
-		expect(calls).toBe(1);
+		vi.advanceTimersByTime(20);
+		expect(calls).toBe(2);
 	});
 });
 
@@ -305,6 +315,51 @@ describe("RENDER_BRIDGE_SCRIPT height report", () => {
 		const run = bridge({ scrollHeight: 640, clientHeight: 312, innerHeight: 312, contentHeight: 312 });
 		await settle();
 		expect(run.heights).toEqual([640]);
+	});
+
+	it("keeps the frame's height for a page that fills the viewport, instead of growing it", async () => {
+		// Android, min-height:100vh: the content box is the viewport, a pixel taller than the 327 frame.
+		const run = bridge({ scrollHeight: 328, clientHeight: 327, innerHeight: 328, contentHeight: 328 });
+		await settle();
+		expect(run.heights).toEqual([327]);
+	});
+
+	it("grows a viewport-filling page that really overflows, then holds", async () => {
+		const page = { scrollHeight: 640, clientHeight: 312, innerHeight: 313, contentHeight: 640 };
+		const run = bridge(page);
+		await settle();
+		// The frame now fits the content; the page still tracks the viewport, a pixel taller.
+		Object.assign(page, { scrollHeight: 641, clientHeight: 640, innerHeight: 641, contentHeight: 641 });
+		run.resize();
+		await settle();
+		expect(run.heights).toEqual([640]);
+	});
+
+	it("holds a page that follows the viewport plus a margin, instead of growing it to the cap", async () => {
+		// min-height:100vh with a paragraph's 16px margin: the document is always the viewport + 16.
+		const page = { scrollHeight: 329, clientHeight: 312, innerHeight: 313, contentHeight: 329 };
+		const run = bridge(page);
+		await settle();
+		expect(run.heights).toEqual([329]);
+		// The frame grew to 329; the page grew with it.
+		Object.assign(page, { scrollHeight: 346, clientHeight: 329, innerHeight: 330, contentHeight: 346 });
+		run.resize();
+		await settle();
+		expect(run.heights).toEqual([329]);
+	});
+
+	it("still follows content that really grows while the frame stays put", async () => {
+		const page = { scrollHeight: 400, clientHeight: 312, innerHeight: 313, contentHeight: 400 };
+		const run = bridge(page);
+		await settle();
+		Object.assign(page, { scrollHeight: 400, clientHeight: 400, innerHeight: 401, contentHeight: 400 });
+		run.resize();
+		await settle();
+		// An image lands: the page grows, the frame has not moved since.
+		Object.assign(page, { scrollHeight: 520, contentHeight: 520 });
+		run.resize();
+		await settle();
+		expect(run.heights).toEqual([400, 520]);
 	});
 
 	it("shrinks a frame taller than its page to the content height", async () => {

@@ -2,6 +2,7 @@ import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { authHeaders, httpBase } from "../config";
 import { haptics } from "../haptics";
@@ -124,9 +125,6 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 			overScrollMode={fullscreen ? "always" : "never"}
 			showsVerticalScrollIndicator={false}
 			showsHorizontalScrollIndicator={false}
-			// A stored page never changes: Android serves it from cache without asking
-			// again. iOS has no such switch and revalidates (a quick 304).
-			cacheMode="LOAD_CACHE_ELSE_NETWORK"
 			style={styles.web}
 		/>
 	</View>;
@@ -212,13 +210,18 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
 	const liveRef = useRef(live);
 	liveRef.current = live;
+	// A screen pushed over the session leaves these frames laid out "in view";
+	// they let their pages go anyway and load them again on the way back.
+	const focused = useIsFocused();
+	const focusedRef = useRef(focused);
+	focusedRef.current = focused;
 	const leaveRange = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(leaveRange.current), []);
 	const measure = useCallback(() => {
 		frame.current?.measureInWindow((_x, y, _width, height) => {
 			// A cell the list has clipped measures as zero; leave it as it was.
 			if (height <= 0) return;
-			if (renderFrameLive(y, height, viewportHeight, liveRef.current, measured)) {
+			if (focusedRef.current && renderFrameLive(y, height, viewportHeight, liveRef.current, measured)) {
 				clearTimeout(leaveRange.current);
 				leaveRange.current = undefined;
 				if (!liveRef.current) setLive(true);
@@ -232,6 +235,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		});
 	}, [viewportHeight, measured]);
 	useEffect(() => subscribeRenderViewport(measure), [measure]);
+	useEffect(() => { measure(); }, [focused, measure]);
 	// A page that leaves range reloads when it returns, so it is loading again.
 	const { unload } = page;
 	useEffect(() => { if (!live) unload(); }, [live, unload]);

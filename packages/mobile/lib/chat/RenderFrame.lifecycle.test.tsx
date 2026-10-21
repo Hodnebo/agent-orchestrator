@@ -10,6 +10,13 @@ vi.mock("react-native", () => ({
 	useWindowDimensions: () => ({ width: 390, height: 800 }),
 }));
 vi.mock("react-native-webview", () => ({ WebView: "WebView" }));
+// Like the real hook, focus changes re-render through a subscription, past React.memo.
+const navigation = vi.hoisted(() => ({ focused: true, listeners: new Set<() => void>() }));
+vi.mock("expo-router/react-navigation", async () => {
+	const React = await import("react");
+	const subscribe = (listener: () => void) => { navigation.listeners.add(listener); return () => { navigation.listeners.delete(listener); }; };
+	return { useIsFocused: () => React.useSyncExternalStore(subscribe, () => navigation.focused) };
+});
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
 vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011" }));
@@ -35,6 +42,7 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	frameTop = 100;
+	navigation.focused = true;
 	act(() => {
 		renderer = create(<RenderFrame render={render} />, {
 			createNodeMock: () => ({
@@ -56,7 +64,9 @@ afterEach(() => {
 const frame = () => renderer!.root.findAll((node) => node.type === ("View" as never) && typeof node.props.onLayout === "function")[0];
 const webView = () => renderer!.root.findAll((node) => node.type === ("WebView" as never))[0];
 const skeletonShown = () => renderer!.root.findAll((node) => node.type === ("RenderSkeleton" as never)).length > 0;
-const moveFrame = (top: number) => act(() => { frameTop = top; notifyRenderViewport(); });
+// Viewport checks run on the next frame.
+const moveFrame = (top: number) => act(() => { frameTop = top; notifyRenderViewport(); vi.advanceTimersByTime(20); });
+const setFocused = (focused: boolean) => act(() => { navigation.focused = focused; for (const listener of navigation.listeners) listener(); });
 
 it("keeps the skeleton for a page that returns after leaving range mid-load", () => {
 	expect(webView()).toBeDefined();
@@ -115,4 +125,14 @@ it("lets a page go once it has really left range", () => {
 	expect(webView()).toBeDefined();
 	act(() => { vi.advanceTimersByTime(200); });
 	expect(webView()).toBeUndefined();
+});
+
+it("lets its page go under a pushed screen and loads it again on return", () => {
+	act(() => webView().props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "height", height: 280 }) } }));
+	// Another screen is pushed over the session: the frame is still laid out "in view".
+	setFocused(false);
+	act(() => { vi.advanceTimersByTime(500); });
+	expect(webView()).toBeUndefined();
+	setFocused(true);
+	expect(webView()).toBeDefined();
 });

@@ -162,10 +162,22 @@ export function restoreRememberedHeights(saved: string | null): void {
 
 type ViewportListener = () => void;
 const viewportListeners = new Set<ViewportListener>();
+let viewportCheckScheduled = false;
+const nextFrame: (callback: () => void) => unknown =
+	typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback) => setTimeout(callback, 16);
 
-/** Frames re-check whether they are in view; the thread calls it as it scrolls. */
+/**
+ * Frames re-check whether they are in view; the thread calls it as it scrolls
+ * and as its content grows. A streaming reply grows it many times a second and
+ * each check is a native measure per frame, so checks coalesce to one a frame.
+ */
 export function notifyRenderViewport(): void {
-	for (const listener of viewportListeners) listener();
+	if (viewportCheckScheduled) return;
+	viewportCheckScheduled = true;
+	nextFrame(() => {
+		viewportCheckScheduled = false;
+		for (const listener of viewportListeners) listener();
+	});
 }
 
 export function subscribeRenderViewport(listener: ViewportListener): () => void {
@@ -249,17 +261,25 @@ export const RENDER_BRIDGE_SCRIPT = `(function () {
   var bridge = window.ReactNativeWebView;
   if (!bridge || window.__aoRenderBridge) return;
   window.__aoRenderBridge = true;
-  var last, timer, settled = false;
+  var last, lastView, timer, settled = false;
   function measure() {
     var r = document.documentElement;
-    // The content box. scrollHeight never drops below the viewport, and on
-    // Android the viewport rounds a pixel taller than the frame, so trusting it
-    // reported "frame + 1" forever: frames stayed too tall and grew each time.
-    // It only counts when it beats the viewport, which means real overflow.
+    // On Android the viewport rounds a pixel taller than the frame (innerHeight
+    // 328 in a 327 frame), so anything that tracks the viewport reads "frame + 1"
+    // and would grow the frame without end. scrollHeight never drops below the
+    // viewport: it counts only when it beats it, which means real overflow. A
+    // page that fills the viewport (min-height:100vh, height:100%) has no height
+    // of its own, so it keeps the frame's. Anything else reports its content box.
     var view = Math.max(r.clientHeight, window.innerHeight || 0);
-    var h = Math.ceil(r.scrollHeight > view + 1 ? r.scrollHeight : r.getBoundingClientRect().height);
+    var content = r.getBoundingClientRect().height;
+    var h = r.scrollHeight > view + 1 ? r.scrollHeight : content >= view - 2 ? r.clientHeight : Math.ceil(content);
     if (!h || h === last) return;
+    // The frame grew to the last report, and the page grew by just as much: it
+    // follows the viewport (100vh plus a margin, say), not its content, and would
+    // grow the frame step by step to the cap. Hold the frame where it is.
+    if (last !== undefined && view > lastView && Math.abs(h - last - (view - lastView)) <= 2) return;
     last = h;
+    lastView = view;
     bridge.postMessage(JSON.stringify({ type: "height", height: h }));
   }
   // A height only counts once it holds still: a layout mid-change would size
