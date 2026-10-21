@@ -63,6 +63,6 @@ for (const role of ["Worker agent", "Orchestrator agent"] as const) {
 		await expect(page.getByRole("dialog", { name: "Set up project" })).toBeVisible();
 		expect(cleanupRequests).toEqual([]);
 		await page.getByRole("button", { name: "Back to clone details" }).click();
-		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-management" }]);
+		await expect.poll(() => cleanupRequests).toEqual([{ path: "/repos/example", preparationId: "prep-management", keepCheckout: true }]);
 	});
 }

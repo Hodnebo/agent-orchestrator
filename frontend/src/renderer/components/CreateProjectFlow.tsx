@@ -267,14 +267,12 @@ export function CreateProjectFlow({
 		window.setTimeout(() => setProjectImportShake(false), 320);
 	};
 
-	const abandonPreparedClone = async (keepCheckout = false): Promise<boolean> => {
+	const abandonPreparedClone = async (): Promise<boolean> => {
 		try {
-			await preparedClone.cleanup(keepCheckout);
+			await preparedClone.cleanup();
 			return true;
 		} catch (err) {
-			reportProjectError(keepCheckout ? apiErrorMessage(err, t("createProject.couldNotAdd")) : t("createProject.cloneCleanupFailed", {
-				defaultValue: "AO could not remove the incomplete checkout. Try again before leaving this flow.",
-			}));
+			reportProjectError(apiErrorMessage(err, t("createProject.couldNotAdd")));
 			return false;
 		}
 	};
@@ -288,6 +286,7 @@ export function CreateProjectFlow({
 	};
 	const transitionFromFolder = (open: () => void) => {
 		setFolderPickerOpen(false);
+		if (cloneDialogOpen) setCloneDialogOpen(false);
 		transitionToChild(open);
 	};
 
@@ -339,6 +338,7 @@ export function CreateProjectFlow({
 					setFolderPickerOpen(false);
 					showGlobalToast("Project already added", "Opened the registered project for this folder.");
 					await onOpenExistingProject(registeredPath);
+					if (cloneDialogOpen) setCloneDialogOpen(false);
 					return;
 				}
 				const validation = await validateImportFolder(path, "project", hostId);
@@ -846,9 +846,9 @@ export function CreateProjectFlow({
 							}}
 							onCheckDestination={preparedClone.checkDestination}
 							onUseExisting={(path) => {
-								setCloneDialogOpen(false);
+								setError(null);
 								setCloneSelection(null);
-								void chooseDirectory("single_repo", path);
+								void chooseDirectory("single_repo", path, true);
 							}}
 							onCancel={preparedClone.cancel}
 							activity={cloneActivity}
@@ -947,7 +947,7 @@ export function CreateProjectFlow({
 			<CreateProjectAgentSheet
 				preparedClonePath={cloneSelection ? selectedPath ?? undefined : undefined}
 				onKeepCheckout={cloneRegistrationFailed ? async () => {
-					if (!(await abandonPreparedClone(true))) return;
+					if (!(await abandonPreparedClone())) return;
 					setSelectedPath(null);
 					setCloneSelection(null);
 					setCloneRegistrationFailed(false);
@@ -964,7 +964,7 @@ export function CreateProjectFlow({
 				onOpenChange={(open) => {
 					if (!open) {
 						void (async () => {
-							if (!(await abandonPreparedClone(cloneRegistrationFailed))) return;
+							if (!(await abandonPreparedClone())) return;
 							setSelectedPath(null);
 							setCloneSelection(null);
 							resetProjectImportState();
@@ -977,7 +977,7 @@ export function CreateProjectFlow({
 					cloneSelection
 						? () => {
 								void (async () => {
-									if (!(await abandonPreparedClone(cloneRegistrationFailed))) return;
+									if (!(await abandonPreparedClone())) return;
 									setCloneSelection(null);
 									setSelectedPath(null);
 									setCloneDetails(initialCloneDetails(hostId));

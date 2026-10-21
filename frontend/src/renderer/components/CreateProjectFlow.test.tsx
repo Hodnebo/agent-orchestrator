@@ -241,16 +241,20 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ open, onBack, onChange, onClose, onContinue, value }: {
+	default: ({ disabled, error, open, onBack, onChange, onClose, onContinue, onUseExisting, value }: {
+		disabled?: boolean;
+		error?: string | null;
 		onBack?: () => void;
 		onChange?: (value: { remoteUrl: string; destinationParent: string }) => void;
 		onClose?: () => void;
 		onContinue?: (selection: { remoteUrl: string; destinationParent: string; targetPath: string }) => void;
+		onUseExisting?: (path: string) => void;
 		open: boolean;
 		value: { remoteUrl: string; destinationParent: string };
 	}) =>
 		open ? (
 			<div data-testid="clone-dialog" data-destination={value.destinationParent}>
+				{error ? <span>{error}</span> : null}
 				<input
 					aria-label="Clone URL"
 					value={value.remoteUrl}
@@ -258,6 +262,7 @@ vi.mock("./CloneRepositoryDialog", () => ({
 				/>
 				<button type="button" onClick={onBack}>Back clone</button>
 				<button type="button" onClick={onClose}>Close clone</button>
+				<button type="button" disabled={disabled} onClick={() => onUseExisting?.("/repo/existing")}>Use existing checkout</button>
 				<button type="button" onClick={() => onContinue?.({ remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo", targetPath: "/repo/empty-repository" })}>
 					Continue clone
 				</button>
@@ -685,6 +690,43 @@ describe("CreateProjectFlow droppedPath", () => {
 		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
 	});
 
+	it("keeps clone inputs and reuse controls when existing-checkout validation fails", async () => {
+		const user = userEvent.setup();
+		let resolveValidation!: (value: unknown) => void;
+		apiMocks.POST.mockImplementationOnce(() => new Promise((resolve) => { resolveValidation = resolve; }))
+			.mockResolvedValueOnce({ data: projectValidation("/repo/existing") });
+		renderChooseFlow();
+		await openSource(user, "Clone a repo");
+		fireEvent.change(screen.getByLabelText("Clone URL"), { target: { value: "file:///source/existing.git" } });
+		const destination = screen.getByTestId("clone-dialog").getAttribute("data-destination");
+		await user.click(screen.getByRole("button", { name: "Use existing checkout" }));
+		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Use existing checkout" })).toBeDisabled();
+		resolveValidation({ error: { message: "Validation unavailable" } });
+		await waitFor(() => expect(screen.getByTestId("clone-dialog")).toHaveTextContent("Validation unavailable"));
+		expect(screen.getByLabelText("Clone URL")).toHaveValue("file:///source/existing.git");
+		expect(screen.getByTestId("clone-dialog")).toHaveAttribute("data-destination", destination);
+		await user.click(screen.getByRole("button", { name: "Use existing checkout" }));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/existing");
+		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
+		expect(apiMocks.POST.mock.calls.every(([path]) => path === "/api/v1/imports/validate")).toBe(true);
+	});
+
+	it.each(["prepare_git", "error"] as const)("closes the clone dialog when reused-checkout validation requires %s", async (nextStep) => {
+		const user = userEvent.setup();
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/existing", {
+			nextStep,
+			isValid: nextStep !== "error",
+			blockingErrors: nextStep === "error" ? ["UNSUPPORTED_GIT_METADATA"] : [],
+			root: nextStep === "error" ? { blockingErrors: ["UNSUPPORTED_GIT_METADATA"] } : { requiredActions: ["git_commit"], hasCommit: false },
+		}) });
+		renderChooseFlow();
+		await openSource(user, "Clone a repo");
+		await user.click(screen.getByRole("button", { name: "Use existing checkout" }));
+		expect(await screen.findByRole("dialog", { name: nextStep === "prepare_git" ? "Prepare project" : "Import project" })).toBeInTheDocument();
+		expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument();
+	});
+
 	it("keeps a successful clone and retries validation without cloning again", async () => {
 		const user = userEvent.setup();
 		let validations = 0;
@@ -763,7 +805,7 @@ describe("CreateProjectFlow droppedPath", () => {
 		await waitFor(() => expect(cleanupAttempts).toBe(1));
 		expect(screen.getByTestId("clone-dialog")).toBeInTheDocument();
 		expect(useUiStore.getState().globalToast?.body).toBe(
-			"AO could not remove the incomplete checkout. Try again before leaving this flow.",
+			"permission denied",
 		);
 
 		fireEvent.click(screen.getByText("Back clone"));

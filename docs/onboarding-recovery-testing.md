@@ -49,6 +49,8 @@ and an existing checkout of the same repository. Each run uses a new directory.
 | Repository URL | Clone a public GitHub repository using its normal page URL, with no `.git`. Use a fresh destination. | AO submits the normalized clone URL automatically. No URL conversion prompt. SSH and file URLs keep their transport. |
 | Conflicting folder | Paste the fixture repository URL and its conflicting destination. | Continue is disabled before cloning. The message names the existing folder. Choose another destination to continue. `keep.txt` stays unchanged. |
 | Existing checkout | Use the fixture repository URL and existing-checkout destination. Click Use existing checkout. | AO opens the normal import/setup flow without cloning, fetching, resetting, or deleting local files. |
+| Leave completed clone | Clone into the available destination, then click Back from project setup. Enter the same URL and destination again. | The checkout stays on disk. AO offers Use existing checkout; continuing through reuse does not clone again. |
+| Reuse validation retry | Simulate a failed imports/validate response while using an existing checkout, then restore the response and retry reuse. | Clone inputs and reuse controls stay visible after failure. Successful retry opens setup without a second clone. |
 | Slow clone | Launch with the `slow` fault below. Use the fixture URL and available destination. | The dialog shows clone activity and elapsed seconds. It remains active past 60 seconds and eventually reaches project setup. |
 | Cancel | Start another slow clone in a fresh destination. Click Cancel clone while it is running. | Cloning stops. Inputs stay filled and Retry becomes available. No partial final checkout or `.ao-clone-*` folder remains after the daemon finishes cancellation cleanup. |
 | Temporary connection failure | Launch with the `retry` fault and a new fixture directory. Clone into its available destination. | AO retries twice, then succeeds on attempt three without user input. |
@@ -78,5 +80,10 @@ completed attempts. The wrapper affects only clones in this dev process. Do not
 put it on your permanent PATH or use it with your normal AO data.
 
 The clone request stays attached to the client and cancels on disconnect. It is
-not a durable background job. An interrupted prepared checkout can be resumed by
-entering the same URL and destination; AO recognizes its ownership marker.
+not a durable background job. A flow holding its original preparation token can
+retry validation without cloning again. A later flow uses **Use existing checkout**;
+an old ownership marker never grants a new request permission to delete files.
+Older daemons without destination preflight keep completed checkouts when leaving
+onboarding, because their cleanup API cannot safely release ownership.
+Back and Close also preserve completed checkouts on current daemons. Cancellation
+only cleans the in-progress clone's temporary staging folder.

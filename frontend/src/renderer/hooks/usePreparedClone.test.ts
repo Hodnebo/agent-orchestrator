@@ -30,6 +30,65 @@ it.each([400, 401, 403, 500, 503])("preserves destination check failures other t
 	await expect(result.current.checkDestination({ remoteUrl: "file:///source", destinationParent: "/projects" }, new AbortController().signal)).rejects.toBe(error);
 });
 
+it.each([404, 405])("preserves a legacy daemon's checkout when leaving (%s)", async (status) => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "legacy-owned" };
+	api.POST.mockResolvedValueOnce({ response: { status } });
+	const { result } = renderHook(() => usePreparedClone("legacy-host"));
+	await result.current.checkDestination({ remoteUrl: prepared.remoteUrl, destinationParent: "/projects" }, new AbortController().signal);
+	api.POST.mockResolvedValueOnce({ data: prepared });
+	await result.current.prepare(prepared.remoteUrl, "/projects");
+	await act(() => result.current.cleanup());
+	expect(result.current.current()).toBeNull();
+	expect(api.POST).toHaveBeenCalledTimes(2);
+	expect(api.POST.mock.calls.some(([path]) => path === "/api/v1/projects/clone/cleanup")).toBe(false);
+});
+
+it("only bypasses an existing destination for the current flow's owned checkout", async () => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "owned" };
+	const destination = { remoteUrl: prepared.remoteUrl, path: prepared.path, exists: true, canUseExisting: true };
+	api.POST.mockResolvedValue({ data: destination });
+	const { result } = renderHook(() => usePreparedClone());
+	const input = { remoteUrl: prepared.remoteUrl, destinationParent: "~/projects" };
+	await expect(result.current.checkDestination(input, new AbortController().signal)).resolves.toEqual(destination);
+	api.POST.mockResolvedValueOnce({ data: prepared });
+	await result.current.prepare(input.remoteUrl, input.destinationParent);
+	await expect(result.current.checkDestination(input, new AbortController().signal)).resolves.toEqual({ ...destination, exists: false, canUseExisting: false });
+	act(() => result.current.complete());
+	await expect(result.current.checkDestination(input, new AbortController().signal)).resolves.toEqual(destination);
+});
+
+it("releases a checkout on a daemon supporting safe cleanup", async () => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "owned" };
+	api.POST.mockResolvedValueOnce({ data: { ...prepared, exists: false, canUseExisting: false } });
+	const { result } = renderHook(() => usePreparedClone("current-host"));
+	await result.current.checkDestination({ remoteUrl: prepared.remoteUrl, destinationParent: "/projects" }, new AbortController().signal);
+	api.POST.mockResolvedValueOnce({ data: prepared });
+	await result.current.prepare(prepared.remoteUrl, "/projects");
+	api.POST.mockResolvedValueOnce({});
+	await act(() => result.current.cleanup());
+	expect(api.POST).toHaveBeenLastCalledWith("/api/v1/projects/clone/cleanup", {
+		body: { path: prepared.path, preparationId: prepared.preparationId, keepCheckout: true },
+	});
+	expect(result.current.current()).toBeNull();
+});
+
+it("only releases files-preserving ownership when a legacy host upgrades during the flow", async () => {
+	const prepared = { path: "/projects/source", remoteUrl: "file:///source", preparationId: "legacy-owned" };
+	const input = { remoteUrl: prepared.remoteUrl, destinationParent: "/projects" };
+	api.POST.mockResolvedValueOnce({ response: { status: 404 } });
+	const { result } = renderHook(() => usePreparedClone("upgrading-host"));
+	await result.current.checkDestination(input, new AbortController().signal);
+	api.POST.mockResolvedValueOnce({ data: prepared });
+	await result.current.prepare(input.remoteUrl, input.destinationParent);
+	api.POST.mockResolvedValueOnce({ data: { ...prepared, exists: true, canUseExisting: true } });
+	await result.current.checkDestination(input, new AbortController().signal);
+	api.POST.mockResolvedValueOnce({});
+	await act(() => result.current.cleanup());
+	expect(api.POST).toHaveBeenLastCalledWith("/api/v1/projects/clone/cleanup", {
+		body: { path: prepared.path, preparationId: prepared.preparationId, keepCheckout: true },
+	});
+});
+
 it("cancels the active clone request", async () => {
 	api.POST.mockImplementation((_path, { signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
 		signal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });

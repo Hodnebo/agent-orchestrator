@@ -437,7 +437,7 @@ func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 	}
 }
 
-func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testing.T) {
+func TestManager_PrepareCloneDoesNotReclaimExistingCheckoutAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	store, err := sqlitetest.Open(dataDir)
@@ -457,6 +457,12 @@ func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testi
 	if err := os.WriteFile(userFile, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if out, err := exec.Command("git", "-C", prepared.Path, "add", "keep.txt").CombinedOutput(); err != nil {
+		t.Fatalf("stage user work: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", prepared.Path, "-c", "user.name=User", "-c", "user.email=user@example.invalid", "commit", "-m", "User work").CombinedOutput(); err != nil {
+		t.Fatalf("commit user work: %v (%s)", err, out)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -467,21 +473,20 @@ func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testi
 	t.Cleanup(func() { _ = store.Close() })
 	m = project.New(store)
 
-	resumed, err := m.PrepareClone(ctx, in)
-	if err != nil {
-		t.Fatalf("resume prepared clone: %v", err)
-	}
-	if resumed != prepared {
-		t.Fatalf("resumed = %+v, want %+v", resumed, prepared)
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("existing checkout should require explicit reuse: %+v, %v", check, err)
 	}
 	if got, err := os.ReadFile(userFile); err != nil || string(got) != "keep" {
-		t.Fatalf("user file after resume = %q, %v", got, err)
+		t.Fatalf("user file after refused preparation = %q, %v", got, err)
 	}
 	if listed, err := m.List(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("projects before registration = %+v, %v", listed, err)
 	}
-	if _, err := m.Add(ctx, project.AddInput{Path: resumed.Path, ClonePreparationID: resumed.PreparationID}); err != nil {
-		t.Fatalf("register resumed clone: %v", err)
+	if _, err := m.Add(ctx, project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}); err != nil {
+		t.Fatalf("register clone with original ownership token: %v", err)
 	}
 	if listed, err := m.List(ctx); err != nil || len(listed) != 1 {
 		t.Fatalf("projects after registration = %+v, %v", listed, err)
@@ -2425,8 +2430,8 @@ func TestCloneDestinationPreflightRecognizesPreparedAndRegisteredCheckout(t *tes
 		t.Fatal(err)
 	}
 	check, err := m.CheckCloneDestination(ctx, in)
-	if err != nil || check.Exists {
-		t.Fatalf("prepared clone should resume: %+v, %v", check, err)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("prepared clone should require explicit reuse: %+v, %v", check, err)
 	}
 	if _, err := m.Add(ctx, project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}); err != nil {
 		t.Fatal(err)

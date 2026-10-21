@@ -86,15 +86,6 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 		return result, nil //nolint:nilerr // Reuse is optional and requires a readable, matching origin.
 	}
 	result.CanUseExisting = true
-	if _, prepared, markerErr := readClonePreparationID(target); markerErr == nil && prepared {
-		if _, registered, storeErr := m.store.FindProjectByPath(ctx, target); storeErr != nil {
-			return result, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to inspect existing project")
-		} else if !registered {
-			// A prior request may have completed just before its response was
-			// lost. PrepareClone safely resumes this owned checkout.
-			result.Exists = false
-		}
-	}
 	return result, nil
 }
 
@@ -103,7 +94,7 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 // The checkout is staged in a unique sibling directory so a failed or cancelled
 // clone can never leave a half-populated destination behind.
 func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
-	prepared, err := m.prepareClone(ctx, in, false)
+	prepared, err := m.prepareClone(ctx, in)
 	if err != nil {
 		return Project{}, err
 	}
@@ -128,7 +119,7 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 
 // PrepareClone checks out a repository without registering it as a project.
 func (m *Service) PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
-	return m.prepareClone(ctx, in, true)
+	return m.prepareClone(ctx, in)
 }
 
 // CleanupPreparedClone removes an unregistered checkout created by PrepareClone,
@@ -179,7 +170,7 @@ func (m *Service) cleanupPreparedCloneAfterFailure(ctx context.Context, prepared
 	}
 }
 
-func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) (ClonePreparationResult, error) {
+func (m *Service) prepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error) {
 	remoteURL := normalizeCloneURL(in.RemoteURL)
 	repositoryName, err := cloneRepositoryName(remoteURL)
 	if err != nil {
@@ -204,20 +195,9 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) 
 	if err := validateRepositorySetupPathSafety(target); err != nil {
 		return ClonePreparationResult{}, err
 	}
-	if info, err := os.Lstat(target); err == nil {
-		if resume && info.IsDir() {
-			markerID, exists, markerErr := readClonePreparationID(target)
-			if markerErr == nil && exists {
-				storedURL, gitErr := aoprocess.CommandContext(ctx, "git", "-C", target, "config", "--local", "--get", "remote.origin.url").Output()
-				if gitErr == nil && normalizeCloneURL(string(storedURL)) == remoteURL {
-					if _, registered, storeErr := m.store.FindProjectByPath(ctx, target); storeErr != nil {
-						return ClonePreparationResult{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to inspect existing project")
-					} else if !registered {
-						return ClonePreparationResult{Path: target, RemoteURL: remoteURL, PreparationID: markerID}, nil
-					}
-				}
-			}
-		}
+	if _, err := os.Lstat(target); err == nil {
+		// A stale marker cannot grant a new request cleanup ownership. The
+		// original caller keeps its token; later flows must explicitly reuse.
 		return ClonePreparationResult{}, apierr.Conflict("CLONE_DESTINATION_EXISTS", "A folder with this repository name already exists in the selected destination.", map[string]any{"path": target})
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "The clone destination could not be inspected.", map[string]any{"path": target})
