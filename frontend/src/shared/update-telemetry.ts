@@ -109,14 +109,24 @@ export function boundPlainReleaseNotes(notes: string | null | undefined): string
 		: text;
 }
 
+/** Rewrites an HTML anchor as a Markdown link; mentions and non-https links keep only their text. */
+function htmlAnchorToMarkdown(_match: string, href: string, inner: string): string {
+	const text = inner.replace(/<[^>]*>/g, "").replace(/[[\]]/g, "\\$&").trim();
+	const url = href.replace(/&amp;/gi, "&");
+	if (text === "" || text.startsWith("@") || !/^https:\/\/[^\s()]+$/.test(url)) return text;
+	return `[${text}](${url})`;
+}
+
 /**
- * Flattens electron-updater's release notes into plain text.
+ * Flattens electron-updater's release notes into Markdown text.
  *
  * The value comes from the release feed, so it is remote content: it arrives as
  * a string or a per-version array, and for the GitHub provider it is the
- * release body, which routinely contains HTML. Tags are stripped rather than
- * forwarded so no call site can be tempted to inject it as markup, and the
- * result is length-capped because a release body has no size limit.
+ * release body rendered by releases.atom as HTML. Links, list items, bold and
+ * code are rewritten as Markdown so the notes render the same as the release
+ * body fetched from the API; every other tag is stripped rather than forwarded
+ * so no call site can be tempted to inject it as markup. The result is
+ * length-capped because a release body has no size limit.
  */
 export function normalizeReleaseNotes(
 	notes: string | Array<{ version?: string; note?: string | null }> | null | undefined,
@@ -127,6 +137,10 @@ export function normalizeReleaseNotes(
 			? notes.map((entry) => entry?.note ?? "").join("\n\n")
 			: "";
 	const text = raw
+		.replace(/<a\b[^>]*?\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, htmlAnchorToMarkdown)
+		.replace(/<li(?:\s[^>]*)?>/gi, "- ")
+		.replace(/<\/?(?:strong|b)(?:\s[^>]*)?>/gi, "**")
+		.replace(/<\/?code(?:\s[^>]*)?>/gi, "`")
 		// Keep block boundaries as line breaks before tags are dropped, so
 		// "<li>a</li><li>b</li>" does not collapse into "ab".
 		.replace(/<\/(p|div|li|ul|ol|h[1-6]|tr)>/gi, "\n")
@@ -143,6 +157,8 @@ export function normalizeReleaseNotes(
 		.split("\n")
 		.map((line) => line.trim())
 		.join("\n")
+		// "</li>\n<li>" leaves a blank line that would make the list loose.
+		.replace(/^(- .*)\n\n(?=- )/gm, "$1\n")
 		.trim();
 	return boundPlainReleaseNotes(text);
 }
