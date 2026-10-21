@@ -423,9 +423,30 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		ServiceTier     *string `json:"serviceTier"`
 	}
 	err = conv.conn.request(resumeCtx, "thread/resume", params, &resp)
+	if err != nil && cfg.FreshIfMissing && codexThreadMissing(err) {
+		// The caller proved the thread never had a turn (a switch target that
+		// had not answered), so Codex never saved it: a new thread loses nothing.
+		delete(params, "threadId")
+		var started struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
+			Model           string `json:"model"`
+			ReasoningEffort string `json:"reasoningEffort"`
+		}
+		if err = conv.conn.request(resumeCtx, "thread/start", params, &started); err == nil && started.Thread.ID == "" {
+			err = errors.New("thread/start returned no thread id")
+		}
+		if err != nil {
+			_ = conv.Terminate()
+			return nil, fmt.Errorf("%w: start in place of a missing thread: %w", ports.ErrChatResumeFailed, err)
+		}
+		conv.start(started.Thread.ID, started.Model, started.ReasoningEffort)
+		return conv, nil
+	}
 	if err != nil {
 		_ = conv.Terminate()
-		// Deliberately not falling back to thread/start: silently opening a new
+		// Otherwise not falling back to thread/start: silently opening a new
 		// conversation would present unrelated history as continuous.
 		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
@@ -438,6 +459,16 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	conv.planUnknown = true
 	conv.start(cfg.ProviderConversationID, resp.Model, resp.ReasoningEffort)
 	return conv, nil
+}
+
+// codexThreadMissing reports a thread/resume refused because Codex has no
+// saved thread under that id: none at all, or the empty rollout a thread that
+// never had a turn leaves behind ("rollout at … is empty").
+func codexThreadMissing(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no rollout found") ||
+		strings.Contains(message, "thread not found") ||
+		(strings.Contains(message, "rollout") && strings.Contains(message, "is empty"))
 }
 
 // threadConfig is the config override sent with thread/start and
