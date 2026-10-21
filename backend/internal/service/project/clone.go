@@ -49,6 +49,7 @@ func normalizeCloneURL(raw string) string {
 	return u.String()
 }
 
+// CheckCloneDestination inspects local clone readiness without contacting the remote.
 func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error) {
 	remoteURL := normalizeCloneURL(in.RemoteURL)
 	name, err := cloneRepositoryName(remoteURL)
@@ -78,11 +79,11 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 	// Only offer reuse for a repository root with the requested origin. This
 	// does not change branches, fetch, reset, or remove any local files.
 	if _, err := os.Stat(filepath.Join(target, ".git")); err != nil {
-		return result, nil
+		return result, nil //nolint:nilerr // Unusable Git metadata leaves a normal destination conflict.
 	}
 	origin, err := aoprocess.CommandContext(ctx, "git", "-C", target, "config", "--local", "--get", "remote.origin.url").Output()
 	if err != nil || normalizeCloneURL(string(origin)) != remoteURL {
-		return result, nil
+		return result, nil //nolint:nilerr // Reuse is optional and requires a readable, matching origin.
 	}
 	result.CanUseExisting = true
 	if _, prepared, markerErr := readClonePreparationID(target); markerErr == nil && prepared {
