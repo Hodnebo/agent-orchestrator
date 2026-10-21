@@ -299,14 +299,18 @@ export function AgentModelPicker({
 	const savedLabel = !loadingModels || !savedCatalog ? undefined
 		: savedModel && savedModel !== "default" ? recordedModelName(currentHarness, savedModel, savedCatalog.models ?? [])
 		: defaultModel ? agentModelDisplayLabel(currentHarness, defaultModel.label) : undefined;
-	const shownModel = pending ? pending.modelLabel ?? agentLabel(pending.harness) : savedLabel ?? currentSource.modelLabel;
-	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort;
+	// A bare agent pick starts on that agent's default model and effort, so those are named.
+	const pendingDefaultModel = source.models.find((model) => model.hint === "default")?.label;
+	const shownModel = pending
+		? pending.modelLabel ?? (source.modelId ? source.modelLabel : pendingDefaultModel) ?? agentLabel(pending.harness)
+		: savedLabel ?? currentSource.modelLabel;
+	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort ?? (pending ? source.effort : undefined);
 	const shownEffort = pending
-		? pendingEffort ? formatEffortLabel(pendingEffort, t) : undefined
+		? pendingEffort ? source.efforts.find((effort) => effort.value === pendingEffort)?.label ?? formatEffortLabel(pendingEffort, t) : undefined
 		: currentSource.efforts.find((effort) => effort.value === currentSource.effort)?.label;
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
-	const shownFast = pending ? pending.fast || pending.fastMode : currentSource.fast;
-	const shownThinking = pending ? pending.thinking : currentSource.thinking;
+	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
+	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
 	const pickModel = (harness: string, id: string) => {
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
@@ -351,9 +355,7 @@ export function AgentModelPicker({
 	const pickRef = useRef<(event: Event, harness: string, id: string) => void>(() => {});
 	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
-	const modelValue = pending
-		? pending.modelLabel ?? source.models.find((model) => model.hint === "default")?.label ?? t("agentSwitch.defaultModel")
-		: source.modelLabel;
+	const modelValue = pending ? shownModel : source.modelLabel;
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 
 	return (
@@ -574,7 +576,8 @@ function otherAgentSource(
 		if (entry.id.includes("/") && shared.has(entry.label)) entry.label = `${entry.label} (${entry.id.slice(0, entry.id.indexOf("/"))})`;
 	}
 	if (listsModelVariants(harness)) {
-		return variantSource(listed, pending?.model, agentLabel(harness), (variant, modelLabel) => onPick({
+		// With no model picked, the agent's default is shown as chosen; it is what starts.
+		return variantSource(listed, pending?.model ?? listed.find((model) => model.hint === "default")?.id, agentLabel(harness), (variant, modelLabel) => onPick({
 			harness, model: variant.id, modelLabel, shownEffort: variant.effort, fast: variant.fast, thinking: variant.thinking,
 		}), t);
 	}
