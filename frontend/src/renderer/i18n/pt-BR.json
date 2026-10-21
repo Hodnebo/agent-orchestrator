@@ -197,6 +197,7 @@
 	"agentSwitch.busy": "O agente está trabalhando. Troque quando ele estiver ocioso.",
 	"agentSwitch.switchTerminalTo": "Mudar este terminal para {{target}}",
 	"agentSwitch.switchToChat": "Mudar para a interface de chat",
+	"agentSwitch.switchToTerminal": "Mudar para a interface de terminal",
 	"agentSwitch.switched": "Trocado",
 	"agentSwitch.switching": "Trocando",
 	"agentSwitch.switchedFromTo": "Trocado de {{from}} para {{to}}",

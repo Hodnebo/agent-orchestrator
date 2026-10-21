@@ -112,7 +112,6 @@ export function TurnSettingsBar({
 	beforePicker,
 	modelsLoading,
 	lastModel,
-	afterPermissions,
 	children,
 }: {
 	models: ChatModel[];
@@ -152,7 +151,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen?: boolean;
 	error?: string;
 	disabled?: boolean;
-	/** Turns the model control into one picker for agent, model and effort, laid out after the permissions. */
+	/** Turns the model control into one picker for agent, model and effort, laid out before the permissions. */
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
@@ -160,8 +159,6 @@ export function TurnSettingsBar({
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
 	lastModel?: string;
-	/** A control after the permission picker, such as the switch to the terminal view. */
-	afterPermissions?: ReactNode;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
 	children?: ReactNode;
 }) {
@@ -419,7 +416,7 @@ export function TurnSettingsBar({
 	return (
 		<div role="group" aria-label="Turn settings" className="flex min-w-0 flex-1 flex-col gap-0.5">
 			<div className="flex h-7 min-w-0 flex-1 items-center justify-between gap-2">
-				<div className={cn("flex h-7 min-w-0 flex-wrap items-center gap-0.5", unified ? "order-2 ml-auto shrink-0" : undefined)}>
+				<div className="flex h-7 min-w-0 flex-wrap items-center gap-0.5">
 					{unified && agentSwitch && harness ? (
 						<>
 							{beforePicker}
@@ -485,8 +482,8 @@ export function TurnSettingsBar({
 					) : null}
 				</div>
 
-				{showRightDropdown || children || (unified && (planOn || afterPermissions)) ? (
-					<div className={cn("flex h-7 shrink-0 items-center gap-1", unified ? "order-1 min-w-0 flex-1" : undefined)}>
+				{showRightDropdown || children || (unified && planOn) ? (
+					<div className="flex h-7 shrink-0 items-center gap-1">
 						{children}
 						{showPermissions && pending && agentSwitch ? (
 							<Picker
@@ -564,7 +561,6 @@ export function TurnSettingsBar({
 								{rememberAction}
 							</Picker>
 						) : null}
-						{unified ? afterPermissions : null}
 						{unified && planOn ? (
 							<button
 								type="button"
