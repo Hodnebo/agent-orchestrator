@@ -252,7 +252,7 @@ describe("ChatWorkspace retry", () => {
 			/>,
 		);
 
-		const retry = screen.getByRole("button", { name: "Retry this turn" });
+		const retry = screen.getByRole("button", { name: "Retrying…" });
 		expect(retry).toBeDisabled();
 		expect(retry).toHaveTextContent("Retrying…");
 	});

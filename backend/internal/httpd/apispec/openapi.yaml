@@ -15514,6 +15514,23 @@ components:
       - revision
       - text
       type: object
+    ConversationFailureResponse:
+      properties:
+        detail:
+          type: string
+        kind:
+          enum:
+          - outOfCredit
+          - auth
+          - rateLimited
+          - overloaded
+          - contextTooLong
+          - modelUnavailable
+          - network
+          type: string
+      required:
+      - kind
+      type: object
     ConversationImageContentRequest:
       properties:
         data:
@@ -15898,6 +15915,8 @@ components:
           $ref: '#/components/schemas/ConversationTurnDiffResponse'
         errorMessage:
           type: string
+        failure:
+          $ref: '#/components/schemas/ConversationFailureResponse'
         hasHumanPrompt:
           type: boolean
         hasRetryAttempt:
