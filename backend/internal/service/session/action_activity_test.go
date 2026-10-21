@@ -201,7 +201,8 @@ func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
 
 	svc.recordClaimed(ctx, "mer-1", domain.PullRequest{URL: "https://github.com/acme/repo/pull/7", Number: 7, Title: "Readable actions"}, domain.ActivityStatusCompleted, nil)
 	svc.recordClaimed(ctx, "mer-1", domain.PullRequest{URL: "https://github.com/acme/repo/pull/7", Number: 7, Title: "Readable actions"}, domain.ActivityStatusCompleted, nil)
-	svc.recordClaimed(ctx, "mer-1", domain.PullRequest{URL: "javascript:alert(1)", Number: 8, Title: "bad"}, domain.ActivityStatusFailed, errors.New("no"))
+	failedCtx := context.WithValue(ctx, middleware.RequestIDKey, "req-claim-bad")
+	svc.recordClaimed(failedCtx, "mer-1", domain.PullRequest{URL: "javascript:alert(1)", Number: 8, Title: "bad"}, domain.ActivityStatusFailed, errors.New("no"))
 	claims := actionsNamed(st.activities, actionPullRequestClaimed)
 	if len(claims) != 2 {
 		t.Fatalf("claims = %d", len(claims))
@@ -212,6 +213,25 @@ func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
 	}
 	if decodeAction(t, claims[1]).Href != "" {
 		t.Fatalf("unsafe href stored: %+v", decodeAction(t, claims[1]))
+	}
+}
+
+func TestFailedReclaimKeepsConfirmedClaim(t *testing.T) {
+	svc, st, _ := actionFixture(t)
+	ctx := context.Background()
+	pr := domain.PullRequest{URL: "https://github.com/acme/repo/pull/7", Number: 7, Title: "Readable actions"}
+	svc.recordClaimed(ctx, "mer-1", pr, domain.ActivityStatusCompleted, nil)
+	failedCtx := context.WithValue(ctx, middleware.RequestIDKey, "req-reclaim")
+	svc.recordClaimed(failedCtx, "mer-1", pr, domain.ActivityStatusFailed, ErrPRNotOpen)
+	claims := actionsNamed(st.activities, actionPullRequestClaimed)
+	if len(claims) != 2 {
+		t.Fatalf("claims = %d, want 2", len(claims))
+	}
+	if claims[0].Status != domain.ActivityStatusCompleted {
+		t.Fatalf("confirmed claim settled as %q", claims[0].Status)
+	}
+	if claims[1].Status != domain.ActivityStatusFailed {
+		t.Fatalf("failed reclaim status = %q", claims[1].Status)
 	}
 }
 

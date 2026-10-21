@@ -279,11 +279,14 @@ func (s *Service) recordAgentSwitched(ctx context.Context, id domain.SessionID, 
 }
 
 func (s *Service) recordClaimed(ctx context.Context, id domain.SessionID, pr domain.PullRequest, status domain.ActivityStatus, err error) {
+	// Only a completed claim keys on the PR. A failed re-claim of the same PR
+	// (closed, merged, SCM error) is its own operation, so it cannot settle an
+	// earlier confirmed claim as failed.
 	operationID := string(id) + ":" + pr.URL
-	if pr.URL == "" {
+	if status != domain.ActivityStatusCompleted || pr.URL == "" {
 		operationID = failureOperationID(ctx, "claim")
 	}
-	if operationID == "" || operationID == string(id)+":" {
+	if operationID == "" {
 		return
 	}
 	rec := s.lookupActionSession(ctx, id)
