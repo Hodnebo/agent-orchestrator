@@ -1,6 +1,7 @@
 import {
 	ArrowRightLeft,
 	Loader2,
+	SquareTerminal,
 	TriangleAlert,
 	X,
 } from "lucide-react";

@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
 
-const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock, setQueryHealthyMock } = vi.hoisted(
+const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionsMock, remoteGetMock } = vi.hoisted(
 	() => ({
 		captureRendererEventMock: vi.fn().mockResolvedValue(undefined),
 		cloudState: { ready: false, org: undefined as { id: string } | undefined },
