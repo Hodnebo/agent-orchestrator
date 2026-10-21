@@ -165,7 +165,7 @@ func (a *Adapter) captureTerminal(ctx context.Context, s *launch, w terminalWind
 const terminalSnapshotScript = `ObjC.import('AppKit');
 var apps=$.NSRunningApplication.runningApplicationsWithBundleIdentifier('com.apple.Terminal');
 var result=[];
-if(apps.count===1){var pid=Number(apps.objectAtIndex(0).processIdentifier),app=Application('Terminal');
+if(Number(apps.count)===1){var pid=Number(apps.objectAtIndex(0).processIdentifier),app=Application('Terminal');
 for(var w of app.windows()){var tabs=w.tabs();if(tabs.length!==1)continue;
 result.push({pid:pid,id:String(w.id()),tty:tabs[0].tty()});}}
 JSON.stringify(result)`
