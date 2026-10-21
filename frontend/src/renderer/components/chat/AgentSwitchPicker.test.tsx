@@ -109,6 +109,11 @@ describe("AgentModelPicker", () => {
 		expect(trigger).not.toHaveTextContent("Loading models…");
 	});
 
+	it("names the agent's default model while loading a chat that saved none", async () => {
+		open(undefined, false, "codex", { modelLabel: "Codex" }, false, true);
+		expect(await screen.findByText("GPT X")).toBeInTheDocument();
+	});
+
 	it("stars a row when its model was starred under another id", async () => {
 		const user = userEvent.setup();
 		const saved = { harness: "claude-code", row: "opus", model: "opus", label: "Opus" };

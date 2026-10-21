@@ -283,8 +283,12 @@ export function AgentModelPicker({
 		? undefined
 		: catalogProblem(shownCatalog);
 	// The agent's list is shared by every session, so it names the saved model at once.
-	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels && savedModel) }).data;
-	const savedLabel = loadingModels && savedModel && savedCatalog ? recordedModelName(currentHarness, savedModel, savedCatalog.models) : undefined;
+	// No saved model means the agent's own default, which Claude Code leaves unset.
+	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
+	const defaultModel = savedCatalog?.models.find((model) => model.isDefault);
+	const savedLabel = !loadingModels || !savedCatalog ? undefined
+		: savedModel ? recordedModelName(currentHarness, savedModel, savedCatalog.models)
+		: defaultModel ? agentModelDisplayLabel(currentHarness, defaultModel.label) : undefined;
 	const shownModel = pending ? pending.modelLabel ?? agentLabel(pending.harness) : savedLabel ?? currentSource.modelLabel;
 	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort;
 	const shownEffort = pending
