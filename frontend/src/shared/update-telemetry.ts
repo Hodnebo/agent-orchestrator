@@ -117,11 +117,13 @@ const HTML_BLOCK_PATTERN = /<(?:p|ul|ol|li|div|h[1-6])(?:\s[^>]*)?>/i;
 
 /** Rewrites an HTML anchor as a Markdown link; mentions and non-https links keep only their text. */
 function htmlAnchorToMarkdown(_match: string, attributes: string, inner: string): string {
-	const text = inner.replace(/<[^>]*>/g, "").replace(/[[\]]/g, "\\$&").trim();
+	// Escaped only once it becomes a link label: a mention such as
+	// "@dependabot[bot]" must stay intact for the attribution cleanup.
+	const text = inner.replace(/<[^>]*>/g, "").trim();
 	const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
 	const url = (href?.[1] ?? href?.[2] ?? "").replace(/&amp;/gi, "&");
 	if (text === "" || text.startsWith("@") || !/^https:\/\/[^\s()]+$/.test(url)) return text;
-	return `[${text}](${url})`;
+	return `[${text.replace(/[[\]]/g, "\\$&")}](${url})`;
 }
 
 /**
@@ -149,6 +151,7 @@ export function normalizeReleaseNotes(
 			.replace(HTML_ANCHOR_PATTERN, htmlAnchorToMarkdown)
 			// The leading break keeps a nested item off its parent's line.
 			.replace(/<li(?:\s[^>]*)?>/gi, "\n- ")
+			.replace(/<h[1-6](?:\s[^>]*)?>/gi, "\n### ")
 			.replace(/<\/?(?:strong|b)(?:\s[^>]*)?>/gi, "**")
 			.replace(/<\/?code(?:\s[^>]*)?>/gi, "`")
 		: raw;
