@@ -339,16 +339,16 @@ func TestToolsParsesListOutput(t *testing.T) {
 // Cua Driver refuses an output path under a symlinked folder, such as macOS's
 // /tmp, so the scope folder is handed over resolved.
 func TestScopeResolvesSymlinks(t *testing.T) {
-	real := t.TempDir()
+	target := t.TempDir()
 	link := filepath.Join(t.TempDir(), "data")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	dir, err := newImageStore(link).scope("ao-1")
 	if err != nil {
 		t.Fatalf("scope() error = %v", err)
 	}
-	want, _ := filepath.EvalSymlinks(filepath.Join(real, "computer-use", "ao-1"))
+	want, _ := filepath.EvalSymlinks(filepath.Join(target, "computer-use", "ao-1"))
 	if dir != want {
 		t.Fatalf("scope = %q, want resolved %q", dir, want)
 	}
