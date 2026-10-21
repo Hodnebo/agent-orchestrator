@@ -345,15 +345,29 @@ export function TurnSettingsBar({
 			modelId: primaryModelOption?.currentValue,
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
 			onPickModel: primaryModelOption && onChangeConfigOption ? (id) => applyOption(primaryModelOption.id, { value: id }) : undefined,
-			// The effort and Fast are set after the model, because the agent offers them per model.
-			// Fast is set either way, so a saved setup without it turns a paid Fast off.
+			// The effort, Thinking and Fast are set after the model, because the agent offers them
+			// per model: each is read from the options the previous write returned, not the outgoing
+			// model's. Fast is set either way, so a saved setup without it turns a paid Fast off.
 			onPickSetup: primaryModelOption && onChangeConfigOption
 				? (setup) => {
 					ultracode?.onChange(false);
-					void Promise.resolve(onChangeConfigOption(primaryModelOption.id, { value: setup.model }))
-						.then(() => setup.effort && acpEffortOption ? onChangeConfigOption(acpEffortOption.id, { value: setup.effort }) : undefined)
-						.then(() => fastOption && setConfigToggle(fastOption, Boolean(setup.fast), (id, value) => void onChangeConfigOption(id, value)))
-						.catch(() => {});
+					let catalog = configOptions ?? [];
+					const write = async (optionId: string, value: ChatConfigOptionValue) => {
+						const next = await onChangeConfigOption(optionId, value);
+						if (Array.isArray(next)) catalog = next as ChatConfigOption[];
+					};
+					const current = () => partitionConfigOptions(harness === "agy" ? agyComposerOptions(catalog) : catalog, harness !== "agy");
+					void (async () => {
+						await write(primaryModelOption.id, { value: setup.model });
+						const effortOption = current().effort.at(0);
+						if (setup.effort && effortOption?.choices.some((choice) => choice.value === setup.effort)) {
+							await write(effortOption.id, { value: setup.effort });
+						}
+						const thinking = current().toggles.find(isThinkingToggle);
+						if (thinking && setup.thinking !== undefined) await toggleConfigOption(thinking, setup.thinking, write);
+						const fast = current().toggles.find(isFastOption);
+						if (fast) await toggleConfigOption(fast, Boolean(setup.fast), write);
+					})().catch(() => {});
 				}
 				: undefined,
 			efforts: [
@@ -1297,6 +1311,18 @@ function setConfigToggle(
 	}
 	const next = option.choices.find((choice) => choiceIsEnabled(choice) === enabled);
 	if (next) apply(option.id, { value: next.value });
+}
+
+/** setConfigToggle for a write the caller waits on; a toggle already set is not written. */
+async function toggleConfigOption(
+	option: ChatConfigOption,
+	enabled: boolean,
+	write: (optionId: string, value: ChatConfigOptionValue) => Promise<void>,
+) {
+	if (optionIsEnabled(option) === enabled) return;
+	let pending: Promise<void> | undefined;
+	setConfigToggle(option, enabled, (optionId, value) => { pending = write(optionId, value); });
+	await pending;
 }
 
 /** Codex names its modes differently: its default has a free hand and its accept-edits asks first. */
