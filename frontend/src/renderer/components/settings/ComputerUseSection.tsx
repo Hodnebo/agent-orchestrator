@@ -3,9 +3,11 @@ import { Check, Copy, ExternalLink, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
+import { useSettings, useUpdateComputerUse } from "../../hooks/useSettings";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { HarnessStateText, type HarnessTone } from "./harness/harness-ui";
 import type { InstallJob } from "./installState";
 import { SettingsRow } from "./SettingsRow";
@@ -147,6 +149,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				<SettingsRow label={t("settings.computerUse.driver")} description={driverDescription}>
 					{driverAction}
 				</SettingsRow>
+				<AgentAccessRow installed={installed} />
 				{installed && current ? (
 					<>
 						<SettingsRow label={t("settings.computerUse.service")} description={current.daemon === "stopped" ? t("settings.computerUse.serviceStopped") : undefined}>
@@ -183,9 +186,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 								)}
 							</SettingsRow>
 						) : null}
-						<SettingsRow label={t("settings.computerUse.agentAccess")} description={t("settings.computerUse.agentAccessDescription")}>
-							<code className="rounded bg-(--color-bg-settings-input) px-1.5 py-0.5 font-mono text-xs text-settings-label">ao cua</code>
-						</SettingsRow>
 					</>
 				) : null}
 				{status.isError ? (
@@ -247,6 +247,34 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				</div>
 			) : null}
 		</>
+	);
+}
+
+/**
+ * "Let agents use this computer": while on, new agent sessions get a standing
+ * instruction that `ao cua` exists and to read `ao cua guide` before using it.
+ * It needs Cua Driver installed to turn on; once on it can always be turned off.
+ */
+function AgentAccessRow({ installed }: { installed: boolean }) {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateComputerUse();
+	const enabled = settings?.computerUse ?? false;
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow
+				label={t("settings.computerUse.agentAccess")}
+				description={!installed && !enabled ? t("settings.computerUse.agentAccessNeedsDriver") : t("settings.computerUse.agentAccessDescription")}
+			>
+				<Switch
+					aria-label={t("settings.computerUse.agentAccess")}
+					checked={enabled}
+					disabled={isLoading || saving || !settings || (!installed && !enabled)}
+					onCheckedChange={update}
+				/>
+			</SettingsRow>
+			{error ? <p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">{error}</p> : null}
+		</div>
 	);
 }
 

@@ -130,6 +130,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao cua":                    {},
 	"ao cua call":               {},
 	"ao cua describe":           {},
+	"ao cua guide":              {},
 	"ao cua start":              {},
 	"ao cua status":             {},
 	"ao cua tools":              {},

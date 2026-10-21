@@ -4056,6 +4056,23 @@ export interface paths {
         patch: operations["updateCloudOffering"];
         trace?: never;
     };
+    "/api/v1/settings/computer-use": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether new agent sessions are told they can drive desktop apps through ao cua */
+        patch: operations["updateComputerUse"];
+        trace?: never;
+    };
     "/api/v1/settings/harness-defaults/{agent}": {
         parameters: {
             query?: never;
@@ -7142,6 +7159,8 @@ export interface components {
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
             cloudOffering: boolean;
+            /** @description New agent sessions are told they can drive desktop apps through ao cua (Settings, Computer use agents). */
+            computerUse: boolean;
             /** @enum {string} */
             defaultSessionMode: "chat" | "tui";
             harnessDefaults?: {
@@ -7612,6 +7631,9 @@ export interface components {
             timezone?: null | string;
         };
         UpdateChatHibernationRequest: {
+            enabled: null | boolean;
+        };
+        UpdateComputerUseRequest: {
             enabled: null | boolean;
         };
         UpdateHarnessDefaultRequest: {
@@ -22857,6 +22879,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ControllersUpdateCloudOfferingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateComputerUse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateComputerUseRequest"];
             };
         };
         responses: {

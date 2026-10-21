@@ -22,6 +22,9 @@ func (*hibernationSettingsStore) SetCloudOffering(context.Context, bool, time.Ti
 func (*hibernationSettingsStore) SetVersionRefresh(context.Context, bool, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -140,5 +143,39 @@ func TestVersionRefreshToggleIsReadOnceAndCached(t *testing.T) {
 	snapshot, err := svc.SetVersionRefresh(ctx, false)
 	if err != nil || snapshot.VersionRefresh || svc.VersionRefreshEnabled(ctx) {
 		t.Fatalf("turn off: snapshot=%+v err=%v enabled=%t", snapshot, err, svc.VersionRefreshEnabled(ctx))
+	}
+}
+
+type computerUseStore struct {
+	hibernationSettingsStore
+	enabled bool
+	err     error
+}
+
+func (s *computerUseStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{ComputerUse: s.enabled}, s.err
+}
+
+func (s *computerUseStore) SetComputerUse(_ context.Context, enabled bool, _ time.Time) error {
+	s.enabled = enabled
+	return nil
+}
+
+// The toggle is read at every spawn, so a change applies to the next session
+// without a daemon restart, and an unreadable store never turns it on.
+func TestComputerUseToggle(t *testing.T) {
+	ctx := context.Background()
+	store := &computerUseStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("computer use is on by default")
+	}
+	snapshot, err := svc.SetComputerUse(ctx, true)
+	if err != nil || !snapshot.ComputerUse || !svc.ComputerUseEnabled(ctx) {
+		t.Fatalf("after enabling: snapshot=%+v err=%v enabled=%v", snapshot, err, svc.ComputerUseEnabled(ctx))
+	}
+	store.err = errors.New("database is locked")
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("an unreadable store must count as off")
 	}
 }

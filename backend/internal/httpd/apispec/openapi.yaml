@@ -12200,6 +12200,44 @@ paths:
       summary: Turn the cloud offering on or off for this machine
       tags:
       - settings
+  /api/v1/settings/computer-use:
+    patch:
+      operationId: updateComputerUse
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateComputerUseRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether new agent sessions are told they can drive desktop apps
+        through ao cua
+      tags:
+      - settings
   /api/v1/settings/harness-defaults/{agent}:
     patch:
       operationId: updateHarnessDefault
@@ -20146,6 +20184,10 @@ components:
           type: boolean
         cloudOffering:
           type: boolean
+        computerUse:
+          description: New agent sessions are told they can drive desktop apps through
+            ao cua (Settings, Computer use agents).
+          type: boolean
         defaultSessionMode:
           enum:
           - chat
@@ -20171,6 +20213,7 @@ components:
       - cloudOffering
       - chatHibernationEnabled
       - versionRefresh
+      - computerUse
       - cloudEnabled
       - cloudControlPlaneUrl
       - trackerIntakeEnabled
@@ -21362,6 +21405,15 @@ components:
           - string
       type: object
     UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UpdateComputerUseRequest:
       properties:
         enabled:
           type:

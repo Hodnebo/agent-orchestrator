@@ -14,6 +14,13 @@ vi.mock("../../lib/api-client", () => ({
 
 vi.mock("../../lib/bridge", () => ({ aoBridge: { app: { openExternal: bridgeMocks.openExternal } } }));
 
+const settingsMocks = vi.hoisted(() => ({ computerUse: false, update: vi.fn(), error: undefined as string | undefined }));
+
+vi.mock("../../hooks/useSettings", () => ({
+	useSettings: () => ({ settings: { computerUse: settingsMocks.computerUse }, isLoading: false }),
+	useUpdateComputerUse: () => ({ update: settingsMocks.update, saving: false, error: settingsMocks.error }),
+}));
+
 import { ComputerUseSection } from "./ComputerUseSection";
 
 type Status = Record<string, unknown>;
@@ -51,6 +58,9 @@ function renderSection() {
 }
 
 beforeEach(() => {
+	settingsMocks.computerUse = false;
+	settingsMocks.update.mockReset();
+	settingsMocks.error = undefined;
 	apiMocks.get.mockReset();
 	apiMocks.post.mockReset();
 	bridgeMocks.openExternal.mockReset();
@@ -95,7 +105,7 @@ describe("ComputerUseSection", () => {
 		expect(screen.getByText("macOS permissions")).toBeInTheDocument();
 		expect(screen.queryByText(/Accessibility: Granted/)).not.toBeInTheDocument();
 		expect(screen.getByText("/Users/me/.local/bin/cua-driver")).toBeInTheDocument();
-		expect(screen.getByText("ao cua")).toBeInTheDocument();
+		expect(screen.getByRole("switch", { name: "Let agents use this computer" })).toBeEnabled();
 
 		await userEvent.click(screen.getByRole("button", { name: "Release notes" }));
 		expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://example.test/notes");
@@ -165,5 +175,45 @@ describe("ComputerUseSection", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no desktop session"));
+	});
+
+	it("turns on the agent standing instruction once Cua Driver is installed", async () => {
+		daemon({ status: () => installed });
+		renderSection();
+
+		await screen.findByText("0.28.2");
+		const toggle = screen.getByRole("switch", { name: "Let agents use this computer" });
+		expect(toggle).not.toBeChecked();
+		expect(screen.getByText(/drive desktop apps with ao cua and to read its guide first/)).toBeInTheDocument();
+		await userEvent.click(toggle);
+		expect(settingsMocks.update).toHaveBeenCalledWith(true);
+	});
+
+	it("needs Cua Driver installed to turn agent access on", async () => {
+		daemon({ status: () => notInstalled });
+		renderSection();
+
+		expect(await screen.findByRole("switch", { name: "Let agents use this computer" })).toBeDisabled();
+		expect(screen.getByText("Install Cua Driver to turn this on.")).toBeInTheDocument();
+	});
+
+	it("can always turn agent access off, even without the driver", async () => {
+		settingsMocks.computerUse = true;
+		daemon({ status: () => notInstalled });
+		renderSection();
+
+		const toggle = await screen.findByRole("switch", { name: "Let agents use this computer" });
+		expect(toggle).toBeChecked();
+		expect(toggle).toBeEnabled();
+		await userEvent.click(toggle);
+		expect(settingsMocks.update).toHaveBeenCalledWith(false);
+	});
+
+	it("reports a failed toggle save", async () => {
+		settingsMocks.error = "database is locked";
+		daemon({ status: () => installed });
+		renderSection();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
 	});
 });

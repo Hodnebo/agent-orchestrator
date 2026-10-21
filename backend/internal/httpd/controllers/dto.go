@@ -3501,6 +3501,8 @@ type SettingsResponse struct {
 	ChatHibernationEnabled bool `json:"chatHibernationEnabled"`
 	// VersionRefresh moves idle open sessions to a harness release installed while they ran.
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
+	// ComputerUse adds the `ao cua` standing instruction to new agent sessions.
+	ComputerUse bool `json:"computerUse" description:"New agent sessions are told they can drive desktop apps through ao cua (Settings, Computer use agents)."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3537,6 +3539,11 @@ type UpdateCloudOfferingRequest struct {
 
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateComputerUseRequest flips whether new agent sessions are told about ao cua.
+type UpdateComputerUseRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 

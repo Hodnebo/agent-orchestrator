@@ -4,7 +4,7 @@ Drive native desktop apps (click, type, read the screen) through
 [Cua Driver](https://cua.ai). The user installs Cua Driver in **Settings >
 Computer use agents**; `ao cua status` tells you whether it is ready.
 
-Always go through `ao cua call`, not `cua-driver call`. The driver prints
+`ao cua guide` prints this guide. Always go through `ao cua call`, not `cua-driver call`. The driver prints
 screenshots as megabytes of base64. `ao cua` saves every screenshot to a file
 and prints only its path, so your context stays small.
 

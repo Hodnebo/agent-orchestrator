@@ -129,3 +129,16 @@ func TestCuaCallSurfacesDaemonErrorEnvelope(t *testing.T) {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
 	}
 }
+
+// The guide is the skill's commands/cua.md, printed without a daemon.
+func TestCuaGuidePrintsEmbeddedHowTo(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "cua", "guide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# ao cua", "ao cua call get_window_state", "## Safety", "## Errors"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("guide missing %q:\n%s", want, out)
+		}
+	}
+}

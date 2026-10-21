@@ -27,6 +27,7 @@ type Store interface {
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
+	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -39,7 +40,10 @@ type Snapshot struct {
 	// VersionRefresh moves idle open sessions to a harness release installed
 	// while they ran (Settings, General). On by default.
 	VersionRefresh bool
-	UpdatedAt      time.Time
+	// ComputerUse adds the `ao cua` standing instruction to new agent sessions
+	// (Settings, Computer use agents). Off by default.
+	ComputerUse bool
+	UpdatedAt   time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -155,6 +159,22 @@ func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot
 		return Snapshot{}, err
 	}
 	s.cacheVersionRefresh(enabled)
+	return s.Get(ctx)
+}
+
+// ComputerUseEnabled reports the user's "Let agents use this computer"
+// toggle. It is read once per session spawn, so it goes to the store each
+// time; an unreadable store counts as off.
+func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.ComputerUse
+}
+
+// SetComputerUse changes whether new agent sessions are told about `ao cua`.
+func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
 	return s.Get(ctx)
 }
 

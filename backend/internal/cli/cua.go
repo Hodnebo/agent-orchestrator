@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 // cuaStatus mirrors the daemon's ComputerUseStatus.
@@ -70,10 +72,29 @@ func newCuaCommand(ctx *commandContext) *cobra.Command {
 		Short: "Drive desktop apps through Cua Driver; screenshots are saved to files",
 		Long: "Computer use through Cua Driver (https://cua.ai). Every call goes through the AO daemon,\n" +
 			"which saves screenshots to files and prints their paths instead of inline base64.\n" +
+			"Run `ao cua guide` for the full how-to before driving an app.\n" +
 			"Install Cua Driver in Settings > Computer use agents.",
 	}
-	cmd.AddCommand(newCuaStatusCommand(ctx), newCuaStartCommand(ctx), newCuaToolsCommand(ctx), newCuaDescribeCommand(ctx), newCuaCallCommand(ctx))
+	cmd.AddCommand(newCuaGuideCommand(), newCuaStatusCommand(ctx), newCuaStartCommand(ctx), newCuaToolsCommand(ctx), newCuaDescribeCommand(ctx), newCuaCallCommand(ctx))
 	return cmd
+}
+
+// newCuaGuideCommand prints the computer-use how-to agents follow. It is the
+// skill's commands/cua.md, embedded in the binary, so it needs no daemon.
+func newCuaGuideCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "guide",
+		Short: "Print the computer-use how-to: workflow, tips, safety, and errors",
+		Args:  noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			guide, err := skillassets.CommandGuide("cua")
+			if err != nil {
+				return err
+			}
+			_, err = io.WriteString(cmd.OutOrStdout(), guide)
+			return err
+		},
+	}
 }
 
 func newCuaStatusCommand(ctx *commandContext) *cobra.Command {

@@ -665,6 +665,8 @@ func Run(buildVersion string) error {
 	computerUse := computeruse.New(cuaDriver, cfg.DataDir)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)
+	// "Let agents use this computer" adds the ao cua standing instruction.
+	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
