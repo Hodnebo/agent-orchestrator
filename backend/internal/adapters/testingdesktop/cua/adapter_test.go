@@ -100,6 +100,9 @@ func newFixture(t *testing.T) *fixture {
 			return Output{Stdout: []byte("<plist><dict><key>IOConsoleLocked</key><" + value + "/></dict></plist>")}, nil
 		}
 		if executable == "/usr/bin/osascript" {
+			if len(args) >= 4 && args[3] == focusedWindowScript {
+				return jsonOutput(map[string]any{"trusted": true, "workspacePID": 123, "focusedPID": 123, "windowID": 456}), nil
+			}
 			if len(args) >= 4 && args[3] == axHitTestScript {
 				zero := 0
 				return jsonOutput(axHitTest{Trusted: boolPointer(true), HitCode: &zero, WindowCode: &zero, WindowID: 456, Ancestry: []axHitNode{{PID: 123, Role: "AXButton", Owner: "Electron"}, {PID: 123, Role: "AXWindow", Owner: "Electron"}}}), nil

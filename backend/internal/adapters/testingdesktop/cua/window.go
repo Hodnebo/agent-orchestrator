@@ -96,14 +96,13 @@ func (a *Adapter) focusWindow(ctx context.Context, b *binding) error {
 	if result.PID != b.target.ElectronPID || strconv.Itoa(result.WindowID) != b.target.WindowID ||
 		!result.RequestAccepted || !result.ProcessActivated || !result.Exact.Focused ||
 		result.Observed.FocusedWindowID == nil || *result.Observed.FocusedWindowID != result.WindowID ||
-		result.Observed.WorkspacePID == nil || *result.Observed.WorkspacePID != result.PID ||
 		result.Observed.FrontProcessMatches == nil || !*result.Observed.FrontProcessMatches ||
 		!verified && !partial {
 		observed, _ := json.Marshal(result.Observed)
 		detail := fmt.Sprintf("Cua did not prove owned PID %d and key window %s: returned PID %d window %d, request_accepted=%t, process_activated=%t, focused=%t, observed=%s, code=%s", b.target.ElectronPID, b.target.WindowID, result.PID, result.WindowID, result.RequestAccepted, result.ProcessActivated, result.Exact.Focused, observed, result.Code)
 		return refuse("window_not_focused", providerDiagnosticText(detail, args, providerDiagnosticLimit))
 	}
-	return nil
+	return a.waitFocusedWindow(ctx, b)
 }
 
 // CGWindowListCopyWindowInfo returns all layers in front-to-back order. JXA is

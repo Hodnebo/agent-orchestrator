@@ -44,6 +44,9 @@ func strictSessionProvider(t *testing.T, f *fixture) *sessionProvider {
 	f.runner.hook = func(executable string, args []string) (Output, error) {
 		switch executable {
 		case "/usr/bin/osascript":
+			if len(args) >= 4 && args[3] == focusedWindowScript {
+				return jsonOutput(map[string]any{"trusted": true, "workspacePID": focusedPID, "focusedPID": focusedPID, "windowID": focusedWindow}), nil
+			}
 			if len(args) >= 4 && args[3] == axHitTestScript {
 				return provider(executable, args)
 			}

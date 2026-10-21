@@ -6,11 +6,150 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+func TestFocusUsesFreshForegroundReadback(t *testing.T) {
+	f := newFixture(t)
+	provider := f.runner.hook
+	activations, readbacks := 0, 0
+	f.runner.hook = func(executable string, args []string) (Output, error) {
+		if executable == "/usr/bin/osascript" && len(args) > 3 && strings.Contains(args[3], "AXFocusedApplication") {
+			readbacks++
+			return jsonOutput(map[string]any{"trusted": true, "workspacePID": 123, "focusedPID": 123, "windowID": 456}), nil
+		}
+		out, err := provider(executable, args)
+		if len(args) == 5 && args[3] == "bring_to_front" {
+			activations++
+			var result map[string]any
+			if err := json.Unmarshal(out.Stdout, &result); err != nil {
+				t.Fatal(err)
+			}
+			// Cua's long-lived NSWorkspace cache still names Electron while
+			// its WindowServer front-process check already names Terminal.
+			result["observed"].(map[string]any)["workspace_frontmost_pid"] = 9554
+			return jsonOutput(result), nil
+		}
+		return out, err
+	}
+	if _, err := f.adapter.Screenshot(context.Background(), f.target); err != nil {
+		t.Fatal("fresh exact foreground was refused", err)
+	}
+	if activations != 1 || readbacks != 1 {
+		t.Fatalf("activation must be issued once, then observed: activate=%d read=%d", activations, readbacks)
+	}
+}
+
+func TestFocusFreshReadbackFailsClosed(t *testing.T) {
+	for _, state := range []string{"foreign app", "foreign key app", "foreign window", "unknown", "permission", "timeout", "provider error", "canceled"} {
+		t.Run(state, func(t *testing.T) {
+			f := newFixture(t)
+			provider := f.runner.hook
+			f.runner.hook = func(executable string, args []string) (Output, error) {
+				if executable == "/usr/bin/osascript" && len(args) > 3 && strings.Contains(args[3], "AXFocusedApplication") {
+					result := map[string]any{"trusted": true, "workspacePID": 123, "focusedPID": 123, "windowID": 456}
+					switch state {
+					case "foreign app":
+						result["workspacePID"] = 9554
+					case "foreign key app":
+						result["focusedPID"] = 9554
+					case "foreign window":
+						result["windowID"] = 999
+					case "unknown":
+						result["workspacePID"] = nil
+					case "permission":
+						result["trusted"] = false
+					case "timeout":
+						result["timedOut"] = true
+					case "provider error":
+						return Output{}, errors.New("metadata unavailable")
+					}
+					return jsonOutput(result), nil
+				}
+				if len(args) == 5 && args[3] == "get_window_state" {
+					t.Fatal("unproved foreground reached capture")
+				}
+				return provider(executable, args)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			if state == "canceled" {
+				cancel()
+			}
+			defer cancel()
+			if _, err := f.adapter.Screenshot(ctx, f.target); err == nil {
+				t.Fatal("unproved foreground accepted")
+			}
+		})
+	}
+}
+
+// Keep a deadline even when the caller supplied no deadline. No input or
+// second activation may be used to make the foreground condition pass.
+func TestFocusReadbackHasBoundedContext(t *testing.T) {
+	f := newFixture(t)
+	base := f.adapter.runner
+	f.adapter.runner = deadlineRunner{Runner: base, t: t}
+	if _, err := f.adapter.Screenshot(context.Background(), f.target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type deadlineRunner struct {
+	Runner
+	t *testing.T
+}
+
+func (r deadlineRunner) Run(ctx context.Context, executable string, args, env []string) (Output, error) {
+	if executable == "/usr/bin/osascript" && len(args) > 3 && strings.Contains(args[3], "AXFocusedApplication") {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 3*time.Second {
+			r.t.Fatal("foreground readback has no bounded timeout")
+		}
+	}
+	return r.Runner.Run(ctx, executable, args, env)
+}
+
+func TestFocusedWindowScriptWaitsForExactCondition(t *testing.T) {
+	script := `const assert=require('node:assert/strict'),vm=require('node:vm');
+const source=` + strconv.Quote(focusedWindowScript) + `;
+for(const scenario of ['ready','activation pending','wrong app','wrong window','unknown','permission']){
+ let now=0,turns=0;
+ const state=()=>({workspace:scenario==='wrong app'||scenario==='activation pending'&&turns===0?9554:123,
+  pid:scenario==='wrong app'?9554:123,window:scenario==='wrong window'?999:456});
+ const $=v=>v;
+ Object.assign($,{
+  AXIsProcessTrusted:()=>scenario!=='permission',AXUIElementCreateSystemWide:()=> 'system',
+  AXUIElementCopyAttributeValue(element,name,ref){
+   if(scenario==='unknown')return -1;
+   ref[0]=name==='AXFocusedApplication'?'app':'window';return 0;
+  },
+  AXUIElementGetPid(element,ref){assert.equal(element,'app');ref[0]=state().pid;return 0},
+  _AXUIElementGetWindow(element,ref){assert.equal(element,'window');ref[0]=state().window;return 0},
+  NSWorkspace:{sharedWorkspace:{get frontmostApplication(){return {processIdentifier:state().workspace}}}},
+  NSRunLoop:{currentRunLoop:{runUntilDate(date){assert.equal(date,20);now+=20;turns++}}},
+  NSDate:{dateWithTimeIntervalSinceNow(seconds){return seconds*1000}}
+ });
+ const context={ObjC:{import(){},bindFunction(){}},$,Ref:()=>[],Date:{now:()=>now}};
+ vm.createContext(context);vm.runInContext(source,context);
+ const result=JSON.parse(context.run(['123','456']));
+ if(scenario==='ready'||scenario==='activation pending'){
+  assert.equal(result.workspacePID,123);assert.equal(result.focusedPID,123);assert.equal(result.windowID,456);
+  assert.equal(result.timedOut,undefined);assert.equal(turns,scenario==='ready'?0:1);
+ }else if(scenario==='permission'){
+  assert.equal(result.trusted,false);assert.equal(turns,0);
+ }else{assert.equal(result.timedOut,true);assert.equal(now,2000);}
+}`
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "node", "-e", script).CombinedOutput(); err != nil {
+		t.Fatalf("native focus condition: %v: %s", err, out)
+	}
+}
 
 func TestInputRequiresExactFocusedWindow(t *testing.T) {
 	for _, reason := range []string{"foreign pid", "foreign window", "not focused", "unknown key window", "foreign key window", "foreign foreground pid", "inactive process", "unknown front process", "provider failure"} {
@@ -19,6 +158,9 @@ func TestInputRequiresExactFocusedWindow(t *testing.T) {
 			frame := f.screenshot(t)
 			provider := f.runner.hook
 			f.runner.hook = func(executable string, args []string) (Output, error) {
+				if reason == "foreign foreground pid" && executable == "/usr/bin/osascript" && len(args) > 3 && args[3] == focusedWindowScript {
+					return jsonOutput(map[string]any{"trusted": true, "workspacePID": 999, "focusedPID": 123, "windowID": 456, "timedOut": true}), nil
+				}
 				if len(args) == 5 && args[3] == "bring_to_front" {
 					if reason == "provider failure" {
 						return Output{}, errors.New("activation failed")
@@ -76,7 +218,7 @@ func TestRecordingControlOnlyBlocksItsCoveredPoint(t *testing.T) {
 			frame := f.screenshot(t)
 			provider := f.runner.hook
 			f.runner.hook = func(executable string, args []string) (Output, error) {
-				if executable == "/usr/bin/osascript" {
+				if executable == "/usr/bin/osascript" && len(args) >= 4 && args[3] != focusedWindowScript {
 					if len(args) >= 4 && args[3] == axHitTestScript {
 						if !covering {
 							return provider(executable, args)
@@ -386,7 +528,7 @@ func TestCoveredElementRequiresOwnedAXAncestry(t *testing.T) {
 			}
 			provider := f.runner.hook
 			f.runner.hook = func(executable string, args []string) (Output, error) {
-				if executable == "/usr/bin/osascript" {
+				if executable == "/usr/bin/osascript" && len(args) >= 4 && args[3] != focusedWindowScript {
 					if len(args) >= 4 && args[3] == axHitTestScript {
 						zero := 0
 						return jsonOutput(axHitTest{Trusted: boolPointer(true), HitCode: &zero, WindowCode: &zero, WindowID: 8094, Ancestry: []axHitNode{{PID: 31111, Role: "AXWindow", Owner: "Wispr Flow"}}}), nil
