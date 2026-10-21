@@ -95,11 +95,9 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, err
 	}
 	if err := s.requireProjectPRRepository(ctx, project, prURL); err != nil {
-		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number}, actionStatusForError(err), err)
 		return ClaimPRResult{}, err
 	}
 	if s.scm == nil || s.prClaimer == nil {
-		s.recordClaimed(ctx, id, domain.PullRequest{URL: prURL, Number: number}, domain.ActivityStatusFailed, ErrSCMUnavailable)
 		return ClaimPRResult{}, ErrSCMUnavailable
 	}
 	repo, err := scmRepoForClaim(prURL)

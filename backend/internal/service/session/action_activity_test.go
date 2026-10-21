@@ -256,6 +256,35 @@ func TestFailedReclaimKeepsConfirmedClaim(t *testing.T) {
 	}
 }
 
+func TestClaimAdmissionRejectionsWriteNoAction(t *testing.T) {
+	svc, st, _ := actionFixture(t)
+	rec := st.sessions["mer-1"]
+	rec.Metadata.WorkspacePath = "/ws/mer-1"
+	st.sessions["mer-1"] = rec
+	project := st.projects["mer"]
+	project.RepoOriginURL = "https://github.com/acme/repo"
+	st.projects["mer"] = project
+	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-claim-admission")
+
+	if _, err := svc.ClaimPR(ctx, "mer-1", "https://github.com/other/repo/pull/7", ClaimPROptions{}); !errors.Is(err, ErrProjectMismatch) {
+		t.Fatalf("repository mismatch = %v, want ErrProjectMismatch", err)
+	}
+	if _, err := svc.ClaimPR(ctx, "mer-1", "https://github.com/acme/repo/pull/7", ClaimPROptions{}); !errors.Is(err, ErrSCMUnavailable) {
+		t.Fatalf("missing SCM = %v, want ErrSCMUnavailable", err)
+	}
+	if got := actionsNamed(st.activities, actionPullRequestClaimed); len(got) != 0 {
+		t.Fatalf("preflight rejections wrote claim actions: %+v", got)
+	}
+
+	started := NewWithDeps(Deps{Store: st, SCM: fakeSCM{fetchErr: ports.ErrSCMNotFound}, PRClaimer: &fakePRClaimer{}})
+	if _, err := started.ClaimPR(ctx, "mer-1", "https://github.com/acme/repo/pull/7", ClaimPROptions{}); !errors.Is(err, ErrPRNotFound) {
+		t.Fatalf("attempted claim = %v, want ErrPRNotFound", err)
+	}
+	if got := actionsNamed(st.activities, actionPullRequestClaimed); len(got) != 1 || got[0].Status != domain.ActivityStatusFailed {
+		t.Fatalf("attempted claim actions = %+v, want one failure", got)
+	}
+}
+
 func TestRenameCycleKeepsEachMutation(t *testing.T) {
 	svc, st, _ := actionFixture(t)
 	ctx := context.Background()
