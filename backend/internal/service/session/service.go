@@ -936,7 +936,11 @@ func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (session
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
 		return result, apiErr
 	}
-	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	// RequestKill can acknowledge terminal intent while cleanup still runs.
+	// A later cleanup failure must not leave a completed action in chat.
+	if !result.CleanupPending {
+		s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	}
 	return result, nil
 }
 

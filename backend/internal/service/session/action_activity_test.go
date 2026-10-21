@@ -131,6 +131,27 @@ func TestTerminateRecordsOnSpawnParent(t *testing.T) {
 	}
 }
 
+func TestRequestKillDoesNotConfirmPendingCleanup(t *testing.T) {
+	svc, st, fc := actionFixture(t)
+	fc.requestKillResult = &sessionmanager.KillResult{CleanupPending: true}
+	result, err := svc.RequestKill(context.Background(), "mer-1")
+	if err != nil || !result.CleanupPending {
+		t.Fatalf("request kill = %+v, %v; want pending cleanup", result, err)
+	}
+	if terminated := actionsNamed(st.activities, actionSessionTerminated); len(terminated) != 0 {
+		t.Fatalf("pending cleanup recorded completed termination: %+v", terminated)
+	}
+
+	fc.requestKillResult = &sessionmanager.KillResult{Freed: true}
+	if _, err := svc.RequestKill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	terminated := actionsNamed(st.activities, actionSessionTerminated)
+	if len(terminated) != 1 || terminated[0].Status != domain.ActivityStatusCompleted {
+		t.Fatalf("confirmed termination = %+v, want one completed action", terminated)
+	}
+}
+
 func TestTerminateRenameRestoreSwitchAndClaim(t *testing.T) {
 	svc, st, fc := actionFixture(t)
 	ctx := context.WithValue(context.Background(), middleware.RequestIDKey, "req-1")

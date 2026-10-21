@@ -2700,6 +2700,7 @@ type fakeCommander struct {
 	spawnRecord        domain.SessionRecord
 	switchErr          error
 	switchRecord       domain.AgentSwitch
+	requestKillResult  *sessionmanager.KillResult
 	beforeSwitchReturn func(context.Context, domain.SessionID)
 	spawnFunc          func(ports.SpawnConfig) domain.SessionRecord
 	spawnCalls         int
@@ -6063,6 +6064,9 @@ func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []
 }
 
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	if f.requestKillResult != nil {
+		return *f.requestKillResult, nil
+	}
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
 }
