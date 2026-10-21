@@ -111,6 +111,7 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	modelsLoading,
+	lastModel,
 	afterPermissions,
 	children,
 }: {
@@ -157,6 +158,8 @@ export function TurnSettingsBar({
 	beforePicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
+	/** The model the chat's agent last reported running, when none is saved. */
+	lastModel?: string;
 	/** A control after the permission picker, such as the switch to the terminal view. */
 	afterPermissions?: ReactNode;
 	/** Inline controls on the right model row, before the mode/approval picker — queue vs steer. */
@@ -428,7 +431,7 @@ export function TurnSettingsBar({
 								// Only an agent that sends back its own settings has any to load; AO's would just flicker.
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
-								savedModel={settings.model}
+								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								mark={reroute ? <Shuffle className="size-3 shrink-0 text-warning" aria-hidden="true" /> : undefined}
 								extras={pickerExtras}

@@ -287,7 +287,7 @@ export function AgentModelPicker({
 	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
 	const defaultModel = savedCatalog?.models.find((model) => model.isDefault);
 	const savedLabel = !loadingModels || !savedCatalog ? undefined
-		: savedModel ? recordedModelName(currentHarness, savedModel, savedCatalog.models)
+		: savedModel && savedModel !== "default" ? recordedModelName(currentHarness, savedModel, savedCatalog.models)
 		: defaultModel ? agentModelDisplayLabel(currentHarness, defaultModel.label) : undefined;
 	const shownModel = pending ? pending.modelLabel ?? agentLabel(pending.harness) : savedLabel ?? currentSource.modelLabel;
 	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort;

@@ -38,6 +38,7 @@ import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
+import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
 import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -495,6 +496,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			? unavailableConversationSnapshot(session)
 			: undefined);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
+	// The model the running agent reports, kept so this chat names it at once the next time it loads.
+	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
+		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
+	useEffect(() => {
+		if (liveModel && snapshot?.harness) rememberChatLastModel(uiSessionId, snapshot.harness, liveModel);
+	}, [liveModel, snapshot?.harness, uiSessionId]);
+	const lastModel = useMemo(
+		() => settingsLoading ? readChatLastModel(uiSessionId, renderSnapshot?.harness) : undefined,
+		[renderSnapshot?.harness, settingsLoading, uiSessionId],
+	);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
 	useEffect(() => {
 		// Keep an ambiguous request's identity until durable progress confirms
@@ -717,6 +728,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				settingsReady={!optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
 					(!settingsLoading || Boolean(renderSnapshot.settings?.model || renderSnapshot.settings?.approvalMode))}
 				settingsLoading={settingsLoading}
+				lastModel={lastModel}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
 				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded

@@ -387,6 +387,8 @@ export interface ChatWorkspaceProps {
 	settingsReady?: boolean;
 	/** The agent's own settings have not arrived; the bar shows the saved ones, disabled. */
 	settingsLoading?: boolean;
+	/** The model this chat's agent last reported running, named while its settings load. */
+	lastModel?: string;
 	/** Freeze agent-owned Chat controls while a durable session mutation owns input. */
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
@@ -663,6 +665,7 @@ function ChatWorkspaceContent({
 	startingSteps,
 	settingsReady = true,
 	settingsLoading = false,
+	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
 	reviewerTerminal,
@@ -1391,6 +1394,7 @@ function ChatWorkspaceContent({
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
+					lastModel={lastModel}
 					afterPermissions={composerAction}
 					models={models ?? []}
 					settings={stableSettings}
@@ -1424,6 +1428,7 @@ function ChatWorkspaceContent({
 		[
 			settingsReady,
 			settingsLoading,
+			lastModel,
 			configOptionError,
 			configOptionPending,
 			configOptions,
