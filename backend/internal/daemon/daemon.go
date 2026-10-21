@@ -186,11 +186,12 @@ func enqueueAgentSwitchWorkerShutdownTimeout(
 
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
-func Run() error {
+func Run(buildVersion string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
 	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
 	if cwd, err := os.Getwd(); err == nil {
@@ -283,7 +284,7 @@ func Run() error {
 	// consent (policyCoordinator) governs only the Sentry failure path above and
 	// the dispatcher below; wiring it in here turned the "Share error events"
 	// switch into a kill switch for every daemon product event.
-	telemetrySink := newTelemetrySink(cfg, store, log)
+	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
 	// Initialize the transport once so a later policy opt-in works without a
@@ -307,11 +308,25 @@ func Run() error {
 			"agent": cfg.Agent,
 		},
 	})
+	if telemetryIdentity != nil && cfg.Telemetry.Events {
+		marked, err := telemetryIdentity.MarkInstalledEvent(context.Background())
+		if err != nil {
+			log.Warn("record telemetry install event", "error", err)
+		} else if marked {
+			telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
+				Name:       "ao.app.installed",
+				Source:     "daemon",
+				OccurredAt: time.Now().UTC(),
+				Level:      ports.TelemetryLevelInfo,
+			})
+		}
+	}
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	startGitHubLoginResolver(ctx, cfg, telemetryIdentity, log)
 	policyCoordinator.StartWatcher(ctx)
 	defer func() { _ = policyCoordinator.CloseAndDrain(context.Background()) }()
 	// Constructing the synchronous sender performs no I/O. The hard production
@@ -1078,6 +1093,7 @@ func Run() error {
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
+		TelemetryIdentity:  telemetryIdentity,
 		Mobile:             mc,
 		BrowserLive:        browserLive,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
@@ -1352,6 +1368,17 @@ func Run() error {
 		log.Error("cdc pipeline shutdown", "err", err)
 	}
 	return runErr
+}
+
+func telemetryAppVersion(configured, buildVersion string) string {
+	if configured != "" {
+		return configured
+	}
+	buildVersion = strings.TrimSpace(buildVersion)
+	if buildVersion == "dev" {
+		return ""
+	}
+	return buildVersion
 }
 
 type reportSemanticSession interface {
