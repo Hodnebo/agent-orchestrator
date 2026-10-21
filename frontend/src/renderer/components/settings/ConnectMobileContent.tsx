@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useStayAwake } from "../../hooks/useStayAwake";
@@ -220,6 +220,7 @@ interface MobileStatus {
 	enabled: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -424,6 +425,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const stayAwake = useStayAwake(active);
 
 
+	const setBrowserRemoteAccess = useMutation({
+		mutationFn: async (browserRemoteAccess: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
+		onMutate: async (browserRemoteAccess) => {
+			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
+			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, browserRemoteAccess });
+			return { previous };
+		},
+		onError: (_error, _enabled, context) => {
+			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
+		},
+		onSettled: invalidate,
+	});
+
 	// TLS turns itself on wherever Tailscale exists — it is not a switch, and it
 	// is deliberately not tied to the connection picker. iOS refuses cleartext
 	// to a 100.x address, so a Tailscale pairing without it works on Android and
@@ -475,6 +494,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
+		setBrowserRemoteAccess.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -483,6 +503,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
+		setBrowserRemoteAccess.reset();
 	};
 
 	const copyPassword = async () => {
@@ -518,6 +539,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
+		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
 		stayAwake.error ||
 		null;
 
@@ -775,6 +797,22 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					}}
 				/>
 			)}
+			<SettingsRow
+				icon={MonitorSmartphone}
+				label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+				description={t("mobile.browserRemote.help", "Streams browser content and allows touch control from paired phones. This is separate from the mobile connection and is off by default.")}
+				data-testid="mobile-browser-remote-access"
+			>
+				<Switch
+					aria-label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+					disabled={busy}
+					checked={status.browserRemoteAccess ?? false}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
 		</>
 	);
 }
