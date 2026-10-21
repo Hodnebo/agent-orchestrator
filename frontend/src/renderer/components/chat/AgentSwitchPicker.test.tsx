@@ -26,7 +26,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	}),
 }));
 
-function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false) {
+function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string) {
 	const onPendingChange = vi.fn();
 	const current: PickerSource = {
 		models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
@@ -46,6 +46,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 				terminal={terminal}
 				loading={loading}
 				loadingModels={loadingModels}
+				savedModel={savedModel}
 				agentSwitch={{ projectId: "p", pending, onPendingChange }}
 			/>
 		</QueryClientProvider>,
@@ -99,6 +100,13 @@ describe("AgentModelPicker", () => {
 	it("names no model while the agent starts again", () => {
 		open(undefined, false, "claude-code", {}, false, true);
 		expect(screen.getByRole("button", { name: /Agent, model and reasoning effort/ })).toHaveTextContent("Loading models…");
+	});
+
+	it("names the saved model instead of loading when the agent's list knows it", async () => {
+		open(undefined, false, "codex", { modelLabel: "Codex" }, false, true, "gpt-x");
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(await screen.findByText("GPT X")).toBeInTheDocument();
+		expect(trigger).not.toHaveTextContent("Loading models…");
 	});
 
 	it("stars a row when its model was starred under another id", async () => {
