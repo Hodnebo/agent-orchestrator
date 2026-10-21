@@ -187,11 +187,18 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	return nil
 }
 
-// clearHandoffNote drops a switch target's saved note once the target is
-// running: a later restore must not start it over from the switch.
+// clearHandoffNote drops a switch target's saved note once the target has a
+// native thread to resume: a later restore must not start it over from the
+// switch. A target still alive is not enough. Until its first native hook
+// arrives, a restore would start it fresh, and the note is what keeps that
+// start from replaying the session's original task. A restore resuming a
+// native thread ignores the note.
 func (m *Manager) clearHandoffNote(ctx context.Context, id domain.SessionID) {
 	launchStore, ok := m.store.(launchOptionsStore)
 	if !ok {
+		return
+	}
+	if rec, found, err := m.store.GetSession(ctx, id); err != nil || !found || rec.Metadata.AgentSessionID == "" {
 		return
 	}
 	options, err := launchStore.SessionLaunchOptions(ctx, id)

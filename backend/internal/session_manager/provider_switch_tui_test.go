@@ -89,9 +89,52 @@ func TestRelaunchAfterACutShortSwitchHandsOverInsteadOfReplayingTheTask(t *testi
 	if got := st.sessions["mer-1"].Metadata.Prompt; got != "ORIGINAL TASK" {
 		t.Fatalf("session prompt = %q, want the task kept", got)
 	}
-	// Delivered once; a later restore must not start over from the switch.
+	// No native session has been reported yet, so a later restore would start
+	// fresh again: the note stays for it.
+	if store.options.HandoffNote != "HANDOFF NOTE" {
+		t.Fatalf("saved note = %q before a native session exists, want it kept", store.options.HandoffNote)
+	}
+	// Once the target has a native session, a restore resumes it and the note goes.
+	rec := st.sessions["mer-1"]
+	rec.Metadata.AgentSessionID = "target-native"
+	st.sessions["mer-1"] = rec
+	m.clearHandoffNote(context.Background(), "mer-1")
 	if store.options.HandoffNote != "" {
-		t.Fatalf("saved note = %q after the target started, want it cleared", store.options.HandoffNote)
+		t.Fatalf("saved note = %q with a native session, want it cleared", store.options.HandoffNote)
+	}
+}
+
+func TestSwitchTargetWithoutANativeSessionYetRestoresFromTheHandoff(t *testing.T) {
+	ctx := context.Background()
+	settle, poll := tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll
+	tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = settle, poll })
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rec := mkLive("mer-1")
+	rec.Harness, rec.Mode, rec.Kind = domain.HarnessClaudeCode, domain.SessionModeTUI, domain.KindWorker
+	rec.Activity.State = domain.ActivityExited
+	rec.Metadata.Branch, rec.Metadata.Prompt = "branch", "ORIGINAL TASK ALREADY COMPLETED"
+	rec.Metadata.AgentSessionID, rec.Metadata.RuntimeLaunchID = "source-native", "source-launch"
+	st.sessions[rec.ID] = rec
+	store := &launchOptionsFakeStore{fakeStore: st}
+	agent := &recordingAgent{}
+	m := New(Deps{Runtime: &childProbeRuntime{fakeRuntime: &fakeRuntime{}, childAlive: true}, Agents: singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	const handoff = "HANDOFF: original task done; the user wants a follow-up"
+	if err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessMuse, HandoffNote: handoff}); err != nil {
+		t.Fatal(err)
+	}
+	// The target stays alive but reports no native session before it exits.
+	target := st.sessions[rec.ID]
+	target.IsTerminated, target.Activity.State, target.Metadata.RuntimeHandleID = true, domain.ActivityExited, ""
+	st.sessions[rec.ID] = target
+	if _, err := m.RestoreWithMode(ctx, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if agent.lastLaunch.Prompt != handoff {
+		t.Fatalf("restored prompt = %q, want the handoff instead of the original task", agent.lastLaunch.Prompt)
 	}
 }
 
