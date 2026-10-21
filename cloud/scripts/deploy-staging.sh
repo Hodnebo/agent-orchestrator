@@ -150,7 +150,9 @@ fi
 	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD" \
 	--artifacts "$AO_CLOUD_ARTIFACTS" \
 	--artifact-bucket "$AO_CLOUD_ARTIFACT_BUCKET" \
-	--artifact-region "$AO_CLOUD_ARTIFACT_REGION"
+	--artifact-region "$AO_CLOUD_ARTIFACT_REGION" \
+	--coder-readable-names "$AO_CLOUD_CODER_READABLE_NAMES" \
+	--coder-worker-working-folder "$AO_CLOUD_CODER_WORKER_WORKING_FOLDER"
 echo "Offering: providers=${PROVIDERS} default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none} artifacts=${AO_CLOUD_ARTIFACTS}" >&2
 check_artifact_bucket || exit 1
 
@@ -439,6 +441,8 @@ register_task_definition() {
 			--set-environment "AO_CLOUD_ARTIFACTS=${AO_CLOUD_ARTIFACTS}"
 			--set-environment "AO_CLOUD_ARTIFACT_BUCKET=${AO_CLOUD_ARTIFACT_BUCKET}"
 			--set-environment "AO_CLOUD_ARTIFACT_REGION=${AO_CLOUD_ARTIFACT_REGION}"
+			--set-environment "AO_CLOUD_CODER_READABLE_NAMES=${AO_CLOUD_CODER_READABLE_NAMES}"
+			--set-environment "AO_CLOUD_CODER_WORKER_WORKING_FOLDER=${AO_CLOUD_CODER_WORKER_WORKING_FOLDER}"
 		)
 		if providers_has coder; then
 			render_args+=(
