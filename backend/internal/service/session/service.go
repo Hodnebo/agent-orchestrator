@@ -211,7 +211,10 @@ type Service struct {
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
 	workspaceManifests  *workspaceManifestIndex
-	workspaceEditsMu    sync.Mutex
+	// commitSelections caches resolved commit selections. Their keys are
+	// immutable SHAs, so entries never go stale.
+	commitSelections *commitSelectionCache
+	workspaceEditsMu sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
@@ -321,6 +324,7 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
+	s.commitSelections = newCommitSelectionCache(commitSelectionCacheSize)
 	return s
 }
 
@@ -602,18 +606,36 @@ func (s *Service) SpawnOrchestrator(
 	requestedMode domain.SessionMode,
 	approval domain.PermissionMode,
 ) (domain.Session, error) {
-	unlock := s.lockOrchestratorProject(projectID)
-	defer unlock()
-
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {
 		return domain.Session{}, err
 	}
+	// A start runs the project's Setup and a clean replacement first runs
+	// the retired orchestrator's Cleanup, both possibly longer than one REST
+	// request; the lock may also wait for another replacement. The request's
+	// budget covers them from here. The bounded context is not passed on:
+	// the spawn extends the budget again, from its own start, and a deadline
+	// set here would cap it.
+	budget := sessionmanager.SetupBudget(project)
+	if clean {
+		budget += sessionmanager.ReplacementCleanupBudget(project)
+	}
+	_, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, budget)
+	defer cancelBudget()
+	unlock := s.lockOrchestratorProject(projectID)
+	defer unlock()
+
 	mode := requestedMode
 	if clean {
 		existing, err := s.activeOrchestrators(ctx, projectID)
 		if err != nil {
 			return domain.Session{}, err
+		}
+		if len(existing) > 1 {
+			// Each retirement runs its own Cleanup.
+			_, cancelRetireBudget := ports.ExtendSpawnRequestBudget(ctx,
+				sessionmanager.SetupBudget(project)+time.Duration(len(existing))*sessionmanager.ReplacementCleanupBudget(project))
+			defer cancelRetireBudget()
 		}
 		if len(existing) > 0 && mode == "" {
 			// Clean replacement preserves the controller contract of the
