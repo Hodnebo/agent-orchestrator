@@ -212,7 +212,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
-	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
+	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId, session.kind);
 	const {
 		acknowledgeAcceptedTurn,
 		acknowledgeLocalEcho,

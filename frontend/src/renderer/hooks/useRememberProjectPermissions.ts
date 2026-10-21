@@ -3,12 +3,14 @@ import { useCallback } from "react";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import type { ApprovalMode } from "../types/conversation";
+import type { SessionKind } from "../types/workspace";
 import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 type ProjectPermissionsConfig = {
 	config?: {
 		agentConfig?: { permissions?: string };
 		worker?: { agentConfig?: { permissions?: string } };
+		orchestrator?: { agentConfig?: { permissions?: string } };
 	};
 };
 
@@ -16,7 +18,7 @@ type ProjectPermissionsConfig = {
  * The project's remembered permission mode, and saving or forgetting it. Only an
  * explicit toggle writes it; selecting a session mode is separate. `null` forgets.
  */
-export function useRememberProjectPermissions(projectId: string, sourceHarness?: string, hostId?: string) {
+export function useRememberProjectPermissions(projectId: string, sourceHarness?: string, hostId?: string, kind?: SessionKind) {
 	const queryClient = useQueryClient();
 	const projectKey = hostId ? ["project", projectId, hostId] : ["project", projectId];
 	const project = useQuery({
@@ -53,11 +55,13 @@ export function useRememberProjectPermissions(projectId: string, sourceHarness?:
 		mutation.mutateAsync({ targetProjectId: projectId, permissions, sourceHarness }), [mutation.mutateAsync, projectId, sourceHarness]);
 	const belongsToProject = mutation.variables?.targetProjectId === projectId;
 	const config = project.data?.config;
-	const stored = (config?.worker?.agentConfig?.permissions || config?.agentConfig?.permissions || undefined) as ApprovalMode | undefined;
-	// The last write wins until the refetched project catches up. The daemon stores
-	// Codex's default as Full access, so the saved mode reads the same for every agent.
+	const role = kind === "orchestrator" ? config?.orchestrator : config?.worker;
+	const stored = (role?.agentConfig?.permissions || config?.agentConfig?.permissions || undefined) as ApprovalMode | undefined;
+	// The last write shows until the refetched project catches up, then the project
+	// wins again, so a change made in project settings shows here too. The daemon
+	// stores Codex's default as Full access, so the saved mode reads the same for every agent.
 	const written = mutation.variables;
-	const savedMode = belongsToProject && mutation.isSuccess && written
+	const savedMode = belongsToProject && mutation.isSuccess && written && project.dataUpdatedAt < mutation.submittedAt
 		? written.sourceHarness === "codex" && written.permissions === "default" ? "bypass-permissions" : written.permissions ?? undefined
 		: stored;
 	return {

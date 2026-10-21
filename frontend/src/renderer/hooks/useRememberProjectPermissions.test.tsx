@@ -16,19 +16,22 @@ function setup(sourceHarness?: string) {
 	const invalidate = vi.spyOn(client, "invalidateQueries");
 	const wrapper = ({ children }: { children: ReactNode }) =>
 		<QueryClientProvider client={client}>{children}</QueryClientProvider>;
-	return { ...renderHook(() => useRememberProjectPermissions("project-one", sourceHarness), { wrapper }), invalidate };
+	return { ...renderHook(() => useRememberProjectPermissions("project-one", sourceHarness), { wrapper }), invalidate, client };
 }
 
+// The daemon's copy of the project: GET reads what the last successful write left.
+let stored: string | undefined;
 beforeEach(() => {
+	stored = undefined;
 	patch.mockReset();
 	del.mockReset();
 	get.mockReset();
-	get.mockResolvedValue({ data: { status: "ok", project: { config: {} } } });
+	get.mockImplementation(async () => ({ data: { status: "ok", project: { config: stored ? { agentConfig: { permissions: stored } } : {} } } }));
 });
 
 describe("project permission persistence", () => {
 	it("writes only the requested permission to the correct project and refreshes project data", async () => {
-		patch.mockResolvedValue({ data: { project: {} } });
+		patch.mockImplementation(async (_path, { body }) => { stored = body.permissions; return { data: { project: {} } }; });
 		const { result, invalidate } = setup();
 		expect(patch).not.toHaveBeenCalled();
 		await act(async () => { await result.current.remember("bypass-permissions"); });
@@ -41,8 +44,8 @@ describe("project permission persistence", () => {
 	});
 
 	it("reads the project's remembered mode and forgets it", async () => {
-		get.mockResolvedValue({ data: { status: "ok", project: { config: { agentConfig: { permissions: "auto" } } } } });
-		del.mockResolvedValue({ data: { project: {} } });
+		stored = "auto";
+		del.mockImplementation(async () => { stored = undefined; return { data: { project: {} } }; });
 		const { result, invalidate } = setup();
 		await waitFor(() => expect(result.current.savedMode).toBe("auto"));
 		await act(async () => { await result.current.remember(null); });
@@ -53,7 +56,7 @@ describe("project permission persistence", () => {
 	});
 
 	it("reports errors without claiming success and allows an explicit retry", async () => {
-		patch.mockResolvedValueOnce({ error: { message: "Project not found" } }).mockResolvedValueOnce({});
+		patch.mockResolvedValueOnce({ error: { message: "Project not found" } }).mockImplementationOnce(async () => { stored = "auto"; return {}; });
 		const { result, invalidate } = setup();
 		await act(async () => { await expect(result.current.remember("auto")).rejects.toEqual({ message: "Project not found" }); });
 		await waitFor(() => expect(result.current.error).toBe("Project not found"));
@@ -76,8 +79,18 @@ it("sends source harness context so the daemon can preserve Full access across p
 });
 
 it("reads a Codex Full access write as the bypass mode the project stores", async () => {
-	patch.mockResolvedValue({});
+	patch.mockImplementation(async () => { stored = "bypass-permissions"; return {}; });
 	const { result } = setup("codex");
 	await act(async () => { await result.current.remember("default"); });
+	await waitFor(() => expect(result.current.savedMode).toBe("bypass-permissions"));
+});
+
+it("shows a mode changed elsewhere once the project refetches", async () => {
+	patch.mockImplementation(async (_path, { body }) => { stored = body.permissions; return {}; });
+	const { result, client } = setup();
+	await act(async () => { await result.current.remember("auto"); });
+	await waitFor(() => expect(result.current.savedMode).toBe("auto"));
+	stored = "bypass-permissions";
+	await act(async () => { await client.invalidateQueries({ queryKey: ["project", "project-one"] }); });
 	await waitFor(() => expect(result.current.savedMode).toBe("bypass-permissions"));
 });

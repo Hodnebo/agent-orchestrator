@@ -957,7 +957,7 @@ describe("remember project permissions", () => {
 		rerender(<TurnSettingsBar models={[]} harness="codex"
 			settings={{ approvalMode: "default" }} onChange={onChange} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("default");
 	});
 
@@ -970,7 +970,7 @@ describe("remember project permissions", () => {
 		expect(screen.getByRole("switch", { name: "Remember for this project" })).not.toBeChecked();
 		rerender(<TurnSettingsBar {...props} rememberedPermissionMode="auto" />);
 		expect(screen.getByRole("switch", { name: "Remember for this project" })).toBeChecked();
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith(null);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
@@ -991,7 +991,7 @@ describe("remember project permissions", () => {
 				{ value: "bypass", name: "Bypass Permissions", permissionMode: "bypass-permissions" },
 			] }]} onChangeConfigOption={vi.fn()} onRememberPermissions={remember} />);
 		await user.click(screen.getByRole("button", { name: "Permission mode" }));
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("bypass-permissions");
 	});
 
@@ -1000,7 +1000,7 @@ describe("remember project permissions", () => {
 		render(<TurnSettingsBar models={[]} settings={{ approvalMode: "auto" }}
 			configOptions={[OPTIONS[2]]} onChangeConfigOption={vi.fn()} onRememberPermissions={vi.fn()} />);
 		await user.click(screen.getByRole("button", { name: "Permission mode" }));
-		expect(screen.queryByRole("menuitem", { name: "Remember for this project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Remember for this project" })).not.toBeInTheDocument();
 	});
 
 	it("disables overlapping writes and shows save errors", () => {
