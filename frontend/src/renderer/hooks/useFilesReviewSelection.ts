@@ -73,10 +73,13 @@ export function useFilesReviewSelection({
 	hostId,
 	manifest,
 	projectKind,
+	checkedOutBranch,
 	onBranchChange,
 }: {
 	sessionId: string;
 	hostId?: string;
+	/** The session's branch, which names the checked-out pick until the branch list arrives. */
+	checkedOutBranch?: string;
 	/** The checked-out manifest. History and branches wait for it, so they never hold up opening Files. */
 	manifest: WorkspaceFilesResponse | undefined;
 	/** Undefined while unknown: the scopes then read as a single repository's, and the branch list says whether others can be read. */
@@ -257,7 +260,7 @@ export function useFilesReviewSelection({
 	const checkedOutRow = branchRows?.find((row) => row.checkedOut);
 	const branchTrigger: ReviewBranchTrigger = branch.kind === "branch" ? { kind: "branch", name: branch.name }
 		: branch.kind === "pull_request" ? { kind: "pull_request", number: branch.number, branch: branch.branch }
-		: { kind: "checked_out", name: checkedOutRow?.name || undefined, detached: checkedOutRow?.detached };
+		: { kind: "checked_out", name: checkedOutRow ? checkedOutRow.name || undefined : checkedOutBranch || undefined, detached: checkedOutRow?.detached };
 	// A scratch session, an older daemon and a degraded manifest read no other
 	// branch. Until the project kind is known, the list says whether one can.
 	const branchesUnknown = projectKind === undefined && !branchesQuery.data && !branchesQuery.isError;

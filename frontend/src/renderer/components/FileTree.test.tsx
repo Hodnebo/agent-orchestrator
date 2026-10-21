@@ -232,6 +232,15 @@ describe("FileTree", () => {
 		expect(screen.queryByText("This folder is empty.")).not.toBeInTheDocument();
 	});
 
+	it("shows stand-in rows, not a line of text, while the tree loads", async () => {
+		getMock.mockImplementation(() => new Promise(() => {}));
+		renderWithQuery(<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />);
+		const status = await screen.findByRole("status");
+		expect(status).toHaveAttribute("aria-busy", "true");
+		expect(status).toHaveTextContent("Loading files...");
+		expect(status.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(8);
+	});
+
 	it("selects a changed file from Pierre's path-first tree", async () => {
 		const changedOnlyData: TreeNode[] = [{ name: "notes.txt", path: "notes.txt", type: "file", status: "modified" }];
 		const onSelectPath = vi.fn();

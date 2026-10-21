@@ -2177,6 +2177,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											onOpenFile={openCenterFile}
 											onSplitChange={setFilesSplit}
 											onToggleMaximized={handleToggleFilesPopOut}
+											checkedOutBranch={session.branch}
 											projectKind={filesKind}
 											sessionId={session.id}
 											split={filesSplit}
@@ -2277,6 +2278,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										isMaximized
 										onSplitChange={setFilesSplit}
 										onToggleMaximized={handleToggleFilesPopOut}
+										checkedOutBranch={session.branch}
 										projectKind={filesKind}
 										sessionId={session.id}
 										split={filesSplit}

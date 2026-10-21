@@ -764,6 +764,20 @@ describe("SessionFileExplorer review pickers", () => {
 		for (const [path] of postMock.mock.calls) expect(String(path)).toMatch(/\/workspace\/(history\/selection|diffs)$/);
 	});
 
+	it("names the session's branch on the picker before the branch list arrives", async () => {
+		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string } } }) => {
+			const sessionId = init.params.path.sessionId;
+			if (path.endsWith("/workspace/manifest")) return { data: { ...manifest, sessionId } };
+			// The list is slow: it never answers in this test.
+			if (path.endsWith("/workspace/branches")) return new Promise(() => {});
+			if (path.endsWith("/workspace/history")) return { data: { ...checkedOutHistory, sessionId } };
+			throw new Error(`Unexpected GET ${path}`);
+		});
+		renderWithQuery(<SessionFileExplorer checkedOutBranch="feature/login" projectKind="single_repo" sessionId="sess-branch-fallback" />);
+		expect(await screen.findByRole("button", { name: "Branch to review: feature/login" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Branch to review: Checked out" })).not.toBeInTheDocument();
+	});
+
 	it("keeps another branch current on its own, with no reload button", async () => {
 		let mainTip = SHA("2");
 		getMock.mockImplementation(async (path: string, init: { params: { path: { sessionId: string }; query?: { branch?: string } } }) => {

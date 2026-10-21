@@ -12,11 +12,34 @@ import {
 import { sessionUiKey } from "../lib/hosts";
 import { type FilesSource, sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
+import { Skeleton } from "./ui/skeleton";
 
 type DirectoryState = { key:string; requested:string[]; open:Set<string> };
 
 
 const ROW_HEIGHT = 28;
+
+/** Indent level and name width (%) of each stand-in row: a small tree, not a uniform block. */
+const SKELETON_ROWS: ReadonlyArray<readonly [number, number]> = [[0, 26], [0, 34], [1, 46], [1, 30], [1, 54], [0, 22], [0, 40], [0, 32], [0, 44]];
+
+/**
+ * Stand-in rows while a tree loads, at the tree's own row height and indent,
+ * so loading reads as the list arriving rather than a line of text in its corner.
+ */
+export function FileTreeSkeleton() {
+	const { t } = useTranslation();
+	return (
+		<div aria-busy="true" className="flex flex-col px-3 pt-1" role="status">
+			<span className="sr-only">{t("files.loading")}</span>
+			{SKELETON_ROWS.map(([indent, width], index) => (
+				<div aria-hidden="true" className="flex items-center gap-2" key={index} style={{ height: ROW_HEIGHT, paddingLeft: indent * 16 }}>
+					<Skeleton className="size-4 shrink-0 rounded-sm" />
+					<Skeleton className="h-3" style={{ width: `${width}%` }} />
+				</div>
+			))}
+		</div>
+	);
+}
 
 // Pierre Trees paints inside a shadow root, so it is themed through its
 // override variables. Everything maps to AO's semantic tokens: neutral hover
@@ -366,9 +389,7 @@ function WorkspaceFileTree({
 
 	return (
 		<div className="flex h-full min-h-0 min-w-0 flex-col bg-background px-1.5">
-			{isPending ? (
-				<p className="p-3 text-xs text-muted-foreground">{t("files.loading")}</p>
-			) : null}
+			{isPending ? <FileTreeSkeleton /> : null}
 			{activeError ? (
 				<p className="p-3 text-xs text-error">{activeError.message || t("files.error.loadWorkspaceTree")}</p>
 			) : null}

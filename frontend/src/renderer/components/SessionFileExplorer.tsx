@@ -36,7 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "./ui/resizable";
 
 import { useFilesActionsHost, useFilesTopbarHost } from "./files-topbar-host";
-import { FileTree } from "./FileTree";
+import { FileTree, FileTreeSkeleton } from "./FileTree";
 import { FileContentPane, type FileOpenOptions, type FileViewMode } from "./FileContentPane";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 import { WorkspaceReviewPane } from "./diffs/WorkspaceReviewPane";
@@ -75,6 +75,8 @@ type SessionFileExplorerProps = {
 	onToggleMaximized?: (next: boolean) => void;
 	/** Which Git scopes and branches the review offers; undefined while unknown. */
 	projectKind?: ProjectKind;
+	/** The session's branch, shown on the branch picker before its list loads. */
+	checkedOutBranch?: string;
 	split?: boolean;
 };
 
@@ -86,6 +88,7 @@ export function SessionFileExplorer({
 	onSplitChange,
 	onToggleMaximized,
 	projectKind,
+	checkedOutBranch,
 	split: controlledSplit,
 }: SessionFileExplorerProps) {
 	const { t } = useTranslation();
@@ -124,6 +127,7 @@ export function SessionFileExplorer({
 		hostId,
 		manifest: filesData,
 		projectKind,
+		checkedOutBranch,
 		// A preview of the old branch's file would be stale.
 		onBranchChange: () => {
 			setPreviewRequest(null);
@@ -499,7 +503,7 @@ export function SessionFileExplorer({
 												sessionId={sessionId}
 											/>
 										) : review.target.state === "pending" ? (
-											<PanelMessage compact>{t("files.loading")}</PanelMessage>
+											<FileTreeSkeleton />
 										) : null}
 									</ResizablePanel>
 								</>
