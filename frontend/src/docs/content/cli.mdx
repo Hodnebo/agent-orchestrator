@@ -18,7 +18,7 @@ ao
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
 ├── session                       ls, top, get, kill, restore, rename, cleanup, claim-pr,
-│                                 exit-agent, resume-agent, switch-agent, agent-switch
+│                                 exit-agent, resume-agent, history
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
@@ -144,6 +144,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session ls` | List active worker sessions. Use `--all` for orchestrators and `--include-terminated` for history. |
 | `ao session top` | Show memory used by each live session, largest first. |
 | `ao session get <id>` | Show one session. |
+| `ao session history [id]` | Print a session's turns, newest first. Defaults to the current session. |
 | `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
 | `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |
@@ -151,8 +152,6 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
-| `ao session switch-agent <id> <target-harness>` | Switch a compatible session to another harness. |
-| `ao session agent-switch ls <session-id>` | Inspect agent-switch attempts. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 
