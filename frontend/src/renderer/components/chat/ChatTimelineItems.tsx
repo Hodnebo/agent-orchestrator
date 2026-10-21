@@ -1183,7 +1183,7 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 						className="overflow-hidden"
 					>
 						<div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-							{lines.map((line) => <span key={line}>{line}</span>)}
+							{lines.map((line, index) => <span key={index}>{line}</span>)}
 							{href && descriptor?.linkLabelKey ? (
 								<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
 							) : null}
