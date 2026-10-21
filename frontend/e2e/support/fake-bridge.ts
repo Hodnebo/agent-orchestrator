@@ -157,6 +157,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -353,6 +358,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					computerName: async () => "E2E computer",
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
@@ -1030,6 +1036,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				telemetry: {
 					getBootstrap: async () => null,
+					getAnalyticsOptOut: async () => false,
+					setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+					onAnalyticsOptOut: () => () => undefined,
+					setCloudUser: async () => false,
+					getGithubLogin: async () => null,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -1218,6 +1229,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						throw new Error(`No fake remote for ${url}`);
 					},
 					disconnect: async () => undefined,
+					computerName: async () => "E2E computer",
 					previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
