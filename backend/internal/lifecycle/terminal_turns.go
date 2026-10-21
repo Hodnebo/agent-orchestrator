@@ -44,11 +44,25 @@ func (m *Manager) recordTerminalTurn(ctx context.Context, rec domain.SessionReco
 	case "stop":
 		// The turn is over even when the hook carries no text. Closing it
 		// keeps the next request from piling onto this one.
-		if s.SubagentID == "" {
+		if s.SubagentID == "" && !staleTerminalStop(rec, s) {
 			err = recorder.RecordTerminalTurnResponse(ctx, rec.ID, strings.TrimSpace(s.FinalAssistantMessage), at)
 		}
 	}
 	if err != nil {
 		slog.Default().Warn("lifecycle: record terminal turn", "session", rec.ID, "event", s.Event, "error", err)
 	}
+}
+
+// staleTerminalStop reports a Stop that belongs to an earlier turn than the
+// one the open terminal row holds: it is older than the latest prompt, or it
+// names a different turn than the one that prompt opened. Recording it would
+// close the newer request with an older answer, so it is left for the
+// lifecycle checkpoint to reject.
+func staleTerminalStop(rec domain.SessionRecord, s ports.ActivitySignal) bool {
+	md := rec.Metadata
+	if !s.Timestamp.IsZero() && !md.LatestUserPromptAt.IsZero() && s.Timestamp.Before(md.LatestUserPromptAt) {
+		return true
+	}
+	return s.ProviderTurnID != "" && md.ConversationCheckpointState == domain.ConversationCheckpointPrompt &&
+		md.ConversationCheckpointTurnID != "" && md.ConversationCheckpointTurnID != s.ProviderTurnID
 }
