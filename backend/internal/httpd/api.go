@@ -343,6 +343,7 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/orchestrators/delegate",
 		"/api/v1/sessions/{sessionId}/send",
 		"/api/v1/sessions/{sessionId}/conversation/messages",
+		"/api/v1/sessions/{sessionId}/provider-switch",
 		"/api/v1/sessions/{sessionId}/conversation/steer",
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",

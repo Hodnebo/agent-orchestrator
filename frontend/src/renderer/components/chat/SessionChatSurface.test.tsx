@@ -401,29 +401,26 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
-	it("shows a message with attachments while the switch runs, and takes it back when the switch fails", async () => {
+	it("sends a message with attachments and its switch in one request", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
-		let failSwitch: (error: Error) => void = () => {};
-		providerSwitchMock.mockReturnValue(new Promise((_resolve, reject) => { failSwitch = reject; }));
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		await act(async () => {
 			sideMocks.agentSwitch?.onPendingChange({ harness: "codex", model: "chosen-model" });
 		});
-		let sent: Promise<void> | undefined;
+		const attachments = [{ mimeType: "image/png", data: "AA==" }];
 		await act(async () => {
-			sent = (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
-				"Recall the code word.", [{ mimeType: "image/png", data: "AA==" }], "switch-message");
+			await (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
+				"Inspect this image.", attachments, "switch-message");
 		});
-		expect(conversationCommandState.echoBeforeSend.mock.calls[0]?.[0]).toMatchObject(
-			{ clientMessageId: "switch-message", text: "Recall the code word." },
-		);
-		expect(conversationCommandState.dropEcho).not.toHaveBeenCalled();
-		await act(async () => {
-			failSwitch(new Error("refused"));
-			await sent?.catch(() => undefined);
-		});
-		expect(conversationCommandState.dropEcho).toHaveBeenCalledWith("switch-message");
-		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		// No other switch can come between them and take the image.
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
+			text: "Inspect this image.",
+			attachments,
+			clientMessageId: "switch-message",
+			providerSwitch: expect.objectContaining({ targetHarness: "codex" }),
+		}));
+		expect(providerSwitchMock).not.toHaveBeenCalled();
+		expect(conversationCommandState.echoBeforeSend).not.toHaveBeenCalled();
 	});
 });
 

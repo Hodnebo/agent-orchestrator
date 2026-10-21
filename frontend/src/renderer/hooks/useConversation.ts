@@ -611,6 +611,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				const refresh = () => void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
 				const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
 					params: { path: { sessionId: targetSessionId } },
+					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: { ...providerSwitch, idempotencyKey: crypto.randomUUID(), message: { ...message, clientMessageId } },
 				}).catch((failure: unknown) => {
 					// No answer: the daemon may have switched, so what it runs is read back.

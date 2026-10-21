@@ -148,6 +148,16 @@ func TestProviderSwitchRouteSendsTheMessageAfterTheSwitch(t *testing.T) {
 		t.Fatalf("response = %s, want the send's turn", rec.Body)
 	}
 
+	// Attachments go with the switch too, so no other switch can come between
+	// the two and take the message.
+	svc = &fakeConversationService{}
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+	rec = route(svc, `{"targetHarness":"claude-code","message":{"text":"Inspect this image","clientMessageId":"image-1","attachments":[{"mimeType":"image/png","data":"`+png+`"}]}}`)
+	if rec.Code != http.StatusOK || svc.switchRequest.TargetHarness != domain.HarnessClaudeCode ||
+		len(svc.sent.Content) != 1 || svc.sent.Content[0].Type != "image" || svc.sent.Content[0].Data != png {
+		t.Fatalf("switch with an image = %d %s, sent %+v", rec.Code, rec.Body, svc.sent)
+	}
+
 	// A send that fails after the switch is flagged, so the client keeps the
 	// message as an unsent send rather than an unswitched one.
 	svc = &fakeConversationService{sendErr: ports.ErrSessionNotFound}

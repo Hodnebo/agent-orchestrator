@@ -29,11 +29,6 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	// malformed one refuses the switch instead of following it.
 	var message ports.ChatUserMessage
 	if req.Message != nil {
-		if len(req.Message.Attachments) > 0 {
-			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_BODY",
-				"send attachments separately after the switch", nil)
-			return
-		}
 		var invalid *attachmentError
 		if message, invalid = chatUserMessage(*req.Message); invalid != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)

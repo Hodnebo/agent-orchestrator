@@ -663,22 +663,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						// Ultracode picked with the switch stays on for the messages after it.
 						ultracode.onChange(Boolean(pendingSwitch.ultracode));
 					};
-					if (attachments?.length) {
-						// Attachments upload on their own route, so this send follows the switch; the message shows at once.
-						if (clientMessageId) {
-							commands.echoBeforeSend(
-								{ clientMessageId, text, excerpts },
-								switchDisplay ? { targetHarness, display: switchDisplay } : undefined,
-							);
-						}
-						await providerSwitch.mutateAsync(switchRequest).catch((error) => {
-							if (clientMessageId) commands.dropEcho(clientMessageId);
-							throw switchFailed(error);
-						});
-						switched();
-						return commands.send(message);
-					}
-					// The daemon switches and sends in one request; the message shows at once.
+					// The daemon switches and sends in one request, attachments included, so no other
+					// switch can take the message; it shows at once.
 					try {
 						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
