@@ -1,4 +1,5 @@
 import { appI18n } from "../../i18n/instance";
+import { agentSwitchErrorLabelKeys, type AgentSwitchErrorCode } from "../../i18n/key-maps";
 import { isSessionLink } from "../../lib/session-links";
 import { isWebLink } from "../../lib/external-link-policy";
 import type { ActivityStatus, ConversationActivity, ConversationItem } from "../../types/conversation";
@@ -120,7 +121,12 @@ export function actionDetailLines(activity: ConversationActivity): string[] {
 	const descriptor = describeConversationActivity(activity);
 	if (descriptor) lines.push(statusLabel(descriptor.state));
 	const error = text(detail.error);
-	if (error) lines.push(error);
+	if (error && detail.action === "session.agent_switched") {
+		const key = Object.prototype.hasOwnProperty.call(agentSwitchErrorLabelKeys, error)
+			? agentSwitchErrorLabelKeys[error as AgentSwitchErrorCode]
+			: "switchAgent.error.switchFailed";
+		lines.push(appI18n.t(key));
+	} else if (error) lines.push(error);
 	return lines;
 }
 

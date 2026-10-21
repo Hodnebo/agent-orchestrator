@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import { describeConversationActivity, isOrdinaryActivity, summarizeAOActions } from "./activity-action";
+import { actionDetailLines, describeConversationActivity, isOrdinaryActivity, summarizeAOActions } from "./activity-action";
 
 function activity(overrides: Partial<ConversationActivity>): ConversationActivity {
 	return {
@@ -78,6 +78,22 @@ describe("describeConversationActivity", () => {
 		}));
 		expect(replay?.operationId).toBe(first?.operationId);
 		expect(replay?.state).toBe("failed");
+	});
+
+	it("shows a readable switch failure for existing activity codes", () => {
+		const switched = activity({
+			status: "failed",
+			detail: { action: "session.agent_switched", error: "target_binary_missing" },
+		});
+		expect(actionDetailLines(switched)).toContain("Target agent is not installed");
+		expect(actionDetailLines(activity({
+			status: "failed",
+			detail: { action: "session.agent_switched", error: "future_switch_failure" },
+		}))).toContain("Switch failed");
+		expect(actionDetailLines(activity({
+			status: "failed",
+			detail: { action: "pull_request.claimed", error: "Claim failed because the PR is closed" },
+		}))).toContain("Claim failed because the PR is closed");
 	});
 
 	it("lists mixed actions instead of a generic performed count", () => {
