@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -508,5 +510,91 @@ func TestArtifactSyncStopsRescanningAFileThatKeepsChanging(t *testing.T) {
 	}
 	if changing {
 		t.Fatal("a file that keeps changing still schedules settle rescans")
+	}
+}
+
+// At the file cap, a new file that sorts first does not push a synced file
+// out: the synced files keep their slots and edits to them still sync.
+func TestArtifactSyncKeepsSyncedFilesAtTheCap(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	for index := range domain.MaxSessionArtifactFiles {
+		writeArtifact(t, dir, fmt.Sprintf("f%03d.md", index), "x")
+	}
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	if got := len(plane.paths()); got != domain.MaxSessionArtifactFiles {
+		t.Fatalf("synced %d files, want %d", got, domain.MaxSessionArtifactFiles)
+	}
+	writeArtifact(t, dir, "a.md", "new")
+	writeArtifact(t, dir, "f199.md", "edited")
+	syncSettled(s)
+	paths := plane.paths()
+	if slices.Contains(paths, "a.md") || !slices.Contains(paths, "f199.md") || len(paths) != domain.MaxSessionArtifactFiles {
+		t.Fatalf("at the cap: %d files, a.md=%v, f199.md=%v", len(paths), slices.Contains(paths, "a.md"), slices.Contains(paths, "f199.md"))
+	}
+	plane.mu.Lock()
+	edited := plane.rows["f199.md"].size
+	plane.mu.Unlock()
+	if edited != int64(len("edited")) {
+		t.Fatalf("edit to a synced file at the cap was not synced: size %d", edited)
+	}
+}
+
+func TestArtifactSyncRefusalIgnoresAFileThatKeepsChanging(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.refuseCommits = http.StatusRequestEntityTooLarge
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	manifests, _, _ := plane.counts()
+	for index := range 4 {
+		writeArtifact(t, dir, "progress.log", strings.Repeat("x", index+1))
+		s.sync(context.Background())
+	}
+	if m, _, _ := plane.counts(); m != manifests {
+		t.Fatalf("a growing log resent the refused request: manifests %d -> %d", manifests, m)
+	}
+}
+
+func TestArtifactSyncRefusalIgnoresAnUnreadableFile(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	writeArtifact(t, dir, "secret.bin", "secret")
+	if err := os.Chmod(filepath.Join(dir, "secret.bin"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "secret.bin"), 0o600) })
+	if _, err := os.ReadFile(filepath.Join(dir, "secret.bin")); err == nil {
+		t.Skip("file permissions are not enforced here")
+	}
+	plane.refuseCommits = http.StatusRequestEntityTooLarge
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	manifests, _, _ := plane.counts()
+	for range 6 {
+		s.sync(context.Background())
+	}
+	if m, _, _ := plane.counts(); m != manifests {
+		t.Fatalf("an unreadable file resent the refused request: manifests %d -> %d", manifests, m)
+	}
+}
+
+func TestArtifactSyncFinalFlushIgnoresTheBackoff(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "report")
+	plane.failCommits = 1
+	s := testSyncer(c, dir)
+	syncSettled(s)
+	if !s.retryAt.After(time.Now()) {
+		t.Fatal("no backoff after a failed commit")
+	}
+	writeArtifact(t, dir, "last.md", "written during the backoff")
+	s.finalFlush()
+	if got := plane.paths(); !slices.Equal(got, []string{"last.md", "report.html"}) {
+		t.Fatalf("final flush during a backoff committed %v", got)
 	}
 }

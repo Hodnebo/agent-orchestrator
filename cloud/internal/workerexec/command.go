@@ -220,7 +220,7 @@ func (b HarnessBuilder) BuildInteractive(
 	}
 	if launch.Harness == "claude-code" {
 		if launch.Kind != "reviewer" {
-			setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+			setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(launch, workspace, b.DataDir))
 		}
 		if err := b.prepareClaudeCloudExperience(&command, agentDir, extraDirs, permission); err != nil {
 			if command.Cleanup != nil {
@@ -398,7 +398,7 @@ func (b HarnessBuilder) Build(
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
 		command.AdditionalDirectories = extraDirs
-		setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+		setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(b.Launch, workspace, b.DataDir))
 		// A session can start in Chat before any terminal wrote the settings;
 		// the ACP adapter and the CLI both load them as user settings.
 		if err := b.writeClaudeChatSettings(configDir, extraDirs); err != nil {
@@ -848,6 +848,9 @@ func loginCodex(binary, home, credentialType, secret string) error {
 // agentDirectories is additionalDirectories plus, for a session that keeps
 // artifacts, its artifact directory: it is outside the workspace, so a
 // harness that limits writes to the workspace must be told it may write there.
+// Claude does not load instructions from the artifact directory: a CLAUDE.md
+// written there is a deliverable, so the CLAUDE.md setting uses
+// additionalDirectories alone.
 func (b HarnessBuilder) agentDirectories(launch worker.LaunchContext, workspace string) []string {
 	dirs := additionalDirectories(launch, workspace, b.DataDir)
 	if launch.Artifacts && launch.Kind != "reviewer" {

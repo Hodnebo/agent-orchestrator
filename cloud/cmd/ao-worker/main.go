@@ -386,8 +386,15 @@ func run(logger *slog.Logger) error {
 		}
 		chatRunner = &workerexec.Supervisor{
 			Control: client, Builder: b, Runner: workerexec.OSRunner{},
-			PullRequestClaimer:  client.claimPullRequest,
-			GitRefReporter:      gitRefReporter,
+			PullRequestClaimer: client.claimPullRequest,
+			GitRefReporter:     gitRefReporter,
+			// A Chat turn's end syncs artifacts at once, as the terminal's
+			// Stop hook does.
+			TurnEnded: func() {
+				if artifacts != nil {
+					artifacts.poke()
+				}
+			},
 			UseProviderProtocol: true,
 			// Use the supervisor's 100 ms default. A one-second worker-command
 			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
@@ -520,7 +527,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 6)
+	results := make(chan error, 7)
 	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
