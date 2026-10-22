@@ -4896,6 +4896,32 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	}
 }
 
+func TestACPDriverFailsWhenRequiredFastLaunchOptionIsRejected(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{selectConfigOption("fast", "Fast mode", "", "true", "true", "false")}
+	agent := &fakeAgent{
+		newConfig: catalog,
+		configErr: acpsdk.NewInvalidParams(map[string]any{"error": "fast=false is unsupported"}),
+	}
+	fast := false
+	driver := New(Config{
+		Harness:      domain.HarnessCursor,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		LaunchSessionOptions: func(LaunchConfig) []SessionOption {
+			return []SessionOption{{ID: "fast", Value: strconv.FormatBool(fast)}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), `fast=false is unsupported`) {
+		t.Fatalf("Start error = %v, want required fast option rejection", err)
+	}
+}
+
 // A setter may accept a launch option without returning the catalog. Keep the
 // remaining advertised choices available for subsequent launch settings.
 func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *testing.T) {
