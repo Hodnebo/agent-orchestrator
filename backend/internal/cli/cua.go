@@ -181,7 +181,7 @@ func newCuaCallCommand(ctx *commandContext) *cobra.Command {
 		Short: "Run one Cua Driver tool; prints JSON with screenshot file paths",
 		Example: "  ao cua call list_windows\n" +
 			"  ao cua call get_window_state '{\"pid\":123,\"window_id\":456}'\n" +
-			"  echo '{\"pid\":123,\"element_index\":7}' | ao cua call click -",
+			"  echo '{\"element_token\":\"s00000019:12\"}' | ao cua call click -",
 		Args: rangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			arguments, err := cuaArguments(cmd.InOrStdin(), args[1:])

@@ -14,7 +14,7 @@ ao cua tools                      # every tool, one line each
 ao cua describe get_window_state  # one tool's description and JSON input schema
 ao cua call list_windows
 ao cua call get_window_state '{"pid":123,"window_id":456}'
-echo '{"pid":123,"element_index":7}' | ao cua call click -
+echo '{"element_token":"s00000019:12"}' | ao cua call click -
 ```
 
 `ao cua call` prints one JSON document: `result` is the tool's output, and
@@ -27,14 +27,20 @@ tool) to see the screen.
 
 1. `ao cua call list_windows` and pick the `pid` and `window_id` of the app.
 2. `ao cua call get_window_state '{"pid":...,"window_id":...}'` returns the
-   window's accessibility tree with `element_index` values plus a screenshot
-   file. Look at the screenshot when the tree is not enough.
-3. Act by element: `click`, `type_text`, `set_value`, `press_key`, `hotkey`
-   with `element_index` (or `element_token`). This works on background windows
-   and does not move the user's mouse. Use `x`/`y` pixels only for canvases and
-   other surfaces missing from the tree; they are in the screenshot's pixels.
-4. Snapshot again after every action before using another `element_index`:
-   each snapshot replaces the previous index map.
+   window's accessibility tree as `tree_markdown`, a `snapshot_id`, and a
+   screenshot file. Each actionable row starts with a number, such as
+   `- [12] AXButton (7) [id=Seven actions=[press]]`. Look at the screenshot
+   when the tree is not enough.
+3. Act by element with an `element_token`: the snapshot's `snapshot_id`, a
+   colon, and the row number. Row `[12]` of snapshot `s00000019` is
+   `{"element_token":"s00000019:12"}`; the token carries the pid and window, so
+   `click`, `set_value`, `type_text`, `press_key` and `hotkey` need nothing else
+   to find the element. Action tools refuse `element_index` and `snapshot_id`.
+   Acting by element works on background windows and does not move the user's
+   mouse. Use `x`/`y` pixels only for canvases and other surfaces missing from
+   the tree; they are in the screenshot's pixels.
+4. Snapshot again after every action before acting on another element: a newer
+   read of the window makes earlier tokens stale (`stale_element_token`).
 
 Every `ao cua call` from one AO session runs in the same Cua Driver session
 (`ao-<session id>`; `ao-shared` outside an AO session), so a pixel `click` or
@@ -46,7 +52,7 @@ after a few idle minutes; snapshot again if a pixel action reports
 Tips:
 
 - `{"include_screenshot":false}` returns the tree only, which is cheaper when
-  you only need fresh element indexes.
+  you only need fresh element tokens.
 - `{"query":"Save"}` filters the tree to matching rows; `max_elements` and
   `max_depth` bound very large trees.
 - `zoom` crops a region at higher detail; pass `from_zoom: true` to the next
@@ -78,5 +84,8 @@ destructive or outward-facing (sending messages, purchases, deleting data).
   CuaDriver in System Settings.
 - `COMPUTER_USE_BROWSER_TOOL_DISABLED`: you called a Cua Driver browser tool;
   use `ao browser` instead.
-- `COMPUTER_USE_CALL_FAILED`: the driver's own message follows; for example
-  `window_id_not_found` means the window closed, so list windows again.
+- `COMPUTER_USE_CALL_FAILED`: the driver's own message follows. For example,
+  `window_id_not_found` means the window closed, so list windows again;
+  `stale_element_token` means a newer read replaced that token, so snapshot
+  again and use a fresh one; `invalid_arguments` names the arguments the tool
+  accepts, and `ao cua describe <tool>` shows its schema.

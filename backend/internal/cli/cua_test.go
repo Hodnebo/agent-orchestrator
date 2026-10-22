@@ -19,7 +19,7 @@ func TestCuaCallSendsToolArgumentsAndSession(t *testing.T) {
 	}{
 		{name: "no arguments", args: []string{"cua", "call", "list_windows"}},
 		{name: "inline JSON", args: []string{"cua", "call", "get_window_state", `{"pid":7,"window_id":9}`}, want: map[string]any{"pid": float64(7), "window_id": float64(9)}},
-		{name: "stdin JSON", args: []string{"cua", "call", "click", "-"}, stdin: `{"element_index":3}`, want: map[string]any{"element_index": float64(3)}},
+		{name: "stdin JSON", args: []string{"cua", "call", "click", "-"}, stdin: `{"element_token":"s00000019:12"}`, want: map[string]any{"element_token": "s00000019:12"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
