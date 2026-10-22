@@ -67,7 +67,7 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"daemon",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper", "scroll-phase"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "scroll-phase", "cloudflared"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -178,9 +178,9 @@ const config: ForgeConfig = {
                 const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
                 if (wakeBuild.error) throw wakeBuild.error;
                 if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
-				const scrollPhaseBuild = spawnSync(process.execPath, [path.resolve("scripts/build-scroll-phase.mjs"), "--arch", arch], { stdio: "inherit" });
-				if (scrollPhaseBuild.error) throw scrollPhaseBuild.error;
-				if (scrollPhaseBuild.status !== 0) throw new Error("macOS scroll phase addon build failed");
+                const scrollPhaseBuild = spawnSync(process.execPath, [path.resolve("scripts/build-scroll-phase.mjs"), "--arch", arch], { stdio: "inherit" });
+                if (scrollPhaseBuild.error) throw scrollPhaseBuild.error;
+                if (scrollPhaseBuild.status !== 0) throw new Error("macOS scroll phase addon build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -219,6 +219,11 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					// Run it: remote access depends on this signed copy starting, not just existing.
+					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
+					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
+					const cloudflaredVersion = spawnSync(cloudflared, ["--version"], { encoding: "utf8", timeout: 10_000 });
+					if (cloudflaredVersion.status !== 0) throw new Error(`packaged cloudflared failed to run at ${cloudflared}: ${cloudflaredVersion.error?.message || cloudflaredVersion.stderr}`);
 					if (!existsSync(path.join(resourcesPath, "scroll-phase", "ao-scroll-phase.node"))) throw new Error(`packaged macOS scroll phase addon missing from ${resourcesPath}`);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");

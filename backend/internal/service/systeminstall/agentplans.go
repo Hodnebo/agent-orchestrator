@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -48,6 +49,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -272,6 +274,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		} else {
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
+	case TargetHermes:
+		// Homebrew ships prebuilt release bottles; the official installer clones
+		// the GitHub repository, so it stays the fallback (lastResortInstallers).
+		plans = []Plan{s.planHermesInstaller(target)}
+		if s.goos == "darwin" || s.goos == "linux" {
+			plans = []Plan{s.planBrew(target, "hermes-agent"), plans[0]}
+		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
 	default:
@@ -363,6 +372,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
+			// Sessions run AO's managed copy, so a reinstall repairs that one:
+			// the same release, installed fresh beside it.
+			plan.managed = true
+			plan.managedPin = record.Version
+			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+			return plan
+		}
 		switch plan.Method {
 		case "homebrew":
 		case "npm":
@@ -431,6 +449,17 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Unsupported = true
 			plan.Reason = "This installation method does not provide a supported update command."
 		}
+		if !plan.Unsupported {
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+		}
+		if s.managedEligible(plan) {
+			// Installed side by side, so no session's files are touched, on any
+			// platform: the update is safe while sessions run.
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+			plan.Command, plan.Prepare = argv, nil
+		}
 		return plan
 	}
 
@@ -449,6 +478,7 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetCodex:      {"codex", "update"},
 	TargetOpencode:   {"opencode", "upgrade", "--method", "curl"},
 	TargetGoose:      {"goose", "update"},
+	TargetHermes:     {"hermes", "update", "--yes"},
 	TargetKimchi:     {"kimchi", "update", "self", "--force"},
 	TargetOMP:        {"omp", "update"},
 	TargetAutohand:   {"autohand", "update"},
@@ -505,6 +535,26 @@ func (s *Service) officialByOS(target Target, unixURL, unixShell, windowsURL, do
 	default:
 		return manualPlan(target, fmt.Sprintf("The official installer does not support %s.", s.goos), docsURL)
 	}
+}
+
+// planHermesInstaller runs Hermes's official installer for the latest release.
+// Its setup and gateway stages need a terminal, so they are skipped; provider
+// setup runs afterwards through the harness's own setup action.
+func (s *Service) planHermesInstaller(target Target) Plan {
+	plan := s.officialByOS(target,
+		"https://hermes-agent.nousresearch.com/install.sh", "bash",
+		"https://hermes-agent.nousresearch.com/install.ps1",
+		agentDocumentationURLs[target],
+	)
+	if plan.Script == nil {
+		return plan
+	}
+	if s.goos == "windows" {
+		plan.Script.Args = []string{"-NonInteractive"}
+	} else {
+		plan.Script.Args = []string{"--non-interactive"}
+	}
+	return plan
 }
 
 func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
