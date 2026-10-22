@@ -328,6 +328,9 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if browserTool(tool) {
 		return CallResult{}, browserToolBlocked(tool)
 	}
+	if err := checkActions(tool, request.Arguments); err != nil {
+		return CallResult{}, err
+	}
 	arguments := make(map[string]any, len(request.Arguments)+1)
 	for key, value := range request.Arguments {
 		arguments[key] = value
@@ -370,7 +373,11 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		if ctx.Err() != nil {
 			return CallResult{}, ctx.Err()
 		}
-		return CallResult{}, apierr.New(apierr.KindUnavailable, "COMPUTER_USE_CALL_FAILED", commandFailure(runErr, stdout, stderr), map[string]any{"tool": tool})
+		message := commandFailure(runErr, stdout, stderr)
+		if code, _ := refusalCode(stdout); driverRefusalHints[code] != "" {
+			message += "\n" + driverRefusalHints[code]
+		}
+		return CallResult{}, apierr.New(apierr.KindUnavailable, "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
 	}
 
 	var result any
@@ -429,16 +436,8 @@ func driverSession(sessionID string) string {
 // argument: {"status":"refused","refusal":{"code":"invalid_arguments",
 // "message":"<tool>: unknown argument session; ..."}}.
 func rejectsSession(stdout []byte) bool {
-	var refused struct {
-		Refusal struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"refusal"`
-	}
-	if json.Unmarshal(stdout, &refused) != nil || refused.Refusal.Code != "invalid_arguments" {
-		return false
-	}
-	return unknownSessionArg.MatchString(refused.Refusal.Message)
+	code, message := refusalCode(stdout)
+	return code == "invalid_arguments" && unknownSessionArg.MatchString(message)
 }
 
 func (s *Service) runCall(ctx context.Context, binary, tool string, arguments []byte) ([]byte, []byte, error) {

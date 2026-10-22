@@ -25,6 +25,9 @@ tool) to see the screen.
 
 ## Workflow
 
+Run `ao cua describe <tool>` before you use a tool for the first time; do not
+guess argument names.
+
 1. `ao cua call list_windows` and pick the `pid` and `window_id` of the app.
 2. `ao cua call get_window_state '{"pid":...,"window_id":...}'` returns the
    window's accessibility tree as `tree_markdown`, a `snapshot_id`, and a
@@ -38,9 +41,24 @@ tool) to see the screen.
    to find the element. Action tools refuse `element_index` and `snapshot_id`.
    Acting by element works on background windows and does not move the user's
    mouse. Use `x`/`y` pixels only for canvases and other surfaces missing from
-   the tree; they are in the screenshot's pixels.
+   the tree; they are in the screenshot's pixels, so pass that window's `pid`
+   and `window_id` with them.
 4. Snapshot again after every action before acting on another element: a newer
-   read of the window makes earlier tokens stale (`stale_element_token`).
+   read of the window makes earlier tokens stale (`stale_element_token`), and
+   live apps reorder their lists. A result that says the effect is
+   `unverifiable` means the driver could not confirm it, so check the new
+   snapshot before the next step.
+
+Type into a field by its token: `type_text` with the field's `element_token`.
+Never type into "whatever has focus": a click that missed, or a shortcut such
+as Cmd+F that did not move focus, leaves the cursor in another field. In
+messaging apps, confirm in a fresh snapshot that you are in the right field and
+chat before typing, and again before pressing Return to send.
+
+`ao cua` refuses actions that would land wherever the user is working:
+`scope: "desktop"` (or a desktop `target`), pixel coordinates without the
+window's `pid` and `window_id`, and `type_text` without a field to type into.
+The same checks apply to every step of `run_steps`.
 
 Every `ao cua call` from one AO session runs in the same Cua Driver session
 (`ao-<session id>`; `ao-shared` outside an AO session), so a pixel `click` or
@@ -84,6 +102,12 @@ destructive or outward-facing (sending messages, purchases, deleting data).
   CuaDriver in System Settings.
 - `COMPUTER_USE_BROWSER_TOOL_DISABLED`: you called a Cua Driver browser tool;
   use `ao browser` instead.
+- `COMPUTER_USE_WINDOW_REQUIRED`: pixel coordinates without a window. Add the
+  `pid` and `window_id` of the window whose screenshot you measured on.
+- `COMPUTER_USE_TEXT_TARGET_REQUIRED`: `type_text` without a field. Snapshot
+  the window and pass the field's `element_token`.
+- `COMPUTER_USE_DESKTOP_SCOPE_DISABLED`: AO does not act on the whole screen.
+  Name the window instead, even if a driver error suggests `scope="desktop"`.
 - `COMPUTER_USE_CALL_FAILED`: the driver's own message follows. For example,
   `window_id_not_found` means the window closed, so list windows again;
   `stale_element_token` means a newer read replaced that token, so snapshot

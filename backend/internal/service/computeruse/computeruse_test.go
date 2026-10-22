@@ -502,3 +502,79 @@ func TestParseVersion(t *testing.T) {
 		}
 	}
 }
+
+// Actions that name no window or field would land wherever the user is
+// working; they are refused before the driver runs.
+func TestCallRefusesActionsWithoutATarget(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	for name, tc := range map[string]struct {
+		tool      string
+		arguments map[string]any
+		code      string
+	}{
+		"pixel click without window": {"click", map[string]any{"x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"pixel click with pid only":  {"click", map[string]any{"pid": 7, "x": 275, "y": 351}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"drag without window":        {"drag", map[string]any{"from_x": 1, "from_y": 1, "to_x": 9, "to_y": 9}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"desktop scope":              {"click", map[string]any{"scope": "desktop", "x": 1, "y": 1}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"desktop target":             {"press_key", map[string]any{"key": "return", "target": map[string]any{"kind": "desktop", "display_id": "primary"}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"desktop scope with token":   {"type_text", map[string]any{"element_token": "s1:2", "text": "hi", "scope": "desktop"}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"type into focus":            {"type_text", map[string]any{"pid": 7, "window_id": 9, "text": "Nihal"}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
+		"run_steps pixel step":       {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "click", "args": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"run_steps type into focus":  {"run_steps", map[string]any{"app": "WhatsApp", "steps": []any{map[string]any{"type_text": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
+		"run_steps desktop scope":    {"run_steps", map[string]any{"steps": []any{map[string]any{"press_key": map[string]any{"key": "a", "scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != tc.code || apiErr.Kind != apierr.KindInvalid {
+				t.Fatalf("err = %v, want %s", err, tc.code)
+			}
+		})
+	}
+	if len(driver.calls) != 0 {
+		t.Fatalf("driver ran %v for a refused action", driver.calls)
+	}
+}
+
+func TestCallAllowsTargetedActions(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	s := newTestService(t, driver, "darwin")
+	for name, tc := range map[string]struct {
+		tool      string
+		arguments map[string]any
+	}{
+		"click by token":            {"click", map[string]any{"element_token": "s1:2"}},
+		"pixel click in window":     {"click", map[string]any{"pid": 7, "window_id": 9, "x": 275, "y": 351}},
+		"pixel click via target":    {"click", map[string]any{"target": map[string]any{"kind": "window", "pid": 7, "window_id": 9}, "x": 1, "y": 1}},
+		"type into token":           {"type_text", map[string]any{"element_token": "s1:2", "text": "hi"}},
+		"type at field pixel":       {"type_text", map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5, "text": "hi"}},
+		"key to app":                {"hotkey", map[string]any{"pid": 7, "keys": []any{"cmd", "f"}}},
+		"overlay cursor":            {"move_cursor", map[string]any{"x": 1, "y": 1}},
+		"window read":               {"get_window_state", map[string]any{"pid": 7, "window_id": 9}},
+		"run_steps batch window":    {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"click": map[string]any{"x": 1, "y": 1}}}}},
+		"run_steps type by name":    {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "type_text", "args": map[string]any{"app": "WhatsApp", "role": "textfield", "name": "Search", "text": "Nihal"}}}}},
+		"run_steps check-only step": {"run_steps", map[string]any{"steps": []any{map[string]any{"expect": []any{map[string]any{"text": "Nihal"}}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments}); err != nil {
+				t.Fatalf("Call() error = %v", err)
+			}
+		})
+	}
+}
+
+// The driver's own advice for a windowless pixel click is scope "desktop";
+// AO says to name the window instead.
+func TestCallExplainsDesktopScopeRefusal(t *testing.T) {
+	driver := &fakeDriver{daemonUp: true}
+	driver.onCall = func([]string) ([]byte, []byte, error) {
+		return []byte(`{"status":"refused","refusal":{"code":"desktop_scope_disabled","message":"pass scope=\"desktop\""}}`), nil, errors.New("exit status 1")
+	}
+	s := newTestService(t, driver, "darwin")
+	_, err := s.Call(context.Background(), CallRequest{Tool: "scroll", Arguments: map[string]any{"pid": 7, "direction": "down"}})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_CALL_FAILED" || !strings.Contains(apiErr.Message, "pass the pid and window_id") {
+		t.Fatalf("err = %v", err)
+	}
+}
