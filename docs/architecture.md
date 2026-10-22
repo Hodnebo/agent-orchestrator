@@ -371,9 +371,10 @@ the session by that namespace. A rename the session row no longer accepts is put
 back in Git. Session IDs remain unchanged. Explicit CLI/API session titles are
 preserved. Explicit branches, promptless sessions, Scratch sessions, and
 existing sessions keep their naming behavior.
-The desktop hides provisional branches until the worktree step completes and
-shows a text shimmer with a randomly selected naming label while provisioning
-is active. The label stays stable across updates while it is displayed.
+The desktop hides provisional branches until the worktree step completes, and
+keeps a launched task's temporary branch hidden for up to thirty seconds while
+its generated name is on the way. Both show a text shimmer with a randomly
+selected naming label, which stays stable across updates while it is displayed.
 
 ### Session interface handoff
 
