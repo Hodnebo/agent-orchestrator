@@ -305,6 +305,7 @@ export function CreateProjectFlow({
 		}
 		prepareOnly.onPrepared({
 			path,
+			asWorkspace: selectedKind === "workspace",
 			clonePreparationId: prepared?.preparationId,
 			defaultBranch,
 		});
