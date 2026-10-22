@@ -4,11 +4,13 @@ import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { buildRankedAgentOptions, DEFAULT_AGENT_PRIORITY_RANK, isReadyAgent } from "../lib/agent-select-options";
+import { cloudDefaultInterfaceMode, createCloudSession } from "../lib/cloud-session-create";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
 import { useCloudCp } from "./useCloudCp";
+import { useSettings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 type Harness = components["schemas"]["SpawnSessionRequest"]["harness"];
@@ -27,6 +29,7 @@ export function useCreateArtifactSession() {
 	const { client: cloudClient } = useCloudCp();
 	const navigateToSession = useNavigateToSession();
 	const agentsQuery = useAgentReadinessQuery();
+	const { settings } = useSettings();
 	const [pending, setPending] = useState(false);
 	const readyAgent = useMemo(
 		() =>
@@ -46,13 +49,17 @@ export function useCreateArtifactSession() {
 			try {
 				if (cloudOrgId && projectId) {
 					const { project } = await cloudClient.getProject(cloudOrgId, projectId);
-					const { session } = await cloudClient.createSession(cloudOrgId, {
+					// Started like a task: in the user's default session interface,
+					// through createCloudSession, which retries without it for a
+					// control plane that predates the field.
+					const { session } = await createCloudSession(cloudClient, cloudOrgId, {
 						projectId,
 						kind: "worker",
 						harness: project.config?.worker?.agent || "claude-code",
 						displayName: t("artifacts.newSessionName"),
 						prompt: "",
 						requestedOutput: "artifact",
+						defaultInterfaceMode: cloudDefaultInterfaceMode(settings),
 					});
 					void captureRendererEvent("ao.renderer.artifact_create_succeeded", { scope });
 					await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -83,7 +90,7 @@ export function useCreateArtifactSession() {
 				setPending(false);
 			}
 		},
-		[cloudClient, navigateToSession, queryClient, readyAgent, t],
+		[cloudClient, navigateToSession, queryClient, readyAgent, settings, t],
 	);
 
 	return {

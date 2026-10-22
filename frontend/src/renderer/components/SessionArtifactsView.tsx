@@ -8,7 +8,7 @@ import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
-import { CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
@@ -133,6 +133,16 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 		}, ERROR_CLEAR_MS);
 		return () => clearTimeout(timer);
 	}, [error, resetOpen]);
+	// A cloud file that is not text is read for its headers only, so it has no
+	// contents to copy; with nothing else to offer it gets no menu.
+	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
+	if (session.cloud && !copyable) {
+		return (
+			<span className="min-w-0 truncate px-1.5 text-sm" title={artifact.path}>
+				{artifact.name}
+			</span>
+		);
+	}
 	return (
 		<>
 			<DropdownMenu>
@@ -156,7 +166,7 @@ function ArtifactMenu({ artifact, hostId, session }: { artifact: SessionArtifact
 							<DropdownMenuSeparator />
 						</>
 					) : null}
-					{!fileMediaKind(artifact.path) ? (
+					{copyable ? (
 						<DropdownMenuItem onSelect={() => void copy()}>
 							<Copy aria-hidden="true" />
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
@@ -279,6 +289,7 @@ function ArtifactViewerBody({
 	artifact,
 	artifactRoot,
 	cloud = false,
+	onAccessRefused,
 	feedbackRequestKey,
 	hostId,
 	onFeedbackRequestConsumed,
@@ -293,6 +304,8 @@ function ArtifactViewerBody({
 	artifactRoot?: string;
 	/** Reads the file through the cloud bridge. */
 	cloud?: boolean;
+	/** Takes a fresh access link for a cloud file whose link was refused. */
+	onAccessRefused?: () => void;
 	feedbackRequestKey?: number;
 	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
@@ -322,6 +335,7 @@ function ArtifactViewerBody({
 						artifactName={artifact.name}
 						artifactRoot={artifactRoot}
 						cloud={cloud}
+						onAccessRefused={onAccessRefused}
 						feedbackRequestKey={feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
@@ -448,7 +462,11 @@ export function SessionArtifactsView({
 								aria-label={fullscreenLabel}
 								aria-pressed={fullscreen}
 								className="text-muted-foreground hover:text-foreground"
-								onClick={() => setFullscreen((current) => !current)}
+								onClick={() => {
+									// Full screen moves the frame, which reloads it: give it a current link.
+									if (cloud) pinned.refresh();
+									setFullscreen((current) => !current);
+								}}
 								size="icon-sm"
 								type="button"
 								variant="ghost"
@@ -462,10 +480,7 @@ export function SessionArtifactsView({
 				<div className="min-h-0 flex-1">
 					{cloud && !selected.rawUrl ? (
 						cloudAccess.isError ? (
-							<PanelMessage>
-								{t("artifacts.accessError")}
-								<RetryButton onClick={() => void cloudAccess.refetch()} />
-							</PanelMessage>
+							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
 						) : (
 							<PanelMessage>{t("files.loading")}</PanelMessage>
 						)
@@ -474,8 +489,9 @@ export function SessionArtifactsView({
 					) : (
 						<ArtifactViewerBody
 							artifact={selected}
-							artifactRoot={cloud ? cloudRoot : undefined}
+							artifactRoot={cloud ? pinned.root : undefined}
 							cloud={cloud}
+							onAccessRefused={cloud ? accessRefused : undefined}
 							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
 							hostId={hostId}
 							onFeedbackRequestConsumed={onRequestConsumed}

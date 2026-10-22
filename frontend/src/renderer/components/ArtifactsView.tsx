@@ -21,13 +21,7 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -313,6 +307,8 @@ function CreateArtifactMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
 			<DropdownMenuContent align={align} className="min-w-56">
+				{/* Says why Scratchpad and local projects are disabled while cloud ones are not. */}
+				{localBlocked ? <DropdownMenuLabel className="max-w-64 text-xs font-normal text-muted-foreground">{localDisabledReason}</DropdownMenuLabel> : null}
 				<DropdownMenuItem disabled={localBlocked} onSelect={() => void create()}>
 					<File aria-hidden="true" className="size-icon-sm" />
 					{t("standalone.workspaceName")}

@@ -28,7 +28,13 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	if (!src || failedSrc === src) {
 		return <PanelMessage action={src ? <RetryButton onClick={() => setFailedSrc(null)} /> : undefined}>{t("files.error.loadFile")}</PanelMessage>;
 	}
-	const onError = () => setFailedSrc(src);
+	// A cloud file's link may have expired: take a fresh one, which changes
+	// src and loads again. The failure shows only if that fails too.
+	const refreshLink = source.kind === "artifact" && source.cloud ? source.onAccessRefused : undefined;
+	const onError = () => {
+		setFailedSrc(src);
+		refreshLink?.();
+	};
 	return (
 		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
 			{kind === "image" ? (

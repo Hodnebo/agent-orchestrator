@@ -35,6 +35,7 @@ export function ArtifactFileView({
 	readOnly = false,
 	cloud = false,
 	artifactRoot,
+	onAccessRefused,
 	sessionId,
 	toolbarHost,
 }: {
@@ -50,12 +51,17 @@ export function ArtifactFileView({
 	cloud?: boolean;
 	/** The URL the file's relative links resolve against. */
 	artifactRoot?: string;
+	/** Called when a cloud media file fails to load, to take a fresh link. */
+	onAccessRefused?: () => void;
 	sessionId: string;
 	/** The header the pane renders its mode and action buttons into. */
 	toolbarHost?: HTMLElement | null;
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
-	const source = useMemo(() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot }), [rawUrl, readOnly, cloud, artifactRoot]);
+	const source = useMemo(
+		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused }),
+		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused],
+	);
 	const scrollRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {

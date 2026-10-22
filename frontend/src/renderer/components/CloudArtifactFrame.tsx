@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
-import { PanelMessage } from "./WorkspaceDiffView";
+import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 /**
  * A cloud session's HTML artifact, framed from the control plane. The frame
@@ -25,7 +25,9 @@ export function CloudArtifactFrame({ title, url, onAccessRefused }: { title: str
 	}, [refused, onAccessRefused]);
 	if (status.isPending || refused) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (status.data === 404) return <PanelMessage>{t("artifacts.unavailable")}</PanelMessage>;
-	if (status.isError || (status.data !== undefined && status.data >= 400)) return <PanelMessage>{t("artifacts.accessError")}</PanelMessage>;
+	if (status.isError || (status.data !== undefined && status.data >= 400)) {
+		return <PanelMessage action={<RetryButton onClick={() => void status.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>;
+	}
 	return (
 		<iframe
 			className="block h-full w-full border-0 bg-white"

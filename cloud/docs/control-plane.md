@@ -187,17 +187,20 @@ and no S3 client is built.
   one hour after its commit. A version the sweeper has claimed can no longer be
   committed.
 - **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
-  wakes the sandbox; the session list carries only `artifactCount`.
+  wakes the sandbox; the session list carries only `artifactCount` and
+  `artifactsUpdatedAt`.
   `POST /sessions/{id}/artifacts/access` returns a ten-minute path prefix
   signed for one user, organization, and session (an iframe cannot send a
   bearer header). `GET /artifact-files/{token}/{path}` checks that the user is
   still an active member of an active organization, reads the row, and streams
   the row's `version_id`, never the newest S3 version, with a sandbox
-  Content-Security-Policy without `allow-same-origin`, `connect-src 'none'`,
-  `nosniff`, and an ETag of the SHA-256. A row whose object is gone returns
-  404 `artifact_unavailable`. A served page cannot fetch, but it can navigate
-  or open a window, so it can carry its own URL to another site; the token in
-  that URL lasts ten minutes and works only for a current member.
+  Content-Security-Policy without `allow-same-origin` or popups,
+  `connect-src 'none'`, `nosniff`, and an ETag of the SHA-256. A row whose
+  object is gone returns 404 `artifact_unavailable`. A served page cannot
+  fetch or open a window, and the desktop holds its frame to the session's
+  access prefix, so it cannot carry its URL to another site; the token in that
+  URL lasts ten minutes and works only for a current member. A frame that
+  navigates with an expired link gets a short page saying so.
 
 Every key comes from a worker's claims or from a row read under the caller's
 organization; a client never supplies one. Paths are NFC-normalized and must be

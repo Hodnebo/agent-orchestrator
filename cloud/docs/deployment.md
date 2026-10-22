@@ -183,9 +183,12 @@ The offering files set the deploy values: `AO_CLOUD_ARTIFACTS` (`0` or `1`),
 rejected in a hosted task. With the flag on, the control plane refuses to start
 without the bucket, the region, or `AO_CLOUD_PROVIDER_SECRET_KEY` (artifact
 links are signed with a key derived from it), and `deploy-staging.sh` and
-`promote-production.sh` stop unless the bucket exists with versioning enabled.
-`promote-production.sh` also refuses `1` in production until staging serves
-artifacts. Migration 00085 runs with the flag off.
+`promote-production.sh` stop unless the bucket exists with versioning enabled
+and the service's task role may use it (checked with
+`iam simulate-principal-policy`, so the deploying identity needs
+`iam:SimulatePrincipalPolicy`). `promote-production.sh` also refuses `1` in
+production until staging serves artifacts. Migration 00084 runs with the flag
+off.
 
 Rollout: deploy with `AO_CLOUD_ARTIFACTS=0`, deploy the worker and desktop
 releases, then turn staging on by committing `AO_CLOUD_ARTIFACTS=1` to

@@ -17,6 +17,7 @@ const { cloudAccessMock, deleteArtifactMock, openPreviewMock } = vi.hoisted(() =
 vi.mock("../hooks/useOpenArtifactPreview", () => ({ useOpenArtifactPreview: () => openPreviewMock }));
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	CloudArtifactAccessError: class extends Error {},
+	CLOUD_TEXT_ARTIFACT: /\.(md|markdown|txt|html?)$/i,
 	deleteSessionArtifactFile: deleteArtifactMock,
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
 		queryKey: ["artifact-file", sessionId, path],

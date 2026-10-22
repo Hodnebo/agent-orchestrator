@@ -11,6 +11,8 @@ vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: cloud, ready: true
 vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigate }));
 vi.mock("./useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [] } }) }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: () => Promise.resolve() }));
+const settings = vi.hoisted(() => ({ current: { defaultSessionMode: "chat" } as { defaultSessionMode?: string } }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: settings.current }) }));
 
 function wrapper({ children }: { children: ReactNode }) {
 	return <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
@@ -29,6 +31,7 @@ describe("useCreateArtifactSession for a cloud project", () => {
 		await act(() => result.current.create("p-1", "org-1"));
 		expect(cloud.createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({
 			projectId: "p-1", kind: "worker", harness: "codex", requestedOutput: "artifact", prompt: "",
+			defaultInterfaceMode: "chat",
 		}));
 		expect(navigate).toHaveBeenCalledWith("p-1", "s-1");
 	});

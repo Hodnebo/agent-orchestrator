@@ -639,6 +639,8 @@ export interface CloudCpSession {
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
 	artifactCount?: number;
+	/** When the newest artifact file was committed; changes only when the files do. */
+	artifactsUpdatedAt?: string;
 	/**
 	 * Committed artifact files: on a session read, and filled in by
 	 * useCloudSessionsQuery for a listed session that has any.

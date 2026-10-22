@@ -78,7 +78,7 @@ export type FilesSource =
 	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
 	 * `artifactRoot` is the URL relative links resolve against.
 	 */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string };
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void };
 
 /** The branch the Files review reads. Only the checked-out branch reads the worktree; the others read revisions. */
 export type FilesBranchTarget =
@@ -287,7 +287,7 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 }
 
 /** Cloud artifact files read as text; any other cloud file is shown as binary. */
-const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
+export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|txt|log|csv|tsv|json|ya?ml|toml|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
 export class CloudArtifactAccessError extends Error {}
@@ -412,8 +412,10 @@ export function sessionArtifactFileQueryOptions(sessionId: string, path: string,
 	return {
 		queryKey: ["session-artifact-file", rawUrl ?? "", sessionId, path],
 		queryFn: () => fetchSessionArtifactFile(sessionId, path, rawUrl, errorMessage, cloud),
-		// A missing cloud file or a refused link does not change on retry.
-		...(cloud ? { retry: false } : {}),
+		// A missing cloud file or a refused link does not change on retry. A
+		// cloud file's URL changes with the file, so a read never goes stale
+		// (and window focus does not carry the file over IPC again).
+		...(cloud ? { retry: false, staleTime: Infinity } : {}),
 	};
 }
 

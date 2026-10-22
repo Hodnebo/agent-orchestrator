@@ -12,12 +12,12 @@ export const cloudArtifactAccessQueryKey = (baseUrl: string, orgId: string, sess
 	["cloud-artifact-access", baseUrl, orgId, sessionId] as const;
 
 /**
- * The query key of one cloud session's artifact list. updatedAt is the
- * session's: every artifact commit changes it, so a cached list is reused
- * until the session changes.
+ * The query key of one cloud session's artifact list at one version (its
+ * artifact count and newest commit time), so a cached list is reused until a
+ * commit changes the files.
  */
-export const cloudArtifactFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string, updatedAt: string) =>
-	["cloud-artifact-files", baseUrl, orgId, sessionId, updatedAt] as const;
+export const cloudArtifactFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string, version: string) =>
+	["cloud-artifact-files", baseUrl, orgId, sessionId, version] as const;
 
 type CloudArtifactAccess = { root: string; expiresAt: number };
 
@@ -60,24 +60,28 @@ export function cloudArtifactFileUrl(root: string, path: string, version?: strin
 }
 
 /**
- * The URL an open cloud file is shown from. It is taken from the access root
- * when the file opens or changes, and kept while the root is refreshed, so a
- * refresh does not reload the open file. After a read with the kept URL was
- * refused, repin drops it and waits for a root that gives a different URL.
+ * The URL an open cloud file is shown from, and the access root it was taken
+ * from (for its relative links). It is taken when the file opens or changes,
+ * and kept while the root is refreshed, so a refresh does not reload the open
+ * file. After a read with the kept URL was refused, repin drops it and waits
+ * for a root that gives a different URL; refresh takes the current root now,
+ * for a view that reloads anyway.
  */
 export function usePinnedArtifactUrl(root: string | undefined, path: string | undefined, version: string | undefined) {
-	const [pinned, setPinned] = useState<{ key: string; url?: string; refused?: string }>();
+	const [pinned, setPinned] = useState<{ key: string; url?: string; root?: string; refused?: string }>();
 	const key = path === undefined ? "" : `${path}\n${version ?? ""}`;
 	let current = pinned?.key === key ? pinned : { key };
 	if (current.url === undefined && root !== undefined && path !== undefined) {
 		const url = cloudArtifactFileUrl(root, path, version);
 		if (url !== current.refused) {
-			current = { key, url };
+			current = { key, url, root };
 			setPinned(current);
 		}
 	}
 	return {
 		url: current.url,
+		root: current.root,
 		repin: () => setPinned((previous) => (previous ? { key: previous.key, refused: previous.url } : previous)),
+		refresh: () => setPinned(undefined),
 	};
 }
