@@ -55,12 +55,14 @@ load_offering() {
 	done
 }
 
-# check_artifact_bucket fails unless the artifact bucket exists with versioning
-# enabled, when AO_CLOUD_ARTIFACTS=1. The control plane makes no AWS call at
-# startup, so without this a missing bucket would show up only as failed
+# check_artifact_bucket CLUSTER SERVICE fails, when AO_CLOUD_ARTIFACTS=1,
+# unless the artifact bucket exists with versioning enabled and the service's
+# task role may use it. The control plane makes no AWS call at startup, so
+# without this a missing bucket or permission would show up only as failed
 # uploads. Expects the caller's aws_cli.
 check_artifact_bucket() {
 	[[ "$AO_CLOUD_ARTIFACTS" == 1 ]] || return 0
+	local cluster="$1" service="$2"
 	if ! aws_cli s3api head-bucket --bucket "$AO_CLOUD_ARTIFACT_BUCKET" >/dev/null; then
 		echo "AO_CLOUD_ARTIFACTS=1 needs the artifact bucket ${AO_CLOUD_ARTIFACT_BUCKET}; create it first (docs/deployment.md, Session artifacts)." >&2
 		return 1
@@ -69,6 +71,31 @@ check_artifact_bucket() {
 	versioning="$(aws_cli s3api get-bucket-versioning --bucket "$AO_CLOUD_ARTIFACT_BUCKET" --query Status --output text)"
 	if [[ "$versioning" != "Enabled" ]]; then
 		echo "The artifact bucket ${AO_CLOUD_ARTIFACT_BUCKET} must have versioning enabled (got: ${versioning})." >&2
+		return 1
+	fi
+	local task_definition role_arn bucket_arn denied
+	task_definition="$(aws_cli ecs describe-services --cluster "$cluster" --services "$service" \
+		--query 'services[0].taskDefinition' --output text)"
+	role_arn="$(aws_cli ecs describe-task-definition --task-definition "$task_definition" \
+		--query 'taskDefinition.taskRoleArn' --output text)"
+	if [[ -z "$role_arn" || "$role_arn" == "None" ]]; then
+		echo "AO_CLOUD_ARTIFACTS=1 needs a task role on ${service}; its task definition has none." >&2
+		return 1
+	fi
+	bucket_arn="arn:aws:s3:::${AO_CLOUD_ARTIFACT_BUCKET}"
+	denied="$(
+		aws_cli iam simulate-principal-policy --policy-source-arn "$role_arn" \
+			--action-names s3:PutObject s3:GetObject s3:GetObjectVersion s3:DeleteObjectVersion \
+			--resource-arns "${bucket_arn}/orgs/deploy-check/sessions/deploy-check/file" \
+			--query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" --output text
+		aws_cli iam simulate-principal-policy --policy-source-arn "$role_arn" \
+			--action-names s3:ListBucket s3:ListBucketVersions \
+			--resource-arns "$bucket_arn" \
+			--query "EvaluationResults[?EvalDecision!='allowed'].EvalActionName" --output text
+	)"
+	denied="$(echo "$denied" | tr -s '[:space:]' ' ' | sed 's/^ *//; s/ *$//')"
+	if [[ -n "$denied" ]]; then
+		echo "The task role ${role_arn} may not use ${AO_CLOUD_ARTIFACT_BUCKET}: ${denied} denied (docs/deployment.md, Session artifacts)." >&2
 		return 1
 	fi
 }

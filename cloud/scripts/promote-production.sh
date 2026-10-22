@@ -176,7 +176,7 @@ fi
 	--coder-readable-names "$AO_CLOUD_CODER_READABLE_NAMES" \
 	--coder-worker-working-folder "$AO_CLOUD_CODER_WORKER_WORKING_FOLDER"
 echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none} artifacts=${AO_CLOUD_ARTIFACTS}" >&2
-check_artifact_bucket || exit 1
+check_artifact_bucket "$PRODUCTION_CLUSTER" "$PRODUCTION_SERVICE" || exit 1
 release="${RELEASE_ARG:-$staging_release}"
 if [[ "$release" != "$staging_release" ]]; then
 	echo "Release ${release} is not the healthy staging release ${staging_release}." >&2

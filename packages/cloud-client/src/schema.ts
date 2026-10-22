@@ -2844,6 +2844,11 @@ export interface components {
             outputType?: components["schemas"]["SessionOutputType"];
             /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
             artifactCount?: number;
+            /**
+             * Format: date-time
+             * @description When the newest of the session's artifact files was committed. It changes whenever a commit changes the files, and only then, so a client can keep a file list until it moves. Absent without files.
+             */
+            artifactsUpdatedAt?: string;
             /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
             artifactFiles?: components["schemas"]["SessionArtifact"][];
             /** Format: date-time */
