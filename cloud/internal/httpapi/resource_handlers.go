@@ -179,13 +179,15 @@ type sessionResponse struct {
 	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
 	OutputType string `json:"outputType"`
 	// ArtifactCount is the number of the session's committed artifact files,
-	// on the session read and list routes while cloud artifacts are on.
+	// on the session read and list routes and the worker children listing
+	// while cloud artifacts are on.
 	ArtifactCount *int `json:"artifactCount,omitempty"`
 	// ArtifactsUpdatedAt is when the newest of those files was committed;
 	// it changes whenever a commit changes the files, and only then.
 	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
 	// ArtifactFiles lists the session's committed artifact files on the
-	// session read route while cloud artifacts are on.
+	// session read route and the worker children listing while cloud
+	// artifacts are on.
 	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
 	CreatedAt     time.Time                 `json:"createdAt"`
 	UpdatedAt     time.Time                 `json:"updatedAt"`
@@ -222,6 +224,19 @@ type sessionPRFactsResponse struct {
 type sessionChildResponse struct {
 	sessionResponse
 	PRs []sessionPRFactsResponse `json:"prs"`
+}
+
+// setArtifactFiles sets the session's committed artifact files, their count,
+// and the newest commit time.
+func (r *sessionResponse) setArtifactFiles(files []domain.SessionArtifact) {
+	count := len(files)
+	r.ArtifactCount = &count
+	r.ArtifactFiles = toSessionArtifactResponses(files)
+	for _, file := range files {
+		if updatedAt := file.UpdatedAt.UTC(); r.ArtifactsUpdatedAt == nil || updatedAt.After(*r.ArtifactsUpdatedAt) {
+			r.ArtifactsUpdatedAt = &updatedAt
+		}
+	}
 }
 
 func toSessionChildResponse(
@@ -1019,15 +1034,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
 	if artifactFiles != nil {
-		files := artifactFiles[sessionID]
-		count := len(files)
-		response.ArtifactCount = &count
-		response.ArtifactFiles = toSessionArtifactResponses(files)
-		for _, file := range files {
-			if updatedAt := file.UpdatedAt.UTC(); response.ArtifactsUpdatedAt == nil || updatedAt.After(*response.ArtifactsUpdatedAt) {
-				response.ArtifactsUpdatedAt = &updatedAt
-			}
-		}
+		response.setArtifactFiles(artifactFiles[sessionID])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }

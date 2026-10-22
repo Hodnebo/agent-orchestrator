@@ -867,3 +867,58 @@ func TestArtifactFileHeadReadsNoBody(t *testing.T) {
 		t.Fatalf("HEAD read the object body %d times", h.fake.Gets())
 	}
 }
+
+func TestListWorkerChildrenIncludesArtifactFiles(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	store := &stubStore{
+		listChildren: func(_ context.Context, orgID, _ string, _ bool, _ *domain.Cursor, _ int) ([]domain.Session, bool, error) {
+			return []domain.Session{{ID: testChildID, OrgID: orgID, Kind: "worker", UpdatedAt: now, CreatedAt: now}}, false, nil
+		},
+	}
+	rows := newMemoryArtifactRows()
+	rows.sessions[testChildID] = testOrgID
+	rows.rows[testChildID] = map[string]domain.SessionArtifact{
+		"report.html": {Path: "report.html", Name: "report.html", Kind: "html", Size: 20, UpdatedAt: now},
+	}
+	server := testServer(store)
+	list := func() string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		server.listWorkerChildren(w, workerRequest(t, http.MethodGet, "/worker/children", "", "worker:orchestrate"))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+
+	if body := list(); strings.Contains(body, "artifact") {
+		t.Fatalf("artifacts off: listing names artifacts: %s", body)
+	}
+
+	server.artifacts, _ = artifactstore.New(context.Background(), s3fake.New(t).Config())
+	server.artifactRows = rows
+	server.artifactAccessKey = []byte("key")
+	var response struct {
+		Items []struct {
+			ArtifactCount      *int       `json:"artifactCount"`
+			ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt"`
+			ArtifactFiles      []struct {
+				Path string `json:"path"`
+				Kind string `json:"kind"`
+			} `json:"artifactFiles"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(list()), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Items) != 1 {
+		t.Fatalf("items = %+v", response.Items)
+	}
+	item := response.Items[0]
+	if item.ArtifactCount == nil || *item.ArtifactCount != 1 || item.ArtifactsUpdatedAt == nil || !item.ArtifactsUpdatedAt.Equal(now) {
+		t.Fatalf("artifact summary = %+v", item)
+	}
+	if len(item.ArtifactFiles) != 1 || item.ArtifactFiles[0].Path != "report.html" || item.ArtifactFiles[0].Kind != "html" {
+		t.Fatalf("artifact files = %+v", item.ArtifactFiles)
+	}
+}
