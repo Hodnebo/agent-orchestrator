@@ -72,7 +72,7 @@ CI/review feedback, and summarize progress for the human.
    any file or path you name in the prompt actually exists in the checkout
    first.
 3. Monitor progress: worker reports arrive here; `+"`ao list --json`"+` shows each
-   worker's branch, status, and PR number/CI state.
+   worker's branch, status, PR number/CI state, and artifact files.
 4. Route CI failures and review comments to the responsible worker with
    `+"`ao send`"+`, including the failing output or review text.
 5. When work is green and approved, report that state to the human. Do not
