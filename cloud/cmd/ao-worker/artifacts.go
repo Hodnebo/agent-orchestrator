@@ -112,6 +112,8 @@ type artifactSyncer struct {
 	// refusedFiles is the fingerprint of the files a request was refused for
 	// with a client error; the syncer waits until the files change.
 	refusedFiles string
+	// flushing is set during the shutdown flush, which ignores the backoff.
+	flushing bool
 }
 
 // artifactScan is one walk of the artifact directory.
@@ -192,6 +194,9 @@ func (s *artifactSyncer) run(ctx context.Context) error {
 func (s *artifactSyncer) finalFlush() {
 	ctx, cancel := context.WithTimeout(context.Background(), artifactFinalFlushTimeout)
 	defer cancel()
+	// The last chance to save the files: a backoff does not apply, a refusal
+	// and a stopped syncer still do.
+	s.flushing = true
 	if !s.sync(ctx) {
 		return
 	}
@@ -222,7 +227,7 @@ func (s *artifactSyncer) sync(ctx context.Context) bool {
 	if s.refusedFiles != "" && fingerprint == s.refusedFiles {
 		return scan.changing
 	}
-	if now.Before(s.retryAt) {
+	if now.Before(s.retryAt) && !s.flushing {
 		return scan.changing
 	}
 
@@ -353,12 +358,15 @@ func (s *artifactSyncer) fail(what string, status int, err error, fingerprint st
 	s.logger.Warn("artifacts: "+what, "status", status, "error", err, "retry_in", delay)
 }
 
-// artifactFingerprint identifies a set of files by path, size and
-// modification time.
+// artifactFingerprint identifies the settled files by path, size and
+// modification time. Files still changing are left out, so a file that keeps
+// growing does not count as a change after a refusal.
 func artifactFingerprint(files map[string]artifactState) string {
 	paths := make([]string, 0, len(files))
-	for path := range files {
-		paths = append(paths, path)
+	for path, state := range files {
+		if state.sha != "" {
+			paths = append(paths, path)
+		}
 	}
 	sort.Strings(paths)
 	var b strings.Builder
@@ -435,14 +443,34 @@ func (s *artifactSyncer) scan() (artifactScan, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 
+	// Files this worker synced keep their slots: the control plane holds
+	// them, so new files fill only what is left, in path order. A synced file
+	// that can no longer be sent still occupies its slot and bytes.
+	sizes := make(map[string]int64, len(entries))
+	for _, item := range entries {
+		sizes[item.path] = item.info.Size()
+	}
+	held := 0
 	var total int64
+	for path, synced := range s.synced {
+		size, listed := sizes[path]
+		if (!listed || size > domain.MaxArtifactFileBytes) && scan.isPresent(path) {
+			held++
+			total += synced.size
+		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		_, iSynced := s.synced[entries[i].path]
+		_, jSynced := s.synced[entries[j].path]
+		return iSynced && !jSynced
+	})
 	for _, item := range entries {
 		size := item.info.Size()
 		if size > domain.MaxArtifactFileBytes {
 			s.skipOnce(item.path, "file is over the per-file limit")
 			continue
 		}
-		if len(scan.current) >= domain.MaxSessionArtifactFiles || total+size > domain.MaxSessionArtifactBytes {
+		if held+len(scan.current) >= domain.MaxSessionArtifactFiles || total+size > domain.MaxSessionArtifactBytes {
 			s.skipOnce(item.path, "session artifact limit reached")
 			continue
 		}
@@ -464,6 +492,9 @@ func (s *artifactSyncer) scan() (artifactScan, error) {
 			}
 			if err != nil {
 				delete(scan.current, item.path)
+				if _, synced := s.synced[item.path]; synced {
+					held++
+				}
 				s.skipOnce(item.path, "file cannot be read")
 				continue
 			}

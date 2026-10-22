@@ -281,3 +281,48 @@ class ShellSyntaxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArtifactBucketCheckTest(unittest.TestCase):
+    """check_artifact_bucket with a stubbed aws_cli."""
+
+    def check(self, denied_objects="", denied_bucket="", versioning="Enabled", artifacts="1"):
+        stub = f"""
+aws_cli() {{
+	case "$*" in
+	*head-bucket*) return 0 ;;
+	*get-bucket-versioning*) echo "{versioning}" ;;
+	*describe-services*) echo "arn:aws:ecs:eu-north-1:1:task-definition/api:7" ;;
+	*describe-task-definition*) echo "arn:aws:iam::1:role/ao-cloud-staging-task-role" ;;
+	*ListBucket*) echo "{denied_bucket}" ;;
+	*simulate-principal-policy*) echo "{denied_objects}" ;;
+	esac
+}}
+AO_CLOUD_ARTIFACTS={artifacts}
+AO_CLOUD_ARTIFACT_BUCKET=ao-cloud-staging-tenant-artifacts
+check_artifact_bucket ao-cloud-staging ao-cloud-staging-api
+"""
+        return bash(stub)
+
+    def test_passes_when_the_role_may_use_the_bucket(self):
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fails_when_the_role_lacks_object_access(self):
+        result = self.check(denied_objects="s3:PutObject\ts3:GetObjectVersion")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s3:PutObject s3:GetObjectVersion denied", result.stderr)
+
+    def test_fails_when_the_role_cannot_list_the_bucket(self):
+        result = self.check(denied_bucket="s3:ListBucket")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s3:ListBucket denied", result.stderr)
+
+    def test_fails_without_versioning(self):
+        result = self.check(versioning="Suspended")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("versioning", result.stderr)
+
+    def test_skips_every_check_with_artifacts_off(self):
+        result = self.check(denied_objects="s3:PutObject", artifacts="0")
+        self.assertEqual(result.returncode, 0, result.stderr)

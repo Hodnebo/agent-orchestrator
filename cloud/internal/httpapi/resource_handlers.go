@@ -181,6 +181,9 @@ type sessionResponse struct {
 	// ArtifactCount is the number of the session's committed artifact files,
 	// on the session read and list routes while cloud artifacts are on.
 	ArtifactCount *int `json:"artifactCount,omitempty"`
+	// ArtifactsUpdatedAt is when the newest of those files was committed;
+	// it changes whenever a commit changes the files, and only then.
+	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
 	// ArtifactFiles lists the session's committed artifact files on the
 	// session read route while cloud artifacts are on.
 	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
@@ -836,8 +839,12 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
 		if artifactCounts != nil {
-			count := artifactCounts[session.ID]
-			response.ArtifactCount = &count
+			summary := artifactCounts[session.ID]
+			response.ArtifactCount = &summary.Count
+			if summary.Count > 0 {
+				updatedAt := summary.UpdatedAt.UTC()
+				response.ArtifactsUpdatedAt = &updatedAt
+			}
 		}
 		items = append(items, response)
 	}
@@ -1012,9 +1019,15 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
 	if artifactFiles != nil {
-		count := len(artifactFiles[sessionID])
+		files := artifactFiles[sessionID]
+		count := len(files)
 		response.ArtifactCount = &count
-		response.ArtifactFiles = toSessionArtifactResponses(artifactFiles[sessionID])
+		response.ArtifactFiles = toSessionArtifactResponses(files)
+		for _, file := range files {
+			if updatedAt := file.UpdatedAt.UTC(); response.ArtifactsUpdatedAt == nil || updatedAt.After(*response.ArtifactsUpdatedAt) {
+				response.ArtifactsUpdatedAt = &updatedAt
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }

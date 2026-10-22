@@ -111,13 +111,19 @@ func (m *memoryArtifactRows) RequireSessionArtifactAccess(_ context.Context, pri
 	return nil
 }
 
-func (m *memoryArtifactRows) SessionArtifactCounts(_ context.Context, orgID string, sessionIDs []string) (map[string]int, error) {
+func (m *memoryArtifactRows) SessionArtifactCounts(_ context.Context, orgID string, sessionIDs []string) (map[string]domain.SessionArtifactSummary, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := map[string]int{}
+	out := map[string]domain.SessionArtifactSummary{}
 	for _, sessionID := range sessionIDs {
 		if m.sessions[sessionID] == orgID && len(m.rows[sessionID]) > 0 {
-			out[sessionID] = len(m.rows[sessionID])
+			summary := domain.SessionArtifactSummary{Count: len(m.rows[sessionID])}
+			for _, row := range m.rows[sessionID] {
+				if row.UpdatedAt.After(summary.UpdatedAt) {
+					summary.UpdatedAt = row.UpdatedAt
+				}
+			}
+			out[sessionID] = summary
 		}
 	}
 	return out, nil
@@ -536,6 +542,11 @@ func TestArtifactFileRejectsBadTokensAndPaths(t *testing.T) {
 		t.Fatalf("forged token status = %d", rec.Code)
 	}
 	expired := h.server.signArtifactAccess(artifactAccessClaims{OrgID: artifactOrgA, SessionID: artifactSessionA, Expires: time.Now().Add(-time.Second).Unix()})
+	framed := h.do(http.MethodGet, "/api/cloud/v1/artifact-files/"+expired+"/report.html", "", nil, map[string]string{"Sec-Fetch-Dest": "iframe"})
+	if framed.Code != http.StatusUnauthorized || !strings.HasPrefix(framed.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(framed.Body.String(), "link has expired") || !strings.HasPrefix(framed.Header().Get("Content-Security-Policy"), "sandbox;") {
+		t.Fatalf("expired link in a frame: %d %v %q", framed.Code, framed.Header(), framed.Body.String())
+	}
 	if rec := h.do(http.MethodGet, "/api/cloud/v1/artifact-files/"+expired+"/report.html", "", nil, nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expired token status = %d", rec.Code)
 	}

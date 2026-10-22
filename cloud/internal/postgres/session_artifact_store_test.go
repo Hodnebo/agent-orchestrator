@@ -462,7 +462,7 @@ func TestSessionReadCountsPullRequestsIntoOutputType(t *testing.T) {
 // so it can be renumbered after reaching an environment.
 func TestSessionArtifactsMigrationIsRepeatable(t *testing.T) {
 	_, admin, _ := openNotificationTestStore(t)
-	raw, err := os.ReadFile("migrations/00085_session_artifacts.sql")
+	raw, err := os.ReadFile("migrations/00084_session_artifacts.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,4 +470,31 @@ func TestSessionArtifactsMigrationIsRepeatable(t *testing.T) {
 	if _, err := admin.Exec(context.Background(), up); err != nil {
 		t.Fatalf("re-running the migration: %v", err)
 	}
+}
+
+// Committing one path over and over leaves replaced versions queued for the
+// sweeper; they count toward the same limit as open uploads.
+func TestArtifactCommitLoopHitsThePendingCap(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	for index := range domain.MaxPendingArtifactUploads + 2 {
+		artifact := testArtifact("report.html", 1)
+		artifact.VersionID = fmt.Sprintf("v-%d", index)
+		err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, artifact.S3Key, artifact.VersionID, artifact.Size)
+		if errors.Is(err, ErrArtifactLimit) {
+			if index < domain.MaxPendingArtifactUploads-1 {
+				t.Fatalf("limit reached after %d commits, want about %d", index, domain.MaxPendingArtifactUploads)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch,
+			[]domain.SessionArtifact{artifact}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("upload-and-commit loop never reached the pending limit")
 }
