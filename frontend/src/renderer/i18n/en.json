@@ -2217,6 +2217,7 @@
 	"shortcut.previousBindingsActive": "Your previous bindings are still active.",
 	"shortcut.previousStillActive": "Your previous binding is still active.",
 	"shortcut.quick-open-file": "Quick open file",
+	"shortcut.quitConfirm": "Press ⌘Q again to quit",
 	"shortcut.reassign": "Reassign",
 	"shortcut.reassigned": "Shortcut reassigned",
 	"shortcut.remove": "Remove",

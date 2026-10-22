@@ -1949,6 +1949,7 @@
 	"shortcut.previousBindingsActive": "仍保留你之前的绑定。",
 	"shortcut.previousStillActive": "仍保留你之前的绑定。",
 	"shortcut.quick-open-file": "快速打开文件",
+	"shortcut.quitConfirm": "再按一次 ⌘Q 退出",
 	"shortcut.reassign": "重新分配",
 	"shortcut.reassigned": "快捷键已重新分配",
 	"shortcut.remove": "移除",

@@ -1894,6 +1894,7 @@
 	"shortcut.previousBindingsActive": "이전 바인딩이 여전히 활성 상태입니다.",
 	"shortcut.previousStillActive": "이전 바인딩이 여전히 활성 상태입니다.",
 	"shortcut.quick-open-file": "파일 빠르게 열기",
+	"shortcut.quitConfirm": "종료하려면 ⌘Q를 다시 누르세요",
 	"shortcut.reassign": "재할당",
 	"shortcut.reassigned": "단축키가 재할당되었습니다",
 	"shortcut.remove": "제거",

@@ -1894,6 +1894,7 @@
 	"shortcut.previousBindingsActive": "以前のバインディングは引き続き有効です。",
 	"shortcut.previousStillActive": "以前のバインディングは引き続き有効です。",
 	"shortcut.quick-open-file": "ファイルをすばやく開く",
+	"shortcut.quitConfirm": "終了するにはもう一度 ⌘Q を押してください",
 	"shortcut.reassign": "再割り当て",
 	"shortcut.reassigned": "ショートカットを再割り当てしました",
 	"shortcut.remove": "削除",

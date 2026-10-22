@@ -1227,6 +1227,19 @@ function ShellLayout() {
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
 
+	// macOS: the first ⌘Q only warns; a second press within `windowMs` quits.
+	useEffect(
+		() =>
+			aoBridge.app.onQuitShortcutConfirm((windowMs) =>
+				useUiStore.getState().showGlobalToast(t("shortcut.quitConfirm"), undefined, {
+					placement: "top-center",
+					durationMs: windowMs,
+					dedupeKey: "quit-shortcut-confirm",
+				}),
+			),
+		[t],
+	);
+
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
 	// dragging a folder into the open window.

@@ -366,6 +366,8 @@ export function shortcutBindingLabel(binding: ShortcutBinding, isMac: boolean): 
 // renderer can all reference one constant without crossing bundle boundaries.
 export const NEW_SESSION_SHORTCUT_CHANNEL = "app:new-session";
 export const KEYBOARD_SHORTCUTS_HELP_CHANNEL = "app:keyboard-shortcuts-help";
+// Payload: how long (ms) a second ⌘Q still counts as confirming the quit.
+export const QUIT_SHORTCUT_CONFIRM_CHANNEL = "app:quit-shortcut-confirm";
 export const NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:new-shell-terminal";
 export const CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL = "app:close-shell-terminal";
 export const OPEN_SETTINGS_SHORTCUT_CHANNEL = "app:open-settings";

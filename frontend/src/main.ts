@@ -88,6 +88,7 @@ import { attachAppShortcuts } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	QUIT_SHORTCUT_CONFIRM_CHANNEL,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -95,6 +96,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { createQuitShortcutGuard, QUIT_SHORTCUT_CONFIRM_MS } from "./main/quit-shortcut";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -394,6 +396,20 @@ const desktopQuit = createDesktopQuitController({
 	hideDock: () => app.dock?.hide(),
 	quit: () => app.quit(),
 });
+const quitShortcutGuard = createQuitShortcutGuard();
+
+// macOS app menu Quit. Choosing it with the mouse quits at once; ⌘Q needs a
+// second press, and the first one asks the shell to say so. With no visible
+// window there is nowhere to show the hint, so the shortcut quits directly.
+function handleMenuQuit(fromShortcut: boolean): void {
+	const shell = getShellWebContents();
+	const canWarn = fromShortcut && mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed();
+	if (!canWarn || quitShortcutGuard.press()) {
+		app.quit();
+		return;
+	}
+	shell.send(QUIT_SHORTCUT_CONFIRM_CHANNEL, QUIT_SHORTCUT_CONFIRM_MS);
+}
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
 let browserStreamLink: BrowserStreamLinkHandle | null = null;
@@ -885,7 +901,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, { appName: app.name, onQuit: handleMenuQuit }),
 			),
 		);
 	} else if (process.platform === "linux") {

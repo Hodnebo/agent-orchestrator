@@ -12,6 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
+		quitShortcutConfirmListener: undefined as ((windowMs: number) => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -60,6 +61,10 @@ const shellMocks = vi.hoisted(() => {
 		}),
 		onKeyboardShortcutsHelp: vi.fn((listener: () => void) => {
 			state.keyboardShortcutsListener = listener;
+			return vi.fn();
+		}),
+		onQuitShortcutConfirm: vi.fn((listener: (windowMs: number) => void) => {
+			state.quitShortcutConfirmListener = listener;
 			return vi.fn();
 		}),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
@@ -148,6 +153,7 @@ vi.mock("../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
+			onQuitShortcutConfirm: shellMocks.onQuitShortcutConfirm,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -414,6 +420,7 @@ beforeEach(() => {
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
 	shellMocks.state.keyboardShortcutsListener = undefined;
+	shellMocks.state.quitShortcutConfirmListener = undefined;
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
@@ -995,6 +1002,25 @@ describe("shell keyboard-shortcuts help subscription", () => {
 		act(() => listener());
 
 		expect(screen.getByTestId("keyboard-shortcuts")).toBeInTheDocument();
+	});
+});
+
+describe("shell quit-shortcut confirmation subscription", () => {
+	it("asks for a second ⌘Q in a top-center toast that lasts as long as the confirm window", async () => {
+		await renderShell();
+
+		const listener = shellMocks.state.quitShortcutConfirmListener;
+		if (!listener) throw new Error("quit-shortcut listener was not registered");
+		act(() => listener(2_500));
+
+		expect(useUiStore.getState().globalToasts).toContainEqual(
+			expect.objectContaining({
+				title: "Press ⌘Q again to quit",
+				placement: "top-center",
+				durationMs: 2_500,
+				dedupeKey: "quit-shortcut-confirm",
+			}),
+		);
 	});
 });
 
