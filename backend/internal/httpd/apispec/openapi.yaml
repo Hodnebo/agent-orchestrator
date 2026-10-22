@@ -14150,6 +14150,53 @@ components:
       - agent
       - modes
       type: object
+    ChatFileReferenceLine:
+      properties:
+        kind:
+          enum:
+          - context
+          - add
+          - del
+          type: string
+        newNo:
+          type:
+          - "null"
+          - integer
+        oldNo:
+          type:
+          - "null"
+          - integer
+        side:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        text:
+          type: string
+      required:
+      - kind
+      - oldNo
+      - newNo
+      - text
+      type: object
+    ChatFileReferenceSource:
+      properties:
+        kind:
+          enum:
+          - workspace
+          - pull_request
+          - artifact
+          type: string
+        number:
+          type: integer
+        snapshot:
+          type: string
+        url:
+          type: string
+      required:
+      - kind
+      type: object
     ChatPermissionModesResponse:
       properties:
         agents:
@@ -15471,6 +15518,13 @@ components:
       type: object
     ConversationContentSummaryResponse:
       properties:
+        annotationId:
+          type: string
+        annotationOrder:
+          format: int64
+          type: integer
+        fileReference:
+          $ref: '#/components/schemas/ConversationFileReferenceRequest'
         mimeType:
           type: string
         name:
@@ -15520,8 +15574,13 @@ components:
       properties:
         conversationId:
           type: string
+        id:
+          type: string
         messageId:
           type: string
+        order:
+          format: int64
+          type: integer
         revision:
           format: int64
           type: integer
@@ -15532,6 +15591,64 @@ components:
       - messageId
       - revision
       - text
+      type: object
+    ConversationFileReferenceRequest:
+      properties:
+        commitSha:
+          type: string
+        endLine:
+          type: integer
+        endSide:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        fileFingerprint:
+          type: string
+        hostId:
+          type: string
+        id:
+          type: string
+        line:
+          type: integer
+        lines:
+          items:
+            $ref: '#/components/schemas/ChatFileReferenceLine'
+          type: array
+        order:
+          format: int64
+          type: integer
+        path:
+          type: string
+        previousPath:
+          type: string
+        scope:
+          type: string
+        sessionId:
+          type: string
+        side:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        source:
+          $ref: '#/components/schemas/ChatFileReferenceSource'
+        truncated:
+          type: boolean
+        workspaceVersion:
+          type: string
+      required:
+      - id
+      - sessionId
+      - path
+      - source
+      - side
+      - line
+      - endLine
+      - lines
+      - truncated
       type: object
     ConversationImageContentRequest:
       properties:
@@ -15849,6 +15966,8 @@ components:
         settings:
           $ref: '#/components/schemas/ConversationTurnSettingsPayload'
         supportsExcerpts:
+          type: boolean
+        supportsFileReferences:
           type: boolean
         threadState:
           $ref: '#/components/schemas/ConversationThreadStatePayload'
@@ -18593,6 +18712,10 @@ components:
         excerpts:
           items:
             $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
+          type: array
+        fileReferences:
+          items:
+            $ref: '#/components/schemas/ConversationFileReferenceRequest'
           type: array
         resources:
           items:
