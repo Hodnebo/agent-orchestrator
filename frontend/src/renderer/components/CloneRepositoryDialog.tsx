@@ -30,6 +30,7 @@ type DestinationCheck =
 export const LAST_CLONE_DESTINATION_KEY = "ao.clone.lastDestinationParent";
 
 export default function CloneRepositoryDialog({
+	cloning = false,
 	disabled,
 	error,
 	onBack,
@@ -48,6 +49,7 @@ export default function CloneRepositoryDialog({
 	existingProjectPaths = [],
 	value,
 }: {
+	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
 	onBack: () => void;
@@ -371,9 +373,11 @@ export default function CloneRepositoryDialog({
 									</button>
 								</div>
 								<p id="cloneDestinationHelp" className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-									{targetPath
-										? t("createProject.cloneDestinationTarget", { path: targetPath })
-										: t("createProject.cloneDestinationHelp")}
+									{cloning && targetPath
+										? t("createProject.cloneDestinationInProgress", { path: targetPath })
+										: targetPath
+											? t("createProject.cloneDestinationTarget", { path: targetPath })
+											: t("createProject.cloneDestinationHelp")}
 								</p>
 								{currentCheck?.kind === "error" ? (
 									<div role="alert" className="space-y-2 text-[12px] text-destructive">
@@ -404,7 +408,7 @@ export default function CloneRepositoryDialog({
 							<div className="flex items-center justify-end gap-3">
 								{activity === "cloning" ? <Button type="button" variant="outline" onClick={onCancel}>{t("createProject.cloneCancel")}</Button> : null}
 								<Button type="submit" variant="primary" disabled={!canContinue}>
-									{t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
+									{cloning && !activity ? <><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{t("createProject.cloning")}</> : t(activity ? "createProject.cloneWorking" : error ? "createProject.retry" : "createProject.cloneContinue")}
 								</Button>
 							</div>
 						</div>

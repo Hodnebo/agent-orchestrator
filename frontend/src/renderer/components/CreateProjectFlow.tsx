@@ -622,7 +622,9 @@ export function CreateProjectFlow({
 			} else {
 				reportProjectError(clonedPath
 					? t("createProject.cloneValidationKept", { path: clonedPath })
-					: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." })));
+					: apiErrorCode(err) === "GIT_CLONE_TIMED_OUT"
+						? t("createProject.cloneTimedOut")
+						: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." })));
 			}
 			setCloneDialogOpen(true);
 		} finally {
@@ -831,6 +833,7 @@ export function CreateProjectFlow({
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}
+							cloning={cloneActivity === "cloning"}
 							error={error}
 							existingProjectNames={existingProjectNames}
 							existingProjectPaths={existingProjectPaths}

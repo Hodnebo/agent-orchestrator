@@ -70,6 +70,13 @@ describe("clone repository input", () => {
 		expect(window.localStorage.getItem("ao.clone.lastDestinationParent")).toBe("/Projects/new folder");
 	});
 
+	it("shows that the clone is running and where it is going", () => {
+		renderCloneDialog({ cloning: true, disabled: true });
+
+		expect(screen.getByRole("button", { name: "Cloning..." })).toBeDisabled();
+		expect(screen.getByText("Cloning into /code/web-app. Large repositories can take a few minutes.")).toBeInTheDocument();
+	});
+
 	it("describes the destination consistently and shows the exact checkout path", () => {
 		renderCloneDialog();
 
@@ -255,8 +262,9 @@ describe("clone repository input", () => {
 	});
 
 	it("shows clone status and provides Cancel while other controls are disabled", () => {
-		const { props } = renderCloneDialog({ disabled: true, activity: "cloning" });
-		expect(screen.getByRole("status")).toHaveTextContent("Cloning repository");
+		const { props } = renderCloneDialog({ disabled: true, cloning: true, activity: "cloning" });
+		expect(screen.getByRole("status")).toHaveTextContent("Cloning repository · 0s");
+		expect(screen.getByText("Cloning into /code/web-app. Large repositories can take a few minutes.")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel clone" }));
 		expect(props.onCancel).toHaveBeenCalledOnce();
 		expect(screen.getByRole("button", { name: "Close clone repository dialog" })).toBeDisabled();

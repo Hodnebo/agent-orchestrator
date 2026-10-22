@@ -18,26 +18,6 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
-type cloneTimeoutProbe struct {
-	projectsvc.Manager
-	budget time.Duration
-}
-
-func (s *cloneTimeoutProbe) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
-	s.budget = remainingRequestBudget(ctx)
-	return projectsvc.ClonePreparationResult{Path: "/prepared"}, nil
-}
-
-func TestClonePreparationDoesNotUseOrdinaryRequestDeadline(t *testing.T) {
-	svc := &cloneTimeoutProbe{}
-	router := NewRouterWithControl(config.Config{RequestTimeout: time.Millisecond}, discardLogger(), nil, APIDeps{Projects: svc}, ControlDeps{})
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/projects/clone/prepare", bytes.NewBufferString(`{"remoteUrl":"file:///source","destinationParent":"/clones"}`)))
-	if response.Code != http.StatusOK || svc.budget != 0 {
-		t.Fatalf("clone status=%d, budget=%s; want 200 and no deadline", response.Code, svc.budget)
-	}
-}
-
 func remainingRequestBudget(ctx context.Context) time.Duration {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -192,6 +172,47 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 				t.Fatalf("plain text budget = %s, want no more than %s", budget, configuredTimeout)
 			}
 		})
+	}
+}
+
+type timeoutProbeProjectManager struct {
+	projectsvc.Manager
+	budget chan time.Duration
+}
+
+func (m *timeoutProbeProjectManager) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.ClonePreparationResult{}, nil
+}
+
+func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.Project, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return projectsvc.Project{}, errors.New("probe only")
+}
+
+// A clone downloads the whole repository inside the request; a ~500 MB
+// repository took longer than the one-minute REST budget and failed.
+func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
+	mgr := &timeoutProbeProjectManager{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Projects: mgr},
+		ControlDeps{},
+	)
+	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remoteUrl":"https://github.com/acme/repo","destinationParent":"/tmp"}`))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		select {
+		case budget := <-mgr.budget:
+			if budget < 29*time.Minute || budget > 30*time.Minute {
+				t.Fatalf("%s budget = %s, want about 30 minutes", path, budget)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the project manager", path)
+		}
 	}
 }
 
