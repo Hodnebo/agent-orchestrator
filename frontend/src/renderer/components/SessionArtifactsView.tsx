@@ -2,12 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, Copy, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
@@ -24,7 +26,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
@@ -296,6 +298,7 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	sendMessage,
 	sessionId,
 	toolbarHost,
 }: {
@@ -312,6 +315,8 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
+	/** Sends feedback to a cloud session's worker. */
+	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
 }) {
@@ -342,6 +347,7 @@ function ArtifactViewerBody({
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						sendMessage={sendMessage}
 						sessionId={sessionId}
 						toolbarHost={previewing ? null : toolbarHost}
 					/>
@@ -361,6 +367,68 @@ function ArtifactViewerBody({
 						version={previewVersion}
 					/>
 				) : null}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * A cloud session's HTML artifact with whole-file feedback for its worker.
+ * The framed page is in another origin, so feedback is on the file, not a
+ * selection in it.
+ */
+function CloudHtmlArtifactView({
+	artifact,
+	feedbackRequestKey,
+	onAccessRefused,
+	onFeedbackRequestConsumed,
+	sendMessage,
+	sessionId,
+	toolbarHost,
+	url,
+}: {
+	artifact: SessionArtifact;
+	feedbackRequestKey?: number;
+	onAccessRefused: () => void;
+	onFeedbackRequestConsumed?: (key: number) => void;
+	sendMessage: (message: string) => Promise<void>;
+	sessionId: string;
+	toolbarHost: HTMLElement | null;
+	url: string;
+}) {
+	const { t } = useTranslation();
+	const annotation = useFileAnnotation(sessionId, { source: artifact.name, sendMessage });
+	const begin = annotation.begin;
+	const path = artifact.path;
+	useEffect(() => {
+		if (feedbackRequestKey === undefined) return;
+		begin({ path, side: "file", surface: "focused" });
+		onFeedbackRequestConsumed?.(feedbackRequestKey);
+	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
+	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
+	const feedbackButton = (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={t("files.addFeedback")}
+					className="text-muted-foreground hover:text-foreground"
+					onClick={() => begin({ path, side: "file", surface: "focused" })}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
+		</Tooltip>
+	);
+	return (
+		<div className="flex h-full min-h-0 flex-col">
+			{toolbarHost ? createPortal(feedbackButton, toolbarHost) : null}
+			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
+			<div className="min-h-0 flex-1">
+				<CloudArtifactFrame onAccessRefused={onAccessRefused} title={artifact.name} url={url} />
 			</div>
 		</div>
 	);
@@ -401,6 +469,13 @@ export function SessionArtifactsView({
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const openArtifactPreview = useOpenArtifactPreview(session.id, hostId);
 	const uiKey = sessionUiKey(session.id, hostId);
+	const { client: cloudClient } = useCloudCp(cloud);
+	const cloudOrgId = session.cloud?.orgId;
+	// A cloud session's worker gets feedback from the control plane, not the daemon.
+	const sendCloudFeedback = useCallback(async (message: string) => {
+		if (!cloudOrgId) throw new Error(t("files.feedbackError"));
+		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
+	}, [cloudClient, cloudOrgId, session.id, t]);
 
 	useEffect(() => setSelectedPath(null), [uiKey]);
 	// History is per file: opening another one starts on its live content.
@@ -485,7 +560,16 @@ export function SessionArtifactsView({
 							<PanelMessage>{t("files.loading")}</PanelMessage>
 						)
 					) : cloud && selected.kind === "html" ? (
-						<CloudArtifactFrame onAccessRefused={accessRefused} title={selected.name} url={selected.rawUrl!} />
+						<CloudHtmlArtifactView
+							artifact={selected}
+							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
+							onAccessRefused={accessRefused}
+							onFeedbackRequestConsumed={onRequestConsumed}
+							sendMessage={sendCloudFeedback}
+							sessionId={session.id}
+							toolbarHost={toolbarHost}
+							url={selected.rawUrl!}
+						/>
 					) : (
 						<ArtifactViewerBody
 							artifact={selected}
@@ -498,6 +582,7 @@ export function SessionArtifactsView({
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
 							readOnly={cloud}
+							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
 						/>

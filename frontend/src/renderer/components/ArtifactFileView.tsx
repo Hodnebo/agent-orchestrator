@@ -36,6 +36,7 @@ export function ArtifactFileView({
 	cloud = false,
 	artifactRoot,
 	onAccessRefused,
+	sendMessage,
 	sessionId,
 	toolbarHost,
 }: {
@@ -53,11 +54,13 @@ export function ArtifactFileView({
 	artifactRoot?: string;
 	/** Called when a cloud media file fails to load, to take a fresh link. */
 	onAccessRefused?: () => void;
+	/** Sends feedback to the worker; without it feedback goes through the daemon. */
+	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	/** The header the pane renders its mode and action buttons into. */
 	toolbarHost?: HTMLElement | null;
 }) {
-	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName });
+	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
 	const source = useMemo(
 		() => ({ kind: "artifact" as const, rawUrl, readOnly, cloud, artifactRoot, onAccessRefused }),
 		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused],

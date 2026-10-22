@@ -8,8 +8,9 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { cloudAccessMock, deleteArtifactMock, openPreviewMock } = vi.hoisted(() => ({
+const { cloudAccessMock, deleteArtifactMock, openPreviewMock, sendSessionMessageMock } = vi.hoisted(() => ({
 	cloudAccessMock: vi.fn(),
+	sendSessionMessageMock: vi.fn(),
 	deleteArtifactMock: vi.fn(),
 	openPreviewMock: vi.fn(),
 }));
@@ -24,9 +25,15 @@ vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 		queryFn: async () => (path.endsWith(".png") ? { binary: true, content: "" } : { content: `contents of ${path}` }),
 	}),
 }));
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { sendSessionMessage: sendSessionMessageMock }, ready: true, baseUrl: "https://cp.test", userId: "u-1" }),
+}));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, feedbackRequestKey, path, rawUrl }: { cloud?: boolean; feedbackRequestKey?: number; path: string; rawUrl?: string }) => (
-		<div data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">{`viewer:${path}`}</div>
+	ArtifactFileView: ({ cloud, feedbackRequestKey, path, rawUrl, sendMessage }: { cloud?: boolean; feedbackRequestKey?: number; path: string; rawUrl?: string; sendMessage?: (message: string) => Promise<void> }) => (
+		<div data-cloud={cloud ? "true" : ""} data-feedback-key={feedbackRequestKey ?? ""} data-raw-url={rawUrl ?? ""} data-testid="artifact-view">
+			{`viewer:${path}`}
+			{sendMessage ? <button type="button" onClick={() => void sendMessage("looks good")}>send feedback</button> : null}
+		</div>
 	),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
@@ -80,6 +87,32 @@ describe("SessionArtifactsView for a cloud session", () => {
 	beforeEach(() => {
 		openPreviewMock.mockReset();
 		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		sendSessionMessageMock.mockReset().mockResolvedValue({});
+	});
+
+	it("sends feedback on an html artifact to the worker through the control plane", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /report\.html/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Add feedback" }));
+		await userEvent.type(screen.getByRole("textbox"), "make the chart wider");
+		await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+
+		expect(sendSessionMessageMock).toHaveBeenCalledWith("org-1", "cloud-1", { text: expect.stringContaining("make the chart wider") });
+		expect(sendSessionMessageMock.mock.calls[0][2].text).toContain("report.html");
+	});
+
+	it("opens html feedback when it was requested", async () => {
+		renderView(<SessionArtifactsView request={{ feedback: true, key: 3, path: "report.html" }} session={cloudSession()} />);
+
+		expect(await screen.findByRole("textbox")).toBeInTheDocument();
+	});
+
+	it("sends feedback on a markdown artifact to the worker through the control plane", async () => {
+		renderView(<SessionArtifactsView session={cloudSession()} />);
+		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
+		await userEvent.click(screen.getByRole("button", { name: "send feedback" }));
+
+		expect(sendSessionMessageMock).toHaveBeenCalledWith("org-1", "cloud-1", { text: "looks good" });
 	});
 
 	it("frames an html artifact from its access URL instead of the Browser panel", async () => {
