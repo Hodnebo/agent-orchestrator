@@ -223,6 +223,14 @@ type ReportingOwner = NonNullable<components["schemas"]["APIError"]["reporting_o
 // makes every polling query fail at once and on every retry — the failure
 // signal matters, the storm does not.
 const API_ERROR_DEDUPE_MS = 30_000;
+// These codes are the successful or expected outcome of a probe: Codex is not
+// wired in this process, a shell the user already closed, or a GitHub token
+// the user has not connected. Other 401 and 404 responses still report.
+const EXPECTED_API_ERROR_CODES = new Set([
+	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
+	"SHELL_TERMINAL_NOT_FOUND",
+	"GITHUB_AUTH_INVALID",
+]);
 const lastApiErrorAt = new Map<string, number>();
 
 function reportApiError(
@@ -326,7 +334,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		} catch {
 			// Non-JSON or empty body: fall back to status-only classification.
 		}
-		if (!visibilityOwned) reportApiError(
+		if (!visibilityOwned && !(code && EXPECTED_API_ERROR_CODES.has(code))) reportApiError(
 			operation,
 			response.status >= 500 ? "http_5xx" : "http_4xx",
 			response.status,
