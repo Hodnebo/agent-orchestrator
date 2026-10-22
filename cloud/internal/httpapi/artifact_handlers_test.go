@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -884,5 +885,48 @@ func TestListWorkerChildrenIncludesArtifactFiles(t *testing.T) {
 	}
 	if len(item.ArtifactFiles) != 1 || item.ArtifactFiles[0].Path != "report.html" || item.ArtifactFiles[0].Kind != "html" {
 		t.Fatalf("artifact files = %+v", item.ArtifactFiles)
+	}
+}
+
+func TestWorkerReadsBackItsCommittedArtifacts(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	report, notes := []byte("<p>report</p>"), []byte("# notes")
+	h.syncArtifacts(map[string][]byte{"report.html": report, "docs/notes.md": notes})
+	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+
+	list := decodeBody[workerArtifactListResponse](t, h.do(http.MethodGet, "/api/cloud/v1/worker/artifacts", worker, nil, nil))
+	want := []workerArtifactManifestFile{
+		{Path: "docs/notes.md", Size: int64(len(notes)), SHA256: hexSHA(notes)},
+		{Path: "report.html", Size: int64(len(report)), SHA256: hexSHA(report)},
+	}
+	if !reflect.DeepEqual(list.Files, want) {
+		t.Fatalf("list = %+v, want %+v", list.Files, want)
+	}
+
+	rec := h.do(http.MethodGet, "/api/cloud/v1/worker/artifacts/blob/docs/notes.md", worker, nil, nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != string(notes) || rec.Header().Get(ArtifactSHA256Header) != hexSHA(notes) {
+		t.Fatalf("blob: %d %q sha=%q", rec.Code, rec.Body.String(), rec.Header().Get(ArtifactSHA256Header))
+	}
+	if rec := h.do(http.MethodGet, "/api/cloud/v1/worker/artifacts/blob/missing.md", worker, nil, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing file: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Another session's worker sees none of these files.
+	other := h.workerToken(artifactOrgB, artifactSessionB, artifactEpoch)
+	if list := decodeBody[workerArtifactListResponse](t, h.do(http.MethodGet, "/api/cloud/v1/worker/artifacts", other, nil, nil)); len(list.Files) != 0 {
+		t.Fatalf("other session list = %+v", list.Files)
+	}
+	if rec := h.do(http.MethodGet, "/api/cloud/v1/worker/artifacts/blob/report.html", other, nil, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("other session blob: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWorkerArtifactReadRoutesNeedArtifactsOn(t *testing.T) {
+	h := newArtifactHarness(t, false)
+	worker := h.workerToken(artifactOrgA, artifactSessionA, artifactEpoch)
+	for _, target := range []string{"/api/cloud/v1/worker/artifacts", "/api/cloud/v1/worker/artifacts/blob/report.html"} {
+		if rec := h.do(http.MethodGet, target, worker, nil, nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s with artifacts off: %d", target, rec.Code)
+		}
 	}
 }

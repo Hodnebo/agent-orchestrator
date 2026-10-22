@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -127,6 +128,10 @@ type workerArtifactManifestRequest struct {
 
 type workerArtifactManifestResponse struct {
 	Changed []string `json:"changed"`
+}
+
+type workerArtifactListResponse struct {
+	Files []workerArtifactManifestFile `json:"files"`
 }
 
 type workerArtifactBlobResponse struct {
@@ -262,6 +267,71 @@ func (s *Server) workerPutArtifactBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, workerArtifactBlobResponse{Path: cleaned, VersionID: versionID})
+}
+
+// workerListArtifacts returns the committed artifact files of the worker's
+// own session, so a new worker can restore them.
+func (s *Server) workerListArtifacts(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:connect") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:connect scope is required.")
+		return
+	}
+	artifacts, err := s.artifactRows.SessionArtifactsBySessions(r.Context(), claims.OrgID, []string{claims.SessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	files := make([]workerArtifactManifestFile, 0, len(artifacts[claims.SessionID]))
+	for _, artifact := range artifacts[claims.SessionID] {
+		files = append(files, workerArtifactManifestFile{Path: artifact.Path, Size: artifact.Size, SHA256: artifact.SHA256})
+	}
+	writeJSON(w, http.StatusOK, workerArtifactListResponse{Files: files})
+}
+
+// workerGetArtifactBlob streams the committed version of one artifact file of
+// the worker's own session, with its SHA-256 in ArtifactSHA256Header.
+func (s *Server) workerGetArtifactBlob(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:connect") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:connect scope is required.")
+		return
+	}
+	raw, err := wildcardPath(r)
+	if err != nil {
+		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	cleaned, err := artifactstore.CleanPath(raw)
+	if err != nil {
+		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	artifacts, err := s.artifactRows.SessionArtifactsBySessions(r.Context(), claims.OrgID, []string{claims.SessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	index := slices.IndexFunc(artifacts[claims.SessionID], func(artifact domain.SessionArtifact) bool { return artifact.Path == cleaned })
+	if index < 0 {
+		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+		return
+	}
+	artifact := artifacts[claims.SessionID][index]
+	object, err := s.artifacts.Get(r.Context(), artifact.S3Key, artifact.VersionID)
+	if !s.artifactObjectReadable(w, r, err) {
+		return
+	}
+	defer object.Body.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(object.Size, 10))
+	w.Header().Set(ArtifactSHA256Header, artifact.SHA256)
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, object.Body); err != nil {
+		s.logger.WarnContext(r.Context(), "stream artifact blob to worker", "error", err, "request_id", requestID(r))
+	}
 }
 
 // workerCommitArtifacts verifies each uploaded object version and then

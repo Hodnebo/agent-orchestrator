@@ -554,7 +554,9 @@ func New(options Options) *Server {
 			// transport request is enqueued for its session.
 			router.Get("/worker/work/wait", server.workerWaitForWork)
 			if server.artifactsEnabled() {
+				router.Get("/worker/artifacts", server.workerListArtifacts)
 				router.Post("/worker/artifacts/manifest", server.workerArtifactManifest)
+				router.Get("/worker/artifacts/blob/*", server.workerGetArtifactBlob)
 				router.Put("/worker/artifacts/blob/*", server.workerPutArtifactBlob)
 				router.Post("/worker/artifacts/commit", server.workerCommitArtifacts)
 			}
