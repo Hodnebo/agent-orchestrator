@@ -94,6 +94,8 @@ export interface AgentSwitchProps {
 	ultracode?: { on: boolean; onChange: (on: boolean) => void };
 	/** When Claude Code compacts on its own. Applies the next time it starts. */
 	autoCompact?: AutoCompactControl;
+	/** The agents to offer in place of the chat switch targets, for choosing one before a session exists. */
+	agents?: Array<{ id: string; label: string }>;
 }
 
 export interface PickerModel {
@@ -212,8 +214,10 @@ export function AgentModelPicker({
 }) {
 	const { t } = useTranslation();
 	const { pending, onPendingChange, projectId, hostId } = agentSwitch;
-	// Agent switching ships behind Developer Mode for its first week.
-	const switching = useUiStore((state) => state.developerMode);
+	// Agent switching ships behind Developer Mode for its first week. Choosing an
+	// agent before a session exists is not a switch, so an explicit list is always offered.
+	const choices = agentSwitch.agents;
+	const switching = useUiStore((state) => state.developerMode) || Boolean(choices);
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
 	// An agent can be ready in a terminal and still miss the adapter its chat
 	// needs (Pi's pi-acp). The daemon checks that without starting anything.
@@ -231,7 +235,10 @@ export function AgentModelPicker({
 	}).data;
 	// Only runnable agents are offered, as in New Task; unknown readiness stays selectable
 	// since the daemon checks the target first. A terminal's own agent is left out (/model there).
-	const agents = useMemo(() => [
+	const agents = useMemo(() => choices ? [
+		{ id: currentHarness, label: agentLabel(currentHarness) },
+		...choices.filter((agent) => agent.id !== currentHarness),
+	] : [
 		...(terminal ? [] : [{ id: currentHarness, label: agentLabel(currentHarness) }]),
 		...(!switching ? [] : terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).flatMap((id) => {
 			if (id === currentHarness) return [];
@@ -240,7 +247,7 @@ export function AgentModelPicker({
 			if (!terminal && chatUnavailable?.has(id)) return [];
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
-	], [chatUnavailable, currentHarness, readiness, switching, terminal]);
+	], [chatUnavailable, choices, currentHarness, readiness, switching, terminal]);
 	const management = useAgentManagementMenu(undefined, hostId);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
