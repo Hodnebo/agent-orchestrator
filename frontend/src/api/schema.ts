@@ -5231,7 +5231,7 @@ export interface components {
             arguments?: {
                 [key: string]: unknown;
             };
-            /** @description AO session the call is made for; screenshots are saved under it. */
+            /** @description AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another. */
             sessionId?: string;
             /** @description Driver tool name, e.g. list_windows or get_window_state. */
             tool: string;

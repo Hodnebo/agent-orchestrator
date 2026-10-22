@@ -80,8 +80,9 @@ type CallRequest struct {
 	Tool string `json:"tool" description:"Driver tool name, e.g. list_windows or get_window_state."`
 	// Arguments is the tool's JSON object input; empty means {}.
 	Arguments map[string]any `json:"arguments,omitempty" description:"Tool arguments as a JSON object."`
-	// SessionID groups saved screenshots by AO session; empty uses a shared folder.
-	SessionID string `json:"sessionId,omitempty" description:"AO session the call is made for; screenshots are saved under it."`
+	// SessionID groups saved screenshots by AO session and names the driver
+	// session the call runs in; empty uses a shared folder and session.
+	SessionID string `json:"sessionId,omitempty" description:"AO session the call is made for. Screenshots are saved under it, and calls for the same AO session share one Cua Driver session unless arguments.session names another."`
 }
 
 // Image is a screenshot a call saved to disk.
@@ -108,10 +109,11 @@ const (
 )
 
 var (
-	toolNamePattern  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	terminalEscape   = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
-	errNotInstalled  = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Cua Driver is not installed. Install it in Settings > Computer use agents.", nil)
-	errDaemonStopped = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
+	toolNamePattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	unknownSessionArg = regexp.MustCompile(`\bunknown argument session\b`)
+	terminalEscape    = regexp.MustCompile(`\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+	errNotInstalled   = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Cua Driver is not installed. Install it in Settings > Computer use agents.", nil)
+	errDaemonStopped  = apierr.Conflict("COMPUTER_USE_DAEMON_STOPPED", "Cua Driver's background service is not running and could not be started. Start it with `ao cua start` or from Settings > Computer use agents.", nil)
 )
 
 // browserTool reports whether tool is one of Cua Driver's browser tools.
@@ -140,17 +142,20 @@ type Service struct {
 	mu         sync.Mutex
 	granting   bool
 	grantError string
+	// sessionless are tools the driver refused a `session` argument for.
+	sessionless map[string]bool
 }
 
 // New returns a Service that saves screenshots under dataDir/computer-use.
 func New(driver ports.ComputerUseDriver, dataDir string) *Service {
 	background, stop := context.WithCancel(context.Background())
 	return &Service{
-		driver:     driver,
-		images:     newImageStore(dataDir),
-		goos:       runtime.GOOS,
-		background: background,
-		stop:       stop,
+		driver:      driver,
+		images:      newImageStore(dataDir),
+		goos:        runtime.GOOS,
+		background:  background,
+		stop:        stop,
+		sessionless: map[string]bool{},
 	}
 }
 
@@ -337,19 +342,28 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
-	encoded, err := json.Marshal(arguments)
-	if err != nil {
-		return CallResult{}, err
+	// Each `cua-driver call` is a new connection, and the driver gives each
+	// one a disposable implicit session. A pixel click or zoom needs the
+	// screenshot an earlier call took in the same session, so every call for
+	// one AO session names the same driver session unless the caller chose one.
+	_, named := arguments["session"]
+	injected := !named && !s.isSessionless(tool)
+	if injected {
+		arguments["session"] = driverSession(request.SessionID)
 	}
 
-	stdout, stderr, runErr := s.runCall(ctx, binary, tool, encoded)
-	if runErr != nil && daemonNotRunning(stdout, stderr) {
-		if err := s.ensureDaemon(ctx, binary); err != nil {
-			return CallResult{}, err
-		}
-		stdout, stderr, runErr = s.runCall(ctx, binary, tool, encoded)
+	stdout, stderr, runErr := s.callWithDaemon(ctx, binary, tool, arguments)
+	if runErr != nil && injected && rejectsSession(stdout) {
+		// A refusal runs nothing, so the call can be sent again without it.
+		s.markSessionless(tool)
+		delete(arguments, "session")
+		stdout, stderr, runErr = s.callWithDaemon(ctx, binary, tool, arguments)
 	}
 	if runErr != nil {
+		var apiErr *apierr.Error
+		if errors.As(runErr, &apiErr) {
+			return CallResult{}, runErr
+		}
 		if daemonNotRunning(stdout, stderr) {
 			return CallResult{}, errDaemonStopped
 		}
@@ -369,6 +383,62 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	s.images.prune(scope)
 	return CallResult{Tool: tool, Result: result, Images: saved.images}, nil
+}
+
+// callWithDaemon runs one driver call, starting a stopped service once and
+// retrying.
+func (s *Service) callWithDaemon(ctx context.Context, binary, tool string, arguments map[string]any) ([]byte, []byte, error) {
+	encoded, err := json.Marshal(arguments)
+	if err != nil {
+		return nil, nil, err
+	}
+	stdout, stderr, runErr := s.runCall(ctx, binary, tool, encoded)
+	if runErr != nil && daemonNotRunning(stdout, stderr) {
+		if err := s.ensureDaemon(ctx, binary); err != nil {
+			return nil, nil, err
+		}
+		stdout, stderr, runErr = s.runCall(ctx, binary, tool, encoded)
+	}
+	return stdout, stderr, runErr
+}
+
+func (s *Service) isSessionless(tool string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionless[tool]
+}
+
+func (s *Service) markSessionless(tool string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionless[tool] = true
+}
+
+// driverSession is the Cua Driver session label for an AO session. Calls made
+// outside any AO session share one label, the way they share one screenshot
+// folder.
+func driverSession(sessionID string) string {
+	name := strings.TrimSpace(sessionID)
+	if name == "" {
+		name = sharedScope
+	}
+	return "ao-" + name
+}
+
+// rejectsSession reports the driver's refusal of an unexpected `session`
+// argument: {"status":"refused","refusal":{"code":"invalid_arguments",
+// "message":"<tool>: unknown argument session; ..."}}.
+func rejectsSession(stdout []byte) bool {
+	var refused struct {
+		Refusal struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"refusal"`
+	}
+	if json.Unmarshal(stdout, &refused) != nil || refused.Refusal.Code != "invalid_arguments" {
+		return false
+	}
+	return unknownSessionArg.MatchString(refused.Refusal.Message)
 }
 
 func (s *Service) runCall(ctx context.Context, binary, tool string, arguments []byte) ([]byte, []byte, error) {

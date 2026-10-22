@@ -15202,8 +15202,9 @@ components:
           description: Tool arguments as a JSON object.
           type: object
         sessionId:
-          description: AO session the call is made for; screenshots are saved under
-            it.
+          description: AO session the call is made for. Screenshots are saved under
+            it, and calls for the same AO session share one Cua Driver session unless
+            arguments.session names another.
           type: string
         tool:
           description: Driver tool name, e.g. list_windows or get_window_state.

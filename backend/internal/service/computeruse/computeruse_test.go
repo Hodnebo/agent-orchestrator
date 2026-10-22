@@ -183,6 +183,108 @@ func TestCallWritesScreenshotsToFiles(t *testing.T) {
 	}
 }
 
+// statefulDriver answers like Cua Driver's session model: a call without a
+// `session` runs in a fresh implicit session, and zoom needs a window read by
+// the same session. It refuses a `session` argument for sessionlessTool.
+type statefulDriver struct {
+	read            map[string]bool
+	sessionlessTool string
+	sessions        []any
+}
+
+func (d *statefulDriver) call(args []string) ([]byte, []byte, error) {
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(args[2]), &sent); err != nil {
+		return nil, nil, err
+	}
+	session, named := sent["session"]
+	d.sessions = append(d.sessions, session)
+	tool := args[1]
+	if tool == d.sessionlessTool && named {
+		return []byte(fmt.Sprintf(`{"status":"refused","refusal":{"code":"invalid_arguments","message":"%s: unknown argument session; accepted: "}}`, tool)), nil, errors.New("exit status 1")
+	}
+	label, _ := session.(string)
+	switch tool {
+	case "get_window_state":
+		if named {
+			d.read[label] = true
+		}
+		return []byte(`{"elements":[]}`), nil, nil
+	case "zoom":
+		if !named || !d.read[label] {
+			return []byte(`{"code":"screenshot_context_missing","reason":"window_never_read"}`), nil, errors.New("exit status 1")
+		}
+	}
+	return []byte(`{}`), nil, nil
+}
+
+func newStatefulService(t *testing.T) (*Service, *statefulDriver) {
+	t.Helper()
+	state := &statefulDriver{read: map[string]bool{}, sessionlessTool: "list_sessions"}
+	driver := &fakeDriver{daemonUp: true, onCall: state.call}
+	return newTestService(t, driver, "darwin"), state
+}
+
+var snapshotArgs = map[string]any{"pid": 7, "window_id": 9, "include_screenshot": false}
+
+// Separate `ao cua call` processes snapshot a window and then zoom into it, so
+// both must run in one driver session tied to the AO session.
+func TestCallKeepsOneDriverSessionPerAOSession(t *testing.T) {
+	s, state := newStatefulService(t)
+	ctx := context.Background()
+	zoom := map[string]any{"pid": 7, "window_id": 9, "x1": 0, "y1": 0, "x2": 10, "y2": 10}
+
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: snapshotArgs, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "zoom", Arguments: zoom, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("zoom after snapshot in the same AO session: %v", err)
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "zoom", Arguments: zoom, SessionID: "worker-2"}); err == nil || !strings.Contains(err.Error(), "screenshot_context_missing") {
+		t.Fatalf("zoom from another AO session err = %v, want screenshot_context_missing", err)
+	}
+	want := []any{"ao-worker-1", "ao-worker-1", "ao-worker-2"}
+	if fmt.Sprint(state.sessions) != fmt.Sprint(want) {
+		t.Fatalf("driver sessions = %v, want %v", state.sessions, want)
+	}
+}
+
+func TestCallOutsideAOSessionUsesSharedDriverSession(t *testing.T) {
+	s, state := newStatefulService(t)
+	if _, err := s.Call(context.Background(), CallRequest{Tool: "get_window_state", Arguments: snapshotArgs}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if len(state.sessions) != 1 || state.sessions[0] != "ao-shared" {
+		t.Fatalf("driver sessions = %v, want [ao-shared]", state.sessions)
+	}
+}
+
+func TestCallKeepsCallerDriverSession(t *testing.T) {
+	s, state := newStatefulService(t)
+	arguments := map[string]any{"pid": 7, "window_id": 9, "session": "research-run"}
+	if _, err := s.Call(context.Background(), CallRequest{Tool: "get_window_state", Arguments: arguments, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if len(state.sessions) != 1 || state.sessions[0] != "research-run" {
+		t.Fatalf("driver sessions = %v, want [research-run]", state.sessions)
+	}
+}
+
+// A tool whose input has no `session` is sent again without it, and later
+// calls leave it out from the start.
+func TestCallDropsSessionForToolsThatRefuseIt(t *testing.T) {
+	s, state := newStatefulService(t)
+	for range 2 {
+		if _, err := s.Call(context.Background(), CallRequest{Tool: "list_sessions", SessionID: "worker-1"}); err != nil {
+			t.Fatalf("Call() error = %v", err)
+		}
+	}
+	want := []any{"ao-worker-1", nil, nil}
+	if fmt.Sprint(state.sessions) != fmt.Sprint(want) {
+		t.Fatalf("driver sessions = %v, want %v", state.sessions, want)
+	}
+}
+
 func TestCallLeavesTreeOnlySnapshotsAlone(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	var sent map[string]any

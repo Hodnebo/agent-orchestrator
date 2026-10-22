@@ -36,6 +36,13 @@ tool) to see the screen.
 4. Snapshot again after every action before using another `element_index`:
    each snapshot replaces the previous index map.
 
+Every `ao cua call` from one AO session runs in the same Cua Driver session
+(`ao-<session id>`; `ao-shared` outside an AO session), so a pixel `click` or
+`zoom` can use the screenshot an earlier `get_window_state` took. Pass your own
+`"session"` argument only to keep separate runs apart. A driver session expires
+after a few idle minutes; snapshot again if a pixel action reports
+`screenshot_context_missing`.
+
 Tips:
 
 - `{"include_screenshot":false}` returns the tree only, which is cheaper when
