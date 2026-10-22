@@ -642,6 +642,11 @@ export function CloudSessionChatSurface({
 	if (settingsRef.current.key !== settingsKey) settingsRef.current = { key: settingsKey, settings };
 	const manualSelectionRef = useRef({ key: settingsKey, version: 0 });
 	if (manualSelectionRef.current.key !== settingsKey) manualSelectionRef.current = { key: settingsKey, version: 0 };
+	// The selection version when the worker's catalog was last read. A choice
+	// made after it (while the worker was still starting, or during the
+	// request) wins over the worker's native model when the catalog arrives.
+	const catalogSyncRef = useRef({ key: settingsKey, version: 0 });
+	if (catalogSyncRef.current.key !== settingsKey) catalogSyncRef.current = { key: settingsKey, version: 0 };
 	const updateSettings = (next: CloudTurnSettings) => {
 		manualSelectionRef.current.version++;
 		settingsRef.current = { key: settingsKey, settings: next };
@@ -678,7 +683,7 @@ export function CloudSessionChatSurface({
 		// query waits for the next connection instead.
 		retry: (_failures, error) => isWorkerUnavailable(error) && liveRef.current.connected && !liveRef.current.terminated,
 		queryFn: async ({ signal }) => {
-			const selectionVersionAtFetch = manualSelectionRef.current.version;
+			const selectionVersionAtFetch = catalogSyncRef.current.version;
 			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
 			return { ...catalog, selectionVersionAtFetch };
 		},
@@ -700,7 +705,10 @@ export function CloudSessionChatSurface({
 	}, [client, cloud?.orgId, ready, session.id]);
 	useEffect(() => {
 		const native = modelsQuery.data;
-		if (!modelsQuery.isFetchedAfterMount || !native || native.selectionVersionAtFetch !== manualSelectionRef.current.version || (!native.model && !native.reasoningEffort)) return;
+		if (!modelsQuery.isFetchedAfterMount || !native) return;
+		const chosenSince = native.selectionVersionAtFetch !== manualSelectionRef.current.version;
+		catalogSyncRef.current = { key: settingsKey, version: manualSelectionRef.current.version };
+		if (chosenSince || (!native.model && !native.reasoningEffort)) return;
 		const current = settingsRef.current.key === settingsKey ? settingsRef.current.settings : readSettings();
 		const next: CloudTurnSettings = {
 			...current,
