@@ -80,7 +80,8 @@ Archiving a Cloud session marks it terminated and sets the sandbox's desired
 state to deleted. The reconciler tears down the provider environment and keeps
 the session and event history. Restore changes the desired state back to
 running. After teardown completes, it provisions a new environment. The worker
-can rehydrate a captured conversation transcript. It restores preserved
+can rehydrate a captured conversation transcript and, with cloud artifacts on,
+restores the session's artifact files. It restores preserved
 uncommitted work only when the checkpoint includes a preserved Git ref. The provider's own storage and retention rules still apply, so code
 that must survive a teardown should be committed and pushed.
 
@@ -166,7 +167,18 @@ and no S3 client is built.
   2 s rescan after a change, and a final flush at shutdown trigger a sync. A
   failed request backs off from 10 s to 5 min; a request refused with a client
   error waits until the files change. The worker reports a deletion only for a
-  file the same process synced that is no longer in the directory at all.
+  file the same process synced or restored that is no longer in the directory
+  at all.
+- **Restore.** Before the agent starts, a worker on a new sandbox (after a
+  restore or a replacement) lists the session's committed files with
+  `GET /worker/artifacts` and downloads each one missing from the directory
+  with `GET /worker/artifacts/blob/{path}`, which streams the row's
+  `version_id`. A download is written under `.ao-restore`, checked against
+  the row's size and SHA-256, and linked into place, so it never replaces a
+  file the agent wrote; a path that already exists keeps its local file, which
+  syncs as usual. A restored file counts as synced: it is not uploaded again,
+  and deleting it deletes the committed file. A restore that fails or runs past
+  30 s is retried in the background while the agent runs.
 - **Storage.** The worker sends a manifest of `(path, size, sha256)`; the
   control plane answers with the paths whose committed row differs. Each
   changed file is relayed to the versioned tenant artifact bucket at
@@ -188,7 +200,8 @@ and no S3 client is built.
   committed.
 - **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
   wakes the sandbox; the session list carries only `artifactCount` and
-  `artifactsUpdatedAt`.
+  `artifactsUpdatedAt`. An orchestrator's `GET /worker/children` (`ao list`)
+  carries each child's `artifactFiles` with the count and newest commit time.
   `POST /sessions/{id}/artifacts/access` returns a ten-minute path prefix
   signed for one user, organization, and session (an iframe cannot send a
   bearer header). `GET /artifact-files/{token}/{path}` checks that the user is
