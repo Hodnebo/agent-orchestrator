@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +33,11 @@ const (
 	artifactSettleDelay = 2 * time.Second
 	// artifactUploadTimeout bounds one blob upload.
 	artifactUploadTimeout = 5 * time.Minute
+	// artifactRestoreTimeout bounds the restore that runs before the agent
+	// starts; a restore it cuts short is finished in the background.
+	artifactRestoreTimeout = 30 * time.Second
+	// artifactRestoreDir holds files being restored until they are complete.
+	artifactRestoreDir = ".ao-restore"
 	// artifactFinalFlushTimeout bounds the sync that runs at shutdown.
 	artifactFinalFlushTimeout = 20 * time.Second
 	// artifactRetryBase and artifactRetryMax bound the backoff after a failed
@@ -53,6 +59,7 @@ const (
 // and tool directories an agent may create that are not deliverables.
 var skippedArtifactDirs = map[string]bool{
 	domain.ArtifactVersionsDir: true,
+	artifactRestoreDir:         true,
 	".git":                     true,
 	"node_modules":             true,
 }
@@ -61,6 +68,7 @@ var skippedArtifactDirs = map[string]bool{
 var errArtifactFileChanged = errors.New("file changed while it was hashed")
 
 const (
+	artifactListPath     = "/worker/artifacts"
 	artifactManifestPath = "/worker/artifacts/manifest"
 	artifactBlobPath     = "/worker/artifacts/blob/"
 	artifactCommitPath   = "/worker/artifacts/commit"
@@ -114,6 +122,10 @@ type artifactSyncer struct {
 	refusedFiles string
 	// flushing is set during the shutdown flush, which ignores the backoff.
 	flushing bool
+	// restorePending is set while the committed files have not all been
+	// restored; each sync tries again first, from restoreRetryAt.
+	restorePending bool
+	restoreRetryAt time.Time
 }
 
 // artifactScan is one walk of the artifact directory.
@@ -183,10 +195,138 @@ func (s *artifactSyncer) run(ctx context.Context) error {
 		case <-ticker.C:
 		case <-settle.C:
 		}
+		if s.restorePending {
+			s.retryRestore(ctx)
+		}
 		if s.sync(ctx) {
 			settle.Reset(artifactSettleDelay)
 		}
 	}
+}
+
+// restore puts back the session's committed artifact files that are not in
+// the directory, so a worker on a new sandbox, after a restore or a
+// replacement, starts with them. A path that already exists keeps its local
+// file, which syncs as usual. A restored file counts as synced: it is not
+// uploaded again, and deleting it deletes the committed file. It returns the
+// number of files written; with a control plane that keeps no artifacts it
+// writes none. A failed restore is tried again before each sync.
+func (s *artifactSyncer) restore(ctx context.Context) (int, error) {
+	s.restorePending = true
+	var list worker.ArtifactListResponse
+	status, err := s.client.artifactJSON(ctx, artifactListPath, nil, &list)
+	if status == http.StatusNotFound {
+		s.restorePending = false
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
+	defer func() { _ = root.RemoveAll(artifactRestoreDir) }()
+	restored := 0
+	for _, file := range list.Files {
+		if !artifactPathStorable(file.Path) || file.Size > domain.MaxArtifactFileBytes {
+			s.skipOnce(file.Path, "committed file cannot be restored")
+			continue
+		}
+		if _, err := root.Lstat(file.Path); !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		state, err := s.restoreFile(ctx, root, file)
+		if errors.Is(err, fs.ErrExist) {
+			// The agent wrote the file while it was downloaded.
+			continue
+		}
+		if err != nil {
+			return restored, fmt.Errorf("restore %s: %w", file.Path, err)
+		}
+		s.previous[file.Path] = state
+		s.synced[file.Path] = state
+		restored++
+	}
+	s.restorePending = false
+	return restored, nil
+}
+
+// retryRestore runs a restore that has not finished, after any backoff.
+func (s *artifactSyncer) retryRestore(ctx context.Context) {
+	if time.Now().Before(s.restoreRetryAt) {
+		return
+	}
+	restored, err := s.restore(ctx)
+	if err != nil {
+		s.restoreRetryAt = time.Now().Add(artifactSyncInterval)
+		if errors.Is(err, errStaleWorker) {
+			s.restorePending = false
+		}
+		s.logger.Warn("artifacts: restore", "error", err)
+		return
+	}
+	if restored > 0 {
+		s.logger.Info("artifacts: restored", "files", restored)
+	}
+}
+
+// restoreFile downloads one committed file into the directory. The file is
+// written under artifactRestoreDir, checked against its size and SHA-256, and
+// then linked into place, which fails with fs.ErrExist rather than replace a
+// file created meanwhile.
+func (s *artifactSyncer) restoreFile(ctx context.Context, root *os.Root, file worker.ArtifactManifestFile) (artifactState, error) {
+	ctx, cancel := context.WithTimeout(ctx, artifactUploadTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		s.client.baseURL+artifactBlobPath+escapeArtifactPath(file.Path), nil)
+	if err != nil {
+		return artifactState{}, err
+	}
+	s.client.authorize(request)
+	response, err := s.upload.Do(request)
+	if err != nil {
+		return artifactState{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return artifactState{}, artifactResponseError("download", response.StatusCode, snippet)
+	}
+	if err := root.MkdirAll(artifactRestoreDir, 0o700); err != nil {
+		return artifactState{}, err
+	}
+	temp := artifactRestoreDir + "/" + file.SHA256
+	out, err := root.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return artifactState{}, err
+	}
+	defer func() { _ = root.Remove(temp) }()
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(out, hash), io.LimitReader(response.Body, file.Size+1))
+	if err := out.Close(); copyErr == nil {
+		copyErr = err
+	}
+	if copyErr != nil {
+		return artifactState{}, copyErr
+	}
+	if written != file.Size || hex.EncodeToString(hash.Sum(nil)) != file.SHA256 {
+		return artifactState{}, errors.New("downloaded file does not match its size and SHA-256")
+	}
+	if dir := path.Dir(file.Path); dir != "." {
+		if err := root.MkdirAll(dir, 0o700); err != nil {
+			return artifactState{}, err
+		}
+	}
+	if err := root.Link(temp, file.Path); err != nil {
+		return artifactState{}, err
+	}
+	info, err := root.Lstat(file.Path)
+	if err != nil {
+		return artifactState{}, err
+	}
+	return artifactState{size: info.Size(), mtime: info.ModTime(), sha: file.SHA256}, nil
 }
 
 // finalFlush syncs once more before the worker exits, waiting one settle delay
@@ -622,18 +762,24 @@ func escapeArtifactPath(path string) string {
 	return strings.Join(segments, "/")
 }
 
-// artifactJSON posts body to a worker artifact route and decodes the response
-// into out when out is not nil. It returns the response status with any error.
+// artifactJSON posts body to a worker artifact route, or gets the route when
+// body is nil, and decodes the response into out when out is not nil. It returns the response status with any error.
 func (c *client) artifactJSON(ctx context.Context, path string, body any, out any) (int, error) {
-	encoded, err := json.Marshal(body)
+	method, payload := http.MethodGet, io.Reader(http.NoBody)
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return 0, err
+		}
+		method, payload = http.MethodPost, bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
 	if err != nil {
 		return 0, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(encoded))
-	if err != nil {
-		return 0, err
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
 	}
-	request.Header.Set("Content-Type", "application/json")
 	c.authorize(request)
 	response, err := c.http.Do(request)
 	if err != nil {

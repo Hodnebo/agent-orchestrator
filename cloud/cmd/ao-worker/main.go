@@ -305,6 +305,14 @@ func run(logger *slog.Logger) error {
 			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
 		} else {
 			artifacts = newArtifactSyncer(client, artifactsDir, logger)
+			// A new sandbox starts with the files the session already has.
+			restoreCtx, cancelRestore := context.WithTimeout(ctx, artifactRestoreTimeout)
+			if restored, err := artifacts.restore(restoreCtx); err != nil {
+				logger.Warn("artifacts: restore; retrying in the background", "error", err)
+			} else if restored > 0 {
+				logger.Info("artifacts: restored", "files", restored)
+			}
+			cancelRestore()
 		}
 	}
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
