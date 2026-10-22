@@ -94,7 +94,7 @@ type Image struct {
 // CallResult is a tool's output with every image replaced by a file path.
 type CallResult struct {
 	Tool   string  `json:"tool"`
-	Result any     `json:"result" description:"The tool's JSON output. Inline images are replaced by *_file_path fields."`
+	Result any     `json:"result" description:"The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file."`
 	Images []Image `json:"images" description:"Screenshots this call saved. Open them with an image viewer."`
 }
 
@@ -144,6 +144,7 @@ type Service struct {
 	grantError string
 	// sessionless are tools the driver refused a `session` argument for.
 	sessionless map[string]bool
+	snapshots   snapshotWindows
 }
 
 // New returns a Service that saves screenshots under dataDir/computer-use.
@@ -156,6 +157,7 @@ func New(driver ports.ComputerUseDriver, dataDir string) *Service {
 		background:  background,
 		stop:        stop,
 		sessionless: map[string]bool{},
+		snapshots:   snapshotWindows{windows: map[string]window{}},
 	}
 }
 
@@ -354,6 +356,11 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if injected {
 		arguments["session"] = driverSession(request.SessionID)
 	}
+	if tool == "run_steps" {
+		if observed := s.prepareObserve(saved, arguments); observed != "" {
+			screenshot = observed
+		}
+	}
 
 	stdout, stderr, runErr := s.callWithDaemon(ctx, binary, tool, arguments)
 	if runErr != nil && injected && rejectsSession(stdout) {
@@ -387,6 +394,10 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	result = saved.externalize(result)
 	if screenshot != "" {
 		saved.adopt(screenshot)
+	}
+	s.rememberReads(arguments["session"], result)
+	if observedTools[tool] {
+		result = s.observeAfter(ctx, binary, saved, arguments, result)
 	}
 	s.images.prune(scope)
 	return CallResult{Tool: tool, Result: result, Images: saved.images}, nil

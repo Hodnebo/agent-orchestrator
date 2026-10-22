@@ -578,3 +578,145 @@ func TestCallExplainsDesktopScopeRefusal(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// observingDriver answers get_window_state with a snapshot of window 9 of pid
+// 7, writing the requested screenshot file, and records every call.
+type observingDriver struct {
+	sent    []map[string]any
+	tools   []string
+	readErr bool
+}
+
+func (o *observingDriver) driver() *fakeDriver {
+	driver := &fakeDriver{daemonUp: true}
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		var arguments map[string]any
+		_ = json.Unmarshal([]byte(args[2]), &arguments)
+		o.tools = append(o.tools, args[1])
+		o.sent = append(o.sent, arguments)
+		if args[1] != "get_window_state" {
+			return []byte(`{"effect":"unverifiable"}`), nil, nil
+		}
+		if o.readErr {
+			return nil, []byte("window_id_not_found"), errors.New("exit status 1")
+		}
+		if path, ok := arguments["screenshot_out_file"].(string); ok {
+			_ = os.WriteFile(path, pngHeader, 0o600)
+		}
+		return []byte(`{"snapshot_id":"s1","pid":7,"window_id":9,"tree_diff":"since s0: 1 changed"}`), nil, nil
+	}
+	return driver
+}
+
+func observation(t *testing.T, result CallResult) map[string]any {
+	t.Helper()
+	output, _ := result.Result.(map[string]any)
+	observed, ok := output["observation"].(map[string]any)
+	if !ok {
+		t.Fatalf("result has no observation: %#v", result.Result)
+	}
+	return observed
+}
+
+func TestActionsAreFollowedByAWindowRead(t *testing.T) {
+	recorder := &observingDriver{}
+	s := newTestService(t, recorder.driver(), "darwin")
+	result, err := s.Call(context.Background(), CallRequest{Tool: "click", Arguments: map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5}, SessionID: "worker-1"})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if fmt.Sprint(recorder.tools) != "[click get_window_state]" {
+		t.Fatalf("driver tools = %v", recorder.tools)
+	}
+	read := recorder.sent[1]
+	if read["pid"] != float64(7) || read["window_id"] != float64(9) || read["since"] != "latest" || read["session"] != "ao-worker-1" || read["screenshot_out_file"] == nil {
+		t.Fatalf("read arguments = %v", read)
+	}
+	if observed := observation(t, result); observed["ok"] != true {
+		t.Fatalf("observation = %v", observed)
+	}
+	if len(result.Images) != 1 || result.Images[0].Path != read["screenshot_out_file"] {
+		t.Fatalf("images = %v, want the read's screenshot", result.Images)
+	}
+	if output := result.Result.(map[string]any); output["effect"] != "unverifiable" {
+		t.Fatalf("action result changed: %v", output)
+	}
+}
+
+// A token names a snapshot, not a window; the window comes from the read that
+// returned the snapshot.
+func TestTokenActionsReadTheSnapshotWindow(t *testing.T) {
+	recorder := &observingDriver{}
+	s := newTestService(t, recorder.driver(), "darwin")
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "type_text", Arguments: map[string]any{"element_token": "s1:4", "text": "hi"}, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("type_text: %v", err)
+	}
+	if read := recorder.sent[2]; recorder.tools[2] != "get_window_state" || read["pid"] != float64(7) || read["window_id"] != float64(9) {
+		t.Fatalf("read after token action = %s %v", recorder.tools[2], read)
+	}
+
+	// Snapshots belong to a driver session: another AO session's token is unknown.
+	result, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: map[string]any{"element_token": "s1:4"}, SessionID: "worker-2"})
+	if err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if observed := observation(t, result); observed["ok"] != false || observed["skipped"] == nil {
+		t.Fatalf("observation = %v, want skipped", observed)
+	}
+	if recorder.tools[len(recorder.tools)-1] != "click" {
+		t.Fatalf("driver tools = %v, want no read of an unknown window", recorder.tools)
+	}
+}
+
+// The action already ran, so a failed read is reported, not returned.
+func TestFailedReadKeepsTheActionResult(t *testing.T) {
+	recorder := &observingDriver{readErr: true}
+	s := newTestService(t, recorder.driver(), "darwin")
+	result, err := s.Call(context.Background(), CallRequest{Tool: "press_key", Arguments: map[string]any{"pid": 7, "window_id": 9, "key": "return"}})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if observed := observation(t, result); observed["ok"] != false || !strings.Contains(fmt.Sprint(observed["error"]), "window_id_not_found") {
+		t.Fatalf("observation = %v", observed)
+	}
+}
+
+func TestRunStepsObservesWithAScreenshot(t *testing.T) {
+	recorder := &observingDriver{}
+	s := newTestService(t, recorder.driver(), "darwin")
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "worker-1"}); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	tokenStep := []any{map[string]any{"tool": "click", "args": map[string]any{"element_token": "s1:5"}}}
+	for name, tc := range map[string]struct {
+		arguments map[string]any
+		session   string
+		want      func(observe map[string]any, present bool) bool
+	}{
+		"token batch gets its window": {map[string]any{"steps": tokenStep}, "worker-1", func(o map[string]any, ok bool) bool {
+			return ok && o["pid"] == float64(7) && o["window_id"] == float64(9) && o["include_screenshot"] == true && o["screenshot_out_file"] != nil
+		}},
+		"unknown window gets no observe": {map[string]any{"steps": tokenStep}, "worker-2", func(_ map[string]any, ok bool) bool { return !ok }},
+		"named app is left to the driver": {map[string]any{"steps": []any{map[string]any{"click": map[string]any{"app": "Calculator", "role": "button", "name": "Clear"}}}}, "worker-1", func(o map[string]any, ok bool) bool {
+			return ok && o["pid"] == nil && o["include_screenshot"] == true
+		}},
+		"caller opt-out is kept": {map[string]any{"pid": 7, "window_id": 9, "steps": tokenStep, "observe": map[string]any{"include_screenshot": false}}, "worker-1", func(o map[string]any, ok bool) bool {
+			return ok && o["include_screenshot"] == false && o["screenshot_out_file"] == nil
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: tc.arguments, SessionID: tc.session}); err != nil {
+				t.Fatalf("Call() error = %v", err)
+			}
+			observe, present := recorder.sent[len(recorder.sent)-1]["observe"].(map[string]any)
+			if !tc.want(observe, present) {
+				t.Fatalf("observe = %v (present %v)", observe, present)
+			}
+		})
+	}
+}

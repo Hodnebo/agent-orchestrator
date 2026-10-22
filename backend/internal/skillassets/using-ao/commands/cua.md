@@ -43,16 +43,23 @@ guess argument names.
    mouse. Use `x`/`y` pixels only for canvases and other surfaces missing from
    the tree; they are in the screenshot's pixels, so pass that window's `pid`
    and `window_id` with them.
-4. Snapshot again after every action before acting on another element: a newer
-   read of the window makes earlier tokens stale (`stale_element_token`), and
-   live apps reorder their lists. A result that says the effect is
-   `unverifiable` means the driver could not confirm it, so check the new
-   snapshot before the next step.
+4. Check the result before the next step. AO reads the window after every
+   action and adds it to the result as `observation`: `observation.state` has
+   `tree_diff` (the rows that changed), a new `snapshot_id`, and a screenshot
+   file of the window after the action. Open the screenshot; the driver often
+   reports an action's effect as `unverifiable`. The read makes earlier tokens
+   stale (`stale_element_token`), and live apps reorder their lists, so act
+   next with the new `snapshot_id`, as `tree_diff` says. If `observation`
+   says `skipped`, AO could not tell the window: snapshot it yourself.
+
+`run_steps` runs several actions in one call; AO has its `observe` read the
+window after the last step with a screenshot. Pass
+`"observe":{"include_screenshot":false}` to get the tree diff only.
 
 Type into a field by its token: `type_text` with the field's `element_token`.
 Never type into "whatever has focus": a click that missed, or a shortcut such
 as Cmd+F that did not move focus, leaves the cursor in another field. In
-messaging apps, confirm in a fresh snapshot that you are in the right field and
+messaging apps, confirm in the screenshot that you are in the right field and
 chat before typing, and again before pressing Return to send.
 
 `ao cua` refuses actions that would land wherever the user is working:

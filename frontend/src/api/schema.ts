@@ -5239,7 +5239,7 @@ export interface components {
         ComputerUseCallResult: {
             /** @description Screenshots this call saved. Open them with an image viewer. */
             images: components["schemas"]["ComputerUseImage"][];
-            /** @description The tool's JSON output. Inline images are replaced by *_file_path fields. */
+            /** @description The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file. */
             result: unknown;
             tool: string;
         };

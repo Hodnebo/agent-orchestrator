@@ -15220,8 +15220,9 @@ components:
             $ref: '#/components/schemas/ComputerUseImage'
           type: array
         result:
-          description: The tool's JSON output. Inline images are replaced by *_file_path
-            fields.
+          description: 'The tool''s JSON output. Inline images are replaced by *_file_path
+            fields. After an action, observation holds AO''s read of the window: the
+            tree diff and a screenshot file.'
         tool:
           type: string
       required:
