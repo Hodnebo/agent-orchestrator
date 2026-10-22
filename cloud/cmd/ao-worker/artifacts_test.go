@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +37,7 @@ type fakeArtifactPlane struct {
 	mu          sync.Mutex
 	rows        map[string]fakeArtifactRow
 	versions    map[string]string
+	bodies      map[string][]byte
 	manifests   int
 	uploads     int
 	commits     int
@@ -46,13 +49,15 @@ type fakeArtifactPlane struct {
 	// rejectUploads answers that many uploads with 422.
 	rejectUploads int
 	disabled      bool
-	deleted       []string
-	nextVersion   int
+	// corruptDownloads serves downloads with a changed body.
+	corruptDownloads bool
+	deleted          []string
+	nextVersion      int
 }
 
 func newFakeArtifactPlane(t *testing.T) (*fakeArtifactPlane, *client) {
 	t.Helper()
-	plane := &fakeArtifactPlane{rows: map[string]fakeArtifactRow{}, versions: map[string]string{}}
+	plane := &fakeArtifactPlane{rows: map[string]fakeArtifactRow{}, versions: map[string]string{}, bodies: map[string][]byte{}}
 	server := httptest.NewServer(plane)
 	t.Cleanup(server.Close)
 	return plane, &client{baseURL: server.URL, http: server.Client(), token: "worker-token"}
@@ -82,6 +87,25 @@ func (p *fakeArtifactPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(worker.ArtifactManifestResponse{Changed: changed})
+	case r.Method == http.MethodGet && r.URL.Path == artifactListPath:
+		files := []worker.ArtifactManifestFile{}
+		for path, row := range p.rows {
+			files = append(files, worker.ArtifactManifestFile{Path: path, Size: row.size, SHA256: row.sha})
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+		_ = json.NewEncoder(w).Encode(worker.ArtifactListResponse{Files: files})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, artifactBlobPath):
+		path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.EscapedPath(), artifactBlobPath))
+		row, ok := p.rows[path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		body := p.bodies[row.versionID]
+		if p.corruptDownloads {
+			body = append([]byte("x"), body[1:]...)
+		}
+		_, _ = w.Write(body)
 	case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, artifactBlobPath):
 		path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.EscapedPath(), artifactBlobPath))
 		body, _ := io.ReadAll(r.Body)
@@ -99,6 +123,7 @@ func (p *fakeArtifactPlane) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.nextVersion++
 		version := "v" + string(rune('0'+p.nextVersion))
 		p.versions[version] = hex.EncodeToString(sum[:])
+		p.bodies[version] = body
 		_ = json.NewEncoder(w).Encode(worker.ArtifactBlobResponse{Path: path, VersionID: version})
 	case r.Method == http.MethodPost && r.URL.Path == artifactCommitPath:
 		var input worker.ArtifactCommitRequest
@@ -596,5 +621,112 @@ func TestArtifactSyncFinalFlushIgnoresTheBackoff(t *testing.T) {
 	s.finalFlush()
 	if got := plane.paths(); !slices.Equal(got, []string{"last.md", "report.html"}) {
 		t.Fatalf("final flush during a backoff committed %v", got)
+	}
+}
+
+func TestArtifactRestorePutsBackCommittedFiles(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "report.html", "<h1>report</h1>")
+	writeArtifact(t, first, "docs/notes.md", "# notes")
+	syncSettled(testSyncer(c, first))
+	manifests, uploads, commits := plane.counts()
+
+	// A new sandbox starts with an empty directory.
+	dir := t.TempDir()
+	s := testSyncer(c, dir)
+	restored, err := s.restore(context.Background())
+	if err != nil || restored != 2 {
+		t.Fatalf("restore = %d, %v", restored, err)
+	}
+	for path, want := range map[string]string{"report.html": "<h1>report</h1>", "docs/notes.md": "# notes"} {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(path)))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v", path, got, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, artifactRestoreDir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("restore left its temporary directory: %v", err)
+	}
+
+	// Restored files count as synced: no request goes out for them.
+	syncSettled(s)
+	if m, u, c := plane.counts(); m != manifests || u != uploads || c != commits {
+		t.Fatalf("restored files were synced again: manifests %d->%d uploads %d->%d commits %d->%d", manifests, m, uploads, u, commits, c)
+	}
+	// Deleting a restored file deletes the committed one.
+	if err := os.Remove(filepath.Join(dir, "docs", "notes.md")); err != nil {
+		t.Fatal(err)
+	}
+	s.sync(context.Background())
+	if got := plane.paths(); !slices.Equal(got, []string{"report.html"}) {
+		t.Fatalf("after deleting a restored file committed = %v", got)
+	}
+}
+
+func TestArtifactRestoreKeepsLocalFiles(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "report.html", "<h1>committed</h1>")
+	writeArtifact(t, first, "notes.md", "# notes")
+	syncSettled(testSyncer(c, first))
+
+	dir := t.TempDir()
+	writeArtifact(t, dir, "report.html", "<h1>local edit</h1>")
+	s := testSyncer(c, dir)
+	if restored, err := s.restore(context.Background()); err != nil || restored != 1 {
+		t.Fatalf("restore = %d, %v", restored, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "report.html")); string(got) != "<h1>local edit</h1>" {
+		t.Fatalf("restore replaced a local file: %q", got)
+	}
+	syncSettled(s)
+	plane.mu.Lock()
+	committed := plane.rows["report.html"].sha
+	plane.mu.Unlock()
+	if want := sha256.Sum256([]byte("<h1>local edit</h1>")); committed != hex.EncodeToString(want[:]) {
+		t.Fatal("the local file was not synced over the committed one")
+	}
+}
+
+func TestArtifactRestoreRetriesAfterABadDownload(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	first := t.TempDir()
+	writeArtifact(t, first, "report.html", "<h1>report</h1>")
+	syncSettled(testSyncer(c, first))
+
+	dir := t.TempDir()
+	s := testSyncer(c, dir)
+	plane.mu.Lock()
+	plane.corruptDownloads = true
+	plane.mu.Unlock()
+	if _, err := s.restore(context.Background()); err == nil {
+		t.Fatal("a download that does not match its SHA-256 was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "report.html")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a bad download was written: %v", err)
+	}
+	if !s.restorePending {
+		t.Fatal("a failed restore is not retried")
+	}
+
+	plane.mu.Lock()
+	plane.corruptDownloads = false
+	plane.mu.Unlock()
+	s.retryRestore(context.Background())
+	if s.restorePending {
+		t.Fatal("the retried restore did not finish")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "report.html")); string(got) != "<h1>report</h1>" {
+		t.Fatalf("retried restore = %q", got)
+	}
+}
+
+func TestArtifactRestoreWithoutArtifacts(t *testing.T) {
+	plane, c := newFakeArtifactPlane(t)
+	plane.disabled = true
+	s := testSyncer(c, t.TempDir())
+	if restored, err := s.restore(context.Background()); err != nil || restored != 0 || s.restorePending {
+		t.Fatalf("restore = %d, %v, pending %t", restored, err, s.restorePending)
 	}
 }

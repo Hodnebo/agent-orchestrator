@@ -41,6 +41,12 @@ type ArtifactManifestResponse struct {
 	Changed []string `json:"changed"`
 }
 
+// ArtifactListResponse lists the committed artifact files of the worker's
+// session.
+type ArtifactListResponse struct {
+	Files []ArtifactManifestFile `json:"files"`
+}
+
 // ArtifactBlobResponse is the stored version of one uploaded file.
 type ArtifactBlobResponse struct {
 	Path      string `json:"path"`

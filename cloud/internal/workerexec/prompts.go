@@ -166,6 +166,7 @@ func artifactsPrompt(dir string) string {
 		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
 		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in this conversation; do not create files solely because a response is a summary, plan, analysis, or report. " +
 		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Prefer one consolidated deliverable over many diagnostic files. " +
+		"The directory starts with the files this session already saved there, so after the session is restored, update them in place rather than starting over. " +
 		"Files in this directory are copied to AO Cloud and shown in the session's Artifacts, up to " + strconv.Itoa(domain.MaxArtifactFileBytes>>20) + " MiB per file and " + strconv.Itoa(domain.MaxSessionArtifactFiles) + " files. " +
 		"Saving a file here does not authorize external publishing; follow the user's publishing scope."
 }
