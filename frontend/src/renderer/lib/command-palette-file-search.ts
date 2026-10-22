@@ -1,18 +1,39 @@
+import type { components } from "../../api/schema";
 import type { CloudCpClient } from "./cloud-cp";
 import { cloudWorkspaceReviewSearchQueryOptions } from "../hooks/useCloudWorkspaceReview";
-import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { apiErrorMessage } from "./api-client";
+import { clientForSessionHost } from "./host-clients";
 import type { WorkspaceFileSearchItem, WorkspaceFileSearchTarget } from "./command-palette";
 
 export const COMMAND_PALETTE_FILE_SEARCH_LIMIT = 20;
 
+type SearchResponse = components["schemas"]["SearchResponse"];
+export type PaletteSearchFileName = components["schemas"]["SearchFileNameHit"];
+export type PaletteSearchContentHit = components["schemas"]["SearchFileContentHit"];
+export type PaletteSearchMessageHit = components["schemas"]["SearchMessageHit"];
+export type PaletteSearchIndexStatus = components["schemas"]["SearchIndexStatus"];
+
+/**
+ * What the palette shows from a search: file names (scored by the daemon,
+ * or name-matched in the palette for Cloud sessions), passages inside files,
+ * chat messages, and whether each index is still being built.
+ */
 export type CommandPaletteFileSearchResponse = {
 	results: WorkspaceFileSearchItem[];
 	truncated: boolean;
+	fileNames?: PaletteSearchFileName[];
+	fileContent?: PaletteSearchContentHit[];
+	messages?: PaletteSearchMessageHit[];
+	files?: PaletteSearchIndexStatus;
+	chats?: PaletteSearchIndexStatus;
 };
 
 type CommandPaletteFileSearchArgs = {
-	target: WorkspaceFileSearchTarget;
+	/** The session whose files are searched; absent searches chats only. */
+	target?: WorkspaceFileSearchTarget;
 	query: string;
+	/** Include chat messages (the root palette); the file picker leaves them out. */
+	includeMessages: boolean;
 	errorMessage: string;
 	cloud: {
 		client: CloudCpClient;
@@ -27,7 +48,7 @@ type CommandPaletteFileSearchQueryOptions = {
 	retry?: (failureCount: number, error: Error) => boolean;
 };
 
-function normalizeSearchResponse(response: {
+function normalizeCloudResponse(response: {
 	results: Array<{ path: string; status?: string; binary?: boolean }>;
 	truncated: boolean;
 }): CommandPaletteFileSearchResponse {
@@ -44,15 +65,18 @@ function normalizeSearchResponse(response: {
 export function commandPaletteFileSearchAvailable(
 	target: WorkspaceFileSearchTarget | undefined,
 	cloudReady: boolean,
+	includeMessages = false,
 ): boolean {
-	return Boolean(target && (!target.cloudOrgId || cloudReady));
+	if (!target) return includeMessages;
+	return !target.cloudOrgId || cloudReady;
 }
 
 export function commandPaletteFileSearchQueryOptions(
 	args: CommandPaletteFileSearchArgs,
 ): CommandPaletteFileSearchQueryOptions {
 	const { target } = args;
-	if (target.cloudOrgId) {
+	if (target?.cloudOrgId) {
+		// Cloud sandboxes have no daemon search index: names only, as before.
 		const options = cloudWorkspaceReviewSearchQueryOptions({
 			client: args.cloud.client,
 			baseUrl: args.cloud.baseUrl,
@@ -63,20 +87,39 @@ export function commandPaletteFileSearchQueryOptions(
 		return {
 			...options,
 			queryFn: async (context: { signal?: AbortSignal } = {}) =>
-				normalizeSearchResponse(await options.queryFn(context)),
+				normalizeCloudResponse(await options.queryFn(context)),
 		};
 	}
-
-	const options = sessionWorkspaceSearchQueryOptions(
-		target.sessionId,
-		args.query,
-		args.errorMessage,
-		target.hostId,
-		COMMAND_PALETTE_FILE_SEARCH_LIMIT,
-	);
+	const kinds = target ? (args.includeMessages ? "fileNames,fileContent,messages" : "fileNames,fileContent") : "messages";
 	return {
-		...options,
-		queryFn: async (context: { signal?: AbortSignal } = {}) =>
-			normalizeSearchResponse(await options.queryFn(context)),
+		queryKey: ["palette-search", target?.hostId ?? "", target?.sessionId ?? "", kinds, args.query] as const,
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}) => {
+			const { data, error } = await clientForSessionHost(target?.hostId).GET("/api/v1/search", {
+				params: {
+					query: {
+						q: args.query,
+						...(target ? { sessionId: target.sessionId } : {}),
+						kinds,
+						limit: COMMAND_PALETTE_FILE_SEARCH_LIMIT,
+					},
+				},
+				signal,
+			});
+			if (error) throw new Error(apiErrorMessage(error, args.errorMessage));
+			if (!data) throw new Error(args.errorMessage);
+			return fromSearchResponse(data);
+		},
+	};
+}
+
+function fromSearchResponse(data: SearchResponse): CommandPaletteFileSearchResponse {
+	return {
+		results: data.fileNames.map((hit) => ({ path: hit.path })),
+		truncated: false,
+		fileNames: data.fileNames,
+		fileContent: data.fileContent,
+		messages: data.messages,
+		files: data.files,
+		chats: data.chats,
 	};
 }

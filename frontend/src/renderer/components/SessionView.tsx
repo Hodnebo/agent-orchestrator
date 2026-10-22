@@ -1608,7 +1608,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		if (!workspaceFileOpenRequest || !session) return;
 		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
-		const { nonce, path, source } = workspaceFileOpenRequest;
+		const { line, nonce, path, source } = workspaceFileOpenRequest;
 		if (source === "artifact") {
 			// Same routing as the Summary panel's artifact rows: HTML opens in
 			// the Browser panel, everything else in the Artifacts view.
@@ -1619,7 +1619,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			prepareFilesInspector();
 			openCenterFile(path, { mode: "file" });
 		} else {
-			handleOpenFile(path);
+			handleOpenFile(path, line);
 		}
 		clearWorkspaceFileOpenRequest(nonce);
 	}, [

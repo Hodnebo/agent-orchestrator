@@ -113,6 +113,18 @@ export type WorkspaceFileOpenRequest = {
 	path: string;
 	/** "artifact" resolves `path` against the session's artifact files instead of its workspace. */
 	source?: "artifact";
+	/** 1-based line to reveal, e.g. a palette content hit. */
+	line?: number;
+	nonce: number;
+};
+
+/** Asks a session's chat to scroll to one message, e.g. a palette chat hit. */
+export type ChatMessageFocusRequest = {
+	sessionId: string;
+	hostId?: string;
+	messageId: string;
+	/** The matched text, used to mark the passage inside the message. */
+	text: string;
 	nonce: number;
 };
 
@@ -162,6 +174,7 @@ export type UiState = {
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
+	chatMessageFocusRequest: ChatMessageFocusRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
@@ -235,8 +248,10 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
+	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, hostId?: string) => void;
+	clearChatMessageFocusRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
 	requestNewShellTerminal: () => void;
@@ -360,6 +375,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToastSequence: 0,
 	newTaskRequest: null,
 	workspaceFileOpenRequest: null,
+	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
 	folderDropRequest: null,
 	newShellTerminalNonce: 0,
@@ -662,19 +678,34 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestWorkspaceFileOpen: (sessionId, path, hostId, source) =>
+	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
 				sessionId,
 				path,
 				...(hostId ? { hostId } : {}),
 				...(source ? { source } : {}),
+				...(line ? { line } : {}),
 				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
 			},
 		})),
 	clearWorkspaceFileOpenRequest: (nonce) =>
 		set((state) => state.workspaceFileOpenRequest?.nonce === nonce
 			? { workspaceFileOpenRequest: null }
+			: state),
+	requestChatMessageFocus: (sessionId, messageId, text, hostId) =>
+		set((state) => ({
+			chatMessageFocusRequest: {
+				sessionId,
+				messageId,
+				text,
+				...(hostId ? { hostId } : {}),
+				nonce: (state.chatMessageFocusRequest?.nonce ?? 0) + 1,
+			},
+		})),
+	clearChatMessageFocusRequest: (nonce) =>
+		set((state) => state.chatMessageFocusRequest?.nonce === nonce
+			? { chatMessageFocusRequest: null }
 			: state),
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestCreateProjectFromPath: (path) =>
