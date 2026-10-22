@@ -24,7 +24,8 @@ const sessionArtifactColumns = `path, name, kind, content_type, size, sha256,
 var ErrArtifactVersionUnknown = errors.New("artifact version is not an open upload")
 
 // ArtifactUploadAllowed reports whether the session can take one more
-// uncommitted upload of size bytes. RecordArtifactUpload enforces the same
+// upload of size bytes while its queued versions (uncommitted uploads and
+// replaced versions not yet swept) stay within their limits. RecordArtifactUpload enforces the same
 // limit exactly; this check only avoids writing an object that would be
 // refused.
 func (s *Store) ArtifactUploadAllowed(ctx context.Context, orgID, sessionID string, size int64) (bool, error) {
@@ -70,13 +71,17 @@ func (s *Store) RecordArtifactUpload(ctx context.Context, orgID, sessionID, s3Ke
 	})
 }
 
+// pendingArtifactUploadsTx counts every version of the session still waiting
+// in the bucket: open uploads and the versions commits replaced or deleted, so
+// committing in a loop cannot pile up versions faster than the sweeper drains
+// them.
 func pendingArtifactUploadsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (int64, int64, error) {
 	var count, bytes int64
 	err := tx.QueryRow(
 		ctx,
 		`SELECT count(*), COALESCE(sum(size), 0)::bigint
 		FROM ao_artifact_object_versions
-		WHERE org_id = $1 AND session_id = $2 AND reason = 'upload'`,
+		WHERE org_id = $1 AND session_id = $2`,
 		orgID, sessionID,
 	).Scan(&count, &bytes)
 	if err != nil {
@@ -479,21 +484,21 @@ func (s *Store) SessionArtifactsBySessions(
 	return bySession, nil
 }
 
-// SessionArtifactCounts returns the committed artifact count of each listed
-// session in one organization that has any.
+// SessionArtifactCounts returns the committed artifact count and newest
+// commit time of each listed session in one organization that has any.
 func (s *Store) SessionArtifactCounts(
 	ctx context.Context,
 	orgID string,
 	sessionIDs []string,
-) (map[string]int, error) {
-	counts := make(map[string]int, len(sessionIDs))
+) (map[string]domain.SessionArtifactSummary, error) {
+	counts := make(map[string]domain.SessionArtifactSummary, len(sessionIDs))
 	if len(sessionIDs) == 0 {
 		return counts, nil
 	}
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
-			`SELECT session_id::text, count(*)
+			`SELECT session_id::text, count(*), max(updated_at)
 			FROM ao_session_artifacts
 			WHERE org_id = $1 AND session_id = ANY($2::uuid[])
 			GROUP BY session_id`,
@@ -505,11 +510,11 @@ func (s *Store) SessionArtifactCounts(
 		defer rows.Close()
 		for rows.Next() {
 			var sessionID string
-			var count int
-			if err := rows.Scan(&sessionID, &count); err != nil {
+			var summary domain.SessionArtifactSummary
+			if err := rows.Scan(&sessionID, &summary.Count, &summary.UpdatedAt); err != nil {
 				return err
 			}
-			counts[sessionID] = count
+			counts[sessionID] = summary
 		}
 		return rows.Err()
 	})

@@ -3,6 +3,10 @@
 -- Every statement here can run again on a database that already applied it,
 -- so the migration can be renumbered after reaching an environment.
 
+-- Fail fast instead of queueing behind a long transaction on ao_sessions or
+-- ao_pull_requests; goose runs the migration in one transaction.
+SET LOCAL lock_timeout = '5s';
+
 -- requested_output is the deliverable a session was created for ('' for the
 -- ordinary task flow, 'artifact' for a file deliverable). output_type is what
 -- the session currently owns: no output, a pull request, artifact files, or

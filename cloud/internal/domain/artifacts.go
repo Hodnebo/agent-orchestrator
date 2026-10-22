@@ -18,7 +18,9 @@ const (
 	MaxSessionArtifactBytes = 500 << 20
 )
 
-// Limits on a session's uploaded but uncommitted artifact versions.
+// Limits on a session's artifact versions waiting in the bucket: uploads not
+// yet committed and versions a commit replaced or deleted, until the sweeper
+// removes them.
 const (
 	MaxPendingArtifactUploads = 2 * MaxSessionArtifactFiles
 	MaxPendingArtifactBytes   = 2 * MaxSessionArtifactBytes
@@ -77,6 +79,13 @@ type ArtifactManifestEntry struct {
 	Path   string
 	Size   int64
 	SHA256 string
+}
+
+// SessionArtifactSummary is how many committed artifact files a session has
+// and when the newest of them was committed.
+type SessionArtifactSummary struct {
+	Count     int
+	UpdatedAt time.Time
 }
 
 // ArtifactObjectVersion is one object version in the artifact bucket.

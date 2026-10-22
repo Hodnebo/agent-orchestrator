@@ -34,7 +34,7 @@ type sessionArtifactStore interface {
 	ListSessionArtifacts(ctx context.Context, principal domain.Principal, orgID, sessionID string) ([]domain.SessionArtifact, error)
 	RequireSessionArtifactAccess(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	SessionArtifactsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.SessionArtifact, error)
-	SessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]int, error)
+	SessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]domain.SessionArtifactSummary, error)
 	SessionArtifact(ctx context.Context, userID, orgID, sessionID, path string) (domain.SessionArtifact, error)
 }
 
@@ -488,6 +488,12 @@ func (s *Server) createArtifactAccess(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveArtifactFile(w http.ResponseWriter, r *http.Request) {
 	claims, ok := s.verifyArtifactAccess(chi.URLParam(r, "token"), time.Now())
 	if !ok {
+		// A page opening another file in its frame after its link expired
+		// gets a readable page, not the JSON error.
+		if dest := r.Header.Get("Sec-Fetch-Dest"); dest == "iframe" || dest == "document" {
+			writeExpiredArtifactPage(w)
+			return
+		}
 		writeError(w, r, http.StatusUnauthorized, "artifact_access_invalid", "The artifact link is invalid or has expired.")
 		return
 	}
@@ -550,6 +556,22 @@ func (s *Server) artifactObjectReadable(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	return true
+}
+
+// expiredArtifactPage is shown in a frame that navigated with an expired or
+// invalid artifact link.
+const expiredArtifactPage = `<!doctype html><meta charset="utf-8"><title>Link expired</title>` +
+	`<body style="font:14px system-ui,sans-serif;color:#555;margin:24px">` +
+	`This artifact link has expired. Open the file again from the session's Artifacts tab.</body>`
+
+func writeExpiredArtifactPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusUnauthorized)
+	_, _ = io.WriteString(w, expiredArtifactPage)
 }
 
 // setArtifactFileHeaders sets the headers of a served artifact file.
@@ -622,9 +644,9 @@ func (s *Server) sessionArtifactFiles(ctx context.Context, orgID string, session
 	return s.artifactRows.SessionArtifactsBySessions(ctx, orgID, sessionIDs)
 }
 
-// sessionArtifactCounts returns the committed artifact count of each session,
-// or nil when artifacts are off.
-func (s *Server) sessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]int, error) {
+// sessionArtifactCounts returns the committed artifact count and newest commit
+// time of each session, or nil when artifacts are off.
+func (s *Server) sessionArtifactCounts(ctx context.Context, orgID string, sessionIDs []string) (map[string]domain.SessionArtifactSummary, error) {
 	if !s.artifactsEnabled() {
 		return nil, nil
 	}
