@@ -4896,20 +4896,19 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	}
 }
 
-func TestACPDriverFailsWhenRequiredFastLaunchOptionIsRejected(t *testing.T) {
-	catalog := []acpsdk.SessionConfigOption{selectConfigOption("fast", "Fast mode", "", "true", "true", "false")}
+func TestACPDriverFailsStartWhenRequiredLaunchOptionIsRejected(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{selectConfigOption("required_option", "Required option", "", "accepted", "accepted", "rejected")}
 	agent := &fakeAgent{
 		newConfig: catalog,
-		configErr: acpsdk.NewInvalidParams(map[string]any{"error": "fast=false is unsupported"}),
+		configErr: acpsdk.NewInvalidParams(map[string]any{"error": "required option is unsupported"}),
 	}
-	fast := false
 	driver := New(Config{
-		Harness:      domain.HarnessCursor,
+		Harness:      domain.HarnessFake,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Probe:        func(context.Context) error { return nil },
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
 		LaunchSessionOptions: func(LaunchConfig) []SessionOption {
-			return []SessionOption{{ID: "fast", Value: strconv.FormatBool(fast)}}
+			return []SessionOption{{ID: "required_option", Value: "rejected"}}
 		},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	driver.useTestProcess(fakeSpawn(agent))
@@ -4917,8 +4916,8 @@ func TestACPDriverFailsWhenRequiredFastLaunchOptionIsRejected(t *testing.T) {
 	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
 	})
-	if err == nil || !strings.Contains(err.Error(), `fast=false is unsupported`) {
-		t.Fatalf("Start error = %v, want required fast option rejection", err)
+	if err == nil || !strings.Contains(err.Error(), `required option is unsupported`) {
+		t.Fatalf("Start error = %v, want required launch option rejection", err)
 	}
 }
 
