@@ -2,6 +2,8 @@ package cursoracp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -121,6 +123,46 @@ func TestLiveCursorACP(t *testing.T) {
 	questionAnswer := waitForLiveTurn(ctx, t, resumed, questionRef.ProviderTurnID, false, false)
 	if !strings.Contains(strings.ToLower(questionAnswer), "alpha") {
 		t.Fatalf("answer after cursor/ask_question = %q, want selected alpha", questionAnswer)
+	}
+}
+
+// This opt-in smoke checks that Cursor runs a native helper and that the
+// parent's completed answer includes a value only given to the helper. It
+// consumes one provider turn; the model could still choose to read the file
+// itself, so this is evidence of the path rather than a proof of provenance.
+func TestLiveCursorACPSubagentCompletionSmoke(t *testing.T) {
+	if os.Getenv("AO_LIVE_CURSOR_ACP") != "1" {
+		t.Skip("set AO_LIVE_CURSOR_ACP=1 to run against the local Cursor account")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	workspace := t.TempDir()
+	challenge := make([]byte, 16)
+	if _, err := rand.Read(challenge); err != nil {
+		t.Fatalf("generate helper challenge: %v", err)
+	}
+	helperResult := "NATIVE_HELPER_RESULT_" + hex.EncodeToString(challenge)
+	if err := os.WriteFile(filepath.Join(workspace, "helper-result.txt"), []byte(helperResult), 0o600); err != nil {
+		t.Fatalf("write helper result: %v", err)
+	}
+	driver := New(cursor.New(), nil)
+	conv, err := driver.Start(ctx, ports.ChatStartConfig{
+		SessionID: "live-cursor-acp-subagent", DataDir: liveDataDir(t),
+		WorkspacePath: workspace, Env: liveEnvMap(), Permissions: ports.PermissionModeDefault,
+		SystemPrompt: "Use native subagents for bounded helper work, then return the helper's result to the parent.",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.(ports.ChatProviderTerminator).Terminate()
+	ref := sendLiveTurn(ctx, t, conv,
+		"Use one native explore subagent. Tell the helper to read helper-result.txt and return its exact contents. Do not read the file yourself. Wait for the helper's result, then include that exact value in your final answer. Do not modify files.")
+	answer, observed := waitForLiveSubagentTurn(ctx, t, conv, ref.ProviderTurnID)
+	if !strings.Contains(answer, helperResult) {
+		t.Fatalf("parent answer did not contain helper result: %q", answer)
+	}
+	if !observed {
+		t.Fatal("parent returned the helper result without an observable cursor/task completion activity")
 	}
 }
 
@@ -282,6 +324,40 @@ func waitForLiveTurn(
 			}
 		case <-ctx.Done():
 			t.Fatalf("live turn timed out: %v; answer=%q", ctx.Err(), answer.String())
+		}
+	}
+}
+
+func waitForLiveSubagentTurn(ctx context.Context, t *testing.T, conv ports.ChatConversation, turnID string) (string, bool) {
+	t.Helper()
+	var answer strings.Builder
+	observed := false
+	for {
+		select {
+		case event, ok := <-conv.Events():
+			if !ok {
+				t.Fatalf("controller closed before subagent turn completion; answer=%q", answer.String())
+			}
+			if event.ProviderTurnID != "" && event.ProviderTurnID != turnID {
+				continue
+			}
+			if event.Kind == ports.ChatEventMessageDelta {
+				answer.WriteString(event.Delta)
+			}
+			if event.ActivityKind == domain.ActivityKindSystem && strings.Contains(string(event.Detail), `"event":"cursor.subagent"`) {
+				observed = true
+			}
+			if event.Kind == ports.ChatEventTurnCompleted {
+				if event.TurnState != domain.TurnStateCompleted {
+					t.Fatalf("turn state = %q; answer=%q", event.TurnState, answer.String())
+				}
+				if err := conv.(ports.ChatProviderEventAcknowledger).AcknowledgeProviderEvent(context.Background(), event.ProviderEventID); err != nil {
+					t.Fatalf("acknowledge: %v", err)
+				}
+				return answer.String(), observed
+			}
+		case <-ctx.Done():
+			t.Fatalf("live subagent turn timed out: %v; answer=%q", ctx.Err(), answer.String())
 		}
 	}
 }

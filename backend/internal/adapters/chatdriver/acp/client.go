@@ -573,6 +573,15 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		}
 	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
+	case "cursor/task":
+		if event, ok := cursorTaskCompletedEvent(params); ok {
+			c.mu.Lock()
+			turnID := c.activeTurn
+			c.mu.Unlock()
+			event.ProviderTurnID = turnID
+			event.ProviderItemID = c.providerItemID(event.ProviderItemID)
+			c.emit(event)
+		}
 	default:
 		return false
 	}
@@ -580,6 +589,74 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		c.log.Error("failed to handle ACP notification", "method", method, "err", err)
 	}
 	return true
+}
+
+// cursorTaskCompletedEvent normalizes Cursor's completion-only subagent
+// notification into one compact timeline activity. The notification also
+// contains the delegated prompt; deliberately do not decode or persist it.
+func cursorTaskCompletedEvent(params json.RawMessage) (ports.ChatEvent, bool) {
+	var notification struct {
+		ToolCallID   string          `json:"toolCallId"`
+		Description  string          `json:"description"`
+		SubagentType json.RawMessage `json:"subagentType"`
+		AgentID      string          `json:"agentId"`
+		DurationMS   *int64          `json:"durationMs"`
+	}
+	if err := json.Unmarshal(params, &notification); err != nil {
+		return ports.ChatEvent{}, false
+	}
+	id := strings.TrimSpace(notification.ToolCallID)
+	if id == "" {
+		id = strings.TrimSpace(notification.AgentID)
+	}
+	if id == "" {
+		return ports.ChatEvent{}, false
+	}
+	description := boundedOneLine(notification.Description, 160)
+	summary := "Subagent completed"
+	if description != "" {
+		summary += ": " + description
+	}
+	detail := map[string]any{"event": "cursor.subagent"}
+	if subagentType := cursorSubagentType(notification.SubagentType); subagentType != "" {
+		detail["subagentType"] = subagentType
+	}
+	if notification.DurationMS != nil && *notification.DurationMS >= 0 {
+		detail["durationMs"] = *notification.DurationMS
+	}
+	detailJSON, _ := json.Marshal(detail)
+	return ports.ChatEvent{
+		Kind:            ports.ChatEventActivityCompleted,
+		ProviderEventID: "cursor/task:" + id,
+		ProviderItemID:  "cursor-task:" + id,
+		ActivityKind:    domain.ActivityKindSystem,
+		ActivityStatus:  domain.ActivityStatusCompleted,
+		Summary:         summary,
+		Detail:          detailJSON,
+	}, true
+}
+
+func cursorSubagentType(raw json.RawMessage) string {
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		return boundedOneLine(value, 64)
+	}
+	var custom struct {
+		Custom string `json:"custom"`
+	}
+	if json.Unmarshal(raw, &custom) == nil {
+		return boundedOneLine(custom.Custom, 64)
+	}
+	return ""
+}
+
+func boundedOneLine(value string, maxRunes int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes-1]) + "…"
+	}
+	return value
 }
 
 // processUpdate runs the full ACP -> AO normalization for one update: live

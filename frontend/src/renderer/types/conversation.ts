@@ -452,7 +452,11 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "workspace.script.run"
-		| "account.switched";
+		| "account.switched"
+		| "cursor.subagent";
+	/** cursor.subagent: compact metadata from Cursor's task-completed notification. */
+	subagentType?: string;
+	durationMs?: number;
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */

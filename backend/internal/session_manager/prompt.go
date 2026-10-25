@@ -225,8 +225,9 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - Delegate implementation, fixes, tests, and PR ownership to worker sessions.
 - Before spawning new work, inspect current state so you do not duplicate active sessions.
 - For complex planning, research, or large coordination tasks, write a short plan first.
-- Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work.
-- You may coordinate multiple workers, but AO workers only. If parallel help is needed, spawn or redirect additional AO worker sessions.
+- AO worker sessions own issue implementation and PR lifecycle. You may use runtime-native subagents for bounded supporting investigation or review, then integrate their findings into the owning AO worker session.
+- Keep delegated tasks scoped to this issue and share only the context they need. The owning AO session remains responsible for deciding what to apply and for all changes, verification, commits, and PR updates.
+- Do not use runtime-native subagents as separate AO issue owners, and do not delegate the orchestrator's issue-worker coordination to them.
 - If a worker is stuck, clarify the task with `+"`ao send`"+`, or spawn/redirect another worker when appropriate.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass AO by writing directly to tmux, PTY, pipes, or runtime internals.
@@ -305,9 +306,9 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 - Do not invent issue, PR, or MR requirements when no remote or SCM provider is available.
 - Clearly report what changed, what was verified, and any remaining risks.`
 	}
-	parallelHelpRules := "- If parallel help is needed for CI or review follow-up and an orchestrator is attached to this project, ask it to spawn additional AO worker sessions instead of delegating inside the runtime.\n- If no orchestrator is attached, continue serially and report the need for additional AO workers to the human."
+	parallelHelpRules := "- Use runtime-native subagents for bounded supporting work such as investigation, implementation subtasks, or review when parallel help will materially speed up this assigned task. Give each helper a narrow task and only the context it needs; integrate and verify its result in this AO session.\n- Keep this AO worker as the owner of the assigned task, final changes, verification, commits, and any PR/MR lifecycle. Do not ask helpers to take separate AO issue ownership or publish work independently."
 	if hasOrchestrator {
-		parallelHelpRules = "- If parallel help is needed for CI or review follow-up, ask the orchestrator to spawn additional AO worker sessions instead of using the agent runtime's built-in subagent or task-delegation tools."
+		parallelHelpRules += "\n- Use AO messages for decisions, missing input, or coordination that needs the project orchestrator; use native helpers for bounded work within this assigned task."
 	}
 	return fmt.Sprintf(`## AO Worker Role
 
@@ -350,7 +351,8 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 
 - When you address PR/MR review comments, address each relevant thread, push the fix, and mark every thread you fixed as resolved when the platform supports it.
 - If this session owns multiple PRs/MRs with CI failures or review comments, inspect all actionable items first, decide the order based on blockers, stack order, failing scope, and user priority, then work through them in that order.
-- Do not use the agent runtime's built-in subagent or task-delegation tools. Complete the assigned task in this AO session only.
+- For bounded supporting work within this assigned task, you may use runtime-native subagents for investigation, implementation subtasks, or review. Keep each task narrow, share only necessary context, and integrate and verify the result here.
+- This AO session remains the owner of the assigned task, its final changes, verification, commits, and PR/MR lifecycle. Do not let helpers claim separate AO issues or publish work independently.
 %s
 - For complex tasks, write a short implementation plan before editing. Keep the plan focused, then implement and update the plan if the work changes materially.
 
