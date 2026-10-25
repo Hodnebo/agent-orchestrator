@@ -1,0 +1,18 @@
+UTC: 2026-10-25T05:54:26Z
+Reviewed revision: 484b6da66c0012a4903ea4de0fd067ded9a482d3
+Cursor CLI: 2026.10.22-27dcf5f
+=== RUN   TestEvidenceCursorFastCatalog
+    evidence_test.go:48: initial model choice: value="gpt-5.5" name="GPT-5.5"
+    evidence_test.go:48: initial model choice: value="gemini-3.6-flash" name="Gemini 3.6 Flash"
+    evidence_test.go:67: Gemini model option current: "gemini-3.6-flash"
+    evidence_test.go:71: Gemini Fast option: id="fast" type="select" current="true" choices=[false (Off) true (Fast)]
+    evidence_test.go:74: Gemini catalog has fast option: true
+    evidence_test.go:80: explicit Gemini Fast start: rejected: configure ACP session: set ACP session option "fast": {"code":-32602,"message":"Invalid params","data":{"message":"Unknown model config option: fast"}}
+    evidence_test.go:95: GPT-5.5 model option current: "gpt-5.5"
+    evidence_test.go:102: GPT-5.5 catalog has fast option: false
+    evidence_test.go:107: explicit GPT-5.5 Fast start: succeeded
+    evidence_test.go:115: GPT-5.5 Fast catalog after explicit Fast: id="fast" name="Fast" current="true" choices=[false (Off) true (Fast)]
+    evidence_test.go:120: live ACP evidence probe complete
+--- PASS: TestEvidenceCursorFastCatalog (22.88s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/cursoracp	23.156s
