@@ -102,9 +102,9 @@ func (c *commandContext) getJSON(ctx context.Context, path string, out any) erro
 
 // postJSON sends body as JSON to POST /api/v1/<path> on the running daemon and
 // decodes a 2xx response into out (out may be nil). A non-2xx response becomes
-// an error built from the API error envelope. A missing run-file or a stale one
-// (dead PID) yields a clear "not running" message rather than a
-// connection-refused dump.
+// an error built from the API error envelope. A missing run-file or one whose
+// daemon cannot be verified yields a clear "not running" message rather than
+// a connection-refused dump.
 func (c *commandContext) postJSON(ctx context.Context, path string, body, out any) error {
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
 }
@@ -176,7 +176,14 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return daemonUnavailableError{message: "AO daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
 	}
 	if !c.deps.ProcessAlive(info.PID) {
-		return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
+		// The run-file PID is written in the daemon's PID namespace. A CLI
+		// running in a sandbox may not be able to see that process even though
+		// the loopback daemon is still reachable. Confirm daemon ownership over
+		// the existing health probe before treating the run-file as stale.
+		health, probeErr := c.readProbe(ctx, info.Port, "healthz")
+		if probeErr != nil || health.Status != "ok" || verifyProbeOwner(health, info.PID, "healthz") != nil {
+			return daemonUnavailableError{message: fmt.Sprintf("AO daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
+		}
 	}
 
 	var reader io.Reader = http.NoBody
